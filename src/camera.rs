@@ -1,0 +1,130 @@
+use glam::{Mat4, Vec2};
+
+pub struct Camera {
+    pub position: Vec2,
+    pub zoom: f32,
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+    // Smooth movement
+    velocity: Vec2,
+    target_zoom: f32,
+    last_mouse_world_pos: Option<Vec2>,
+}
+
+impl Camera {
+    pub fn new(viewport_width: f32, viewport_height: f32) -> Self {
+        Self {
+            position: Vec2::ZERO,
+            zoom: 32.0, // pixels per grid cell
+            viewport_width,
+            viewport_height,
+            velocity: Vec2::ZERO,
+            target_zoom: 32.0,
+            last_mouse_world_pos: None,
+        }
+    }
+
+    pub fn resize(&mut self, width: f32, height: f32) {
+        self.viewport_width = width;
+        self.viewport_height = height;
+    }
+
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        // Direct pan - moves exactly with cursor (no momentum while dragging)
+        let world_dx = -dx / self.zoom;
+        let world_dy = dy / self.zoom;
+
+        self.position.x += world_dx;
+        self.position.y += world_dy;
+
+        // Track velocity for momentum on release
+        self.velocity.x = world_dx;
+        self.velocity.y = world_dy;
+    }
+
+    pub fn release_pan(&mut self) {
+        // Apply momentum scaling when mouse is released
+        self.velocity *= 2.0; // Scale up for nice momentum effect
+    }
+
+    pub fn add_zoom_impulse(&mut self, delta: f32, mouse_x: f32, mouse_y: f32) {
+        // Store the world position under cursor for zoom-to-point
+        self.last_mouse_world_pos = Some(self.screen_to_world(mouse_x, mouse_y));
+
+        // Add zoom velocity
+        let zoom_factor = 1.1_f32.powf(delta);
+        self.target_zoom = (self.target_zoom * zoom_factor).clamp(4.0, 128.0);
+    }
+
+    pub fn update(&mut self, dt: f32, is_dragging: bool) {
+        // Only apply momentum when not dragging
+        if !is_dragging {
+            // Apply velocity with damping (smooth deceleration)
+            let damping = 0.90_f32.powf(dt * 60.0); // Frame-rate independent damping
+
+            self.position += self.velocity * dt * 60.0;
+            self.velocity *= damping;
+
+            // Stop completely when velocity is very small
+            if self.velocity.length() < 0.001 {
+                self.velocity = Vec2::ZERO;
+            }
+        }
+
+        // Smooth zoom interpolation
+        if (self.zoom - self.target_zoom).abs() > 0.01 {
+            let zoom_before = self.zoom;
+
+            // Smooth interpolation
+            let t = 1.0 - 0.85_f32.powf(dt * 60.0);
+            self.zoom = self.zoom + (self.target_zoom - self.zoom) * t;
+
+            // Adjust position to zoom towards last mouse position
+            if let Some(world_pos) = self.last_mouse_world_pos {
+                // Keep the world point stationary during zoom
+                self.position = world_pos + (self.position - world_pos) * (zoom_before / self.zoom);
+            }
+        } else {
+            self.zoom = self.target_zoom;
+            self.last_mouse_world_pos = None;
+        }
+    }
+
+    pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> Vec2 {
+        let ndc_x = (screen_x / self.viewport_width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen_y / self.viewport_height) * 2.0;
+
+        let world_x = (ndc_x * self.viewport_width) / (2.0 * self.zoom) + self.position.x;
+        let world_y = (ndc_y * self.viewport_height) / (2.0 * self.zoom) + self.position.y;
+
+        Vec2::new(world_x, world_y)
+    }
+
+    pub fn projection_matrix(&self) -> Mat4 {
+        let half_width = self.viewport_width / (2.0 * self.zoom);
+        let half_height = self.viewport_height / (2.0 * self.zoom);
+
+        let left = self.position.x - half_width;
+        let right = self.position.x + half_width;
+        let bottom = self.position.y - half_height;
+        let top = self.position.y + half_height;
+
+        Mat4::orthographic_rh(left, right, bottom, top, -1.0, 1.0)
+    }
+
+    pub fn view_matrix(&self) -> Mat4 {
+        Mat4::IDENTITY
+    }
+
+    pub fn get_visible_bounds(&self) -> (i32, i32, i32, i32) {
+        let half_width = self.viewport_width / (2.0 * self.zoom);
+        let half_height = self.viewport_height / (2.0 * self.zoom);
+
+        let min_x = (self.position.x - half_width).floor() as i32 - 1;
+        let max_x = (self.position.x + half_width).ceil() as i32 + 1;
+        let min_y = (self.position.y - half_height).floor() as i32 - 1;
+        let max_y = (self.position.y + half_height).ceil() as i32 + 1;
+
+        (min_x, max_x, min_y, max_y)
+    }
+}

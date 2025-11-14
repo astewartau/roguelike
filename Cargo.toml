@@ -1,0 +1,11 @@
+[package]
+name = "grid-roguelike"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sdl2 = "0.37"
+glow = "0.14"
+hecs = "0.10"
+glam = "0.29"
+noise = "0.9"
