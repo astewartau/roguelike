@@ -25,6 +25,10 @@ impl TileType {
     pub fn is_walkable(&self) -> bool {
         matches!(self, TileType::Floor | TileType::Grass)
     }
+
+    pub fn blocks_vision(&self) -> bool {
+        matches!(self, TileType::Wall | TileType::Empty)
+    }
 }
 
 #[derive(Debug, Clone)]

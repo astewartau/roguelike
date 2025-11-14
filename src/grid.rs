@@ -1,5 +1,5 @@
-use crate::tile::{Tile, TileType};
-use noise::{NoiseFn, Perlin};
+use crate::dungeon_gen::DungeonGenerator;
+use crate::tile::Tile;
 
 pub struct Grid {
     pub width: usize,
@@ -9,33 +9,8 @@ pub struct Grid {
 
 impl Grid {
     pub fn new(width: usize, height: usize) -> Self {
-        let mut tiles = vec![Tile::default(); width * height];
-
-        // Generate procedural terrain using Perlin noise
-        let perlin = Perlin::new(42);
-
-        for y in 0..height {
-            for x in 0..width {
-                let nx = x as f64 / 50.0;
-                let ny = y as f64 / 50.0;
-
-                let value = perlin.get([nx, ny]);
-
-                let tile_type = if value < -0.3 {
-                    TileType::Water
-                } else if value < 0.0 {
-                    TileType::Grass
-                } else if value < 0.4 {
-                    TileType::Floor
-                } else if value < 0.6 {
-                    TileType::Stone
-                } else {
-                    TileType::Wall
-                };
-
-                tiles[y * width + x] = Tile::new(tile_type);
-            }
-        }
+        // Generate mine/cave dungeon using cellular automata + constructed rooms
+        let tiles = DungeonGenerator::generate(width, height);
 
         Self {
             width,

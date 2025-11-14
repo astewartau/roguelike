@@ -9,6 +9,9 @@ pub struct Camera {
     velocity: Vec2,
     target_zoom: f32,
     last_mouse_world_pos: Option<Vec2>,
+    // Auto-tracking
+    tracking_target: Option<Vec2>,
+    manual_control: bool,
 }
 
 impl Camera {
@@ -21,6 +24,8 @@ impl Camera {
             velocity: Vec2::ZERO,
             target_zoom: 32.0,
             last_mouse_world_pos: None,
+            tracking_target: None,
+            manual_control: false,
         }
     }
 
@@ -40,11 +45,20 @@ impl Camera {
         // Track velocity for momentum on release
         self.velocity.x = world_dx;
         self.velocity.y = world_dy;
+
+        // Enable manual control mode
+        self.manual_control = true;
     }
 
     pub fn release_pan(&mut self) {
         // Apply momentum scaling when mouse is released
         self.velocity *= 2.0; // Scale up for nice momentum effect
+    }
+
+    pub fn set_tracking_target(&mut self, target: Vec2) {
+        self.tracking_target = Some(target);
+        // When player moves, return to auto-tracking
+        self.manual_control = false;
     }
 
     pub fn add_zoom_impulse(&mut self, delta: f32, mouse_x: f32, mouse_y: f32) {
@@ -57,8 +71,17 @@ impl Camera {
     }
 
     pub fn update(&mut self, dt: f32, is_dragging: bool) {
-        // Only apply momentum when not dragging
-        if !is_dragging {
+        // Auto-track target if not in manual control mode
+        if !self.manual_control && !is_dragging {
+            if let Some(target) = self.tracking_target {
+                // Smooth interpolation to target position
+                let t = 1.0 - 0.85_f32.powf(dt * 60.0);
+                self.position = self.position + (target - self.position) * t;
+            }
+        }
+
+        // Only apply momentum when not dragging and in manual mode
+        if !is_dragging && self.manual_control {
             // Apply velocity with damping (smooth deceleration)
             let damping = 0.90_f32.powf(dt * 60.0); // Frame-rate independent damping
 

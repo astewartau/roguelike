@@ -1,10 +1,17 @@
 mod camera;
+mod components;
+mod dungeon_gen;
+mod fov;
 mod grid;
 mod renderer;
 mod tile;
 
 use camera::Camera;
+use components::{Health, Inventory, Player, Position, Sprite, Stats};
+use fov::FOV;
+use glam::Vec2;
 use grid::Grid;
+use hecs::World;
 use renderer::Renderer;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
@@ -32,13 +39,43 @@ fn main() -> Result<(), String> {
     };
 
     let mut camera = Camera::new(1280.0, 720.0);
-    let grid = Grid::new(100, 100);
+    let mut grid = Grid::new(100, 100);
     let mut renderer = Renderer::new(gl)?;
+
+    // Create ECS world
+    let mut world = World::new();
+
+    // Find a walkable tile to spawn the player
+    let mut player_start = Position::new(50, 50);
+    'find_spawn: for y in 0..grid.height as i32 {
+        for x in 0..grid.width as i32 {
+            if let Some(tile) = grid.get(x, y) {
+                if tile.tile_type.is_walkable() {
+                    player_start = Position::new(x, y);
+                    break 'find_spawn;
+                }
+            }
+        }
+    }
+
+    // Spawn player at first walkable position
+    let player_entity = world.spawn((
+        player_start,
+        Sprite::new(glam::Vec3::new(1.0, 1.0, 0.0)), // Yellow player
+        Player,
+        Health::new(100), // Start with 100 HP
+        Stats::new(10, 8, 12), // STR: 10, INT: 8, AGI: 12
+        Inventory::new(),
+    ));
+
+    // Set camera to track player initially at their actual spawn position
+    camera.set_tracking_target(Vec2::new(player_start.x as f32, player_start.y as f32));
 
     let mut event_pump = sdl_context.event_pump()?;
     let mut mouse_down = false;
     let mut last_mouse_pos = (0, 0);
     let mut last_frame_time = Instant::now();
+    let mut show_inventory = false;
 
     'running: loop {
         let current_time = Instant::now();
@@ -51,6 +88,58 @@ fn main() -> Result<(), String> {
                     keycode: Some(Keycode::Escape),
                     ..
                 } => break 'running,
+
+                Event::KeyDown {
+                    keycode: Some(keycode),
+                    ..
+                } => {
+                    // Toggle inventory
+                    if keycode == Keycode::I {
+                        show_inventory = !show_inventory;
+                        continue;
+                    }
+
+                    // WASD movement
+                    let mut moved = false;
+
+                    // Get player position
+                    if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
+                        let old_pos = *pos;
+
+                        let new_pos = match keycode {
+                            Keycode::W | Keycode::Up => {
+                                moved = true;
+                                Position::new(old_pos.x, old_pos.y + 1)
+                            }
+                            Keycode::S | Keycode::Down => {
+                                moved = true;
+                                Position::new(old_pos.x, old_pos.y - 1)
+                            }
+                            Keycode::A | Keycode::Left => {
+                                moved = true;
+                                Position::new(old_pos.x - 1, old_pos.y)
+                            }
+                            Keycode::D | Keycode::Right => {
+                                moved = true;
+                                Position::new(old_pos.x + 1, old_pos.y)
+                            }
+                            _ => old_pos,
+                        };
+
+                        // Check collision before moving
+                        if moved {
+                            // Check if target tile is walkable
+                            if let Some(tile) = grid.get(new_pos.x, new_pos.y) {
+                                if tile.tile_type.is_walkable() {
+                                    // Only move if tile is walkable
+                                    *pos = new_pos;
+                                    // Update camera tracking
+                                    camera.set_tracking_target(Vec2::new(new_pos.x as f32, new_pos.y as f32));
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Event::Window {
                     win_event: sdl2::event::WindowEvent::Resized(w, h),
@@ -99,7 +188,57 @@ fn main() -> Result<(), String> {
         // Update camera with smooth interpolation
         camera.update(dt, mouse_down);
 
+        // Update field of view based on player position
+        if let Ok(player_pos) = world.get::<&Position>(player_entity) {
+            // Clear all visibility
+            for tile in &mut grid.tiles {
+                tile.visible = false;
+            }
+
+            // Calculate visible tiles with shadowcasting (10 tile radius)
+            let visible_tiles = FOV::calculate(&grid, player_pos.x, player_pos.y, 10);
+
+            // Mark tiles as visible and explored
+            for (x, y) in visible_tiles {
+                if let Some(tile) = grid.get_mut(x, y) {
+                    tile.visible = true;
+                    tile.explored = true;
+                }
+            }
+        }
+
+        // Collect entities for rendering
+        let mut entities_to_render = Vec::new();
+        for (_id, (pos, sprite)) in world.query::<(&Position, &Sprite)>().iter() {
+            entities_to_render.push((*pos, *sprite));
+        }
+
+        // Get player health for UI
+        let health_percent = if let Ok(health) = world.get::<&Health>(player_entity) {
+            health.percentage()
+        } else {
+            1.0
+        };
+
+        // Render
         renderer.render(&camera, &grid)?;
+        renderer.render_entities(&camera, &entities_to_render)?;
+        renderer.render_ui(health_percent, camera.viewport_width, camera.viewport_height)?;
+
+        // Render inventory if open
+        if show_inventory {
+            if let Ok(stats) = world.get::<&Stats>(player_entity) {
+                if let Ok(inventory) = world.get::<&Inventory>(player_entity) {
+                    renderer.render_inventory(
+                        (stats.strength, stats.intelligence, stats.agility),
+                        inventory.current_weight_kg,
+                        camera.viewport_width,
+                        camera.viewport_height,
+                    )?;
+                }
+            }
+        }
+
         window.gl_swap_window();
     }
 
