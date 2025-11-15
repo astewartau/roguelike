@@ -47,6 +47,10 @@ impl Health {
     pub fn percentage(&self) -> f32 {
         (self.current as f32 / self.max as f32).clamp(0.0, 1.0)
     }
+
+    pub fn heal(&mut self, amount: i32) {
+        self.current = (self.current + amount).min(self.max);
+    }
 }
 
 /// Stats component - character attributes
@@ -72,10 +76,48 @@ impl Stats {
     }
 }
 
+/// Item type
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ItemType {
+    HealthPotion,
+}
+
+impl ItemType {
+    pub fn name(&self) -> &str {
+        match self {
+            ItemType::HealthPotion => "Health Potion",
+        }
+    }
+
+    pub fn weight_kg(&self) -> f32 {
+        match self {
+            ItemType::HealthPotion => 0.5,
+        }
+    }
+
+    pub fn heal_amount(&self) -> i32 {
+        match self {
+            ItemType::HealthPotion => 50,
+        }
+    }
+}
+
+/// Item component
+#[derive(Debug, Clone, Copy)]
+pub struct Item {
+    pub item_type: ItemType,
+}
+
+impl Item {
+    pub fn new(item_type: ItemType) -> Self {
+        Self { item_type }
+    }
+}
+
 /// Inventory component
 #[derive(Debug, Clone)]
 pub struct Inventory {
-    pub items: Vec<String>, // Item names for now
+    pub items: Vec<ItemType>,
     pub current_weight_kg: f32,
 }
 
@@ -87,7 +129,44 @@ impl Inventory {
         }
     }
 
+    pub fn add_item(&mut self, item_type: ItemType) {
+        self.current_weight_kg += item_type.weight_kg();
+        self.items.push(item_type);
+    }
+
+    pub fn remove_item(&mut self, index: usize) -> Option<ItemType> {
+        if index < self.items.len() {
+            let item = self.items.remove(index);
+            self.current_weight_kg -= item.weight_kg();
+            Some(item)
+        } else {
+            None
+        }
+    }
+
     pub fn weight_percentage(&self, max_weight: f32) -> f32 {
         (self.current_weight_kg / max_weight).clamp(0.0, 1.0)
+    }
+}
+
+/// Container component (for chests)
+#[derive(Debug, Clone)]
+pub struct Container {
+    pub items: Vec<ItemType>,
+    pub is_open: bool,
+}
+
+impl Container {
+    pub fn new(items: Vec<ItemType>) -> Self {
+        Self {
+            items,
+            is_open: false,
+        }
+    }
+
+    pub fn take_all(&mut self) -> Vec<ItemType> {
+        let items = self.items.clone();
+        self.items.clear();
+        items
     }
 }

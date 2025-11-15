@@ -3,11 +3,16 @@ name = "grid-roguelike"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "grid-roguelike"
+path = "src/main.rs"
+
 [dependencies]
 sdl2 = "0.37"
-glow = "0.13"
+glow = "0.14"
 hecs = "0.10"
 glam = "0.29"
 noise = "0.9"
 rand = "0.8"
-glow_glyph = "0.7"
+egui = "0.29"
+egui_sdl2_gl = { version = "0.32", default-features = false }

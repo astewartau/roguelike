@@ -43,7 +43,7 @@ impl DungeonGenerator {
         }
     }
 
-    pub fn generate(width: usize, height: usize) -> Vec<Tile> {
+    pub fn generate(width: usize, height: usize) -> (Vec<Tile>, Vec<(i32, i32)>) {
         let mut gen = Self::new(width, height);
 
         // Generate rooms
@@ -52,7 +52,13 @@ impl DungeonGenerator {
         // Connect all rooms with corridors
         gen.connect_rooms();
 
-        gen.tiles
+        // Collect chest spawn positions (center of each room except first)
+        let chest_positions: Vec<(i32, i32)> = gen.rooms.iter()
+            .skip(1) // Skip first room (player spawns there)
+            .map(|room| room.center())
+            .collect();
+
+        (gen.tiles, chest_positions)
     }
 
     fn get_index(&self, x: i32, y: i32) -> Option<usize> {

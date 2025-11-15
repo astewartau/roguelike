@@ -3,7 +3,7 @@ use crate::components::{Position, Sprite};
 use crate::grid::Grid;
 use glow::*;
 use std::mem;
-use glow_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, Section, Text};
+use std::sync::Arc;
 
 const VERTEX_SHADER_SRC: &str = r#"#version 330 core
 layout (location = 0) in vec2 aPos;
@@ -44,13 +44,13 @@ const GRID_LINE_FRAGMENT_SHADER: &str = r#"#version 330 core
 out vec4 FragColor;
 
 void main() {
-    // Bright blue grid lines for techy look
-    FragColor = vec4(0.2, 0.4, 0.8, 0.3);
+    // Extremely subtle blue grid lines
+    FragColor = vec4(0.2, 0.4, 0.8, 0.03);
 }
 "#;
 
 pub struct Renderer {
-    gl: glow::Context,
+    gl: Arc<glow::Context>,
     program: NativeProgram,
     vao: NativeVertexArray,
     vbo: NativeBuffer,
@@ -62,12 +62,10 @@ pub struct Renderer {
     grid_vao: NativeVertexArray,
     grid_vbo: NativeBuffer,
     grid_projection_loc: NativeUniformLocation,
-    // Text rendering
-    glyph_brush: GlyphBrush,
 }
 
 impl Renderer {
-    pub fn new(gl: glow::Context) -> Result<Self, String> {
+    pub fn new(gl: Arc<glow::Context>) -> Result<Self, String> {
         unsafe {
             // Compile shaders
             let vertex_shader = gl
@@ -210,15 +208,6 @@ impl Renderer {
             gl.enable(BLEND);
             gl.blend_func(SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
 
-            // Load font for text rendering
-            let font_data = std::fs::read("/usr/share/fonts/TTF/Hack-Regular.ttf")
-                .map_err(|e| format!("Failed to load font: {}", e))?;
-
-            let font = ab_glyph::FontArc::try_from_vec(font_data)
-                .map_err(|e| format!("Failed to parse font: {:?}", e))?;
-
-            let glyph_brush = GlyphBrushBuilder::using_font(font).build(&gl);
-
             Ok(Self {
                 gl,
                 program,
@@ -231,7 +220,6 @@ impl Renderer {
                 grid_vao,
                 grid_vbo,
                 grid_projection_loc,
-                glyph_brush,
             })
         }
     }
@@ -388,257 +376,6 @@ impl Renderer {
 
             self.gl.bind_vertex_array(None);
         }
-
-        Ok(())
-    }
-
-    pub fn render_ui(&mut self, health_percent: f32, viewport_width: f32, viewport_height: f32) -> Result<(), String> {
-        unsafe {
-            self.gl.use_program(Some(self.program));
-            self.gl.bind_vertex_array(Some(self.vao));
-
-            // Screen space projection
-            let ui_projection = glam::Mat4::orthographic_rh(0.0, viewport_width, viewport_height, 0.0, -1.0, 1.0);
-
-            // Healthbar in top-left corner
-            let bar_x = 20.0;
-            let bar_y = 20.0;
-            let bar_width = 200.0;
-            let bar_height = 20.0;
-
-            // Background bar (dark red)
-            let mut instance_data = Vec::new();
-            instance_data.push(bar_x);
-            instance_data.push(bar_y);
-            instance_data.push(0.3); // R
-            instance_data.push(0.0); // G
-            instance_data.push(0.0); // B
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
-
-            self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, ui_projection.as_ref());
-
-            let bg_vertices: [f32; 12] = [
-                0.0, 0.0,
-                bar_width, 0.0,
-                bar_width, bar_height,
-                0.0, 0.0,
-                bar_width, bar_height,
-                0.0, bar_height,
-            ];
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&bg_vertices), DYNAMIC_DRAW);
-            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, 1);
-
-            // Foreground bar (green, scaled by health)
-            let fg_width = bar_width * health_percent;
-            instance_data.clear();
-            instance_data.push(bar_x);
-            instance_data.push(bar_y);
-            instance_data.push(0.0); // R
-            instance_data.push(0.8); // G
-            instance_data.push(0.0); // B
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
-
-            let fg_vertices: [f32; 12] = [
-                0.0, 0.0,
-                fg_width, 0.0,
-                fg_width, bar_height,
-                0.0, 0.0,
-                fg_width, bar_height,
-                0.0, bar_height,
-            ];
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&fg_vertices), DYNAMIC_DRAW);
-            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, 1);
-
-            // Restore original quad
-            let vertices: [f32; 12] = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&vertices), STATIC_DRAW);
-
-            self.gl.bind_vertex_array(None);
-        }
-
-        Ok(())
-    }
-
-    pub fn render_inventory(&mut self, stats: (i32, i32, i32), inventory_weight: f32, viewport_width: f32, viewport_height: f32) -> Result<(), String> {
-        unsafe {
-            self.gl.use_program(Some(self.program));
-            self.gl.bind_vertex_array(Some(self.vao));
-
-            // Screen space projection
-            let ui_projection = glam::Mat4::orthographic_rh(0.0, viewport_width, viewport_height, 0.0, -1.0, 1.0);
-
-            // Semi-transparent dark background panel
-            let panel_x = viewport_width / 2.0 - 200.0;
-            let panel_y = viewport_height / 2.0 - 150.0;
-            let panel_width = 400.0;
-            let panel_height = 300.0;
-
-            // Background panel
-            let mut instance_data = Vec::new();
-            instance_data.push(panel_x);
-            instance_data.push(panel_y);
-            instance_data.push(0.1); // Dark gray
-            instance_data.push(0.1);
-            instance_data.push(0.15);
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
-
-            self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, ui_projection.as_ref());
-
-            let panel_verts: [f32; 12] = [
-                0.0, 0.0,
-                panel_width, 0.0,
-                panel_width, panel_height,
-                0.0, 0.0,
-                panel_width, panel_height,
-                0.0, panel_height,
-            ];
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&panel_verts), DYNAMIC_DRAW);
-            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, 1);
-
-            // Stat bars
-            let bar_start_y = panel_y + 80.0;
-            let bar_spacing = 40.0;
-            let bar_width = 300.0;
-            let bar_height = 20.0;
-            let bar_x = panel_x + 50.0;
-
-            let (strength, intelligence, agility) = stats;
-            let max_stat = 20.0;
-
-            let stat_values = [strength, intelligence, agility];
-            let stat_colors = [(0.8, 0.2, 0.2), (0.2, 0.2, 0.8), (0.2, 0.8, 0.2)];
-
-            // Draw stat bars
-            for i in 0..3 {
-                let y = bar_start_y + (i as f32) * bar_spacing;
-                let fill_width = bar_width * (stat_values[i] as f32 / max_stat).min(1.0);
-                let color = stat_colors[i];
-
-                instance_data.clear();
-                instance_data.push(bar_x);
-                instance_data.push(y);
-                instance_data.push(color.0);
-                instance_data.push(color.1);
-                instance_data.push(color.2);
-
-                self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-                self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
-
-                let stat_verts: [f32; 12] = [
-                    0.0, 0.0,
-                    fill_width, 0.0,
-                    fill_width, bar_height,
-                    0.0, 0.0,
-                    fill_width, bar_height,
-                    0.0, bar_height,
-                ];
-
-                self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-                self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&stat_verts), DYNAMIC_DRAW);
-                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, 1);
-            }
-
-            // Weight bar at bottom
-            let carry_capacity = (strength as f32) * 2.0;
-            let weight_percent = (inventory_weight / carry_capacity).min(1.0);
-            let weight_y = panel_y + panel_height - 50.0;
-
-            instance_data.clear();
-            instance_data.push(bar_x);
-            instance_data.push(weight_y);
-            instance_data.push(0.7);
-            instance_data.push(0.7);
-            instance_data.push(0.2); // Yellow
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
-
-            let weight_verts: [f32; 12] = [
-                0.0, 0.0,
-                bar_width * weight_percent, 0.0,
-                bar_width * weight_percent, bar_height,
-                0.0, 0.0,
-                bar_width * weight_percent, bar_height,
-                0.0, bar_height,
-            ];
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&weight_verts), DYNAMIC_DRAW);
-            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, 1);
-
-            // Restore original quad
-            let vertices: [f32; 12] = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&vertices), STATIC_DRAW);
-
-            self.gl.bind_vertex_array(None);
-        }
-
-        // Now render text labels using glow_glyph
-        let text_color = [1.0, 1.0, 1.0, 1.0]; // White text
-
-        // Title
-        self.glyph_brush.queue(Section {
-            screen_position: (viewport_width / 2.0 - 80.0, viewport_height / 2.0 - 120.0),
-            text: vec![Text::new("CHARACTER STATS")
-                .with_color(text_color)
-                .with_scale(24.0)],
-            ..Section::default()
-        });
-
-        // Stat labels
-        let label_x = viewport_width / 2.0 - 180.0;
-        let bar_start_y = viewport_height / 2.0 - 70.0;
-        let bar_spacing = 40.0;
-
-        let (strength, intelligence, agility) = stats;
-        let stat_labels = [
-            format!("STR: {}", strength),
-            format!("INT: {}", intelligence),
-            format!("AGI: {}", agility),
-        ];
-
-        for (i, label) in stat_labels.iter().enumerate() {
-            let y = bar_start_y + (i as f32) * bar_spacing;
-            self.glyph_brush.queue(Section {
-                screen_position: (label_x, y),
-                text: vec![Text::new(label)
-                    .with_color(text_color)
-                    .with_scale(18.0)],
-                ..Section::default()
-            });
-        }
-
-        // Weight label
-        let carry_capacity = (strength as f32) * 2.0;
-        let weight_label = format!("Weight: {:.1} / {:.1} kg", inventory_weight, carry_capacity);
-        self.glyph_brush.queue(Section {
-            screen_position: (label_x, viewport_height / 2.0 + 100.0),
-            text: vec![Text::new(&weight_label)
-                .with_color(text_color)
-                .with_scale(18.0)],
-            ..Section::default()
-        });
-
-        // Draw all queued text
-        self.glyph_brush.draw_queued(
-            &self.gl,
-            viewport_width as u32,
-            viewport_height as u32,
-        ).map_err(|e| format!("Failed to draw text: {:?}", e))?;
 
         Ok(())
     }
