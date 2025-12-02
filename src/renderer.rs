@@ -1,6 +1,7 @@
 use crate::camera::Camera;
 use crate::components::{Position, Sprite};
 use crate::grid::Grid;
+use crate::tileset::Tileset;
 use glow::*;
 use std::mem;
 use std::sync::Arc;
@@ -8,25 +9,36 @@ use std::sync::Arc;
 const VERTEX_SHADER_SRC: &str = r#"#version 330 core
 layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
-layout (location = 2) in vec3 aInstanceColor;
+layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
+layout (location = 3) in float aFogMult;
 
 uniform mat4 uProjection;
 
-out vec3 vColor;
+out vec2 vTexCoord;
+out float vFog;
 
 void main() {
     vec2 worldPos = aInstancePos + aPos;
     gl_Position = uProjection * vec4(worldPos, 0.0, 1.0);
-    vColor = aInstanceColor;
+
+    // Interpolate UV based on vertex position (0-1)
+    vTexCoord = mix(aInstanceUV.xy, aInstanceUV.zw, aPos);
+    vFog = aFogMult;
 }
 "#;
 
 const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
-in vec3 vColor;
+in vec2 vTexCoord;
+in float vFog;
+
+uniform sampler2D uTileset;
+
 out vec4 FragColor;
 
 void main() {
-    FragColor = vec4(vColor, 1.0);
+    vec4 texColor = texture(uTileset, vTexCoord);
+    if (texColor.a < 0.1) discard;  // Discard transparent pixels
+    FragColor = vec4(texColor.rgb * vFog, texColor.a);
 }
 "#;
 
@@ -44,8 +56,8 @@ const GRID_LINE_FRAGMENT_SHADER: &str = r#"#version 330 core
 out vec4 FragColor;
 
 void main() {
-    // Extremely subtle blue grid lines
-    FragColor = vec4(0.2, 0.4, 0.8, 0.03);
+    // Subtle dark grid lines
+    FragColor = vec4(0.05, 0.1, 0.2, 0.015);
 }
 "#;
 
@@ -56,7 +68,7 @@ pub struct Renderer {
     vbo: NativeBuffer,
     instance_vbo: NativeBuffer,
     projection_loc: NativeUniformLocation,
-    max_instances: usize,
+    tileset_loc: NativeUniformLocation,
     // Grid line rendering
     grid_program: NativeProgram,
     grid_vao: NativeVertexArray,
@@ -102,6 +114,9 @@ impl Renderer {
             let projection_loc = gl
                 .get_uniform_location(program, "uProjection")
                 .ok_or("Failed to get projection uniform location")?;
+            let tileset_loc = gl
+                .get_uniform_location(program, "uTileset")
+                .ok_or("Failed to get tileset uniform location")?;
 
             // Create quad vertices (0,0 to 1,1)
             let vertices: [f32; 12] = [
@@ -132,20 +147,28 @@ impl Renderer {
             gl.vertex_attrib_pointer_f32(0, 2, FLOAT, false, 8, 0);
 
             // Create instance buffer
+            // Layout: pos(2) + uv(4) + fog(1) = 7 floats = 28 bytes per instance
             let instance_vbo = gl
                 .create_buffer()
                 .map_err(|e| format!("Failed to create instance VBO: {}", e))?;
             gl.bind_buffer(ARRAY_BUFFER, Some(instance_vbo));
 
+            let stride = 28; // 7 floats * 4 bytes
+
             // Position attribute (2 floats)
             gl.enable_vertex_attrib_array(1);
-            gl.vertex_attrib_pointer_f32(1, 2, FLOAT, false, 20, 0);
+            gl.vertex_attrib_pointer_f32(1, 2, FLOAT, false, stride, 0);
             gl.vertex_attrib_divisor(1, 1);
 
-            // Color attribute (3 floats)
+            // UV attribute (4 floats: u0, v0, u1, v1)
             gl.enable_vertex_attrib_array(2);
-            gl.vertex_attrib_pointer_f32(2, 3, FLOAT, false, 20, 8);
+            gl.vertex_attrib_pointer_f32(2, 4, FLOAT, false, stride, 8);
             gl.vertex_attrib_divisor(2, 1);
+
+            // Fog multiplier attribute (1 float)
+            gl.enable_vertex_attrib_array(3);
+            gl.vertex_attrib_pointer_f32(3, 1, FLOAT, false, stride, 24);
+            gl.vertex_attrib_divisor(3, 1);
 
             gl.bind_vertex_array(None);
 
@@ -201,10 +224,10 @@ impl Renderer {
 
             gl.bind_vertex_array(None);
 
-            // Navy blue background (techy look)
+            // Navy blue background
             gl.clear_color(0.05, 0.08, 0.15, 1.0);
 
-            // Enable blending for semi-transparent grid lines
+            // Enable blending for transparency
             gl.enable(BLEND);
             gl.blend_func(SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
 
@@ -215,7 +238,7 @@ impl Renderer {
                 vbo,
                 instance_vbo,
                 projection_loc,
-                max_instances: 100000,
+                tileset_loc,
                 grid_program,
                 grid_vao,
                 grid_vbo,
@@ -224,23 +247,22 @@ impl Renderer {
         }
     }
 
-    pub fn resize(&self, width: i32, height: i32) {
-        unsafe {
-            self.gl.viewport(0, 0, width, height);
-        }
-    }
-
-    pub fn render(&mut self, camera: &Camera, grid: &Grid) -> Result<(), String> {
+    pub fn render(&mut self, camera: &Camera, grid: &Grid, tileset: &Tileset) -> Result<(), String> {
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
 
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
 
+            // Bind tileset texture
+            tileset.bind(&self.gl, 0);
+            self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
+
             // Get visible bounds
             let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
 
             // Build instance data for visible tiles
+            // Layout: pos(2) + uv(4) + fog(1) = 7 floats per instance
             let mut instance_data = Vec::new();
 
             for y in min_y..=max_y {
@@ -251,25 +273,21 @@ impl Renderer {
                             continue;
                         }
 
-                        let mut color = tile.tile_type.color();
+                        let uv = tileset.get_uv(tile.tile_type.tile_id());
+                        let fog = if tile.visible { 1.0 } else { 0.5 };
 
-                        // Apply fog of war to non-visible tiles
-                        if !tile.visible {
-                            color *= 0.3; // Darken explored but not visible tiles
-                        }
-
-                        // Position (2 floats) + Color (3 floats) = 5 floats per instance
                         instance_data.push(x as f32);
                         instance_data.push(y as f32);
-                        instance_data.push(color.x);
-                        instance_data.push(color.y);
-                        instance_data.push(color.z);
+                        instance_data.push(uv.u0);
+                        instance_data.push(uv.v0);
+                        instance_data.push(uv.u1);
+                        instance_data.push(uv.v1);
+                        instance_data.push(fog);
                     }
                 }
             }
 
             if !instance_data.is_empty() {
-                // Upload instance data
                 self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
                 self.gl.buffer_data_u8_slice(
                     ARRAY_BUFFER,
@@ -277,7 +295,6 @@ impl Renderer {
                     DYNAMIC_DRAW,
                 );
 
-                // Set projection matrix
                 let projection = camera.projection_matrix();
                 self.gl.uniform_matrix_4_f32_slice(
                     Some(&self.projection_loc),
@@ -285,8 +302,7 @@ impl Renderer {
                     projection.as_ref(),
                 );
 
-                // Draw instances
-                let instance_count = instance_data.len() / 5;
+                let instance_count = instance_data.len() / 7;
                 self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
             }
 
@@ -304,7 +320,6 @@ impl Renderer {
             self.gl.use_program(Some(self.grid_program));
             self.gl.bind_vertex_array(Some(self.grid_vao));
 
-            // Set projection matrix
             let projection = camera.projection_matrix();
             self.gl.uniform_matrix_4_f32_slice(
                 Some(&self.grid_projection_loc),
@@ -312,7 +327,6 @@ impl Renderer {
                 projection.as_ref(),
             );
 
-            // Build line vertices for visible grid
             let mut line_vertices = Vec::new();
 
             // Vertical lines
@@ -332,7 +346,6 @@ impl Renderer {
             }
 
             if !line_vertices.is_empty() {
-                // Upload line data
                 self.gl.bind_buffer(ARRAY_BUFFER, Some(self.grid_vbo));
                 self.gl.buffer_data_u8_slice(
                     ARRAY_BUFFER,
@@ -340,7 +353,6 @@ impl Renderer {
                     DYNAMIC_DRAW,
                 );
 
-                // Draw lines
                 self.gl.draw_arrays(LINES, 0, (line_vertices.len() / 2) as i32);
             }
 
@@ -348,31 +360,41 @@ impl Renderer {
         }
     }
 
-    pub fn render_entities(&mut self, camera: &Camera, entities: &[(Position, Sprite)]) -> Result<(), String> {
+    pub fn render_entities(&mut self, camera: &Camera, entities: &[(Position, Sprite, f32)], tileset: &Tileset) -> Result<(), String> {
+        if entities.is_empty() {
+            return Ok(());
+        }
+
         unsafe {
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
 
+            // Bind tileset texture
+            tileset.bind(&self.gl, 0);
+            self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
+
             // Build instance data for entities
             let mut instance_data = Vec::new();
 
-            for (pos, sprite) in entities {
+            for (pos, sprite, fog) in entities {
+                let uv = tileset.get_uv(sprite.tile_id);
+
                 instance_data.push(pos.x as f32);
                 instance_data.push(pos.y as f32);
-                instance_data.push(sprite.color.x);
-                instance_data.push(sprite.color.y);
-                instance_data.push(sprite.color.z);
+                instance_data.push(uv.u0);
+                instance_data.push(uv.v0);
+                instance_data.push(uv.u1);
+                instance_data.push(uv.v1);
+                instance_data.push(*fog);
             }
 
-            if !instance_data.is_empty() {
-                self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-                self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
+            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
 
-                let projection = camera.projection_matrix();
-                self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, projection.as_ref());
+            let projection = camera.projection_matrix();
+            self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, projection.as_ref());
 
-                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, (instance_data.len() / 5) as i32);
-            }
+            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, entities.len() as i32);
 
             self.gl.bind_vertex_array(None);
         }

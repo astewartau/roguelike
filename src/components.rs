@@ -1,5 +1,3 @@
-use glam::Vec3;
-
 /// Position component - world coordinates (grid-based)
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
@@ -13,15 +11,15 @@ impl Position {
     }
 }
 
-/// Sprite component - visual representation
+/// Sprite component - visual representation using tileset
 #[derive(Debug, Clone, Copy)]
 pub struct Sprite {
-    pub color: Vec3,
+    pub tile_id: u32,
 }
 
 impl Sprite {
-    pub fn new(color: Vec3) -> Self {
-        Self { color }
+    pub fn new(tile_id: u32) -> Self {
+        Self { tile_id }
     }
 }
 
