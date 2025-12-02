@@ -467,6 +467,17 @@ impl AppState {
     }
 
     fn handle_input(&mut self) {
+        // Toggle fullscreen
+        if self.keys_pressed.remove(&KeyCode::F11) {
+            use winit::window::Fullscreen;
+            let fullscreen = if self.window.fullscreen().is_some() {
+                None
+            } else {
+                Some(Fullscreen::Borderless(None))
+            };
+            self.window.set_fullscreen(fullscreen);
+        }
+
         // Toggle inventory
         if self.keys_pressed.remove(&KeyCode::KeyI) {
             self.show_inventory = !self.show_inventory;

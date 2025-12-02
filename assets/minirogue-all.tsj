@@ -20,10 +20,18 @@
         {
          "id":32,
          "type":"chest_gold_closed"
-        },
+        }, 
+        {
+         "id":33,
+         "type":"chest_gold_open"
+        }, 
         {
          "id":87,
          "type":"human"
+        }, 
+        {
+         "id":105,
+         "type":"skeleton"
         }],
  "tilewidth":8,
  "type":"tileset",

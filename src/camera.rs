@@ -62,10 +62,16 @@ impl Camera {
     }
 
     pub fn add_zoom_impulse(&mut self, delta: f32, mouse_x: f32, mouse_y: f32) {
-        // Store the world position under cursor for zoom-to-point
-        self.last_mouse_world_pos = Some(self.screen_to_world(mouse_x, mouse_y));
+        // Zoom towards player if following, otherwise zoom towards mouse cursor
+        if !self.manual_control {
+            // Following player - zoom towards tracking target (player position)
+            self.last_mouse_world_pos = self.tracking_target;
+        } else {
+            // Manual control - zoom towards mouse cursor
+            self.last_mouse_world_pos = Some(self.screen_to_world(mouse_x, mouse_y));
+        }
 
-        // Add zoom velocity
+        // Apply zoom
         let zoom_factor = 1.1_f32.powf(delta);
         self.target_zoom = (self.target_zoom * zoom_factor).clamp(4.0, 128.0);
     }
