@@ -4,18 +4,19 @@ mod dungeon_gen;
 mod fov;
 mod grid;
 mod renderer;
+mod systems;
 mod tile;
 mod tileset;
 
 use camera::Camera;
-use components::{Container, Health, Inventory, ItemType, Player, Position, Sprite, Stats};
-use fov::FOV;
+use components::{Actor, Container, Health, Inventory, ItemType, Player, Position, RandomWanderAI, Sprite, Stats, VisualPosition};
 use glam::Vec2;
 use grid::Grid;
 use hecs::World;
 use renderer::Renderer;
 use tile::tile_ids;
 use tileset::Tileset;
+use rand::Rng;
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -172,11 +173,13 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Spawn player
+        // Spawn player (speed 3 = slower than skeletons)
         let player_entity = world.spawn((
             player_start,
+            VisualPosition::from_position(&player_start),
             Sprite::new(tile_ids::PLAYER),
             Player,
+            Actor::new(3),
             {
                 let mut health = Health::new(100);
                 health.current = 50;
@@ -195,6 +198,30 @@ impl ApplicationHandler for App {
                 Sprite::new(tile_ids::CHEST_CLOSED),
                 Container::new(vec![ItemType::HealthPotion]),
             ));
+        }
+
+        // Spawn skeletons on random walkable tiles (speed 2 = faster than player)
+        let mut rng = rand::thread_rng();
+        let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
+            .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                grid.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false)
+                    && !(x == player_start.x && y == player_start.y)
+            })
+            .collect();
+
+        // Spawn wandering enemies (skeletons)
+        for _ in 0..10 {
+            if let Some(&(x, y)) = walkable_tiles.get(rng.gen_range(0..walkable_tiles.len())) {
+                let pos = Position::new(x, y);
+                world.spawn((
+                    pos,
+                    VisualPosition::from_position(&pos),
+                    Sprite::new(tile_ids::SKELETON),
+                    Actor::new(2),
+                    RandomWanderAI,  // Behavior, not type
+                ));
+            }
         }
 
         self.state = Some(AppState {
@@ -304,50 +331,26 @@ impl AppState {
         // Handle input
         self.handle_input();
 
+        // Lerp all visual positions toward logical positions
+        systems::visual_lerp(&mut self.world, dt);
+
+        // Update camera to follow player's visual position
+        if let Ok(vis_pos) = self.world.get::<&VisualPosition>(self.player_entity) {
+            self.camera.set_tracking_target(Vec2::new(vis_pos.x, vis_pos.y));
+        }
+
         // Update camera (pass mouse_down so momentum doesn't apply while dragging)
         self.camera.update(dt, self.mouse_down);
 
         // Update FOV
-        if let Ok(player_pos) = self.world.get::<&Position>(self.player_entity) {
-            for tile in &mut self.grid.tiles {
-                tile.visible = false;
-            }
+        systems::update_fov(&self.world, &mut self.grid, self.player_entity, 10);
 
-            let visible_tiles = FOV::calculate(&self.grid, player_pos.x, player_pos.y, 10);
-            for (x, y) in visible_tiles {
-                if let Some(tile) = self.grid.get_mut(x, y) {
-                    tile.visible = true;
-                    tile.explored = true;
-                }
-            }
-        }
-
-        // Collect entities for rendering (only if in explored tiles, with fog)
-        let mut entities_to_render = Vec::new();
-        let mut player_render: Option<(Position, Sprite, f32)> = None;
-
-        for (id, (pos, sprite)) in self.world.query::<(&Position, &Sprite)>().iter() {
-            // Check tile visibility for fog of war
-            let (is_explored, is_visible) = self.grid.get(pos.x, pos.y)
-                .map(|tile| (tile.explored, tile.visible))
-                .unwrap_or((false, false));
-
-            if id == self.player_entity {
-                player_render = Some((*pos, *sprite, 1.0)); // Player always full brightness
-            } else if is_explored {
-                let fog = if is_visible { 1.0 } else { 0.5 };
-                entities_to_render.push((*pos, *sprite, fog));
-            }
-        }
-
-        // Player is always rendered (they're always in an explored tile)
-        if let Some(player) = player_render {
-            entities_to_render.push(player);
-        }
+        // Collect entities for rendering
+        let entities_to_render = systems::collect_renderables(&self.world, &self.grid, self.player_entity);
 
         // Get player health
         let health_percent = if let Ok(health) = self.world.get::<&Health>(self.player_entity) {
-            health.percentage()
+            (health.current as f32 / health.max as f32).clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -441,9 +444,11 @@ impl AppState {
         // Use item if clicked
         if let Some(item_index) = item_to_use {
             if let Ok(mut inv) = self.world.get::<&mut Inventory>(self.player_entity) {
-                if let Some(item) = inv.remove_item(item_index) {
+                if item_index < inv.items.len() {
+                    let item = inv.items.remove(item_index);
+                    inv.current_weight_kg -= item.weight_kg();
                     if let Ok(mut health) = self.world.get::<&mut Health>(self.player_entity) {
-                        health.heal(item.heal_amount());
+                        health.current = (health.current + item.heal_amount()).min(health.max);
                     }
                 }
             }
@@ -464,6 +469,27 @@ impl AppState {
 
         // Swap buffers
         self.gl_surface.swap_buffers(&self.gl_context).unwrap();
+    }
+
+    fn run_ticks_until_player_acts(&mut self, dx: i32, dy: i32) {
+        let mut rng = rand::thread_rng();
+
+        loop {
+            // Check if player can act
+            let player_can_act = self.world
+                .get::<&Actor>(self.player_entity)
+                .map(|a| a.energy >= a.speed)
+                .unwrap_or(true);
+
+            if player_can_act {
+                systems::player_move(&mut self.world, self.player_entity, dx, dy);
+                return;
+            }
+
+            // Player can't act yet - run one tick
+            systems::tick_energy(&mut self.world);
+            systems::ai_wander(&mut self.world, &self.grid, &mut rng);
+        }
     }
 
     fn handle_input(&mut self) {
@@ -496,39 +522,15 @@ impl AppState {
             movement = Some((1, 0));
         }
 
+        // Execute movement immediately (run all ticks, visuals will catch up)
         if let Some((dx, dy)) = movement {
-            // Get current position (copy it to avoid borrow issues)
             let current_pos = self.world.get::<&Position>(self.player_entity).ok().map(|p| *p);
-
             if let Some(pos) = current_pos {
                 let target_pos = Position::new(pos.x + dx, pos.y + dy);
-
                 if let Some(tile) = self.grid.get(target_pos.x, target_pos.y) {
                     if tile.tile_type.is_walkable() {
-                        // Move player
-                        if let Ok(mut pos) = self.world.get::<&mut Position>(self.player_entity) {
-                            *pos = target_pos;
-                        }
-                        self.camera.set_tracking_target(Vec2::new(target_pos.x as f32, target_pos.y as f32));
-
-                        // Check for chest and collect items
-                        let mut collected_items = Vec::new();
-                        for (_id, (chest_pos, container)) in self.world.query_mut::<(&Position, &mut Container)>() {
-                            if chest_pos.x == target_pos.x && chest_pos.y == target_pos.y && !container.is_open {
-                                container.is_open = true;
-                                collected_items = container.take_all();
-                                break;
-                            }
-                        }
-
-                        // Add collected items to inventory
-                        if !collected_items.is_empty() {
-                            if let Ok(mut inventory) = self.world.get::<&mut Inventory>(self.player_entity) {
-                                for item in collected_items {
-                                    inventory.add_item(item);
-                                }
-                            }
-                        }
+                        // Run ticks until player can act, then execute move
+                        self.run_ticks_until_player_acts(dx, dy);
                     }
                 }
             }

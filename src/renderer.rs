@@ -1,5 +1,5 @@
 use crate::camera::Camera;
-use crate::components::{Position, Sprite};
+use crate::components::Sprite;
 use crate::grid::Grid;
 use crate::tileset::Tileset;
 use glow::*;
@@ -360,7 +360,7 @@ impl Renderer {
         }
     }
 
-    pub fn render_entities(&mut self, camera: &Camera, entities: &[(Position, Sprite, f32)], tileset: &Tileset) -> Result<(), String> {
+    pub fn render_entities(&mut self, camera: &Camera, entities: &[(f32, f32, Sprite, f32)], tileset: &Tileset) -> Result<(), String> {
         if entities.is_empty() {
             return Ok(());
         }
@@ -376,11 +376,11 @@ impl Renderer {
             // Build instance data for entities
             let mut instance_data = Vec::new();
 
-            for (pos, sprite, fog) in entities {
+            for (x, y, sprite, fog) in entities {
                 let uv = tileset.get_uv(sprite.tile_id);
 
-                instance_data.push(pos.x as f32);
-                instance_data.push(pos.y as f32);
+                instance_data.push(*x);
+                instance_data.push(*y);
                 instance_data.push(uv.u0);
                 instance_data.push(uv.v0);
                 instance_data.push(uv.u1);

@@ -10,6 +10,7 @@ pub mod tile_ids {
 
     // Entity tiles
     pub const PLAYER: u32 = 87;    // Human character
+    pub const SKELETON: u32 = 105; // Skeleton enemy
     pub const CHEST_CLOSED: u32 = 32;  // Closed chest
     pub const CHEST_OPEN: u32 = 33;    // Open chest (if available)
 }
