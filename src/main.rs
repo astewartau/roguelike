@@ -1,12 +1,16 @@
+mod actions;
 mod camera;
 mod components;
 mod dungeon_gen;
+mod events;
 mod fov;
 mod grid;
+mod pathfinding;
 mod renderer;
 mod systems;
 mod tile;
 mod tileset;
+mod vfx;
 
 use camera::Camera;
 use components::{Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, Position, Sprite, Stats, VisualPosition, Weapon};
@@ -71,6 +75,16 @@ struct AppState {
     mouse_pos: (f32, f32),
     mouse_down: bool,
     last_mouse_pos: (f32, f32),
+    // Click-to-move path for player
+    player_path: Vec<(i32, i32)>,
+    // Destination of click-to-move (for auto-interact on arrival)
+    player_path_destination: Option<(i32, i32)>,
+    // Whether to show grid lines
+    show_grid_lines: bool,
+    // Visual effects (slashes, particles, etc.)
+    vfx: vfx::VfxManager,
+    // Event queue for decoupled system communication
+    events: events::EventQueue,
 }
 
 impl App {
@@ -186,11 +200,7 @@ impl ApplicationHandler for App {
             Sprite::new(tile_ids::PLAYER),
             Player,
             Actor::new(3),
-            {
-                let mut health = Health::new(100);
-                health.current = 50;
-                health
-            },
+            Health::new(15),
             Stats::new(10, 8, 12),
             Inventory::new(),
             Equipment::with_weapon(Weapon::sword()),
@@ -273,6 +283,11 @@ impl ApplicationHandler for App {
             mouse_pos: (0.0, 0.0),
             mouse_down: false,
             last_mouse_pos: (0.0, 0.0),
+            player_path: Vec::new(),
+            player_path_destination: None,
+            show_grid_lines: false,
+            vfx: vfx::VfxManager::new(),
+            events: events::EventQueue::new(),
         });
     }
 
@@ -323,8 +338,20 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
                 if !egui_consumed.consumed && button == MouseButton::Left {
+                    let was_down = state.mouse_down;
                     state.mouse_down = btn_state == ElementState::Pressed;
+
                     if btn_state == ElementState::Released {
+                        // Check if this was a click (not a drag)
+                        let dx = state.mouse_pos.0 - state.last_mouse_pos.0;
+                        let dy = state.mouse_pos.1 - state.last_mouse_pos.1;
+                        let was_drag = was_down && (dx.abs() > 5.0 || dy.abs() > 5.0);
+
+                        if !was_drag {
+                            // Click-to-move: calculate path to clicked tile
+                            state.handle_click_to_move();
+                        }
+
                         state.camera.release_pan();
                     }
                 }
@@ -365,10 +392,12 @@ impl AppState {
         // Update animations
         systems::update_lunge_animations(&mut self.world, dt);
         systems::update_hit_flashes(&mut self.world, dt);
+        self.vfx.update(dt);
 
         // Remove dead entities (turn into lootable bones, grant XP)
         let mut rng = rand::thread_rng();
-        systems::remove_dead_entities(&mut self.world, self.player_entity, &mut rng);
+        systems::remove_dead_entities(&mut self.world, self.player_entity, &mut rng, &mut self.events);
+        self.process_events();
 
         // Lerp all visual positions toward logical positions
         systems::visual_lerp(&mut self.world, dt);
@@ -671,8 +700,9 @@ impl AppState {
             self.gl.clear(glow::COLOR_BUFFER_BIT);
         }
 
-        self.renderer.render(&self.camera, &self.grid, &self.tileset).unwrap();
+        self.renderer.render(&self.camera, &self.grid, &self.tileset, self.show_grid_lines).unwrap();
         self.renderer.render_entities(&self.camera, &entities_to_render, &self.tileset).unwrap();
+        self.renderer.render_vfx(&self.camera, &self.vfx.effects);
 
         // Render egui
         self.egui_glow.paint(&self.window);
@@ -681,7 +711,7 @@ impl AppState {
         self.gl_surface.swap_buffers(&self.gl_context).unwrap();
     }
 
-    fn run_ticks_until_player_acts(&mut self, dx: i32, dy: i32) {
+    fn run_ticks_until_player_acts(&mut self, dx: i32, dy: i32) -> systems::MoveResult {
         let mut rng = rand::thread_rng();
 
         loop {
@@ -692,18 +722,123 @@ impl AppState {
                 .unwrap_or(true);
 
             if player_can_act {
-                match systems::player_move(&mut self.world, self.player_entity, dx, dy) {
+                let result = systems::player_move(&mut self.world, &self.grid, self.player_entity, dx, dy, &mut self.events);
+                match result {
                     systems::MoveResult::OpenedChest(chest) => {
                         self.open_chest = Some(chest);
                     }
-                    systems::MoveResult::Attacked(_) | systems::MoveResult::Moved | systems::MoveResult::Blocked => {}
+                    systems::MoveResult::Moved => {
+                        // Close any open loot window when player moves away
+                        self.open_chest = None;
+                    }
+                    _ => {}
                 }
-                return;
+                // Process events (VFX spawning, etc.)
+                self.process_events();
+                return result;
             }
 
             // Player can't act yet - run one tick
             systems::tick_energy(&mut self.world);
-            systems::ai_chase(&mut self.world, &self.grid, self.player_entity, &mut rng);
+            systems::ai_chase(&mut self.world, &self.grid, self.player_entity, &mut rng, &mut self.events);
+            // Process events from AI actions too
+            self.process_events();
+        }
+    }
+
+    /// Process all pending events, dispatching to appropriate handlers
+    fn process_events(&mut self) {
+        for event in self.events.drain() {
+            self.vfx.handle_event(&event);
+            // Future: audio.handle_event(&event), ui.handle_event(&event), etc.
+        }
+    }
+
+    fn handle_click_to_move(&mut self) {
+        // Convert screen position to world position
+        let world_pos = self.camera.screen_to_world(self.mouse_pos.0, self.mouse_pos.1);
+
+        // Convert to tile coordinates
+        let tile_x = world_pos.x.floor() as i32;
+        let tile_y = world_pos.y.floor() as i32;
+
+        // Get player position
+        let player_pos = match self.world.get::<&Position>(self.player_entity) {
+            Ok(p) => (p.x, p.y),
+            Err(_) => return,
+        };
+
+        // Don't path to current position
+        if tile_x == player_pos.0 && tile_y == player_pos.1 {
+            return;
+        }
+
+        // Collect blocking positions (other entities)
+        let blocked: std::collections::HashSet<(i32, i32)> = self.world
+            .query::<(&Position, &BlocksMovement)>()
+            .iter()
+            .filter(|(id, _)| *id != self.player_entity)
+            .map(|(_, (pos, _))| (pos.x, pos.y))
+            .collect();
+
+        // Calculate path
+        if let Some(path) = pathfinding::find_path(&self.grid, player_pos, (tile_x, tile_y), &blocked) {
+            self.player_path = path;
+            self.player_path_destination = Some((tile_x, tile_y));
+        }
+    }
+
+    fn follow_player_path(&mut self) {
+        if self.player_path.is_empty() {
+            return;
+        }
+
+        // Get the next step
+        let (next_x, next_y) = self.player_path[0];
+
+        // Get player position
+        let player_pos = match self.world.get::<&Position>(self.player_entity) {
+            Ok(p) => (p.x, p.y),
+            Err(_) => {
+                self.player_path.clear();
+                return;
+            }
+        };
+
+        // Calculate movement direction
+        let dx = next_x - player_pos.0;
+        let dy = next_y - player_pos.1;
+
+        // Execute the move
+        let result = self.run_ticks_until_player_acts(dx, dy);
+
+        match result {
+            systems::MoveResult::Moved => {
+                // Remove the step we just took
+                self.player_path.remove(0);
+
+                // If path is now empty, we've arrived - check for auto-interact
+                if self.player_path.is_empty() {
+                    if let Some(_dest) = self.player_path_destination.take() {
+                        // Check for lootable container at current position (bones, etc.)
+                        if let Some(container_id) =
+                            systems::find_container_at_player(&self.world, self.player_entity)
+                        {
+                            self.open_chest = Some(container_id);
+                        }
+                    }
+                }
+            }
+            systems::MoveResult::Attacked(_) | systems::MoveResult::OpenedChest(_) => {
+                // Stop pathing if we attacked or opened something
+                self.player_path.clear();
+                self.player_path_destination = None;
+            }
+            systems::MoveResult::Blocked => {
+                // Path is blocked, recalculate or clear
+                self.player_path.clear();
+                self.player_path_destination = None;
+            }
         }
     }
 
@@ -722,6 +857,11 @@ impl AppState {
         // Toggle inventory
         if self.keys_pressed.remove(&KeyCode::KeyI) {
             self.show_inventory = !self.show_inventory;
+        }
+
+        // Toggle grid lines
+        if self.keys_pressed.remove(&KeyCode::BracketRight) {
+            self.show_grid_lines = !self.show_grid_lines;
         }
 
         // Enter key: Take All if chest open, otherwise loot bones at player position
@@ -750,6 +890,9 @@ impl AppState {
 
         // Execute movement immediately (run all ticks, visuals will catch up)
         if let Some((dx, dy)) = movement {
+            // Keyboard movement cancels click-to-move path
+            self.player_path.clear();
+
             let current_pos = self.world.get::<&Position>(self.player_entity).ok().map(|p| *p);
             if let Some(pos) = current_pos {
                 let target_pos = Position::new(pos.x + dx, pos.y + dy);
@@ -760,6 +903,9 @@ impl AppState {
                     }
                 }
             }
+        } else {
+            // No keyboard movement - follow click-to-move path
+            self.follow_player_path();
         }
 
         // Mouse drag for panning (when inventory is closed)

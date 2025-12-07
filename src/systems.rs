@@ -1,6 +1,9 @@
+use crate::actions::{Action, ActionResult};
 use crate::components::{Actor, AIState, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment, Experience, Health, HitFlash, Inventory, LungeAnimation, Position, Sprite, Stats, VisualPosition, Weapon};
+use crate::events::EventQueue;
 use crate::fov::FOV;
 use crate::grid::Grid;
+use crate::pathfinding;
 use crate::tile::tile_ids;
 use hecs::World;
 use rand::Rng;
@@ -164,25 +167,36 @@ pub fn item_heal_amount(item: ItemType) -> i32 {
 }
 
 /// Turn dead entities into bones (health <= 0) and grant XP to player
-pub fn remove_dead_entities(world: &mut World, player_entity: hecs::Entity, rng: &mut impl Rng) {
+pub fn remove_dead_entities(world: &mut World, player_entity: hecs::Entity, rng: &mut impl Rng, events: &mut EventQueue) {
     let mut to_convert = Vec::new();
 
-    for (id, (health, stats)) in world.query::<(&Health, Option<&Stats>)>().iter() {
+    for (id, (pos, health, stats)) in world.query::<(&Position, &Health, Option<&Stats>)>().iter() {
         if health.current <= 0 {
             let xp = calculate_xp_value(stats);
-            to_convert.push((id, xp));
+            to_convert.push((id, (pos.x as f32 + 0.5, pos.y as f32 + 0.5), xp));
         }
     }
 
     // Grant XP to player
-    let total_xp: u32 = to_convert.iter().map(|(_, xp)| xp).sum();
+    let total_xp: u32 = to_convert.iter().map(|(_, _, xp)| xp).sum();
     if total_xp > 0 {
         if let Ok(mut exp) = world.get::<&mut Experience>(player_entity) {
-            grant_xp(&mut exp, total_xp);
+            let leveled_up = grant_xp(&mut exp, total_xp);
+            if leveled_up {
+                events.push(crate::events::GameEvent::LevelUp {
+                    new_level: exp.level,
+                });
+            }
         }
     }
 
-    for (id, _xp) in to_convert {
+    for (id, position, _xp) in to_convert {
+        // Emit death event
+        events.push(crate::events::GameEvent::EntityDied {
+            entity: id,
+            position,
+        });
+
         // Remove AI, Actor, Attackable, Stats components - turn into decoration
         let _ = world.remove_one::<Actor>(id);
         let _ = world.remove_one::<ChaseAI>(id);
@@ -237,15 +251,35 @@ pub fn update_fov(world: &World, grid: &mut Grid, player_entity: hecs::Entity, r
     }
 }
 
+/// Visual effect flags (bitfield)
+pub mod effects {
+    pub const NONE: u32 = 0;
+    pub const AGGRO_BORDER: u32 = 1 << 0;  // Red border when chasing
+    pub const HIT_FLASH: u32 = 1 << 1;     // White flash when damaged
+    // Future effects:
+    // pub const POISONED: u32 = 1 << 2;
+    // pub const BURNING: u32 = 1 << 3;
+    // pub const FROZEN: u32 = 1 << 4;
+    // pub const SHIELDED: u32 = 1 << 5;
+}
+
+/// Entity ready for rendering with all visual state
+pub struct RenderEntity {
+    pub x: f32,
+    pub y: f32,
+    pub sprite: Sprite,
+    pub brightness: f32,
+    pub effects: u32,  // Bitfield of active effects
+}
+
 /// Collect entities that should be rendered, with fog of war applied
-/// Returns (x, y, sprite, fog, has_border, has_hit_flash)
 pub fn collect_renderables(
     world: &World,
     grid: &Grid,
     player_entity: hecs::Entity,
-) -> Vec<(f32, f32, Sprite, f32, bool, bool)> {
-    let mut entities_to_render: Vec<(f32, f32, Sprite, f32, bool, bool)> = Vec::new();
-    let mut player_render: Option<(f32, f32, Sprite, f32, bool, bool)> = None;
+) -> Vec<RenderEntity> {
+    let mut entities_to_render: Vec<RenderEntity> = Vec::new();
+    let mut player_render: Option<RenderEntity> = None;
 
     for (id, (pos, vis_pos, sprite)) in world.query::<(&Position, &VisualPosition, &Sprite)>().iter() {
         let (is_explored, is_visible) = grid.get(pos.x, pos.y)
@@ -268,17 +302,44 @@ pub fn collect_renderables(
             .map(|door| door.is_open)
             .unwrap_or(false);
 
+        // Build effect flags
+        let mut entity_effects = effects::NONE;
+        if is_chasing {
+            entity_effects |= effects::AGGRO_BORDER;
+        }
+        if has_hit_flash {
+            entity_effects |= effects::HIT_FLASH;
+        }
+
         if id == player_entity {
-            player_render = Some((vis_pos.x, vis_pos.y, *sprite, 1.0, false, false));
+            player_render = Some(RenderEntity {
+                x: vis_pos.x,
+                y: vis_pos.y,
+                sprite: *sprite,
+                brightness: 1.0,
+                effects: effects::NONE,
+            });
         } else if is_visible {
             // Open doors render at 50% brightness
             let brightness = if is_open_door { 0.5 } else { 1.0 };
-            entities_to_render.push((vis_pos.x, vis_pos.y, *sprite, brightness, is_chasing, has_hit_flash));
+            entities_to_render.push(RenderEntity {
+                x: vis_pos.x,
+                y: vis_pos.y,
+                sprite: *sprite,
+                brightness,
+                effects: entity_effects,
+            });
         } else if is_explored && !is_actor {
             // In fog but explored - only show non-actors (chests, items)
             // Open doors in fog render even darker
             let brightness = if is_open_door { 0.25 } else { 0.5 };
-            entities_to_render.push((vis_pos.x, vis_pos.y, *sprite, brightness, false, false));
+            entities_to_render.push(RenderEntity {
+                x: vis_pos.x,
+                y: vis_pos.y,
+                sprite: *sprite,
+                brightness,
+                effects: effects::NONE,
+            });
         }
     }
 
@@ -298,25 +359,27 @@ pub fn tick_energy(world: &mut World) {
 }
 
 /// AI state machine: Idle (wander) -> Chasing (sees player) -> Investigating (lost sight)
-pub fn ai_chase(world: &mut World, grid: &Grid, player_entity: hecs::Entity, rng: &mut impl Rng) {
+/// Uses execution-time validation to prevent invalid moves like entity swaps.
+pub fn ai_chase(world: &mut World, grid: &Grid, player_entity: hecs::Entity, rng: &mut impl Rng, events: &mut EventQueue) {
     // Get player position
     let player_pos = match world.get::<&Position>(player_entity) {
         Ok(p) => (p.x, p.y),
         Err(_) => return,
     };
 
-    // Collect decisions first to avoid borrow conflicts
-    // (entity, new_x, new_y, new_state, last_known_pos)
-    let mut ai_moves: Vec<(hecs::Entity, i32, i32, AIState, Option<(i32, i32)>)> = Vec::new();
+    // Collect AI decisions first to avoid borrow conflicts
+    // We store: (entity, dx, dy, new_state, last_known_pos)
+    // Note: We now store deltas (dx, dy) not absolute positions
+    let mut ai_decisions: Vec<(hecs::Entity, i32, i32, AIState, Option<(i32, i32)>)> = Vec::new();
 
-    // Collect blocking positions for enemy FOV
+    // Collect blocking positions for enemy FOV (used for planning, not execution)
     let vision_blocking: HashSet<(i32, i32)> = world
         .query::<(&Position, &BlocksVision)>()
         .iter()
         .map(|(_, (pos, _))| (pos.x, pos.y))
         .collect();
 
-    // Collect movement blocking positions
+    // Collect movement blocking for pathfinding (soft check for planning)
     let movement_blocking: HashSet<(i32, i32)> = world
         .query::<(&Position, &BlocksMovement)>()
         .iter()
@@ -345,69 +408,46 @@ pub fn ai_chase(world: &mut World, grid: &Grid, player_entity: hecs::Entity, rng
         let (new_state, target, last_known) = match chase.state {
             AIState::Idle => {
                 if can_see_player {
-                    // Spotted the player! Start chasing
                     (AIState::Chasing, Some(player_pos), Some(player_pos))
                 } else {
-                    // Keep wandering randomly
                     (AIState::Idle, None, None)
                 }
             }
             AIState::Chasing => {
                 if can_see_player {
-                    // Still see the player, keep chasing
                     (AIState::Chasing, Some(player_pos), Some(player_pos))
                 } else {
-                    // Lost sight, switch to investigating last known position
                     (AIState::Investigating, chase.last_known_pos, chase.last_known_pos)
                 }
             }
             AIState::Investigating => {
                 if can_see_player {
-                    // Found the player again!
                     (AIState::Chasing, Some(player_pos), Some(player_pos))
                 } else if let Some(last_pos) = chase.last_known_pos {
-                    // Check if we've reached the last known position
                     if pos.x == last_pos.0 && pos.y == last_pos.1 {
-                        // Reached last known position, still don't see player -> go back to idle
                         (AIState::Idle, None, None)
                     } else {
-                        // Keep investigating toward last known position
                         (AIState::Investigating, Some(last_pos), Some(last_pos))
                     }
                 } else {
-                    // No last known position, go idle
                     (AIState::Idle, None, None)
                 }
             }
         };
 
-        // Determine movement based on state
-        let (new_x, new_y) = if let Some((tx, ty)) = target {
-            // Move toward target (Chasing or Investigating)
-            let dx = (tx - pos.x).signum();
-            let dy = (ty - pos.y).signum();
-
-            let mut nx = pos.x;
-            let mut ny = pos.y;
-
-            // Try horizontal first, then vertical
-            if dx != 0 {
-                let try_x = pos.x + dx;
-                if let Some(tile) = grid.get(try_x, pos.y) {
-                    if tile.tile_type.is_walkable() && !movement_blocking.contains(&(try_x, pos.y)) {
-                        nx = try_x;
-                    }
-                }
+        // Determine intended movement (as delta, not absolute)
+        let (dx, dy) = if let Some((tx, ty)) = target {
+            // Move toward target using A* pathfinding
+            if let Some((nx, ny)) = pathfinding::next_step_toward(
+                grid,
+                (pos.x, pos.y),
+                (tx, ty),
+                &movement_blocking,
+            ) {
+                (nx - pos.x, ny - pos.y)
+            } else {
+                (0, 0) // Can't pathfind, stay in place
             }
-            if nx == pos.x && dy != 0 {
-                let try_y = pos.y + dy;
-                if let Some(tile) = grid.get(pos.x, try_y) {
-                    if tile.tile_type.is_walkable() && !movement_blocking.contains(&(pos.x, try_y)) {
-                        ny = try_y;
-                    }
-                }
-            }
-            (nx, ny)
         } else {
             // Idle: wander randomly
             let dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)];
@@ -415,143 +455,70 @@ pub fn ai_chase(world: &mut World, grid: &Grid, player_entity: hecs::Entity, rng
             let new_x = pos.x + dx;
             let new_y = pos.y + dy;
 
+            // Soft check for planning - actual validation happens at execution
             if let Some(tile) = grid.get(new_x, new_y) {
-                if tile.tile_type.is_walkable() && !movement_blocking.contains(&(new_x, new_y)) {
-                    (new_x, new_y)
+                if tile.tile_type.is_walkable() {
+                    (dx, dy)
                 } else {
-                    (pos.x, pos.y)
+                    (0, 0)
                 }
             } else {
-                (pos.x, pos.y)
+                (0, 0)
             }
         };
 
-        ai_moves.push((id, new_x, new_y, new_state, last_known));
+        ai_decisions.push((id, dx, dy, new_state, last_known));
     }
 
-    // Apply moves and state updates
-    for (id, new_x, new_y, new_state, last_known) in ai_moves {
-        // Update chase state
+    // Execute each action with real-time validation
+    // This is the key fix: each action checks the CURRENT world state
+    for (id, dx, dy, new_state, last_known) in ai_decisions {
+        // Update chase state first
         if let Ok(mut chase) = world.get::<&mut ChaseAI>(id) {
             chase.state = new_state;
             chase.last_known_pos = last_known;
         }
 
-        // Get current position to check if we're actually moving
-        let current_pos = world.get::<&Position>(id).ok().map(|p| (p.x, p.y));
-
-        if let Some((cx, cy)) = current_pos {
-            // Spend energy (even if we couldn't move)
-            if let Ok(mut actor) = world.get::<&mut Actor>(id) {
-                actor.energy -= actor.speed;
-            }
-
-            if new_x != cx || new_y != cy {
-                // Move
-                if let Ok(mut pos) = world.get::<&mut Position>(id) {
-                    pos.x = new_x;
-                    pos.y = new_y;
-                }
-            }
+        // Execute the move action with real-time validation
+        // This will:
+        // - Convert to attack if there's an attackable entity at target
+        // - Block if something is in the way
+        // - Move if the path is clear
+        if dx != 0 || dy != 0 {
+            let action = Action::Move { dx, dy };
+            let _result = action.execute(world, grid, id, events);
+            // Note: We don't need to handle the result specially here.
+            // If blocked or attacked, that's fine - the action system handles it.
+        } else {
+            // No movement intended, just wait (spend energy)
+            let action = Action::Wait;
+            let _result = action.execute(world, grid, id, events);
         }
     }
 }
 
 
 /// Handle player movement, door interaction, chest interaction, and combat.
+/// Uses the unified Action system for execution-time validation.
 pub fn player_move(
     world: &mut World,
+    grid: &Grid,
     player_entity: hecs::Entity,
     dx: i32,
     dy: i32,
+    events: &mut EventQueue,
 ) -> MoveResult {
-    let current_pos = world.get::<&Position>(player_entity).ok().map(|p| *p);
-    let Some(pos) = current_pos else { return MoveResult::Blocked };
+    let action = Action::Move { dx, dy };
+    let result = action.execute(world, grid, player_entity, events);
 
-    let target_x = pos.x + dx;
-    let target_y = pos.y + dy;
-
-    // Check for attackable entity at target position
-    let mut enemy_to_attack: Option<hecs::Entity> = None;
-    for (id, (enemy_pos, _attackable)) in world.query::<(&Position, &Attackable)>().iter() {
-        if enemy_pos.x == target_x && enemy_pos.y == target_y {
-            enemy_to_attack = Some(id);
-            break;
-        }
+    // Convert ActionResult to MoveResult for backwards compatibility
+    match result {
+        ActionResult::Moved => MoveResult::Moved,
+        ActionResult::Attacked(entity) => MoveResult::Attacked(entity),
+        ActionResult::OpenedDoor(_) => MoveResult::Moved,
+        ActionResult::OpenedChest(entity) => MoveResult::OpenedChest(entity),
+        ActionResult::Blocked | ActionResult::Invalid => MoveResult::Blocked,
     }
-
-    // If there's an enemy, attack it
-    if let Some(enemy_id) = enemy_to_attack {
-        perform_attack(world, player_entity, enemy_id, target_x as f32, target_y as f32);
-        // Spend energy for attacking
-        if let Ok(mut actor) = world.get::<&mut Actor>(player_entity) {
-            actor.energy -= actor.speed;
-        }
-        return MoveResult::Attacked(enemy_id);
-    }
-
-    // Check for door at target position
-    let mut door_to_open: Option<hecs::Entity> = None;
-    for (id, (door_pos, door)) in world.query::<(&Position, &Door)>().iter() {
-        if door_pos.x == target_x && door_pos.y == target_y && !door.is_open {
-            door_to_open = Some(id);
-            break;
-        }
-    }
-
-    // If there's a closed door, open it instead of moving
-    if let Some(door_id) = door_to_open {
-        open_door(world, door_id);
-        // Spend energy for opening the door
-        if let Ok(mut actor) = world.get::<&mut Actor>(player_entity) {
-            actor.energy -= actor.speed;
-        }
-        return MoveResult::Moved;
-    }
-
-    // Check for chest at target position (open or closed) - but not bones (walkable containers)
-    let mut chest_to_interact: Option<(hecs::Entity, bool, bool)> = None;
-    for (id, (chest_pos, container, _blocks)) in world.query::<(&Position, &Container, &BlocksMovement)>().iter() {
-        if chest_pos.x == target_x && chest_pos.y == target_y {
-            chest_to_interact = Some((id, container.is_open, !container.is_empty()));
-            break;
-        }
-    }
-
-    // If there's a chest with items (or closed), interact with it
-    if let Some((chest_id, is_open, has_items)) = chest_to_interact {
-        // Skip interaction if chest is open and empty
-        if is_open && !has_items {
-            return MoveResult::Blocked;
-        }
-        if !is_open {
-            open_chest(world, chest_id);
-        }
-        // Spend energy for interacting with the chest
-        if let Ok(mut actor) = world.get::<&mut Actor>(player_entity) {
-            actor.energy -= actor.speed;
-        }
-        return MoveResult::OpenedChest(chest_id);
-    }
-
-    // Check for any entity blocking movement at target position
-    for (id, (blocking_pos, _)) in world.query::<(&Position, &BlocksMovement)>().iter() {
-        if id != player_entity && blocking_pos.x == target_x && blocking_pos.y == target_y {
-            return MoveResult::Blocked;
-        }
-    }
-
-    let target_pos = Position::new(target_x, target_y);
-
-    // Spend energy and move
-    if let Ok(mut actor) = world.get::<&mut Actor>(player_entity) {
-        actor.energy -= actor.speed;
-    }
-    if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
-        *pos = target_pos;
-    }
-
-    MoveResult::Moved
 }
 
 // === Combat System Functions ===
@@ -570,24 +537,8 @@ pub fn get_attack_damage(world: &World, attacker: hecs::Entity) -> i32 {
     }
 }
 
-/// Perform an attack from attacker to target
-fn perform_attack(world: &mut World, attacker: hecs::Entity, target: hecs::Entity, target_x: f32, target_y: f32) {
-    let damage = get_attack_damage(world, attacker);
-
-    // Apply damage to target
-    if let Ok(mut health) = world.get::<&mut Health>(target) {
-        health.current -= damage;
-    }
-
-    // Add lunge animation to attacker
-    let _ = world.insert_one(attacker, LungeAnimation::new(target_x, target_y));
-
-    // Add hit flash to target
-    let _ = world.insert_one(target, HitFlash::new());
-}
-
 /// Open a door - remove blocking components (sprite stays the same but renders darker)
-fn open_door(world: &mut World, door_id: hecs::Entity) {
+pub fn open_door(world: &mut World, door_id: hecs::Entity) {
     // Mark as open
     if let Ok(mut door) = world.get::<&mut Door>(door_id) {
         door.is_open = true;
@@ -599,7 +550,7 @@ fn open_door(world: &mut World, door_id: hecs::Entity) {
 }
 
 /// Open a chest - mark as open and change sprite (keeps blocking movement)
-fn open_chest(world: &mut World, chest_id: hecs::Entity) {
+pub fn open_chest(world: &mut World, chest_id: hecs::Entity) {
     // Mark as open
     if let Ok(mut container) = world.get::<&mut Container>(chest_id) {
         container.is_open = true;

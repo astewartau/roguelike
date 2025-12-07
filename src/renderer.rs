@@ -1,6 +1,6 @@
 use crate::camera::Camera;
-use crate::components::Sprite;
 use crate::grid::Grid;
+use crate::systems::RenderEntity;
 use crate::tileset::Tileset;
 use glow::*;
 use std::mem;
@@ -11,14 +11,14 @@ layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
 layout (location = 3) in float aFogMult;
-layout (location = 4) in float aBorder;
+layout (location = 4) in float aEffects;    // Bitfield of visual effects
 
 uniform mat4 uProjection;
 
 out vec2 vTexCoord;
 out vec2 vLocalPos;
 out float vFog;
-out float vBorder;
+out float vEffects;
 
 void main() {
     vec2 worldPos = aInstancePos + aPos;
@@ -28,7 +28,7 @@ void main() {
     vTexCoord = mix(aInstanceUV.xy, aInstanceUV.zw, aPos);
     vLocalPos = aPos;
     vFog = aFogMult;
-    vBorder = aBorder;
+    vEffects = aEffects;
 }
 "#;
 
@@ -36,29 +36,35 @@ const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
 in vec2 vTexCoord;
 in vec2 vLocalPos;
 in float vFog;
-in float vBorder;  // 0.0 = normal, 1.0 = red border, 2.0 = hit flash
+in float vEffects;  // Bitfield: 1=aggro border, 2=hit flash, 4=poison, etc.
 
 uniform sampler2D uTileset;
 
 out vec4 FragColor;
+
+// Effect bit flags (must match systems::effects)
+const int EFFECT_AGGRO_BORDER = 1;
+const int EFFECT_HIT_FLASH = 2;
 
 void main() {
     vec4 texColor = texture(uTileset, vTexCoord);
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
 
     vec3 color = texColor.rgb * vFog;
+    int effects = int(vEffects);
 
-    // Hit flash effect (white overlay)
-    if (vBorder > 1.5) {
-        color = mix(color, vec3(1.0, 1.0, 1.0), 0.7);  // White flash
+    // Hit flash effect (white overlay) - takes priority
+    if ((effects & EFFECT_HIT_FLASH) != 0) {
+        color = mix(color, vec3(1.0, 1.0, 1.0), 0.7);
     }
-    // Draw red border if flagged
-    else if (vBorder > 0.5) {
+
+    // Aggro border (red outline when chasing)
+    if ((effects & EFFECT_AGGRO_BORDER) != 0) {
         float borderWidth = 0.08;
         bool onBorder = vLocalPos.x < borderWidth || vLocalPos.x > (1.0 - borderWidth) ||
                         vLocalPos.y < borderWidth || vLocalPos.y > (1.0 - borderWidth);
         if (onBorder) {
-            color = vec3(0.9, 0.2, 0.2);  // Red border
+            color = vec3(0.9, 0.2, 0.2);
         }
     }
 
@@ -85,6 +91,76 @@ void main() {
 }
 "#;
 
+// VFX shaders for slash effects
+const VFX_VERTEX_SHADER: &str = r#"#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aInstancePos;
+layout (location = 2) in float aProgress;
+layout (location = 3) in float aAngle;
+
+uniform mat4 uProjection;
+
+out vec2 vLocalPos;
+out float vProgress;
+out float vAngle;
+
+void main() {
+    vec2 worldPos = aInstancePos + aPos;
+    gl_Position = uProjection * vec4(worldPos, 0.0, 1.0);
+    vLocalPos = aPos;
+    vProgress = aProgress;
+    vAngle = aAngle;
+}
+"#;
+
+const VFX_FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 vLocalPos;
+in float vProgress;
+in float vAngle;
+
+out vec4 FragColor;
+
+void main() {
+    // Center UV at (0,0) and scale to -1..1
+    vec2 uv = vLocalPos * 2.0 - 1.0;
+
+    // Rotate UV by angle to get diagonal slash
+    float c = cos(vAngle);
+    float s = sin(vAngle);
+    vec2 rotUV = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+
+    // Slash is a horizontal line in rotated space (distance from y=0)
+    float dist = abs(rotUV.y);
+
+    // Slash thickness
+    float thickness = 0.18;
+    float edge = smoothstep(thickness, thickness * 0.2, dist);
+
+    // Position along the slash (-1 to 1 in rotated x)
+    float alongSlash = rotUV.x;
+
+    // Animated sweep: slash extends from one end to the other
+    float sweepStart = mix(-1.8, 0.2, vProgress);
+    float sweepEnd = mix(-0.2, 1.8, vProgress);
+    float sweep = smoothstep(sweepStart, sweepStart + 0.4, alongSlash) *
+                  smoothstep(sweepEnd, sweepEnd - 0.4, alongSlash);
+
+    // Fade out over time
+    float fadeOut = 1.0 - smoothstep(0.6, 1.0, vProgress);
+
+    float alpha = edge * sweep * fadeOut;
+
+    // Deep red core, brighter red edge
+    vec3 coreColor = vec3(0.4, 0.0, 0.0);   // Deep dark red core
+    vec3 edgeColor = vec3(1.0, 0.2, 0.1);   // Bright red edge
+    float coreMask = smoothstep(thickness, 0.0, dist);
+    vec3 color = mix(edgeColor, coreColor, coreMask);
+
+    if (alpha < 0.01) discard;
+    FragColor = vec4(color, alpha);
+}
+"#;
+
 pub struct Renderer {
     gl: Arc<glow::Context>,
     program: NativeProgram,
@@ -98,6 +174,12 @@ pub struct Renderer {
     grid_vao: NativeVertexArray,
     grid_vbo: NativeBuffer,
     grid_projection_loc: NativeUniformLocation,
+    // VFX rendering
+    vfx_program: NativeProgram,
+    vfx_vao: NativeVertexArray,
+    vfx_vbo: NativeBuffer,
+    vfx_instance_vbo: NativeBuffer,
+    vfx_projection_loc: NativeUniformLocation,
 }
 
 impl Renderer {
@@ -253,6 +335,91 @@ impl Renderer {
 
             gl.bind_vertex_array(None);
 
+            // Create VFX shader program
+            let vfx_vertex_shader = gl
+                .create_shader(VERTEX_SHADER)
+                .map_err(|e| format!("Failed to create VFX vertex shader: {}", e))?;
+            gl.shader_source(vfx_vertex_shader, VFX_VERTEX_SHADER);
+            gl.compile_shader(vfx_vertex_shader);
+            if !gl.get_shader_compile_status(vfx_vertex_shader) {
+                return Err(gl.get_shader_info_log(vfx_vertex_shader));
+            }
+
+            let vfx_fragment_shader = gl
+                .create_shader(FRAGMENT_SHADER)
+                .map_err(|e| format!("Failed to create VFX fragment shader: {}", e))?;
+            gl.shader_source(vfx_fragment_shader, VFX_FRAGMENT_SHADER);
+            gl.compile_shader(vfx_fragment_shader);
+            if !gl.get_shader_compile_status(vfx_fragment_shader) {
+                return Err(gl.get_shader_info_log(vfx_fragment_shader));
+            }
+
+            let vfx_program = gl
+                .create_program()
+                .map_err(|e| format!("Failed to create VFX program: {}", e))?;
+            gl.attach_shader(vfx_program, vfx_vertex_shader);
+            gl.attach_shader(vfx_program, vfx_fragment_shader);
+            gl.link_program(vfx_program);
+            if !gl.get_program_link_status(vfx_program) {
+                return Err(gl.get_program_info_log(vfx_program));
+            }
+
+            gl.delete_shader(vfx_vertex_shader);
+            gl.delete_shader(vfx_fragment_shader);
+
+            let vfx_projection_loc = gl
+                .get_uniform_location(vfx_program, "uProjection")
+                .ok_or("Failed to get VFX projection uniform location")?;
+
+            // Create VFX VAO and VBOs
+            let vfx_vao = gl
+                .create_vertex_array()
+                .map_err(|e| format!("Failed to create VFX VAO: {}", e))?;
+            gl.bind_vertex_array(Some(vfx_vao));
+
+            // Quad vertices for VFX (same as entity quad)
+            let vfx_vbo = gl
+                .create_buffer()
+                .map_err(|e| format!("Failed to create VFX VBO: {}", e))?;
+            gl.bind_buffer(ARRAY_BUFFER, Some(vfx_vbo));
+            let vfx_vertices: [f32; 12] = [
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
+            ];
+            gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&vfx_vertices), STATIC_DRAW);
+
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(0, 2, FLOAT, false, 8, 0);
+
+            // VFX instance buffer: pos(2) + progress(1) + angle(1) = 4 floats = 16 bytes
+            let vfx_instance_vbo = gl
+                .create_buffer()
+                .map_err(|e| format!("Failed to create VFX instance VBO: {}", e))?;
+            gl.bind_buffer(ARRAY_BUFFER, Some(vfx_instance_vbo));
+
+            let vfx_stride = 16;
+
+            // Position (2 floats)
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 2, FLOAT, false, vfx_stride, 0);
+            gl.vertex_attrib_divisor(1, 1);
+
+            // Progress (1 float)
+            gl.enable_vertex_attrib_array(2);
+            gl.vertex_attrib_pointer_f32(2, 1, FLOAT, false, vfx_stride, 8);
+            gl.vertex_attrib_divisor(2, 1);
+
+            // Angle (1 float)
+            gl.enable_vertex_attrib_array(3);
+            gl.vertex_attrib_pointer_f32(3, 1, FLOAT, false, vfx_stride, 12);
+            gl.vertex_attrib_divisor(3, 1);
+
+            gl.bind_vertex_array(None);
+
             // Navy blue background
             gl.clear_color(0.05, 0.08, 0.15, 1.0);
 
@@ -272,11 +439,16 @@ impl Renderer {
                 grid_vao,
                 grid_vbo,
                 grid_projection_loc,
+                vfx_program,
+                vfx_vao,
+                vfx_vbo,
+                vfx_instance_vbo,
+                vfx_projection_loc,
             })
         }
     }
 
-    pub fn render(&mut self, camera: &Camera, grid: &Grid, tileset: &Tileset) -> Result<(), String> {
+    pub fn render(&mut self, camera: &Camera, grid: &Grid, tileset: &Tileset, show_grid_lines: bool) -> Result<(), String> {
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
 
@@ -338,8 +510,10 @@ impl Renderer {
 
             self.gl.bind_vertex_array(None);
 
-            // Render grid lines on top
-            self.render_grid_lines(camera, min_x, max_x, min_y, max_y);
+            // Render grid lines on top (if enabled)
+            if show_grid_lines {
+                self.render_grid_lines(camera, min_x, max_x, min_y, max_y);
+            }
         }
 
         Ok(())
@@ -390,8 +564,8 @@ impl Renderer {
         }
     }
 
-    /// Render entities. Tuple: (x, y, sprite, fog, has_border, has_hit_flash)
-    pub fn render_entities(&mut self, camera: &Camera, entities: &[(f32, f32, Sprite, f32, bool, bool)], tileset: &Tileset) -> Result<(), String> {
+    /// Render entities
+    pub fn render_entities(&mut self, camera: &Camera, entities: &[RenderEntity], tileset: &Tileset) -> Result<(), String> {
         if entities.is_empty() {
             return Ok(());
         }
@@ -407,19 +581,18 @@ impl Renderer {
             // Build instance data for entities
             let mut instance_data = Vec::new();
 
-            for (x, y, sprite, fog, has_border, has_hit_flash) in entities {
-                let uv = tileset.get_uv(sprite.tile_id);
+            for entity in entities {
+                let uv = tileset.get_uv(entity.sprite.tile_id);
 
-                instance_data.push(*x);
-                instance_data.push(*y);
+                instance_data.push(entity.x);
+                instance_data.push(entity.y);
                 instance_data.push(uv.u0);
                 instance_data.push(uv.v0);
                 instance_data.push(uv.u1);
                 instance_data.push(uv.v1);
-                instance_data.push(*fog);
-                // Encode border (1.0) and hit flash (2.0) in the same field
-                let effect = if *has_hit_flash { 2.0 } else if *has_border { 1.0 } else { 0.0 };
-                instance_data.push(effect);
+                instance_data.push(entity.brightness);
+                // Pass effects bitfield as float (shader will cast to int)
+                instance_data.push(entity.effects as f32);
             }
 
             self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
@@ -435,6 +608,43 @@ impl Renderer {
 
         Ok(())
     }
+
+    /// Render visual effects (slashes, particles, etc.)
+    pub fn render_vfx(&mut self, camera: &Camera, effects: &[crate::vfx::VisualEffect]) {
+        if effects.is_empty() {
+            return;
+        }
+
+        unsafe {
+            self.gl.use_program(Some(self.vfx_program));
+            self.gl.bind_vertex_array(Some(self.vfx_vao));
+
+            // Build instance data: pos(2) + progress(1) + angle(1)
+            let mut instance_data = Vec::new();
+
+            for effect in effects {
+                let angle = match effect.effect_type {
+                    crate::vfx::EffectType::Slash { angle } => angle,
+                };
+
+                // Center the effect on the tile (effect.x/y is already centered)
+                instance_data.push(effect.x - 0.5);
+                instance_data.push(effect.y - 0.5);
+                instance_data.push(effect.progress());
+                instance_data.push(angle);
+            }
+
+            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vfx_instance_vbo));
+            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
+
+            let projection = camera.projection_matrix();
+            self.gl.uniform_matrix_4_f32_slice(Some(&self.vfx_projection_loc), false, projection.as_ref());
+
+            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, effects.len() as i32);
+
+            self.gl.bind_vertex_array(None);
+        }
+    }
 }
 
 impl Drop for Renderer {
@@ -447,6 +657,10 @@ impl Drop for Renderer {
             self.gl.delete_program(self.grid_program);
             self.gl.delete_vertex_array(self.grid_vao);
             self.gl.delete_buffer(self.grid_vbo);
+            self.gl.delete_program(self.vfx_program);
+            self.gl.delete_vertex_array(self.vfx_vao);
+            self.gl.delete_buffer(self.vfx_vbo);
+            self.gl.delete_buffer(self.vfx_instance_vbo);
         }
     }
 }
