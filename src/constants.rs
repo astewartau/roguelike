@@ -99,6 +99,8 @@ pub const SKELETON_STRENGTH: i32 = 4;
 pub const SKELETON_INTELLIGENCE: i32 = 1;
 /// Skeleton agility
 pub const SKELETON_AGILITY: i32 = 3;
+/// Skeleton attack damage
+pub const SKELETON_DAMAGE: i32 = 5;
 
 /// Gold dropped by enemies (min)
 pub const ENEMY_GOLD_DROP_MIN: u32 = 1;

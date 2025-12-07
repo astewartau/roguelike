@@ -221,6 +221,15 @@ impl Weapon {
             damage_bonus: SWORD_DAMAGE_BONUS,
         }
     }
+
+    pub fn claws(base_damage: i32) -> Self {
+        Self {
+            name: "Claws".to_string(),
+            tile_id: crate::tile::tile_ids::BONES, // No specific icon, use bones
+            base_damage,
+            damage_bonus: 0,
+        }
+    }
 }
 
 /// Equipped items for an entity

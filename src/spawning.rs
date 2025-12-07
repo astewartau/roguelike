@@ -4,7 +4,8 @@
 //! without modifying spawning code.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Health, Position, Sprite, Stats, VisualPosition,
+    Actor, Attackable, BlocksMovement, ChaseAI, Equipment, Health, Position, Sprite, Stats,
+    VisualPosition, Weapon,
 };
 use crate::tile::tile_ids;
 use hecs::World;
@@ -22,6 +23,8 @@ pub struct EnemyDef {
     pub speed: i32,
     /// Sight radius for chase AI
     pub sight_radius: i32,
+    /// Base attack damage
+    pub damage: i32,
     /// Base stats
     pub strength: i32,
     pub intelligence: i32,
@@ -40,6 +43,7 @@ impl EnemyDef {
             ChaseAI::new(self.sight_radius),
             Health::new(self.health),
             Stats::new(self.strength, self.intelligence, self.agility),
+            Equipment::with_weapon(Weapon::claws(self.damage)),
             Attackable,
             BlocksMovement,
         ))
@@ -57,6 +61,7 @@ pub mod enemies {
         health: SKELETON_HEALTH,
         speed: SKELETON_SPEED,
         sight_radius: SKELETON_SIGHT_RADIUS,
+        damage: SKELETON_DAMAGE,
         strength: SKELETON_STRENGTH,
         intelligence: SKELETON_INTELLIGENCE,
         agility: SKELETON_AGILITY,

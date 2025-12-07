@@ -4,7 +4,7 @@
 
 use crate::camera::Camera;
 use crate::components::{
-    Actor, BlocksMovement, BlocksVision, Container, Door, Equipment, Experience, Health,
+    Actor, Attackable, BlocksMovement, BlocksVision, Container, Door, Equipment, Experience, Health,
     Inventory, ItemType, Player, Position, Sprite, Stats, VisualPosition, Weapon,
 };
 use crate::constants::*;
@@ -45,6 +45,7 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         Equipment::with_weapon(Weapon::sword()),
         BlocksMovement,
         Experience::new(),
+        Attackable,
     ));
 
     // Spawn chests (block movement until opened)
