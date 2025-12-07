@@ -1,3 +1,4 @@
+use crate::constants::*;
 use glam::{Mat4, Vec2};
 
 pub struct Camera {
@@ -18,11 +19,11 @@ impl Camera {
     pub fn new(viewport_width: f32, viewport_height: f32) -> Self {
         Self {
             position: Vec2::ZERO,
-            zoom: 32.0, // pixels per grid cell
+            zoom: CAMERA_DEFAULT_ZOOM,
             viewport_width,
             viewport_height,
             velocity: Vec2::ZERO,
-            target_zoom: 32.0,
+            target_zoom: CAMERA_DEFAULT_ZOOM,
             last_mouse_world_pos: None,
             tracking_target: None,
             manual_control: false,
@@ -52,7 +53,7 @@ impl Camera {
 
     pub fn release_pan(&mut self) {
         // Apply momentum scaling when mouse is released
-        self.velocity *= 2.0; // Scale up for nice momentum effect
+        self.velocity *= CAMERA_MOMENTUM_SCALE;
     }
 
     pub fn set_tracking_target(&mut self, target: Vec2) {
@@ -72,8 +73,8 @@ impl Camera {
         }
 
         // Apply zoom
-        let zoom_factor = 1.1_f32.powf(delta);
-        self.target_zoom = (self.target_zoom * zoom_factor).clamp(4.0, 128.0);
+        let zoom_factor = CAMERA_ZOOM_FACTOR.powf(delta);
+        self.target_zoom = (self.target_zoom * zoom_factor).clamp(CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
     }
 
     pub fn update(&mut self, dt: f32, is_dragging: bool) {
@@ -81,7 +82,7 @@ impl Camera {
         if !self.manual_control && !is_dragging {
             if let Some(target) = self.tracking_target {
                 // Smooth interpolation to target position
-                let t = 1.0 - 0.85_f32.powf(dt * 60.0);
+                let t = 1.0 - CAMERA_TRACKING_SMOOTHING.powf(dt * 60.0);
                 self.position = self.position + (target - self.position) * t;
             }
         }
@@ -89,23 +90,23 @@ impl Camera {
         // Only apply momentum when not dragging and in manual mode
         if !is_dragging && self.manual_control {
             // Apply velocity with damping (smooth deceleration)
-            let damping = 0.90_f32.powf(dt * 60.0); // Frame-rate independent damping
+            let damping = CAMERA_VELOCITY_DAMPING.powf(dt * 60.0);
 
             self.position += self.velocity * dt * 60.0;
             self.velocity *= damping;
 
             // Stop completely when velocity is very small
-            if self.velocity.length() < 0.001 {
+            if self.velocity.length() < CAMERA_VELOCITY_THRESHOLD {
                 self.velocity = Vec2::ZERO;
             }
         }
 
         // Smooth zoom interpolation
-        if (self.zoom - self.target_zoom).abs() > 0.01 {
+        if (self.zoom - self.target_zoom).abs() > CAMERA_ZOOM_SNAP_THRESHOLD {
             let zoom_before = self.zoom;
 
             // Smooth interpolation
-            let t = 1.0 - 0.85_f32.powf(dt * 60.0);
+            let t = 1.0 - CAMERA_TRACKING_SMOOTHING.powf(dt * 60.0);
             self.zoom = self.zoom + (self.target_zoom - self.zoom) * t;
 
             // Adjust position to zoom towards last mouse position

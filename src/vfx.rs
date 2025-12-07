@@ -3,6 +3,7 @@
 //! These are separate from entity state - they're spawned, animated, and removed
 //! without affecting game logic.
 
+use crate::constants::*;
 use crate::events::GameEvent;
 
 /// A one-shot visual effect
@@ -52,7 +53,7 @@ pub enum EffectType {
 impl EffectType {
     pub fn duration(&self) -> f32 {
         match self {
-            EffectType::Slash { .. } => 0.2,
+            EffectType::Slash { .. } => SLASH_VFX_DURATION,
         }
     }
 }
@@ -74,9 +75,7 @@ impl VfxManager {
 
     /// Spawn a slash effect at target position
     pub fn spawn_slash(&mut self, x: f32, y: f32) {
-        // Slight randomization to angle for variety
-        let angle = std::f32::consts::FRAC_PI_4; // 45 degrees
-        self.spawn(x, y, EffectType::Slash { angle });
+        self.spawn(x, y, EffectType::Slash { angle: SLASH_VFX_ANGLE });
     }
 
     /// Update all effects, removing finished ones

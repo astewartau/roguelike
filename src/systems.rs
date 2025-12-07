@@ -1,5 +1,6 @@
 use crate::actions::{Action, ActionResult};
 use crate::components::{Actor, AIState, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment, Experience, Health, HitFlash, Inventory, LungeAnimation, Position, Sprite, Stats, VisualPosition, Weapon};
+use crate::constants::*;
 use crate::events::EventQueue;
 use crate::fov::FOV;
 use crate::grid::Grid;
@@ -19,7 +20,7 @@ pub enum MoveResult {
 
 /// Smoothly interpolate visual positions toward logical positions
 pub fn visual_lerp(world: &mut World, dt: f32) {
-    let lerp_speed = dt * 25.0;
+    let lerp_speed = dt * VISUAL_LERP_SPEED;
     for (_id, (pos, vis_pos, lunge)) in world.query_mut::<(&Position, &mut VisualPosition, Option<&LungeAnimation>)>() {
         // If lunging, offset visual position toward target
         if let Some(lunge) = lunge {
@@ -35,7 +36,7 @@ pub fn visual_lerp(world: &mut World, dt: f32) {
                 let t = lunge.progress;
                 1.0 - (1.0 - t) * (1.0 - t)  // Ease-out (fast start, slow end)
             };
-            let lunge_distance = 0.5 * if lunge.returning { 1.0 - lunge_amount } else { lunge_amount };
+            let lunge_distance = LUNGE_DISTANCE * if lunge.returning { 1.0 - lunge_amount } else { lunge_amount };
 
             let dx = lunge.target_x - base_x;
             let dy = lunge.target_y - base_y;
@@ -66,7 +67,7 @@ pub fn visual_lerp(world: &mut World, dt: f32) {
 
 /// Update lunge animations
 pub fn update_lunge_animations(world: &mut World, dt: f32) {
-    let lunge_speed = 12.0;  // Fast, snappy attack
+    let lunge_speed = LUNGE_ANIMATION_SPEED;
     let mut to_remove = Vec::new();
 
     for (id, lunge) in world.query_mut::<&mut LungeAnimation>() {
@@ -109,7 +110,7 @@ pub fn update_hit_flashes(world: &mut World, dt: f32) {
 
 /// XP needed to reach the next level
 pub fn xp_for_level(level: u32) -> u32 {
-    level * 100
+    level * XP_PER_LEVEL_MULTIPLIER
 }
 
 /// Calculate XP progress toward next level (0.0 to 1.0)
@@ -155,14 +156,14 @@ pub fn item_name(item: ItemType) -> &'static str {
 /// Get the weight of an item in kg
 pub fn item_weight(item: ItemType) -> f32 {
     match item {
-        ItemType::HealthPotion => 0.5,
+        ItemType::HealthPotion => HEALTH_POTION_WEIGHT,
     }
 }
 
 /// Get the heal amount for healing items (0 for non-healing items)
 pub fn item_heal_amount(item: ItemType) -> i32 {
     match item {
-        ItemType::HealthPotion => 50,
+        ItemType::HealthPotion => HEALTH_POTION_HEAL,
     }
 }
 
@@ -211,8 +212,8 @@ pub fn remove_dead_entities(world: &mut World, player_entity: hecs::Entity, rng:
             sprite.tile_id = tile_ids::BONES;
         }
 
-        // Add loot container with random gold (1-10 pieces)
-        let gold = rng.gen_range(1..=10);
+        // Add loot container with random gold
+        let gold = rng.gen_range(ENEMY_GOLD_DROP_MIN..=ENEMY_GOLD_DROP_MAX);
         let _ = world.insert_one(id, Container::with_gold(vec![], gold));
     }
 }
@@ -531,9 +532,9 @@ pub fn weapon_damage(weapon: &Weapon) -> i32 {
 /// Get the damage an entity deals (from equipped weapon or unarmed)
 pub fn get_attack_damage(world: &World, attacker: hecs::Entity) -> i32 {
     if let Ok(equipment) = world.get::<&Equipment>(attacker) {
-        equipment.weapon.as_ref().map(|w| weapon_damage(w)).unwrap_or(1)
+        equipment.weapon.as_ref().map(|w| weapon_damage(w)).unwrap_or(UNARMED_DAMAGE)
     } else {
-        1  // Unarmed = 1 damage
+        UNARMED_DAMAGE
     }
 }
 

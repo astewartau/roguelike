@@ -1,3 +1,5 @@
+use crate::constants::*;
+
 /// Position component - world coordinates (grid-based)
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
@@ -214,9 +216,9 @@ impl Weapon {
     pub fn sword() -> Self {
         Self {
             name: "Sword".to_string(),
-            tile_id: 65,  // sword tile
-            base_damage: 8,
-            damage_bonus: 2,
+            tile_id: crate::tile::tile_ids::SWORD,
+            base_damage: SWORD_BASE_DAMAGE,
+            damage_bonus: SWORD_DAMAGE_BONUS,
         }
     }
 }
@@ -269,6 +271,6 @@ pub struct HitFlash {
 
 impl HitFlash {
     pub fn new() -> Self {
-        Self { timer: 0.15 }  // 150ms flash
+        Self { timer: HIT_FLASH_DURATION }
     }
 }

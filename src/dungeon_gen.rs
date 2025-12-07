@@ -1,9 +1,6 @@
+use crate::constants::*;
 use crate::tile::{Tile, TileType};
 use rand::Rng;
-
-const MIN_LEAF_SIZE: i32 = 10;
-const MIN_ROOM_SIZE: i32 = 4;
-const ROOM_MARGIN: i32 = 1;
 
 #[derive(Clone, Copy)]
 struct Rect {
@@ -52,7 +49,7 @@ impl BspNode {
     /// Recursively split this node until leaves are small enough for rooms.
     fn split(&mut self, rng: &mut impl Rng) {
         // Don't split if already too small
-        if self.region.width < MIN_LEAF_SIZE * 2 && self.region.height < MIN_LEAF_SIZE * 2 {
+        if self.region.width < DUNGEON_MIN_LEAF_SIZE * 2 && self.region.height < DUNGEON_MIN_LEAF_SIZE * 2 {
             return;
         }
 
@@ -67,12 +64,12 @@ impl BspNode {
 
         if split_horizontal {
             // Split horizontally (top/bottom children)
-            if self.region.height < MIN_LEAF_SIZE * 2 {
+            if self.region.height < DUNGEON_MIN_LEAF_SIZE * 2 {
                 return; // Can't split this direction
             }
 
-            // Choose split point, keeping both children at least MIN_LEAF_SIZE
-            let split_y = rng.gen_range(MIN_LEAF_SIZE..self.region.height - MIN_LEAF_SIZE + 1);
+            // Choose split point, keeping both children at least DUNGEON_MIN_LEAF_SIZE
+            let split_y = rng.gen_range(DUNGEON_MIN_LEAF_SIZE..self.region.height - DUNGEON_MIN_LEAF_SIZE + 1);
 
             let top = Rect::new(
                 self.region.x,
@@ -91,11 +88,11 @@ impl BspNode {
             self.right = Some(Box::new(BspNode::new(bottom)));
         } else {
             // Split vertically (left/right children)
-            if self.region.width < MIN_LEAF_SIZE * 2 {
+            if self.region.width < DUNGEON_MIN_LEAF_SIZE * 2 {
                 return; // Can't split this direction
             }
 
-            let split_x = rng.gen_range(MIN_LEAF_SIZE..self.region.width - MIN_LEAF_SIZE + 1);
+            let split_x = rng.gen_range(DUNGEON_MIN_LEAF_SIZE..self.region.width - DUNGEON_MIN_LEAF_SIZE + 1);
 
             let left = Rect::new(
                 self.region.x,
@@ -127,20 +124,20 @@ impl BspNode {
     fn create_rooms(&mut self, rng: &mut impl Rng) {
         if self.is_leaf() {
             // Create a room within this region, with some margin
-            let max_width = self.region.width - ROOM_MARGIN * 2;
-            let max_height = self.region.height - ROOM_MARGIN * 2;
+            let max_width = self.region.width - DUNGEON_ROOM_MARGIN * 2;
+            let max_height = self.region.height - DUNGEON_ROOM_MARGIN * 2;
 
-            if max_width < MIN_ROOM_SIZE || max_height < MIN_ROOM_SIZE {
+            if max_width < DUNGEON_MIN_ROOM_SIZE || max_height < DUNGEON_MIN_ROOM_SIZE {
                 return; // Region too small for a room
             }
 
-            let room_width = rng.gen_range(MIN_ROOM_SIZE..=max_width);
-            let room_height = rng.gen_range(MIN_ROOM_SIZE..=max_height);
+            let room_width = rng.gen_range(DUNGEON_MIN_ROOM_SIZE..=max_width);
+            let room_height = rng.gen_range(DUNGEON_MIN_ROOM_SIZE..=max_height);
 
             // Random position within the region (with margin)
-            let room_x = self.region.x + ROOM_MARGIN +
+            let room_x = self.region.x + DUNGEON_ROOM_MARGIN +
                 rng.gen_range(0..=(max_width - room_width));
-            let room_y = self.region.y + ROOM_MARGIN +
+            let room_y = self.region.y + DUNGEON_ROOM_MARGIN +
                 rng.gen_range(0..=(max_height - room_height));
 
             self.room = Some(Rect::new(room_x, room_y, room_width, room_height));
