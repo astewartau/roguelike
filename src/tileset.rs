@@ -147,4 +147,24 @@ impl Tileset {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
         }
     }
+
+    /// Get the egui TextureId for this tileset (requires prior registration)
+    pub fn egui_texture_id(&self) -> egui::TextureId {
+        egui::TextureId::User(self.texture.0.get() as u64)
+    }
+
+    /// Get UV rect for egui (note: egui uses top-left origin, OpenGL uses bottom-left)
+    pub fn get_egui_uv(&self, tile_id: u32) -> egui::Rect {
+        let col = tile_id % self.columns;
+        let row = tile_id / self.columns;
+
+        let u0 = (col * self.tile_width) as f32 / self.image_width as f32;
+        let u1 = ((col + 1) * self.tile_width) as f32 / self.image_width as f32;
+
+        // egui uses top-left origin like PNG, no flip needed
+        let v0 = (row * self.tile_height) as f32 / self.image_height as f32;
+        let v1 = ((row + 1) * self.tile_height) as f32 / self.image_height as f32;
+
+        egui::Rect::from_min_max(egui::pos2(u0, v0), egui::pos2(u1, v1))
+    }
 }

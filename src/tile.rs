@@ -7,12 +7,19 @@ pub mod tile_ids {
     pub const WATER: u32 = 4;      // Water tile
     pub const GRASS: u32 = 5;      // Grass tile
     pub const STONE: u32 = 2;      // Stone floor
+    pub const DOOR: u32 = 27;      // Door tile
 
     // Entity tiles
-    pub const PLAYER: u32 = 87;    // Human character
+    pub const PLAYER: u32 = 85;    // character_1
     pub const SKELETON: u32 = 105; // Skeleton enemy
     pub const CHEST_CLOSED: u32 = 32;  // Closed chest
     pub const CHEST_OPEN: u32 = 33;    // Open chest (if available)
+    pub const BONES: u32 = 22;     // bones_1 - remains of defeated enemies
+
+    // Item tiles
+    pub const SWORD: u32 = 65;
+    pub const RED_POTION: u32 = 52;
+    pub const COINS: u32 = 36;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

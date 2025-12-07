@@ -9,7 +9,7 @@ mod tile;
 mod tileset;
 
 use camera::Camera;
-use components::{Actor, Container, Health, Inventory, ItemType, Player, Position, RandomWanderAI, Sprite, Stats, VisualPosition};
+use components::{Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, Position, Sprite, Stats, VisualPosition, Weapon};
 use glam::Vec2;
 use grid::Grid;
 use hecs::World;
@@ -59,10 +59,13 @@ struct AppState {
     grid: Grid,
     renderer: Renderer,
     tileset: Tileset,
+    tileset_egui_id: egui::TextureId,  // Registered texture for egui
     world: World,
     player_entity: hecs::Entity,
     last_frame_time: Instant,
     show_inventory: bool,
+    // Currently open chest (for loot UI)
+    open_chest: Option<hecs::Entity>,
     // Input state
     keys_pressed: std::collections::HashSet<KeyCode>,
     mouse_pos: (f32, f32),
@@ -146,7 +149,7 @@ impl ApplicationHandler for App {
         });
 
         // Initialize egui
-        let egui_glow = EguiGlow::new(event_loop, gl.clone(), None, None, false);
+        let mut egui_glow = EguiGlow::new(event_loop, gl.clone(), None, None, false);
 
         // Initialize game state
         let mut camera = Camera::new(size.width as f32, size.height as f32);
@@ -156,6 +159,9 @@ impl ApplicationHandler for App {
         // Load tileset
         let tileset = Tileset::load(gl.clone(), std::path::Path::new("assets/minirogue-all.tsj"))
             .expect("Failed to load tileset");
+
+        // Register tileset texture with egui
+        let tileset_egui_id = egui_glow.painter.register_native_texture(tileset.texture);
 
         // Create ECS world
         let mut world = World::new();
@@ -187,16 +193,35 @@ impl ApplicationHandler for App {
             },
             Stats::new(10, 8, 12),
             Inventory::new(),
+            Equipment::with_weapon(Weapon::sword()),
+            BlocksMovement,
+            Experience::new(),
         ));
 
         camera.set_tracking_target(Vec2::new(player_start.x as f32, player_start.y as f32));
 
-        // Spawn chests
+        // Spawn chests (block movement until opened)
         for (x, y) in &grid.chest_positions.clone() {
+            let pos = Position::new(*x, *y);
             world.spawn((
-                Position::new(*x, *y),
+                pos,
+                VisualPosition::from_position(&pos),
                 Sprite::new(tile_ids::CHEST_CLOSED),
                 Container::new(vec![ItemType::HealthPotion]),
+                BlocksMovement,
+            ));
+        }
+
+        // Spawn doors (closed by default, block vision and movement)
+        for (x, y) in &grid.door_positions.clone() {
+            let pos = Position::new(*x, *y);
+            world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                Sprite::new(tile_ids::DOOR),
+                Door::new(),
+                BlocksVision,
+                BlocksMovement,
             ));
         }
 
@@ -210,7 +235,7 @@ impl ApplicationHandler for App {
             })
             .collect();
 
-        // Spawn wandering enemies (skeletons)
+        // Spawn enemies (skeletons) - all have chase AI but start idle
         for _ in 0..10 {
             if let Some(&(x, y)) = walkable_tiles.get(rng.gen_range(0..walkable_tiles.len())) {
                 let pos = Position::new(x, y);
@@ -219,7 +244,11 @@ impl ApplicationHandler for App {
                     VisualPosition::from_position(&pos),
                     Sprite::new(tile_ids::SKELETON),
                     Actor::new(2),
-                    RandomWanderAI,  // Behavior, not type
+                    ChaseAI::new(8),  // sight radius of 8 tiles
+                    Health::new(25),
+                    Stats::new(4, 1, 3),  // Total: 8 -> 8 XP
+                    Attackable,
+                    BlocksMovement,
                 ));
             }
         }
@@ -234,10 +263,12 @@ impl ApplicationHandler for App {
             grid,
             renderer,
             tileset,
+            tileset_egui_id,
             world,
             player_entity,
             last_frame_time: Instant::now(),
             show_inventory: false,
+            open_chest: None,
             keys_pressed: std::collections::HashSet::new(),
             mouse_pos: (0.0, 0.0),
             mouse_down: false,
@@ -331,6 +362,14 @@ impl AppState {
         // Handle input
         self.handle_input();
 
+        // Update animations
+        systems::update_lunge_animations(&mut self.world, dt);
+        systems::update_hit_flashes(&mut self.world, dt);
+
+        // Remove dead entities (turn into lootable bones, grant XP)
+        let mut rng = rand::thread_rng();
+        systems::remove_dead_entities(&mut self.world, self.player_entity, &mut rng);
+
         // Lerp all visual positions toward logical positions
         systems::visual_lerp(&mut self.world, dt);
 
@@ -348,26 +387,139 @@ impl AppState {
         // Collect entities for rendering
         let entities_to_render = systems::collect_renderables(&self.world, &self.grid, self.player_entity);
 
-        // Get player health
+        // Get player health, gold, and experience
         let health_percent = if let Ok(health) = self.world.get::<&Health>(self.player_entity) {
             (health.current as f32 / health.max as f32).clamp(0.0, 1.0)
         } else {
             1.0
         };
+        let player_gold = self.world.get::<&Inventory>(self.player_entity)
+            .map(|inv| inv.gold)
+            .unwrap_or(0);
+        let (xp_progress, xp_level) = self.world.get::<&Experience>(self.player_entity)
+            .map(|exp| (systems::xp_progress(&exp), exp.level))
+            .unwrap_or((0.0, 1));
 
         // Begin egui frame
         let mut item_to_use: Option<usize> = None;
+        let mut chest_item_to_take: Option<usize> = None;
+        let mut chest_take_all = false;
+        let mut chest_take_gold = false;
+        let mut close_chest = false;
+
+        // Get chest contents for UI (if chest is open)
+        let (chest_contents, chest_gold): (Vec<ItemType>, u32) = self.open_chest
+            .and_then(|id| self.world.get::<&Container>(id).ok())
+            .map(|c| (c.items.clone(), c.gold))
+            .unwrap_or_default();
+
+        // Pre-compute tileset info for UI icons
+        let tileset_texture_id = self.tileset_egui_id;
+        let sword_uv = self.tileset.get_egui_uv(tile_ids::SWORD);
+        let potion_uv = self.tileset.get_egui_uv(tile_ids::RED_POTION);
+        let coins_uv = self.tileset.get_egui_uv(tile_ids::COINS);
 
         self.egui_glow.run(&self.window, |ctx| {
-            // Health bar
-            egui::Window::new("Health")
+            // Health, XP, and Gold bar
+            egui::Window::new("Status")
                 .fixed_pos([10.0, 10.0])
-                .fixed_size([200.0, 40.0])
+                .fixed_size([200.0, 90.0])
                 .title_bar(false)
                 .show(ctx, |ui| {
                     ui.add(egui::ProgressBar::new(health_percent)
                         .text(format!("HP: {:.0}%", health_percent * 100.0)));
+                    ui.add(egui::ProgressBar::new(xp_progress)
+                        .fill(egui::Color32::from_rgb(100, 149, 237))  // Cornflower blue
+                        .text(format!("Lv {} - XP: {:.0}%", xp_level, xp_progress * 100.0)));
+                    ui.horizontal(|ui| {
+                        let coin_img = egui::Image::new(egui::load::SizedTexture::new(
+                            tileset_texture_id,
+                            egui::vec2(16.0, 16.0),
+                        ))
+                        .uv(coins_uv);
+                        ui.add(coin_img);
+                        ui.label(format!("{}", player_gold));
+                    });
                 });
+
+            // Chest/bones loot window
+            if self.open_chest.is_some() {
+                egui::Window::new("Loot")
+                    .default_pos([self.camera.viewport_width / 2.0 - 150.0, self.camera.viewport_height / 2.0 - 100.0])
+                    .default_size([300.0, 200.0])
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.heading("Contents");
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        let has_contents = !chest_contents.is_empty() || chest_gold > 0;
+
+                        if !has_contents {
+                            ui.label(egui::RichText::new("(empty)")
+                                .italics()
+                                .color(egui::Color32::GRAY));
+                        } else {
+                            // Show gold if present
+                            if chest_gold > 0 {
+                                ui.horizontal(|ui| {
+                                    let coin_img = egui::Image::new(egui::load::SizedTexture::new(
+                                        tileset_texture_id,
+                                        egui::vec2(32.0, 32.0),
+                                    ))
+                                    .uv(coins_uv);
+
+                                    if ui.add(egui::ImageButton::new(coin_img))
+                                        .on_hover_text(format!("{} Gold\n\nClick to take", chest_gold))
+                                        .clicked()
+                                    {
+                                        chest_take_gold = true;
+                                    }
+                                    ui.label(format!("{} gold", chest_gold));
+                                });
+                                ui.add_space(5.0);
+                            }
+
+                            // Show items
+                            ui.horizontal_wrapped(|ui| {
+                                for (i, item_type) in chest_contents.iter().enumerate() {
+                                    let uv = match item_type {
+                                        ItemType::HealthPotion => potion_uv,
+                                    };
+
+                                    let image = egui::Image::new(egui::load::SizedTexture::new(
+                                        tileset_texture_id,
+                                        egui::vec2(48.0, 48.0),
+                                    ))
+                                    .uv(uv);
+
+                                    let response = ui.add(egui::ImageButton::new(image));
+
+                                    if response
+                                        .on_hover_text(format!("{}\n\nClick to take", systems::item_name(*item_type)))
+                                        .clicked()
+                                    {
+                                        chest_item_to_take = Some(i);
+                                    }
+                                }
+                            });
+                        }
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if has_contents {
+                                if ui.button("Take All").clicked() {
+                                    chest_take_all = true;
+                                }
+                            }
+                            if ui.button("Close").clicked() {
+                                close_chest = true;
+                            }
+                        });
+                    });
+            }
 
             // Inventory window
             if self.show_inventory {
@@ -379,7 +531,7 @@ impl AppState {
                     .show(ctx, |ui| {
                         if let Ok(stats) = self.world.get::<&Stats>(self.player_entity) {
                             ui.columns(2, |columns| {
-                                // Left column: Stats
+                                // Left column: Stats + Equipment
                                 columns[0].vertical(|ui| {
                                     ui.heading("CHARACTER STATS");
                                     ui.separator();
@@ -396,7 +548,50 @@ impl AppState {
                                     if let Ok(inventory) = self.world.get::<&Inventory>(self.player_entity) {
                                         ui.label(format!("Weight: {:.1} / {:.1} kg",
                                             inventory.current_weight_kg, carry_capacity));
+
+                                        ui.add_space(10.0);
+                                        ui.horizontal(|ui| {
+                                            let coin_img = egui::Image::new(egui::load::SizedTexture::new(
+                                                tileset_texture_id,
+                                                egui::vec2(24.0, 24.0),
+                                            ))
+                                            .uv(coins_uv);
+                                            ui.add(coin_img);
+                                            ui.label(format!("{} gold", inventory.gold));
+                                        });
                                     }
+
+                                    ui.add_space(20.0);
+                                    ui.heading("EQUIPMENT");
+                                    ui.separator();
+                                    ui.add_space(10.0);
+
+                                    // Weapon slot
+                                    ui.horizontal(|ui| {
+                                        ui.label("Weapon:");
+                                        if let Ok(equipment) = self.world.get::<&Equipment>(self.player_entity) {
+                                            if let Some(weapon) = &equipment.weapon {
+                                                let image = egui::Image::new(egui::load::SizedTexture::new(
+                                                    tileset_texture_id,
+                                                    egui::vec2(48.0, 48.0),
+                                                ))
+                                                .uv(sword_uv);
+
+                                                ui.add(egui::ImageButton::new(image))
+                                                    .on_hover_text(format!(
+                                                        "{}\n\nDamage: {} + {} = {}",
+                                                        weapon.name,
+                                                        weapon.base_damage,
+                                                        weapon.damage_bonus,
+                                                        systems::weapon_damage(weapon)
+                                                    ));
+                                            } else {
+                                                ui.label(egui::RichText::new("(none)")
+                                                    .italics()
+                                                    .color(egui::Color32::GRAY));
+                                            }
+                                        }
+                                    });
                                 });
 
                                 // Right column: Inventory
@@ -413,19 +608,20 @@ impl AppState {
                                         } else {
                                             ui.horizontal_wrapped(|ui| {
                                                 for (i, item_type) in inventory.items.iter().enumerate() {
-                                                    let (icon, color) = match item_type {
-                                                        ItemType::HealthPotion => ("HP", egui::Color32::from_rgb(255, 100, 100)),
+                                                    let uv = match item_type {
+                                                        ItemType::HealthPotion => potion_uv,
                                                     };
 
-                                                    let button = egui::Button::new(
-                                                        egui::RichText::new(icon)
-                                                            .size(24.0)
-                                                            .color(color)
-                                                    )
-                                                    .min_size(egui::vec2(60.0, 60.0));
+                                                    let image = egui::Image::new(egui::load::SizedTexture::new(
+                                                        tileset_texture_id,
+                                                        egui::vec2(48.0, 48.0),
+                                                    ))
+                                                    .uv(uv);
 
-                                                    if ui.add(button)
-                                                        .on_hover_text(format!("{}\n\nClick to use", item_type.name()))
+                                                    let response = ui.add(egui::ImageButton::new(image));
+
+                                                    if response
+                                                        .on_hover_text(format!("{}\n\nClick to use", systems::item_name(*item_type)))
                                                         .clicked()
                                                     {
                                                         item_to_use = Some(i);
@@ -441,14 +637,28 @@ impl AppState {
             }
         });
 
+        // Handle chest/loot interactions
+        if let Some(chest_id) = self.open_chest {
+            if chest_take_all {
+                systems::take_all_from_container(&mut self.world, self.player_entity, chest_id);
+                self.open_chest = None;
+            } else if chest_take_gold {
+                systems::take_gold_from_container(&mut self.world, self.player_entity, chest_id);
+            } else if let Some(item_index) = chest_item_to_take {
+                systems::take_item_from_container(&mut self.world, self.player_entity, chest_id, item_index);
+            } else if close_chest {
+                self.open_chest = None;
+            }
+        }
+
         // Use item if clicked
         if let Some(item_index) = item_to_use {
             if let Ok(mut inv) = self.world.get::<&mut Inventory>(self.player_entity) {
                 if item_index < inv.items.len() {
                     let item = inv.items.remove(item_index);
-                    inv.current_weight_kg -= item.weight_kg();
+                    inv.current_weight_kg -= systems::item_weight(item);
                     if let Ok(mut health) = self.world.get::<&mut Health>(self.player_entity) {
-                        health.current = (health.current + item.heal_amount()).min(health.max);
+                        health.current = (health.current + systems::item_heal_amount(item)).min(health.max);
                     }
                 }
             }
@@ -482,13 +692,18 @@ impl AppState {
                 .unwrap_or(true);
 
             if player_can_act {
-                systems::player_move(&mut self.world, self.player_entity, dx, dy);
+                match systems::player_move(&mut self.world, self.player_entity, dx, dy) {
+                    systems::MoveResult::OpenedChest(chest) => {
+                        self.open_chest = Some(chest);
+                    }
+                    systems::MoveResult::Attacked(_) | systems::MoveResult::Moved | systems::MoveResult::Blocked => {}
+                }
                 return;
             }
 
             // Player can't act yet - run one tick
             systems::tick_energy(&mut self.world);
-            systems::ai_wander(&mut self.world, &self.grid, &mut rng);
+            systems::ai_chase(&mut self.world, &self.grid, self.player_entity, &mut rng);
         }
     }
 
@@ -507,6 +722,17 @@ impl AppState {
         // Toggle inventory
         if self.keys_pressed.remove(&KeyCode::KeyI) {
             self.show_inventory = !self.show_inventory;
+        }
+
+        // Enter key: Take All if chest open, otherwise loot bones at player position
+        if self.keys_pressed.remove(&KeyCode::Enter) {
+            if let Some(chest_id) = self.open_chest {
+                // Take all from open chest
+                systems::take_all_from_container(&mut self.world, self.player_entity, chest_id);
+                self.open_chest = None;
+            } else if let Some(container_id) = systems::find_container_at_player(&self.world, self.player_entity) {
+                self.open_chest = Some(container_id);
+            }
         }
 
         // Movement (only process once per key press)

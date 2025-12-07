@@ -11,11 +11,14 @@ layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
 layout (location = 3) in float aFogMult;
+layout (location = 4) in float aBorder;
 
 uniform mat4 uProjection;
 
 out vec2 vTexCoord;
+out vec2 vLocalPos;
 out float vFog;
+out float vBorder;
 
 void main() {
     vec2 worldPos = aInstancePos + aPos;
@@ -23,13 +26,17 @@ void main() {
 
     // Interpolate UV based on vertex position (0-1)
     vTexCoord = mix(aInstanceUV.xy, aInstanceUV.zw, aPos);
+    vLocalPos = aPos;
     vFog = aFogMult;
+    vBorder = aBorder;
 }
 "#;
 
 const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
 in vec2 vTexCoord;
+in vec2 vLocalPos;
 in float vFog;
+in float vBorder;  // 0.0 = normal, 1.0 = red border, 2.0 = hit flash
 
 uniform sampler2D uTileset;
 
@@ -38,7 +45,24 @@ out vec4 FragColor;
 void main() {
     vec4 texColor = texture(uTileset, vTexCoord);
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
-    FragColor = vec4(texColor.rgb * vFog, texColor.a);
+
+    vec3 color = texColor.rgb * vFog;
+
+    // Hit flash effect (white overlay)
+    if (vBorder > 1.5) {
+        color = mix(color, vec3(1.0, 1.0, 1.0), 0.7);  // White flash
+    }
+    // Draw red border if flagged
+    else if (vBorder > 0.5) {
+        float borderWidth = 0.08;
+        bool onBorder = vLocalPos.x < borderWidth || vLocalPos.x > (1.0 - borderWidth) ||
+                        vLocalPos.y < borderWidth || vLocalPos.y > (1.0 - borderWidth);
+        if (onBorder) {
+            color = vec3(0.9, 0.2, 0.2);  // Red border
+        }
+    }
+
+    FragColor = vec4(color, texColor.a);
 }
 "#;
 
@@ -147,13 +171,13 @@ impl Renderer {
             gl.vertex_attrib_pointer_f32(0, 2, FLOAT, false, 8, 0);
 
             // Create instance buffer
-            // Layout: pos(2) + uv(4) + fog(1) = 7 floats = 28 bytes per instance
+            // Layout: pos(2) + uv(4) + fog(1) + border(1) = 8 floats = 32 bytes per instance
             let instance_vbo = gl
                 .create_buffer()
                 .map_err(|e| format!("Failed to create instance VBO: {}", e))?;
             gl.bind_buffer(ARRAY_BUFFER, Some(instance_vbo));
 
-            let stride = 28; // 7 floats * 4 bytes
+            let stride = 32; // 8 floats * 4 bytes
 
             // Position attribute (2 floats)
             gl.enable_vertex_attrib_array(1);
@@ -169,6 +193,11 @@ impl Renderer {
             gl.enable_vertex_attrib_array(3);
             gl.vertex_attrib_pointer_f32(3, 1, FLOAT, false, stride, 24);
             gl.vertex_attrib_divisor(3, 1);
+
+            // Border attribute (1 float)
+            gl.enable_vertex_attrib_array(4);
+            gl.vertex_attrib_pointer_f32(4, 1, FLOAT, false, stride, 28);
+            gl.vertex_attrib_divisor(4, 1);
 
             gl.bind_vertex_array(None);
 
@@ -262,7 +291,7 @@ impl Renderer {
             let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
 
             // Build instance data for visible tiles
-            // Layout: pos(2) + uv(4) + fog(1) = 7 floats per instance
+            // Layout: pos(2) + uv(4) + fog(1) + border(1) = 8 floats per instance
             let mut instance_data = Vec::new();
 
             for y in min_y..=max_y {
@@ -283,6 +312,7 @@ impl Renderer {
                         instance_data.push(uv.u1);
                         instance_data.push(uv.v1);
                         instance_data.push(fog);
+                        instance_data.push(0.0);  // no border for tiles
                     }
                 }
             }
@@ -302,7 +332,7 @@ impl Renderer {
                     projection.as_ref(),
                 );
 
-                let instance_count = instance_data.len() / 7;
+                let instance_count = instance_data.len() / 8;
                 self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
             }
 
@@ -360,7 +390,8 @@ impl Renderer {
         }
     }
 
-    pub fn render_entities(&mut self, camera: &Camera, entities: &[(f32, f32, Sprite, f32)], tileset: &Tileset) -> Result<(), String> {
+    /// Render entities. Tuple: (x, y, sprite, fog, has_border, has_hit_flash)
+    pub fn render_entities(&mut self, camera: &Camera, entities: &[(f32, f32, Sprite, f32, bool, bool)], tileset: &Tileset) -> Result<(), String> {
         if entities.is_empty() {
             return Ok(());
         }
@@ -376,7 +407,7 @@ impl Renderer {
             // Build instance data for entities
             let mut instance_data = Vec::new();
 
-            for (x, y, sprite, fog) in entities {
+            for (x, y, sprite, fog, has_border, has_hit_flash) in entities {
                 let uv = tileset.get_uv(sprite.tile_id);
 
                 instance_data.push(*x);
@@ -386,6 +417,9 @@ impl Renderer {
                 instance_data.push(uv.u1);
                 instance_data.push(uv.v1);
                 instance_data.push(*fog);
+                // Encode border (1.0) and hit flash (2.0) in the same field
+                let effect = if *has_hit_flash { 2.0 } else if *has_border { 1.0 } else { 0.0 };
+                instance_data.push(effect);
             }
 
             self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));

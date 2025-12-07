@@ -6,18 +6,20 @@ pub struct Grid {
     pub height: usize,
     pub tiles: Vec<Tile>,
     pub chest_positions: Vec<(i32, i32)>,
+    pub door_positions: Vec<(i32, i32)>,
 }
 
 impl Grid {
     pub fn new(width: usize, height: usize) -> Self {
-        // Generate mine/cave dungeon using cellular automata + constructed rooms
-        let (tiles, chest_positions) = DungeonGenerator::generate(width, height);
+        // Generate dungeon using BSP
+        let (tiles, chest_positions, door_positions) = DungeonGenerator::generate(width, height);
 
         Self {
             width,
             height,
             tiles,
             chest_positions,
+            door_positions,
         }
     }
 
