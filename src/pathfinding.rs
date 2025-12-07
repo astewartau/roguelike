@@ -141,3 +141,181 @@ fn reconstruct_path(came_from: &HashMap<Node, Node>, mut current: Node) -> Vec<(
     }
     path
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tile::{Tile, TileType};
+
+    /// Create a simple test grid with all floor tiles
+    fn make_floor_grid(width: usize, height: usize) -> Grid {
+        Grid {
+            width,
+            height,
+            tiles: vec![Tile::new(TileType::Floor); width * height],
+            chest_positions: vec![],
+            door_positions: vec![],
+        }
+    }
+
+    /// Create a grid with a wall in the middle
+    fn make_grid_with_wall() -> Grid {
+        // 5x5 grid with a vertical wall at x=2 (except y=0 which is open)
+        let mut tiles = vec![Tile::new(TileType::Floor); 25];
+        // Wall at (2,1), (2,2), (2,3), (2,4)
+        for y in 1..5 {
+            tiles[y * 5 + 2] = Tile::new(TileType::Wall);
+        }
+        Grid {
+            width: 5,
+            height: 5,
+            tiles,
+            chest_positions: vec![],
+            door_positions: vec![],
+        }
+    }
+
+    #[test]
+    fn test_heuristic() {
+        assert_eq!(heuristic((0, 0), (0, 0)), 0);
+        assert_eq!(heuristic((0, 0), (1, 0)), 1);
+        assert_eq!(heuristic((0, 0), (0, 1)), 1);
+        assert_eq!(heuristic((0, 0), (3, 4)), 7);
+        assert_eq!(heuristic((5, 5), (2, 1)), 7);
+    }
+
+    #[test]
+    fn test_find_path_straight_line() {
+        let grid = make_floor_grid(10, 10);
+        let blocked = HashSet::new();
+
+        let path = find_path(&grid, (0, 0), (5, 0), &blocked);
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!(path.len(), 5);
+        assert_eq!(path.last(), Some(&(5, 0)));
+    }
+
+    #[test]
+    fn test_find_path_diagonal() {
+        let grid = make_floor_grid(10, 10);
+        let blocked = HashSet::new();
+
+        let path = find_path(&grid, (0, 0), (3, 3), &blocked);
+        assert!(path.is_some());
+        let path = path.unwrap();
+        // Manhattan distance is 6, so path should be 6 steps
+        assert_eq!(path.len(), 6);
+        assert_eq!(path.last(), Some(&(3, 3)));
+    }
+
+    #[test]
+    fn test_find_path_around_wall() {
+        let grid = make_grid_with_wall();
+        let blocked = HashSet::new();
+
+        // Path from (0,2) to (4,2) must go around the wall
+        let path = find_path(&grid, (0, 2), (4, 2), &blocked);
+        assert!(path.is_some());
+        let path = path.unwrap();
+        // Must go up to y=0, across, and back down
+        assert!(path.len() > 4); // Would be 4 if direct, must be longer
+        assert_eq!(path.last(), Some(&(4, 2)));
+    }
+
+    #[test]
+    fn test_find_path_blocked_by_entity() {
+        let grid = make_floor_grid(5, 5);
+        let mut blocked = HashSet::new();
+        blocked.insert((2, 0));
+        blocked.insert((2, 1));
+        blocked.insert((2, 2));
+
+        // Path from (0,1) to (4,1) with entities blocking
+        let path = find_path(&grid, (0, 1), (4, 1), &blocked);
+        assert!(path.is_some());
+        let path = path.unwrap();
+        // Path should avoid blocked tiles
+        for (x, y) in &path {
+            if (*x, *y) != (4, 1) {
+                // Goal is allowed even if blocked
+                assert!(!blocked.contains(&(*x, *y)));
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_path_no_path() {
+        // Create a grid where the goal is completely surrounded by walls
+        let mut tiles = vec![Tile::new(TileType::Floor); 25];
+        // Wall around (2,2)
+        tiles[1 * 5 + 1] = Tile::new(TileType::Wall);
+        tiles[1 * 5 + 2] = Tile::new(TileType::Wall);
+        tiles[1 * 5 + 3] = Tile::new(TileType::Wall);
+        tiles[2 * 5 + 1] = Tile::new(TileType::Wall);
+        tiles[2 * 5 + 3] = Tile::new(TileType::Wall);
+        tiles[3 * 5 + 1] = Tile::new(TileType::Wall);
+        tiles[3 * 5 + 2] = Tile::new(TileType::Wall);
+        tiles[3 * 5 + 3] = Tile::new(TileType::Wall);
+        let grid = Grid {
+            width: 5,
+            height: 5,
+            tiles,
+            chest_positions: vec![],
+            door_positions: vec![],
+        };
+
+        let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_find_path_to_unwalkable_tile() {
+        let mut tiles = vec![Tile::new(TileType::Floor); 25];
+        tiles[2 * 5 + 2] = Tile::new(TileType::Wall); // Goal is a wall
+        let grid = Grid {
+            width: 5,
+            height: 5,
+            tiles,
+            chest_positions: vec![],
+            door_positions: vec![],
+        };
+
+        let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_next_step_toward() {
+        let grid = make_floor_grid(10, 10);
+        let blocked = HashSet::new();
+
+        let next = next_step_toward(&grid, (0, 0), (5, 0), &blocked);
+        assert!(next.is_some());
+        let (nx, ny) = next.unwrap();
+        // First step should be adjacent to start
+        assert!(((nx - 0).abs() + (ny - 0).abs()) == 1);
+    }
+
+    #[test]
+    fn test_next_step_at_goal() {
+        let grid = make_floor_grid(10, 10);
+        let blocked = HashSet::new();
+
+        let next = next_step_toward(&grid, (5, 5), (5, 5), &blocked);
+        assert!(next.is_none()); // Already at goal
+    }
+
+    #[test]
+    fn test_path_allows_goal_even_if_blocked() {
+        let grid = make_floor_grid(5, 5);
+        let mut blocked = HashSet::new();
+        blocked.insert((2, 0)); // Block the goal
+
+        // Should still find a path to (2, 0) even though it's blocked
+        // (useful for attacking enemies at that position)
+        let path = find_path(&grid, (0, 0), (2, 0), &blocked);
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().last(), Some(&(2, 0)));
+    }
+}

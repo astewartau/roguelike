@@ -48,7 +48,7 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
     ));
 
     // Spawn chests (block movement until opened)
-    for (x, y) in &grid.chest_positions.clone() {
+    for (x, y) in &grid.chest_positions {
         let pos = Position::new(*x, *y);
         world.spawn((
             pos,
@@ -60,7 +60,7 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
     }
 
     // Spawn doors (closed by default, block vision and movement)
-    for (x, y) in &grid.door_positions.clone() {
+    for (x, y) in &grid.door_positions {
         let pos = Position::new(*x, *y);
         world.spawn((
             pos,

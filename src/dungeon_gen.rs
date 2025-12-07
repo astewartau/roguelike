@@ -391,3 +391,95 @@ impl DungeonGenerator {
         h_doorway || v_doorway
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rect_center() {
+        let rect = Rect::new(0, 0, 10, 10);
+        assert_eq!(rect.center(), (5, 5));
+
+        let rect2 = Rect::new(5, 5, 4, 6);
+        assert_eq!(rect2.center(), (7, 8));
+    }
+
+    #[test]
+    fn test_dungeon_generates_tiles() {
+        let (tiles, _, _) = DungeonGenerator::generate(50, 50);
+        assert_eq!(tiles.len(), 50 * 50);
+    }
+
+    #[test]
+    fn test_dungeon_has_floor_tiles() {
+        let (tiles, _, _) = DungeonGenerator::generate(50, 50);
+        let floor_count = tiles.iter().filter(|t| t.tile_type == TileType::Floor).count();
+        // Should have at least some floor tiles
+        assert!(floor_count > 0);
+    }
+
+    #[test]
+    fn test_dungeon_has_wall_tiles() {
+        let (tiles, _, _) = DungeonGenerator::generate(50, 50);
+        let wall_count = tiles.iter().filter(|t| t.tile_type == TileType::Wall).count();
+        // Should have some walls
+        assert!(wall_count > 0);
+    }
+
+    #[test]
+    fn test_dungeon_generates_chest_positions() {
+        let (_, chest_positions, _) = DungeonGenerator::generate(50, 50);
+        // Should have at least some chests (one per room except first)
+        assert!(!chest_positions.is_empty());
+    }
+
+    #[test]
+    fn test_dungeon_generates_door_positions() {
+        let (_, _, door_positions) = DungeonGenerator::generate(50, 50);
+        // Should have some doors
+        assert!(!door_positions.is_empty());
+    }
+
+    #[test]
+    fn test_chest_positions_are_on_floor() {
+        let (tiles, chest_positions, _) = DungeonGenerator::generate(50, 50);
+        for (x, y) in chest_positions {
+            let idx = y as usize * 50 + x as usize;
+            assert_eq!(tiles[idx].tile_type, TileType::Floor);
+        }
+    }
+
+    #[test]
+    fn test_door_positions_are_on_floor() {
+        let (tiles, _, door_positions) = DungeonGenerator::generate(50, 50);
+        for (x, y) in door_positions {
+            let idx = y as usize * 50 + x as usize;
+            assert_eq!(tiles[idx].tile_type, TileType::Floor);
+        }
+    }
+
+    #[test]
+    fn test_bsp_node_is_leaf() {
+        let node = BspNode::new(Rect::new(0, 0, 10, 10));
+        assert!(node.is_leaf());
+    }
+
+    #[test]
+    fn test_bsp_split_creates_children() {
+        let mut node = BspNode::new(Rect::new(0, 0, 100, 100));
+        let mut rng = rand::thread_rng();
+        node.split(&mut rng);
+        // After splitting, should have children (unless region was too small)
+        assert!(!node.is_leaf());
+    }
+
+    #[test]
+    fn test_bsp_small_node_doesnt_split() {
+        let mut node = BspNode::new(Rect::new(0, 0, 5, 5)); // Too small to split
+        let mut rng = rand::thread_rng();
+        node.split(&mut rng);
+        // Should remain a leaf
+        assert!(node.is_leaf());
+    }
+}

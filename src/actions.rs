@@ -4,7 +4,7 @@
 //! ensuring that stale planning data cannot cause invalid moves (like entity swaps).
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, Container, Door, Health, HitFlash,
+    Actor, Attackable, BlocksMovement, Container, Door, Health,
     LungeAnimation, Position,
 };
 use crate::events::{EventQueue, GameEvent};
@@ -208,9 +208,6 @@ fn execute_attack(
     // Add lunge animation to attacker
     let _ = world.insert_one(attacker, LungeAnimation::new(target_x, target_y));
 
-    // Add hit flash to target
-    let _ = world.insert_one(target, HitFlash::new());
-
     // Spend energy
     spend_energy(world, attacker);
 
@@ -229,5 +226,241 @@ fn execute_attack(
 fn spend_energy(world: &mut World, entity: Entity) {
     if let Ok(mut actor) = world.get::<&mut Actor>(entity) {
         actor.energy -= actor.speed;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::Sprite;
+    use crate::grid::Grid;
+    use crate::tile::{Tile, TileType};
+
+    /// Create a simple test grid with all floor tiles
+    fn make_floor_grid(width: usize, height: usize) -> Grid {
+        Grid {
+            width,
+            height,
+            tiles: vec![Tile::new(TileType::Floor); width * height],
+            chest_positions: vec![],
+            door_positions: vec![],
+        }
+    }
+
+    fn make_grid_with_wall_at(width: usize, height: usize, wall_x: i32, wall_y: i32) -> Grid {
+        let mut tiles = vec![Tile::new(TileType::Floor); width * height];
+        tiles[wall_y as usize * width + wall_x as usize] = Tile::new(TileType::Wall);
+        Grid {
+            width,
+            height,
+            tiles,
+            chest_positions: vec![],
+            door_positions: vec![],
+        }
+    }
+
+    #[test]
+    fn test_action_move_is_possible() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+
+        let entity = world.spawn((Position::new(5, 5),));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        assert!(action.is_possible(&world, &grid, entity));
+    }
+
+    #[test]
+    fn test_action_move_blocked_by_wall() {
+        let mut world = World::new();
+        let grid = make_grid_with_wall_at(10, 10, 6, 5);
+
+        let entity = world.spawn((Position::new(5, 5),));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        assert!(!action.is_possible(&world, &grid, entity));
+    }
+
+    #[test]
+    fn test_action_wait_always_possible() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+
+        let entity = world.spawn((Position::new(5, 5),));
+
+        let action = Action::Wait;
+        assert!(action.is_possible(&world, &grid, entity));
+    }
+
+    #[test]
+    fn test_execute_move_success() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+        let mut events = EventQueue::new();
+
+        let entity = world.spawn((
+            Position::new(5, 5),
+            Actor::new(100),
+        ));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        let result = action.execute(&mut world, &grid, entity, &mut events);
+
+        assert!(matches!(result, ActionResult::Moved));
+
+        let pos = world.get::<&Position>(entity).unwrap();
+        assert_eq!(pos.x, 6);
+        assert_eq!(pos.y, 5);
+    }
+
+    #[test]
+    fn test_execute_move_blocked_by_wall() {
+        let mut world = World::new();
+        let grid = make_grid_with_wall_at(10, 10, 6, 5);
+        let mut events = EventQueue::new();
+
+        let entity = world.spawn((
+            Position::new(5, 5),
+            Actor::new(100),
+        ));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        let result = action.execute(&mut world, &grid, entity, &mut events);
+
+        assert!(matches!(result, ActionResult::Blocked));
+
+        // Position should not have changed
+        let pos = world.get::<&Position>(entity).unwrap();
+        assert_eq!(pos.x, 5);
+        assert_eq!(pos.y, 5);
+    }
+
+    #[test]
+    fn test_execute_move_attacks_enemy() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+        let mut events = EventQueue::new();
+
+        let attacker = world.spawn((
+            Position::new(5, 5),
+            Actor::new(100),
+        ));
+
+        let target = world.spawn((
+            Position::new(6, 5),
+            Health::new(100),
+            Attackable,
+        ));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        let result = action.execute(&mut world, &grid, attacker, &mut events);
+
+        assert!(matches!(result, ActionResult::Attacked(_)));
+
+        // Attacker should not have moved
+        let pos = world.get::<&Position>(attacker).unwrap();
+        assert_eq!(pos.x, 5);
+        assert_eq!(pos.y, 5);
+
+        // Target should have taken damage
+        let health = world.get::<&Health>(target).unwrap();
+        assert!(health.current < 100);
+    }
+
+    #[test]
+    fn test_execute_move_opens_door() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+        let mut events = EventQueue::new();
+
+        let entity = world.spawn((
+            Position::new(5, 5),
+            Actor::new(100),
+        ));
+
+        let door = world.spawn((
+            Position::new(6, 5),
+            Door::new(),
+            crate::components::BlocksVision,
+            BlocksMovement,
+        ));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        let result = action.execute(&mut world, &grid, entity, &mut events);
+
+        assert!(matches!(result, ActionResult::OpenedDoor(_)));
+
+        // Door should now be open
+        let door_component = world.get::<&Door>(door).unwrap();
+        assert!(door_component.is_open);
+    }
+
+    #[test]
+    fn test_execute_move_opens_chest() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+        let mut events = EventQueue::new();
+
+        let entity = world.spawn((
+            Position::new(5, 5),
+            Actor::new(100),
+        ));
+
+        let chest = world.spawn((
+            Position::new(6, 5),
+            Container::new(vec![]),
+            BlocksMovement,
+            Sprite::new(0),
+        ));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        let result = action.execute(&mut world, &grid, entity, &mut events);
+
+        assert!(matches!(result, ActionResult::OpenedChest(_)));
+
+        // Chest should now be open
+        let container = world.get::<&Container>(chest).unwrap();
+        assert!(container.is_open);
+    }
+
+    #[test]
+    fn test_execute_wait_spends_energy() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+        let mut events = EventQueue::new();
+
+        let entity = world.spawn((
+            Position::new(5, 5),
+            Actor { energy: 100, speed: 10 },
+        ));
+
+        let action = Action::Wait;
+        action.execute(&mut world, &grid, entity, &mut events);
+
+        let actor = world.get::<&Actor>(entity).unwrap();
+        assert_eq!(actor.energy, 90);
+    }
+
+    #[test]
+    fn test_execute_move_blocked_by_entity() {
+        let mut world = World::new();
+        let grid = make_floor_grid(10, 10);
+        let mut events = EventQueue::new();
+
+        let entity = world.spawn((
+            Position::new(5, 5),
+            Actor::new(100),
+        ));
+
+        // Blocking entity (not attackable)
+        let _blocker = world.spawn((
+            Position::new(6, 5),
+            BlocksMovement,
+        ));
+
+        let action = Action::Move { dx: 1, dy: 0 };
+        let result = action.execute(&mut world, &grid, entity, &mut events);
+
+        assert!(matches!(result, ActionResult::Blocked));
     }
 }

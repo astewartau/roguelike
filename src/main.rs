@@ -316,7 +316,6 @@ impl AppState {
 
         // Update animations
         systems::update_lunge_animations(&mut self.world, dt);
-        systems::update_hit_flashes(&mut self.world, dt);
         self.vfx.update(dt);
 
         // Remove dead entities (turn into lootable bones, grant XP)

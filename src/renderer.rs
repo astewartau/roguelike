@@ -34,40 +34,17 @@ void main() {
 
 const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
 in vec2 vTexCoord;
-in vec2 vLocalPos;
 in float vFog;
-in float vEffects;  // Bitfield: 1=aggro border, 2=hit flash, 4=poison, etc.
 
 uniform sampler2D uTileset;
 
 out vec4 FragColor;
-
-// Effect bit flags (must match systems::effects)
-const int EFFECT_AGGRO_BORDER = 1;
-const int EFFECT_HIT_FLASH = 2;
 
 void main() {
     vec4 texColor = texture(uTileset, vTexCoord);
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
 
     vec3 color = texColor.rgb * vFog;
-    int effects = int(vEffects);
-
-    // Hit flash effect (white overlay) - takes priority
-    if ((effects & EFFECT_HIT_FLASH) != 0) {
-        color = mix(color, vec3(1.0, 1.0, 1.0), 0.7);
-    }
-
-    // Aggro border (red outline when chasing)
-    if ((effects & EFFECT_AGGRO_BORDER) != 0) {
-        float borderWidth = 0.08;
-        bool onBorder = vLocalPos.x < borderWidth || vLocalPos.x > (1.0 - borderWidth) ||
-                        vLocalPos.y < borderWidth || vLocalPos.y > (1.0 - borderWidth);
-        if (onBorder) {
-            color = vec3(0.9, 0.2, 0.2);
-        }
-    }
-
     FragColor = vec4(color, texColor.a);
 }
 "#;
