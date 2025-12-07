@@ -130,6 +130,25 @@ impl Camera {
         Vec2::new(world_x, world_y)
     }
 
+    pub fn world_to_screen(&self, world_x: f32, world_y: f32) -> (f32, f32) {
+        // Use same calculations as projection_matrix for consistency
+        let half_width = self.viewport_width / (2.0 * self.zoom);
+        let half_height = self.viewport_height / (2.0 * self.zoom);
+
+        let left = self.position.x - half_width;
+        let bottom = self.position.y - half_height;
+
+        // Convert world to NDC using orthographic projection
+        let ndc_x = (world_x - left) / (2.0 * half_width) * 2.0 - 1.0;
+        let ndc_y = (world_y - bottom) / (2.0 * half_height) * 2.0 - 1.0;
+
+        // Convert NDC to screen (y is flipped for screen coordinates)
+        let screen_x = (ndc_x + 1.0) * 0.5 * self.viewport_width;
+        let screen_y = (1.0 - ndc_y) * 0.5 * self.viewport_height;
+
+        (screen_x, screen_y)
+    }
+
     pub fn projection_matrix(&self) -> Mat4 {
         let half_width = self.viewport_width / (2.0 * self.zoom);
         let half_height = self.viewport_height / (2.0 * self.zoom);

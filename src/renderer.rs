@@ -598,10 +598,12 @@ impl Renderer {
 
             // Build instance data: pos(2) + progress(1) + angle(1)
             let mut instance_data = Vec::new();
+            let mut slash_count = 0;
 
             for effect in effects {
-                let angle = match effect.effect_type {
-                    crate::vfx::EffectType::Slash { angle } => angle,
+                let angle = match &effect.effect_type {
+                    crate::vfx::EffectType::Slash { angle } => *angle,
+                    crate::vfx::EffectType::DamageNumber { .. } => continue, // Rendered via egui
                 };
 
                 // Center the effect on the tile (effect.x/y is already centered)
@@ -609,6 +611,12 @@ impl Renderer {
                 instance_data.push(effect.y - 0.5);
                 instance_data.push(effect.progress());
                 instance_data.push(angle);
+                slash_count += 1;
+            }
+
+            if slash_count == 0 {
+                self.gl.bind_vertex_array(None);
+                return;
             }
 
             self.gl.bind_buffer(ARRAY_BUFFER, Some(self.vfx_instance_vbo));
@@ -617,7 +625,7 @@ impl Renderer {
             let projection = camera.projection_matrix();
             self.gl.uniform_matrix_4_f32_slice(Some(&self.vfx_projection_loc), false, projection.as_ref());
 
-            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, effects.len() as i32);
+            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, slash_count);
 
             self.gl.bind_vertex_array(None);
         }

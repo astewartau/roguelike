@@ -34,11 +34,38 @@ pub struct Player;
 pub struct Health {
     pub current: i32,
     pub max: i32,
+    /// HP regenerated per regen tick
+    pub regen_amount: i32,
+    /// Number of game ticks between regen ticks (0 = no regen)
+    pub regen_interval: i32,
+    /// Counter tracking ticks until next regen
+    pub regen_counter: i32,
 }
 
 impl Health {
     pub fn new(max: i32) -> Self {
-        Self { current: max, max }
+        Self {
+            current: max,
+            max,
+            regen_amount: 0,
+            regen_interval: 0,
+            regen_counter: 0,
+        }
+    }
+
+    /// Create health with regeneration
+    pub fn with_regen(max: i32, regen_amount: i32, regen_interval: i32) -> Self {
+        Self {
+            current: max,
+            max,
+            regen_amount,
+            regen_interval,
+            regen_counter: 0,
+        }
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.current <= 0
     }
 }
 

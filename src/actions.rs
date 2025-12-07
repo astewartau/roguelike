@@ -7,10 +7,14 @@ use crate::components::{
     Actor, Attackable, BlocksMovement, Container, Door, Health,
     LungeAnimation, Position,
 };
+use crate::constants::{
+    COMBAT_CRIT_CHANCE, COMBAT_CRIT_MULTIPLIER, COMBAT_DAMAGE_MAX_MULT, COMBAT_DAMAGE_MIN_MULT,
+};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::systems::{get_attack_damage, open_chest, open_door};
 use hecs::{Entity, World};
+use rand::Rng;
 
 /// The result of executing an action
 #[derive(Debug, Clone)]
@@ -198,7 +202,20 @@ fn execute_attack(
     target_y: f32,
     events: &mut EventQueue,
 ) -> ActionResult {
-    let damage = get_attack_damage(world, attacker);
+    let base_damage = get_attack_damage(world, attacker);
+
+    // Roll for damage variance and critical hits
+    let mut rng = rand::thread_rng();
+    let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
+    let is_crit = rng.gen::<f32>() < COMBAT_CRIT_CHANCE;
+
+    let mut damage = (base_damage as f32 * damage_mult) as i32;
+    if is_crit {
+        damage = (damage as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
+    }
+
+    // Ensure at least 1 damage
+    damage = damage.max(1);
 
     // Apply damage to target
     if let Ok(mut health) = world.get::<&mut Health>(target) {

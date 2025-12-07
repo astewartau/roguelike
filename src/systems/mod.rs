@@ -22,7 +22,7 @@ pub mod rendering;
 // Re-export everything for backwards compatibility
 pub use ai::{ai_chase, tick_energy};
 pub use animation::{update_lunge_animations, visual_lerp};
-pub use combat::{get_attack_damage, open_chest, open_door, remove_dead_entities, weapon_damage};
+pub use combat::{get_attack_damage, open_chest, open_door, remove_dead_entities, tick_health_regen, weapon_damage};
 pub use experience::{calculate_xp_value, grant_xp, stats_total, xp_for_level, xp_progress};
 pub use inventory::{
     find_container_at_player, take_all_from_container, take_gold_from_container,

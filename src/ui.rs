@@ -2,15 +2,19 @@
 //!
 //! Handles all game UI: status bars, inventory, loot windows, etc.
 
+use crate::camera::Camera;
 use crate::components::{Container, Equipment, Health, Inventory, ItemType, Stats};
+use crate::constants::DAMAGE_NUMBER_RISE;
 use crate::systems;
 use crate::tile::tile_ids;
 use crate::tileset::Tileset;
+use crate::vfx::{EffectType, VisualEffect};
 use hecs::World;
 
 /// Data needed to render the status bar
 pub struct StatusBarData {
-    pub health_percent: f32,
+    pub health_current: i32,
+    pub health_max: i32,
     pub xp_progress: f32,
     pub xp_level: u32,
     pub gold: u32,
@@ -40,6 +44,138 @@ pub struct UiActions {
     pub close_chest: bool,
 }
 
+// =============================================================================
+// DEVELOPER MENU
+// =============================================================================
+
+/// Tools available in the developer menu
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DevTool {
+    SpawnChest,
+    SpawnEnemy,
+}
+
+impl DevTool {
+    pub fn name(&self) -> &'static str {
+        match self {
+            DevTool::SpawnChest => "Chest",
+            DevTool::SpawnEnemy => "Enemy",
+        }
+    }
+
+    pub fn tile_id(&self) -> u32 {
+        match self {
+            DevTool::SpawnChest => tile_ids::CHEST_CLOSED,
+            DevTool::SpawnEnemy => tile_ids::SKELETON,
+        }
+    }
+}
+
+/// State for the developer menu
+pub struct DevMenu {
+    pub visible: bool,
+    pub selected_tool: Option<DevTool>,
+}
+
+impl Default for DevMenu {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            selected_tool: None,
+        }
+    }
+}
+
+impl DevMenu {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn toggle(&mut self) {
+        self.visible = !self.visible;
+        if !self.visible {
+            self.selected_tool = None;
+        }
+    }
+
+    pub fn has_active_tool(&self) -> bool {
+        self.visible && self.selected_tool.is_some()
+    }
+}
+
+/// Draw the developer menu
+pub fn draw_dev_menu(
+    ctx: &egui::Context,
+    dev_menu: &mut DevMenu,
+    tileset_texture_id: egui::TextureId,
+    tileset: &Tileset,
+) {
+    if !dev_menu.visible {
+        return;
+    }
+
+    egui::Window::new("Developer Tools")
+        .fixed_pos([10.0, 120.0])
+        .fixed_size([200.0, 120.0])
+        .title_bar(true)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let tools = [DevTool::SpawnChest, DevTool::SpawnEnemy];
+
+                for tool in tools {
+                    let is_selected = dev_menu.selected_tool == Some(tool);
+                    let uv_rect = tileset.get_egui_uv(tool.tile_id());
+
+                    // Create a button with the tile image
+                    let button_size = egui::vec2(48.0, 48.0);
+                    let (rect, response) = ui.allocate_exact_size(button_size, egui::Sense::click());
+
+                    // Draw background (highlight if selected)
+                    let bg_color = if is_selected {
+                        egui::Color32::from_rgb(80, 120, 200)
+                    } else if response.hovered() {
+                        egui::Color32::from_rgb(60, 60, 80)
+                    } else {
+                        egui::Color32::from_rgb(40, 40, 50)
+                    };
+                    ui.painter().rect_filled(rect, 4.0, bg_color);
+
+                    // Draw the tile image
+                    let image_rect = rect.shrink(4.0);
+                    ui.painter().image(
+                        tileset_texture_id,
+                        image_rect,
+                        uv_rect,
+                        egui::Color32::WHITE,
+                    );
+
+                    // Handle click
+                    if response.clicked() {
+                        if is_selected {
+                            dev_menu.selected_tool = None;
+                        } else {
+                            dev_menu.selected_tool = Some(tool);
+                        }
+                    }
+
+                    // Tooltip
+                    response.on_hover_text(tool.name());
+                }
+            });
+
+            ui.add_space(8.0);
+
+            // Show current selection
+            if let Some(tool) = dev_menu.selected_tool {
+                ui.label(format!("Selected: {}", tool.name()));
+                ui.label("Click on map to spawn");
+            } else {
+                ui.label("Select a tool above");
+            }
+        });
+}
+
 /// Render the status bar (health, XP, gold)
 pub fn draw_status_bar(
     ctx: &egui::Context,
@@ -52,9 +188,14 @@ pub fn draw_status_bar(
         .fixed_size([200.0, 90.0])
         .title_bar(false)
         .show(ctx, |ui| {
+            let health_percent = if data.health_max > 0 {
+                data.health_current as f32 / data.health_max as f32
+            } else {
+                0.0
+            };
             ui.add(
-                egui::ProgressBar::new(data.health_percent)
-                    .text(format!("HP: {:.0}%", data.health_percent * 100.0)),
+                egui::ProgressBar::new(health_percent)
+                    .text(format!("HP: {}/{}", data.health_current, data.health_max)),
             );
             ui.add(
                 egui::ProgressBar::new(data.xp_progress)
@@ -352,10 +493,10 @@ impl UiIcons {
 
 /// Extract status bar data from the world
 pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> StatusBarData {
-    let health_percent = world
+    let (health_current, health_max) = world
         .get::<&Health>(player_entity)
-        .map(|h| (h.current as f32 / h.max as f32).clamp(0.0, 1.0))
-        .unwrap_or(1.0);
+        .map(|h| (h.current, h.max))
+        .unwrap_or((0, 0));
 
     let gold = world
         .get::<&Inventory>(player_entity)
@@ -368,7 +509,8 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
         .unwrap_or((0.0, 1));
 
     StatusBarData {
-        health_percent,
+        health_current,
+        health_max,
         xp_progress,
         xp_level,
         gold,
@@ -391,4 +533,54 @@ pub fn get_loot_window_data(
         viewport_width,
         viewport_height,
     })
+}
+
+/// Render floating damage numbers
+pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("damage_numbers"),
+    ));
+
+    // Get egui's pixels per point for HiDPI scaling
+    let ppp = ctx.pixels_per_point();
+
+    for effect in effects {
+        let EffectType::DamageNumber { amount } = &effect.effect_type else {
+            continue;
+        };
+
+        let progress = effect.progress();
+
+        // Convert world position to screen position
+        // The effect position is already centered on the tile
+        let rise_offset = progress * DAMAGE_NUMBER_RISE;
+        let world_x = effect.x;
+        let world_y = effect.y + rise_offset; // Rise up (positive Y is up in world space)
+
+        // Transform from world to screen coordinates (in physical pixels)
+        let screen_pos = camera.world_to_screen(world_x, world_y);
+
+        // Convert to egui points (egui uses logical points, not physical pixels)
+        let egui_x = screen_pos.0 / ppp;
+        let egui_y = screen_pos.1 / ppp;
+
+        // Fade out as progress increases
+        let alpha = ((1.0 - progress) * 255.0) as u8;
+
+        // Red color for damage
+        let color = egui::Color32::from_rgba_unmultiplied(255, 80, 80, alpha);
+
+        // Draw the damage number
+        let text = format!("{}", amount);
+        let font_id = egui::FontId::proportional(20.0);
+
+        painter.text(
+            egui::pos2(egui_x, egui_y),
+            egui::Align2::CENTER_CENTER,
+            text,
+            font_id,
+            color,
+        );
+    }
 }

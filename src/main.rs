@@ -82,6 +82,7 @@ struct AppState {
     show_inventory: bool,
     open_chest: Option<hecs::Entity>,
     show_grid_lines: bool,
+    dev_menu: ui::DevMenu,
 
     // Input state
     input: input::InputState,
@@ -201,6 +202,7 @@ impl ApplicationHandler for App {
             show_inventory: false,
             open_chest: None,
             show_grid_lines: false,
+            dev_menu: ui::DevMenu::new(),
             input: input::InputState::new(),
             last_frame_time: Instant::now(),
         });
@@ -238,6 +240,9 @@ impl ApplicationHandler for App {
                                 if key == KeyCode::Escape {
                                     event_loop.exit();
                                 }
+                                if key == KeyCode::Backquote {
+                                    state.dev_menu.toggle();
+                                }
                                 state.input.keys_pressed.insert(key);
                             }
                             ElementState::Released => {
@@ -264,13 +269,18 @@ impl ApplicationHandler for App {
                             && (dx.abs() > CLICK_DRAG_THRESHOLD || dy.abs() > CLICK_DRAG_THRESHOLD);
 
                         if !was_drag {
-                            input::handle_click_to_move(
-                                &mut state.input,
-                                &state.camera,
-                                &state.world,
-                                &state.grid,
-                                state.player_entity,
-                            );
+                            // Check if a dev tool is active
+                            if state.dev_menu.has_active_tool() {
+                                state.handle_dev_spawn();
+                            } else {
+                                input::handle_click_to_move(
+                                    &mut state.input,
+                                    &state.camera,
+                                    &state.world,
+                                    &state.grid,
+                                    state.player_entity,
+                                );
+                            }
                         }
 
                         state.camera.release_pan();
@@ -395,10 +405,20 @@ impl AppState {
         let player_entity = self.player_entity;
         let viewport_width = self.camera.viewport_width;
         let viewport_height = self.camera.viewport_height;
+        let vfx_effects = &self.vfx.effects;
+        let camera = &self.camera;
+        let tileset = &self.tileset;
+        let dev_menu = &mut self.dev_menu;
 
         self.egui_glow.run(&self.window, |ctx| {
             // Status bar (always visible)
             ui::draw_status_bar(ctx, &status_data, icons.tileset_texture_id, icons.coins_uv);
+
+            // Floating damage numbers
+            ui::draw_damage_numbers(ctx, vfx_effects, camera);
+
+            // Developer menu
+            ui::draw_dev_menu(ctx, dev_menu, icons.tileset_texture_id, tileset);
 
             // Loot window (if chest is open)
             if let Some(ref data) = loot_data {
@@ -496,8 +516,18 @@ impl AppState {
             }
         }
 
-        // Handle movement
-        if let Some((dx, dy)) = result.movement {
+        // Check if player is dead - no movement allowed
+        // If Health component is missing (removed on death), treat as dead
+        let is_dead = self
+            .world
+            .get::<&components::Health>(self.player_entity)
+            .map(|h| h.is_dead())
+            .unwrap_or(true);
+
+        if is_dead {
+            // Clear any pending path and skip movement processing
+            self.input.clear_path();
+        } else if let Some((dx, dy)) = result.movement {
             // Keyboard movement cancels click-to-move path
             self.input.clear_path();
 
@@ -546,5 +576,54 @@ impl AppState {
 
         // Process mouse drag for camera panning
         input::process_mouse_drag(&mut self.input, &mut self.camera, self.show_inventory);
+    }
+
+    fn handle_dev_spawn(&mut self) {
+        let Some(tool) = self.dev_menu.selected_tool else {
+            return;
+        };
+
+        // Convert mouse position to world coordinates
+        let world_pos = self.camera.screen_to_world(
+            self.input.mouse_pos.0,
+            self.input.mouse_pos.1,
+        );
+
+        // Round to get tile coordinates
+        let tile_x = world_pos.x.round() as i32;
+        let tile_y = world_pos.y.round() as i32;
+
+        // Check if the tile is walkable
+        let Some(tile) = self.grid.get(tile_x, tile_y) else {
+            return;
+        };
+        if !tile.tile_type.is_walkable() {
+            return;
+        }
+
+        // Check if something is already blocking this tile
+        let is_blocked = self.world.query::<(&components::Position, &components::BlocksMovement)>()
+            .iter()
+            .any(|(_, (pos, _))| pos.x == tile_x && pos.y == tile_y);
+        if is_blocked {
+            return;
+        }
+
+        // Spawn the entity based on the selected tool
+        match tool {
+            ui::DevTool::SpawnChest => {
+                let pos = components::Position::new(tile_x, tile_y);
+                self.world.spawn((
+                    pos,
+                    components::VisualPosition::from_position(&pos),
+                    components::Sprite::new(tile::tile_ids::CHEST_CLOSED),
+                    components::Container::new(vec![components::ItemType::HealthPotion]),
+                    components::BlocksMovement,
+                ));
+            }
+            ui::DevTool::SpawnEnemy => {
+                spawning::enemies::SKELETON.spawn(&mut self.world, tile_x, tile_y);
+            }
+        }
     }
 }

@@ -39,7 +39,7 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         Sprite::new(tile_ids::PLAYER),
         Player,
         Actor::new(PLAYER_SPEED),
-        Health::new(PLAYER_STARTING_HEALTH),
+        Health::with_regen(PLAYER_STARTING_HEALTH, PLAYER_HP_REGEN_AMOUNT, PLAYER_HP_REGEN_INTERVAL),
         Stats::new(PLAYER_STRENGTH, PLAYER_INTELLIGENCE, PLAYER_AGILITY),
         Inventory::new(),
         Equipment::with_weapon(Weapon::sword()),

@@ -41,6 +41,10 @@ pub const HIT_FLASH_DURATION: f32 = 0.15;
 pub const SLASH_VFX_DURATION: f32 = 0.2;
 /// Slash VFX angle (45 degrees)
 pub const SLASH_VFX_ANGLE: f32 = std::f32::consts::FRAC_PI_4;
+/// Damage number duration in seconds
+pub const DAMAGE_NUMBER_DURATION: f32 = 0.8;
+/// How high damage numbers rise (in tiles)
+pub const DAMAGE_NUMBER_RISE: f32 = 1.0;
 
 // =============================================================================
 // DUNGEON GENERATION
@@ -62,15 +66,15 @@ pub const DUNGEON_DEFAULT_HEIGHT: usize = 100;
 // =============================================================================
 
 /// Player's default starting health
-pub const PLAYER_STARTING_HEALTH: i32 = 15;
+pub const PLAYER_STARTING_HEALTH: i32 = 50;
 /// Player's action speed (higher = slower, costs more energy)
 pub const PLAYER_SPEED: i32 = 3;
 /// Player's starting strength
-pub const PLAYER_STRENGTH: i32 = 10;
+pub const PLAYER_STRENGTH: i32 = 14;
 /// Player's starting intelligence
-pub const PLAYER_INTELLIGENCE: i32 = 8;
+pub const PLAYER_INTELLIGENCE: i32 = 10;
 /// Player's starting agility
-pub const PLAYER_AGILITY: i32 = 12;
+pub const PLAYER_AGILITY: i32 = 14;
 
 /// Default FOV radius for player
 pub const FOV_RADIUS: i32 = 10;
@@ -79,7 +83,29 @@ pub const FOV_RADIUS: i32 = 10;
 pub const XP_PER_LEVEL_MULTIPLIER: u32 = 100;
 
 /// Unarmed attack damage
-pub const UNARMED_DAMAGE: i32 = 1;
+pub const UNARMED_DAMAGE: i32 = 2;
+
+// =============================================================================
+// COMBAT
+// =============================================================================
+
+/// Minimum damage multiplier from dice roll (percentage)
+pub const COMBAT_DAMAGE_MIN_MULT: f32 = 0.5;
+/// Maximum damage multiplier from dice roll (percentage)
+pub const COMBAT_DAMAGE_MAX_MULT: f32 = 1.5;
+/// Chance to deal a critical hit (0.0 - 1.0)
+pub const COMBAT_CRIT_CHANCE: f32 = 0.1;
+/// Critical hit damage multiplier
+pub const COMBAT_CRIT_MULTIPLIER: f32 = 2.0;
+
+// =============================================================================
+// REGENERATION
+// =============================================================================
+
+/// Player HP regenerated per regen tick
+pub const PLAYER_HP_REGEN_AMOUNT: i32 = 1;
+/// Game ticks between each player HP regen tick
+pub const PLAYER_HP_REGEN_INTERVAL: i32 = 20;
 
 // =============================================================================
 // ENEMIES
@@ -88,7 +114,7 @@ pub const UNARMED_DAMAGE: i32 = 1;
 /// Number of skeletons to spawn
 pub const SKELETON_SPAWN_COUNT: usize = 10;
 /// Skeleton health
-pub const SKELETON_HEALTH: i32 = 25;
+pub const SKELETON_HEALTH: i32 = 15;
 /// Skeleton action speed (lower = faster)
 pub const SKELETON_SPEED: i32 = 2;
 /// Skeleton sight radius for chase AI
@@ -100,7 +126,7 @@ pub const SKELETON_INTELLIGENCE: i32 = 1;
 /// Skeleton agility
 pub const SKELETON_AGILITY: i32 = 3;
 /// Skeleton attack damage
-pub const SKELETON_DAMAGE: i32 = 5;
+pub const SKELETON_DAMAGE: i32 = 3;
 
 /// Gold dropped by enemies (min)
 pub const ENEMY_GOLD_DROP_MIN: u32 = 1;
@@ -117,9 +143,9 @@ pub const HEALTH_POTION_HEAL: i32 = 50;
 pub const HEALTH_POTION_WEIGHT: f32 = 0.5;
 
 /// Sword base damage
-pub const SWORD_BASE_DAMAGE: i32 = 8;
+pub const SWORD_BASE_DAMAGE: i32 = 10;
 /// Sword damage bonus
-pub const SWORD_DAMAGE_BONUS: i32 = 2;
+pub const SWORD_DAMAGE_BONUS: i32 = 4;
 
 // =============================================================================
 // UI / WINDOW

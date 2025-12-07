@@ -249,6 +249,7 @@ pub fn run_ticks_until_player_acts(
 
         // Player can't act yet - run one tick
         systems::tick_energy(world);
+        systems::tick_health_regen(world);
         systems::ai_chase(world, grid, player_entity, &mut rng, events);
         // Process events from AI actions too
         process_events(events, vfx);

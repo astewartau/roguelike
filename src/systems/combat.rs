@@ -110,6 +110,27 @@ pub fn remove_dead_entities(
     }
 }
 
+/// Tick HP regeneration for all entities with regen
+/// Called each game tick (when energy is ticked)
+pub fn tick_health_regen(world: &mut World) {
+    for (_id, health) in world.query_mut::<&mut Health>() {
+        // Skip if no regen, at full health, or dead
+        if health.regen_interval <= 0 || health.current >= health.max || health.current <= 0 {
+            health.regen_counter = 0;
+            continue;
+        }
+
+        // Increment counter
+        health.regen_counter += 1;
+
+        // Regen when counter reaches interval
+        if health.regen_counter >= health.regen_interval {
+            health.current = (health.current + health.regen_amount).min(health.max);
+            health.regen_counter = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

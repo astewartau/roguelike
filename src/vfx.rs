@@ -44,16 +44,19 @@ impl VisualEffect {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum EffectType {
     /// Diagonal slash mark (for melee hits)
     Slash { angle: f32 },
+    /// Floating damage number
+    DamageNumber { amount: i32 },
 }
 
 impl EffectType {
     pub fn duration(&self) -> f32 {
         match self {
             EffectType::Slash { .. } => SLASH_VFX_DURATION,
+            EffectType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
         }
     }
 }
@@ -78,6 +81,11 @@ impl VfxManager {
         self.spawn(x, y, EffectType::Slash { angle: SLASH_VFX_ANGLE });
     }
 
+    /// Spawn a floating damage number
+    pub fn spawn_damage_number(&mut self, x: f32, y: f32, amount: i32) {
+        self.spawn(x, y, EffectType::DamageNumber { amount });
+    }
+
     /// Update all effects, removing finished ones
     pub fn update(&mut self, dt: f32) {
         self.effects.retain_mut(|effect| effect.update(dt));
@@ -86,8 +94,9 @@ impl VfxManager {
     /// Handle a game event, spawning appropriate VFX
     pub fn handle_event(&mut self, event: &GameEvent) {
         match event {
-            GameEvent::AttackHit { target_pos, .. } => {
+            GameEvent::AttackHit { target_pos, damage, .. } => {
                 self.spawn_slash(target_pos.0, target_pos.1);
+                self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
             }
             GameEvent::EntityDied { position, .. } => {
                 // Could spawn death particles here in the future
