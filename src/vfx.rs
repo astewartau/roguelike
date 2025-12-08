@@ -50,6 +50,8 @@ pub enum EffectType {
     Slash { angle: f32 },
     /// Floating damage number
     DamageNumber { amount: i32 },
+    /// Fire particle effect (looping)
+    Fire { seed: f32 },
 }
 
 impl EffectType {
@@ -57,18 +59,38 @@ impl EffectType {
         match self {
             EffectType::Slash { .. } => SLASH_VFX_DURATION,
             EffectType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
+            EffectType::Fire { .. } => f32::INFINITY, // Fire loops forever
         }
+    }
+}
+
+/// A persistent fire effect (doesn't expire)
+pub struct FireEffect {
+    pub x: f32,
+    pub y: f32,
+    pub seed: f32,
+    pub time: f32, // Accumulated time for animation
+}
+
+impl FireEffect {
+    pub fn new(x: f32, y: f32, seed: f32) -> Self {
+        Self { x, y, seed, time: 0.0 }
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        self.time += dt;
     }
 }
 
 /// Manager for all active visual effects
 pub struct VfxManager {
     pub effects: Vec<VisualEffect>,
+    pub fires: Vec<FireEffect>,
 }
 
 impl VfxManager {
     pub fn new() -> Self {
-        Self { effects: Vec::new() }
+        Self { effects: Vec::new(), fires: Vec::new() }
     }
 
     /// Spawn a new effect
@@ -86,9 +108,19 @@ impl VfxManager {
         self.spawn(x, y, EffectType::DamageNumber { amount });
     }
 
+    /// Spawn a persistent fire effect
+    pub fn spawn_fire(&mut self, x: f32, y: f32) {
+        let seed = rand::random::<f32>() * 1000.0;
+        self.fires.push(FireEffect::new(x, y, seed));
+    }
+
     /// Update all effects, removing finished ones
     pub fn update(&mut self, dt: f32) {
         self.effects.retain_mut(|effect| effect.update(dt));
+        // Update fire animation times
+        for fire in &mut self.fires {
+            fire.update(dt);
+        }
     }
 
     /// Handle a game event, spawning appropriate VFX

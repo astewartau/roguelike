@@ -120,12 +120,17 @@ impl Tileset {
         let col = tile_id % self.columns;
         let row = tile_id / self.columns;
 
-        let u0 = (col * self.tile_width) as f32 / self.image_width as f32;
-        let u1 = ((col + 1) * self.tile_width) as f32 / self.image_width as f32;
+        // Tiny inset to prevent texture bleeding at tile edges
+        // Using 0.1 pixel instead of 0.5 to minimize visual stretching
+        let inset_u = 0.1 / self.image_width as f32;
+        let inset_v = 0.1 / self.image_height as f32;
+
+        let u0 = (col * self.tile_width) as f32 / self.image_width as f32 + inset_u;
+        let u1 = ((col + 1) * self.tile_width) as f32 / self.image_width as f32 - inset_u;
 
         // Flip V coordinates (OpenGL has origin at bottom-left, PNG at top-left)
-        let v0 = ((row + 1) * self.tile_height) as f32 / self.image_height as f32;
-        let v1 = (row * self.tile_height) as f32 / self.image_height as f32;
+        let v0 = ((row + 1) * self.tile_height) as f32 / self.image_height as f32 - inset_v;
+        let v1 = (row * self.tile_height) as f32 / self.image_height as f32 + inset_v;
 
         TileUV { u0, v0, u1, v1 }
     }

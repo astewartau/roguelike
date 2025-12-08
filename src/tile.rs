@@ -2,7 +2,7 @@
 /// These can be adjusted to match different tilesets
 pub mod tile_ids {
     pub const EMPTY: u32 = 0;
-    pub const FLOOR: u32 = 1;      // Basic floor tile
+    pub const FLOOR: u32 = 2;      // Stone floor tile
     pub const WALL: u32 = 3;       // Wall tile
     pub const WATER: u32 = 4;      // Water tile
     pub const GRASS: u32 = 5;      // Grass tile
@@ -26,6 +26,17 @@ pub mod tile_ids {
     // UI icons
     pub const HEART: u32 = 151;
     pub const DIAMOND: u32 = 38;
+
+    // Decorative decals
+    pub const BONES_1: u32 = 22;
+    pub const BONES_2: u32 = 23;
+    pub const BONES_3: u32 = 24;
+    pub const BONES_4: u32 = 25;
+    pub const ROCKS: u32 = 26;
+    pub const PLANT: u32 = 13;
+    pub const MUSHROOM: u32 = 48;
+    pub const FLOWERS: u32 = 51;
+    pub const SKULL: u32 = 148;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -138,6 +138,130 @@ void main() {
 }
 "#;
 
+// Fire particle shader
+const FIRE_VERTEX_SHADER: &str = r#"#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aInstancePos;
+layout (location = 2) in float aTime;
+layout (location = 3) in float aSeed;
+
+uniform mat4 uProjection;
+
+out vec2 vLocalPos;
+out float vTime;
+out float vSeed;
+
+void main() {
+    vec2 worldPos = aInstancePos + aPos;
+    gl_Position = uProjection * vec4(worldPos, 0.0, 1.0);
+    vLocalPos = aPos;
+    vTime = aTime;
+    vSeed = aSeed;
+}
+"#;
+
+const FIRE_FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 vLocalPos;
+in float vTime;
+in float vSeed;
+
+out vec4 FragColor;
+
+// Simple pseudo-random noise
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Value noise
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f); // smoothstep
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Fractal brownian motion
+float fbm(vec2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 4; i++) {
+        sum += noise(p) * amp;
+        p *= 2.0;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+void main() {
+    // Center UV and scale
+    vec2 uv = vLocalPos * 2.0 - 1.0;
+
+    // Fire rises upward - offset y by time
+    float time = vTime * 2.0;
+    vec2 fireUV = uv;
+    fireUV.y += time * 0.8; // Fire rises
+    fireUV += vSeed; // Per-fire variation
+
+    // Create turbulent fire shape using layered noise
+    // Base large turbulence
+    float n = fbm(fireUV * 3.0 + vec2(0.0, -time * 1.5));
+    // Medium detail
+    n += fbm(fireUV * 6.0 + vec2(vSeed, -time * 2.0)) * 0.5;
+    // Fine detail - faster moving small wisps
+    n += fbm(fireUV * 12.0 + vec2(-vSeed * 0.5, -time * 3.0)) * 0.25;
+    // Extra fine grain for texture
+    float grain = noise(fireUV * 20.0 + vec2(time * 2.0, -time * 4.0)) * 0.15;
+
+    // Fire shape: wider at bottom, narrower at top
+    float shape = 1.0 - abs(uv.x) * (1.0 + uv.y * 0.5);
+    shape *= 1.0 - uv.y; // Fade toward top
+    shape = max(0.0, shape);
+
+    // Combine noise with shape
+    float fire = shape * n * 2.0;
+    fire = smoothstep(0.1, 0.8, fire);
+
+    // Add grain texture to the body (stronger in middle, fades at edges)
+    fire += grain * fire * (1.0 - fire) * 2.0;
+
+    // Flicker effect (reduced intensity)
+    float flicker = 0.9 + 0.1 * sin(time * 8.0 + vSeed * 100.0);
+    fire *= flicker;
+
+    // Fire colors: orange core -> red-orange -> deep red -> transparent
+    // More red/orange focused, less yellow/white
+    vec3 color;
+    if (fire > 0.75) {
+        // Hot core: bright orange-yellow (not white)
+        color = mix(vec3(1.0, 0.5, 0.1), vec3(1.0, 0.7, 0.2), (fire - 0.75) / 0.25);
+    } else if (fire > 0.45) {
+        // Mid flame: orange to bright orange
+        color = mix(vec3(0.9, 0.25, 0.0), vec3(1.0, 0.5, 0.1), (fire - 0.45) / 0.3);
+    } else if (fire > 0.2) {
+        // Outer flame: red-orange
+        color = mix(vec3(0.6, 0.1, 0.0), vec3(0.9, 0.25, 0.0), (fire - 0.2) / 0.25);
+    } else {
+        // Edge: deep red to dark
+        color = mix(vec3(0.3, 0.05, 0.0), vec3(0.6, 0.1, 0.0), fire / 0.2);
+    }
+
+    // Subtle emissive boost (reduced from before)
+    color *= 1.0 + fire * 0.3;
+
+    float alpha = fire * shape * 1.5;
+    alpha = clamp(alpha, 0.0, 1.0);
+
+    if (alpha < 0.01) discard;
+    FragColor = vec4(color, alpha);
+}
+"#;
+
 pub struct Renderer {
     gl: Arc<glow::Context>,
     program: NativeProgram,
@@ -157,6 +281,12 @@ pub struct Renderer {
     vfx_vbo: NativeBuffer,
     vfx_instance_vbo: NativeBuffer,
     vfx_projection_loc: NativeUniformLocation,
+    // Fire particle rendering
+    fire_program: NativeProgram,
+    fire_vao: NativeVertexArray,
+    fire_vbo: NativeBuffer,
+    fire_instance_vbo: NativeBuffer,
+    fire_projection_loc: NativeUniformLocation,
 }
 
 impl Renderer {
@@ -397,6 +527,91 @@ impl Renderer {
 
             gl.bind_vertex_array(None);
 
+            // Create Fire shader program
+            let fire_vertex_shader = gl
+                .create_shader(VERTEX_SHADER)
+                .map_err(|e| format!("Failed to create Fire vertex shader: {}", e))?;
+            gl.shader_source(fire_vertex_shader, FIRE_VERTEX_SHADER);
+            gl.compile_shader(fire_vertex_shader);
+            if !gl.get_shader_compile_status(fire_vertex_shader) {
+                return Err(gl.get_shader_info_log(fire_vertex_shader));
+            }
+
+            let fire_fragment_shader = gl
+                .create_shader(FRAGMENT_SHADER)
+                .map_err(|e| format!("Failed to create Fire fragment shader: {}", e))?;
+            gl.shader_source(fire_fragment_shader, FIRE_FRAGMENT_SHADER);
+            gl.compile_shader(fire_fragment_shader);
+            if !gl.get_shader_compile_status(fire_fragment_shader) {
+                return Err(gl.get_shader_info_log(fire_fragment_shader));
+            }
+
+            let fire_program = gl
+                .create_program()
+                .map_err(|e| format!("Failed to create Fire program: {}", e))?;
+            gl.attach_shader(fire_program, fire_vertex_shader);
+            gl.attach_shader(fire_program, fire_fragment_shader);
+            gl.link_program(fire_program);
+            if !gl.get_program_link_status(fire_program) {
+                return Err(gl.get_program_info_log(fire_program));
+            }
+
+            gl.delete_shader(fire_vertex_shader);
+            gl.delete_shader(fire_fragment_shader);
+
+            let fire_projection_loc = gl
+                .get_uniform_location(fire_program, "uProjection")
+                .ok_or("Failed to get Fire projection uniform location")?;
+
+            // Create Fire VAO and VBOs
+            let fire_vao = gl
+                .create_vertex_array()
+                .map_err(|e| format!("Failed to create Fire VAO: {}", e))?;
+            gl.bind_vertex_array(Some(fire_vao));
+
+            // Quad vertices for fire (same as other quads)
+            let fire_vbo = gl
+                .create_buffer()
+                .map_err(|e| format!("Failed to create Fire VBO: {}", e))?;
+            gl.bind_buffer(ARRAY_BUFFER, Some(fire_vbo));
+            let fire_vertices: [f32; 12] = [
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
+            ];
+            gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&fire_vertices), STATIC_DRAW);
+
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(0, 2, FLOAT, false, 8, 0);
+
+            // Fire instance buffer: pos(2) + time(1) + seed(1) = 4 floats = 16 bytes
+            let fire_instance_vbo = gl
+                .create_buffer()
+                .map_err(|e| format!("Failed to create Fire instance VBO: {}", e))?;
+            gl.bind_buffer(ARRAY_BUFFER, Some(fire_instance_vbo));
+
+            let fire_stride = 16;
+
+            // Position (2 floats)
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 2, FLOAT, false, fire_stride, 0);
+            gl.vertex_attrib_divisor(1, 1);
+
+            // Time (1 float)
+            gl.enable_vertex_attrib_array(2);
+            gl.vertex_attrib_pointer_f32(2, 1, FLOAT, false, fire_stride, 8);
+            gl.vertex_attrib_divisor(2, 1);
+
+            // Seed (1 float)
+            gl.enable_vertex_attrib_array(3);
+            gl.vertex_attrib_pointer_f32(3, 1, FLOAT, false, fire_stride, 12);
+            gl.vertex_attrib_divisor(3, 1);
+
+            gl.bind_vertex_array(None);
+
             // Navy blue background
             gl.clear_color(0.05, 0.08, 0.15, 1.0);
 
@@ -421,6 +636,11 @@ impl Renderer {
                 vfx_vbo,
                 vfx_instance_vbo,
                 vfx_projection_loc,
+                fire_program,
+                fire_vao,
+                fire_vbo,
+                fire_instance_vbo,
+                fire_projection_loc,
             })
         }
     }
@@ -541,6 +761,82 @@ impl Renderer {
         }
     }
 
+    /// Render decorative decals (on top of floor, below entities)
+    pub fn render_decals(&mut self, camera: &Camera, grid: &Grid, tileset: &Tileset) -> Result<(), String> {
+        if grid.decals.is_empty() {
+            return Ok(());
+        }
+
+        unsafe {
+            self.gl.use_program(Some(self.program));
+            self.gl.bind_vertex_array(Some(self.vao));
+
+            // Bind tileset texture
+            tileset.bind(&self.gl, 0);
+            self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
+
+            // Get visible bounds
+            let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
+
+            // Build instance data for visible decals
+            let mut instance_data = Vec::new();
+
+            for decal in &grid.decals {
+                // Skip decals outside visible bounds
+                if decal.x < min_x || decal.x > max_x || decal.y < min_y || decal.y > max_y {
+                    continue;
+                }
+
+                // Check if tile is explored (decals should respect fog of war)
+                let is_visible = grid.get(decal.x, decal.y)
+                    .map(|t| t.explored)
+                    .unwrap_or(false);
+
+                if !is_visible {
+                    continue;
+                }
+
+                let fog = grid.get(decal.x, decal.y)
+                    .map(|t| if t.visible { 1.0 } else { 0.5 })
+                    .unwrap_or(0.5);
+
+                let uv = tileset.get_uv(decal.tile_id);
+
+                instance_data.push(decal.x as f32);
+                instance_data.push(decal.y as f32);
+                instance_data.push(uv.u0);
+                instance_data.push(uv.v0);
+                instance_data.push(uv.u1);
+                instance_data.push(uv.v1);
+                instance_data.push(fog);
+                instance_data.push(0.0); // no effects
+            }
+
+            if !instance_data.is_empty() {
+                self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+                self.gl.buffer_data_u8_slice(
+                    ARRAY_BUFFER,
+                    as_u8_slice(&instance_data),
+                    DYNAMIC_DRAW,
+                );
+
+                let projection = camera.projection_matrix();
+                self.gl.uniform_matrix_4_f32_slice(
+                    Some(&self.projection_loc),
+                    false,
+                    projection.as_ref(),
+                );
+
+                let instance_count = instance_data.len() / 8;
+                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
+            }
+
+            self.gl.bind_vertex_array(None);
+        }
+
+        Ok(())
+    }
+
     /// Render entities
     pub fn render_entities(&mut self, camera: &Camera, entities: &[RenderEntity], tileset: &Tileset) -> Result<(), String> {
         if entities.is_empty() {
@@ -604,6 +900,7 @@ impl Renderer {
                 let angle = match &effect.effect_type {
                     crate::vfx::EffectType::Slash { angle } => *angle,
                     crate::vfx::EffectType::DamageNumber { .. } => continue, // Rendered via egui
+                    crate::vfx::EffectType::Fire { .. } => continue, // Rendered separately
                 };
 
                 // Center the effect on the tile (effect.x/y is already centered)
@@ -630,6 +927,45 @@ impl Renderer {
             self.gl.bind_vertex_array(None);
         }
     }
+
+    /// Render fire particle effects
+    pub fn render_fire(&mut self, camera: &Camera, fires: &[crate::vfx::FireEffect]) {
+        if fires.is_empty() {
+            return;
+        }
+
+        unsafe {
+            // Use additive blending for fire glow
+            self.gl.blend_func(SRC_ALPHA, ONE);
+
+            self.gl.use_program(Some(self.fire_program));
+            self.gl.bind_vertex_array(Some(self.fire_vao));
+
+            // Build instance data: pos(2) + time(1) + seed(1)
+            let mut instance_data = Vec::new();
+
+            for fire in fires {
+                // Center the fire on the tile
+                instance_data.push(fire.x - 0.5);
+                instance_data.push(fire.y - 0.5);
+                instance_data.push(fire.time);
+                instance_data.push(fire.seed);
+            }
+
+            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.fire_instance_vbo));
+            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
+
+            let projection = camera.projection_matrix();
+            self.gl.uniform_matrix_4_f32_slice(Some(&self.fire_projection_loc), false, projection.as_ref());
+
+            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, fires.len() as i32);
+
+            self.gl.bind_vertex_array(None);
+
+            // Restore normal alpha blending
+            self.gl.blend_func(SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
+        }
+    }
 }
 
 impl Drop for Renderer {
@@ -646,6 +982,10 @@ impl Drop for Renderer {
             self.gl.delete_vertex_array(self.vfx_vao);
             self.gl.delete_buffer(self.vfx_vbo);
             self.gl.delete_buffer(self.vfx_instance_vbo);
+            self.gl.delete_program(self.fire_program);
+            self.gl.delete_vertex_array(self.fire_vao);
+            self.gl.delete_buffer(self.fire_vbo);
+            self.gl.delete_buffer(self.fire_instance_vbo);
         }
     }
 }

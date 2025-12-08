@@ -1,5 +1,6 @@
 use crate::constants::*;
-use crate::tile::{Tile, TileType};
+use crate::grid::Decal;
+use crate::tile::{tile_ids, Tile, TileType};
 use rand::Rng;
 
 #[derive(Clone, Copy)]
@@ -202,8 +203,8 @@ impl DungeonGenerator {
         }
     }
 
-    /// Returns (tiles, chest_positions, door_positions)
-    pub fn generate(width: usize, height: usize) -> (Vec<Tile>, Vec<(i32, i32)>, Vec<(i32, i32)>) {
+    /// Returns (tiles, chest_positions, door_positions, decals)
+    pub fn generate(width: usize, height: usize) -> (Vec<Tile>, Vec<(i32, i32)>, Vec<(i32, i32)>, Vec<Decal>) {
         let mut gen = Self::new(width, height);
         let mut rng = rand::thread_rng();
 
@@ -236,7 +237,10 @@ impl DungeonGenerator {
             .map(|room| room.center())
             .collect();
 
-        (gen.tiles, chest_positions, door_positions)
+        // Generate decorative decals in rooms
+        let decals = gen.generate_decals(&rooms, &mut rng);
+
+        (gen.tiles, chest_positions, door_positions, decals)
     }
 
     fn get_index(&self, x: i32, y: i32) -> Option<usize> {
@@ -362,6 +366,62 @@ impl DungeonGenerator {
         }
 
         door_positions
+    }
+
+    /// Generate decorative decals in rooms
+    fn generate_decals(&self, rooms: &[Rect], rng: &mut impl Rng) -> Vec<Decal> {
+        let mut decals = Vec::new();
+
+        // Possible decal types with their weights
+        let decal_types = [
+            (tile_ids::BONES_1, 3),
+            (tile_ids::BONES_2, 2),
+            (tile_ids::BONES_3, 2),
+            (tile_ids::BONES_4, 1),
+            (tile_ids::ROCKS, 4),
+            (tile_ids::SKULL, 1),
+            (tile_ids::MUSHROOM, 2),
+            (tile_ids::FLOWERS, 2),
+            (tile_ids::PLANT, 3),
+        ];
+        let total_weight: u32 = decal_types.iter().map(|(_, w)| w).sum();
+
+        for room in rooms {
+            // Calculate room area and decide how many decals
+            let area = room.width * room.height;
+            // Sparse decals: roughly 1 decal per 8-12 tiles, with some randomness
+            let num_decals = rng.gen_range(area / 15..=area / 8).max(1);
+
+            for _ in 0..num_decals {
+                // Random position within the room (avoid edges for visual appeal)
+                let x = if room.width > 2 {
+                    rng.gen_range(room.x + 1..room.x + room.width - 1)
+                } else {
+                    room.x + room.width / 2
+                };
+                let y = if room.height > 2 {
+                    rng.gen_range(room.y + 1..room.y + room.height - 1)
+                } else {
+                    room.y + room.height / 2
+                };
+
+                // Pick a random decal type using weights
+                let roll = rng.gen_range(0..total_weight);
+                let mut cumulative = 0;
+                let mut tile_id = tile_ids::ROCKS; // default
+                for (id, weight) in &decal_types {
+                    cumulative += weight;
+                    if roll < cumulative {
+                        tile_id = *id;
+                        break;
+                    }
+                }
+
+                decals.push(Decal { x, y, tile_id });
+            }
+        }
+
+        decals
     }
 
     /// Check if a tile is a good door candidate:

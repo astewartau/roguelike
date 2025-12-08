@@ -342,9 +342,13 @@ impl AppState {
             .render(&self.camera, &self.grid, &self.tileset, self.ui_state.show_grid_lines)
             .unwrap();
         self.renderer
+            .render_decals(&self.camera, &self.grid, &self.tileset)
+            .unwrap();
+        self.renderer
             .render_entities(&self.camera, &entities_to_render, &self.tileset)
             .unwrap();
         self.renderer.render_vfx(&self.camera, &self.vfx.effects);
+        self.renderer.render_fire(&self.camera, &self.vfx.fires);
 
         // Render egui
         self.egui_glow.paint(&self.window);
@@ -638,6 +642,10 @@ impl AppState {
                     &mut self.events,
                     &mut rng,
                 );
+            }
+            ui::DevTool::SpawnFire => {
+                // Spawn a fire particle effect at this location
+                self.vfx.spawn_fire(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
             }
         }
     }
