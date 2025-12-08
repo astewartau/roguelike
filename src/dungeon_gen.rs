@@ -188,6 +188,16 @@ impl BspNode {
     }
 }
 
+/// Result of dungeon generation
+pub struct DungeonResult {
+    pub tiles: Vec<Tile>,
+    pub chest_positions: Vec<(i32, i32)>,
+    pub door_positions: Vec<(i32, i32)>,
+    pub decals: Vec<Decal>,
+    pub stairs_up_pos: Option<(i32, i32)>,
+    pub stairs_down_pos: Option<(i32, i32)>,
+}
+
 pub struct DungeonGenerator {
     width: usize,
     height: usize,
@@ -203,8 +213,8 @@ impl DungeonGenerator {
         }
     }
 
-    /// Returns (tiles, chest_positions, door_positions, decals)
-    pub fn generate(width: usize, height: usize) -> (Vec<Tile>, Vec<(i32, i32)>, Vec<(i32, i32)>, Vec<Decal>) {
+    /// Generate a dungeon floor. floor_num 0 is the starting floor (no stairs up).
+    pub fn generate(width: usize, height: usize, floor_num: u32) -> DungeonResult {
         let mut gen = Self::new(width, height);
         let mut rng = rand::thread_rng();
 
@@ -231,16 +241,55 @@ impl DungeonGenerator {
         // Find door positions (but keep floor tiles - doors are entities)
         let door_positions = gen.find_door_positions(&rooms);
 
-        // Collect chest spawn positions (center of each room except first)
-        let chest_positions: Vec<(i32, i32)> = rooms.iter()
-            .skip(1)
-            .map(|room| room.center())
-            .collect();
-
         // Generate decorative decals in rooms
         let decals = gen.generate_decals(&rooms, &mut rng);
 
-        (gen.tiles, chest_positions, door_positions, decals)
+        // Place stairs
+        // First room is the starting room (player spawns here)
+        // On floor 0, no stairs up. On other floors, stairs up in first room.
+        // Stairs down always in the last room (furthest from start).
+        let stairs_up_pos = if floor_num > 0 && !rooms.is_empty() {
+            let (x, y) = rooms[0].center();
+            gen.set_tile(x, y, TileType::StairsUp);
+            Some((x, y))
+        } else {
+            None
+        };
+
+        // Stairs down in last room (or a random room that's not the first)
+        let stairs_down_pos = if rooms.len() >= 2 {
+            let room_idx = rooms.len() - 1;
+            let (x, y) = rooms[room_idx].center();
+            gen.set_tile(x, y, TileType::StairsDown);
+            Some((x, y))
+        } else if rooms.len() == 1 {
+            // Only one room - place stairs in a corner
+            let room = &rooms[0];
+            let x = room.x + 1;
+            let y = room.y + 1;
+            gen.set_tile(x, y, TileType::StairsDown);
+            Some((x, y))
+        } else {
+            None
+        };
+
+        // Collect chest spawn positions (center of each room except first and last)
+        // First room has player spawn (and maybe stairs up on deeper floors)
+        // Last room has stairs down
+        let chest_positions: Vec<(i32, i32)> = rooms.iter()
+            .enumerate()
+            .filter(|(i, _)| *i != 0 && *i != rooms.len() - 1)
+            .map(|(_, room)| room.center())
+            .collect();
+
+        DungeonResult {
+            tiles: gen.tiles,
+            chest_positions,
+            door_positions,
+            decals,
+            stairs_up_pos,
+            stairs_down_pos,
+        }
     }
 
     fn get_index(&self, x: i32, y: i32) -> Option<usize> {
@@ -467,55 +516,88 @@ mod tests {
 
     #[test]
     fn test_dungeon_generates_tiles() {
-        let (tiles, _, _) = DungeonGenerator::generate(50, 50);
-        assert_eq!(tiles.len(), 50 * 50);
+        let result = DungeonGenerator::generate(50, 50, 0);
+        assert_eq!(result.tiles.len(), 50 * 50);
     }
 
     #[test]
     fn test_dungeon_has_floor_tiles() {
-        let (tiles, _, _) = DungeonGenerator::generate(50, 50);
-        let floor_count = tiles.iter().filter(|t| t.tile_type == TileType::Floor).count();
+        let result = DungeonGenerator::generate(50, 50, 0);
+        let floor_count = result.tiles.iter().filter(|t| t.tile_type == TileType::Floor).count();
         // Should have at least some floor tiles
         assert!(floor_count > 0);
     }
 
     #[test]
     fn test_dungeon_has_wall_tiles() {
-        let (tiles, _, _) = DungeonGenerator::generate(50, 50);
-        let wall_count = tiles.iter().filter(|t| t.tile_type == TileType::Wall).count();
+        let result = DungeonGenerator::generate(50, 50, 0);
+        let wall_count = result.tiles.iter().filter(|t| t.tile_type == TileType::Wall).count();
         // Should have some walls
         assert!(wall_count > 0);
     }
 
     #[test]
     fn test_dungeon_generates_chest_positions() {
-        let (_, chest_positions, _) = DungeonGenerator::generate(50, 50);
-        // Should have at least some chests (one per room except first)
-        assert!(!chest_positions.is_empty());
+        let result = DungeonGenerator::generate(50, 50, 0);
+        // Chests are placed in rooms except first (player spawn) and last (stairs down)
+        // With a 50x50 dungeon we should have at least 3 rooms, so at least 1 chest
+        // But this can vary based on BSP randomness, so just check it doesn't crash
+        // and positions are valid if any exist
+        for (x, y) in &result.chest_positions {
+            assert!(*x >= 0 && *x < 50);
+            assert!(*y >= 0 && *y < 50);
+        }
     }
 
     #[test]
     fn test_dungeon_generates_door_positions() {
-        let (_, _, door_positions) = DungeonGenerator::generate(50, 50);
+        let result = DungeonGenerator::generate(50, 50, 0);
         // Should have some doors
-        assert!(!door_positions.is_empty());
+        assert!(!result.door_positions.is_empty());
     }
 
     #[test]
     fn test_chest_positions_are_on_floor() {
-        let (tiles, chest_positions, _) = DungeonGenerator::generate(50, 50);
-        for (x, y) in chest_positions {
+        let result = DungeonGenerator::generate(50, 50, 0);
+        for (x, y) in result.chest_positions {
             let idx = y as usize * 50 + x as usize;
-            assert_eq!(tiles[idx].tile_type, TileType::Floor);
+            assert_eq!(result.tiles[idx].tile_type, TileType::Floor);
         }
     }
 
     #[test]
     fn test_door_positions_are_on_floor() {
-        let (tiles, _, door_positions) = DungeonGenerator::generate(50, 50);
-        for (x, y) in door_positions {
+        let result = DungeonGenerator::generate(50, 50, 0);
+        for (x, y) in result.door_positions {
             let idx = y as usize * 50 + x as usize;
-            assert_eq!(tiles[idx].tile_type, TileType::Floor);
+            assert_eq!(result.tiles[idx].tile_type, TileType::Floor);
+        }
+    }
+
+    #[test]
+    fn test_floor_0_has_stairs_down_no_stairs_up() {
+        let result = DungeonGenerator::generate(50, 50, 0);
+        assert!(result.stairs_down_pos.is_some());
+        assert!(result.stairs_up_pos.is_none());
+    }
+
+    #[test]
+    fn test_floor_1_has_both_stairs() {
+        let result = DungeonGenerator::generate(50, 50, 1);
+        assert!(result.stairs_down_pos.is_some());
+        assert!(result.stairs_up_pos.is_some());
+    }
+
+    #[test]
+    fn test_stairs_are_on_stair_tiles() {
+        let result = DungeonGenerator::generate(50, 50, 1);
+        if let Some((x, y)) = result.stairs_up_pos {
+            let idx = y as usize * 50 + x as usize;
+            assert_eq!(result.tiles[idx].tile_type, TileType::StairsUp);
+        }
+        if let Some((x, y)) = result.stairs_down_pos {
+            let idx = y as usize * 50 + x as usize;
+            assert_eq!(result.tiles[idx].tile_type, TileType::StairsDown);
         }
     }
 

@@ -27,11 +27,11 @@
         }, 
         {
          "id":4,
-         "type":"stair_up"
-        }, 
+         "type":"stair_down"
+        },
         {
          "id":5,
-         "type":"stair_down"
+         "type":"stair_up"
         }, 
         {
          "id":9,

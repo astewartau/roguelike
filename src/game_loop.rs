@@ -23,6 +23,12 @@ pub enum TurnResult {
     NotReady,
 }
 
+/// Full result of executing a player turn, including any events that need handling
+pub struct TurnExecutionResult {
+    pub turn_result: TurnResult,
+    pub floor_transition: Option<StairDirection>,
+}
+
 /// Start a player action and advance time until player can act again.
 ///
 /// This is the main entry point for player turns. It:
@@ -41,7 +47,7 @@ pub fn execute_player_turn(
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
-) -> TurnResult {
+) -> TurnExecutionResult {
     // Check if player can act
     let can_act = world
         .get::<&Actor>(player_entity)
@@ -49,7 +55,10 @@ pub fn execute_player_turn(
         .unwrap_or(false);
 
     if !can_act {
-        return TurnResult::NotReady;
+        return TurnExecutionResult {
+            turn_result: TurnResult::NotReady,
+            floor_transition: None,
+        };
     }
 
     // Determine what action the player is attempting
@@ -57,7 +66,10 @@ pub fn execute_player_turn(
 
     // Try to start the action
     if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
-        return TurnResult::Blocked;
+        return TurnExecutionResult {
+            turn_result: TurnResult::Blocked,
+            floor_transition: None,
+        };
     }
 
     // Advance time until player can act again
@@ -65,9 +77,12 @@ pub fn execute_player_turn(
     advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
 
     // Process events (VFX, UI state, world state changes)
-    process_events(events, world, vfx, ui_state);
+    let event_result = process_events(events, world, vfx, ui_state);
 
-    TurnResult::Started
+    TurnExecutionResult {
+        turn_result: TurnResult::Started,
+        floor_transition: event_result.floor_transition,
+    }
 }
 
 /// Get the action type that would result from a movement input.
@@ -167,15 +182,26 @@ pub fn advance_until_player_ready_public(
     advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, rng);
 }
 
+use crate::events::StairDirection;
 use crate::ui::GameUiState;
 
+/// Result of processing events, contains any floor transitions that need handling
+pub struct EventProcessingResult {
+    pub floor_transition: Option<StairDirection>,
+}
+
 /// Process all pending events, dispatching to appropriate handlers.
+/// Returns any floor transitions that need to be handled by the caller.
 pub fn process_events(
     events: &mut EventQueue,
     world: &mut World,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
-) {
+) -> EventProcessingResult {
+    let mut result = EventProcessingResult {
+        floor_transition: None,
+    };
+
     for event in events.drain() {
         // Visual effects
         vfx.handle_event(&event);
@@ -188,9 +214,15 @@ pub fn process_events(
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
             }
+            GameEvent::FloorTransition { direction, .. } => {
+                // Capture floor transition for handling by caller
+                result.floor_transition = Some(*direction);
+            }
             _ => {}
         }
 
         // Future: audio.handle_event(&event), etc.
     }
+
+    result
 }

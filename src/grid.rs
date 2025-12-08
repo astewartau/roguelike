@@ -16,20 +16,29 @@ pub struct Grid {
     pub chest_positions: Vec<(i32, i32)>,
     pub door_positions: Vec<(i32, i32)>,
     pub decals: Vec<Decal>,
+    pub stairs_up_pos: Option<(i32, i32)>,
+    pub stairs_down_pos: Option<(i32, i32)>,
 }
 
 impl Grid {
     pub fn new(width: usize, height: usize) -> Self {
+        Self::new_floor(width, height, 0)
+    }
+
+    /// Generate a dungeon floor. floor_num 0 is the first floor (no stairs up).
+    pub fn new_floor(width: usize, height: usize, floor_num: u32) -> Self {
         // Generate dungeon using BSP
-        let (tiles, chest_positions, door_positions, decals) = DungeonGenerator::generate(width, height);
+        let result = DungeonGenerator::generate(width, height, floor_num);
 
         Self {
             width,
             height,
-            tiles,
-            chest_positions,
-            door_positions,
-            decals,
+            tiles: result.tiles,
+            chest_positions: result.chest_positions,
+            door_positions: result.door_positions,
+            decals: result.decals,
+            stairs_up_pos: result.stairs_up_pos,
+            stairs_down_pos: result.stairs_down_pos,
         }
     }
 

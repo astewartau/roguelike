@@ -72,6 +72,10 @@ struct AppState {
     vfx: vfx::VfxManager,
     events: events::EventQueue,
 
+    // Multi-floor dungeon state
+    current_floor: u32,
+    floors: std::collections::HashMap<u32, game::SavedFloor>,
+
     // Time system
     game_clock: time_system::GameClock,
     action_scheduler: time_system::ActionScheduler,
@@ -158,6 +162,8 @@ impl ApplicationHandler for App {
             player_entity,
             vfx: vfx::VfxManager::new(),
             events: event_queue,
+            current_floor: 0,
+            floors: std::collections::HashMap::new(),
             game_clock,
             action_scheduler,
             ui_state: ui::GameUiState::new(player_entity),
@@ -297,7 +303,10 @@ impl AppState {
             Some(&mut self.action_scheduler),
         );
         // Process any events from remove_dead_entities (death VFX, etc.)
-        game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
+        let event_result = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
+        if let Some(direction) = event_result.floor_transition {
+            self.handle_floor_transition(direction);
+        }
 
         // Lerp all visual positions toward logical positions
         systems::visual_lerp(&mut self.world, dt);
@@ -491,7 +500,7 @@ impl AppState {
                     opener: self.player_entity,
                 });
                 // Process immediately so UI updates this frame
-                game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
+                let _ = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
             }
         }
 
@@ -566,11 +575,15 @@ impl AppState {
                 );
 
                 // Handle path consumption based on result
-                match turn_result {
+                match turn_result.turn_result {
                     game_loop::TurnResult::Started => {
                         // For path-following, consume the step we just took
                         if !from_keyboard {
                             self.input.consume_step();
+                        }
+                        // Handle floor transition if player used stairs
+                        if let Some(direction) = turn_result.floor_transition {
+                            self.handle_floor_transition(direction);
                         }
                     }
                     game_loop::TurnResult::Blocked | game_loop::TurnResult::NotReady => {
@@ -647,6 +660,20 @@ impl AppState {
                 // Spawn a fire particle effect at this location
                 self.vfx.spawn_fire(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
             }
+            ui::DevTool::SpawnStairsDown => {
+                // Change the tile to stairs down
+                if let Some(tile) = self.grid.get_mut(tile_x, tile_y) {
+                    tile.tile_type = tile::TileType::StairsDown;
+                }
+                self.grid.stairs_down_pos = Some((tile_x, tile_y));
+            }
+            ui::DevTool::SpawnStairsUp => {
+                // Change the tile to stairs up
+                if let Some(tile) = self.grid.get_mut(tile_x, tile_y) {
+                    tile.tile_type = tile::TileType::StairsUp;
+                }
+                self.grid.stairs_up_pos = Some((tile_x, tile_y));
+            }
         }
     }
 
@@ -711,12 +738,101 @@ impl AppState {
             );
 
             // Process events
-            game_loop::process_events(
+            let _ = game_loop::process_events(
                 &mut self.events,
                 &mut self.world,
                 &mut self.vfx,
                 &mut self.ui_state,
             );
+        }
+    }
+
+    /// Handle a floor transition (going up or down stairs)
+    fn handle_floor_transition(&mut self, direction: events::StairDirection) {
+        use events::StairDirection;
+
+        let target_floor = match direction {
+            StairDirection::Down => self.current_floor + 1,
+            StairDirection::Up => {
+                if self.current_floor == 0 {
+                    return; // Can't go up from floor 0
+                }
+                self.current_floor - 1
+            }
+        };
+
+        // Save current floor
+        let old_grid = std::mem::replace(
+            &mut self.grid,
+            Grid::new_floor(DUNGEON_DEFAULT_WIDTH, DUNGEON_DEFAULT_HEIGHT, target_floor),
+        );
+        let saved_floor = game::save_floor(&self.world, old_grid, self.player_entity);
+        self.floors.insert(self.current_floor, saved_floor);
+
+        // Clear current floor entities
+        game::clear_floor_entities(&mut self.world, self.player_entity, &mut self.action_scheduler);
+
+        // Load or generate target floor
+        if let Some(saved) = self.floors.remove(&target_floor) {
+            // Determine spawn position (near opposite stairs)
+            let spawn_pos = match direction {
+                StairDirection::Down => {
+                    // Coming from above, spawn at stairs up
+                    saved.grid.stairs_up_pos.unwrap_or((1, 1))
+                }
+                StairDirection::Up => {
+                    // Coming from below, spawn at stairs down
+                    saved.grid.stairs_down_pos.unwrap_or((1, 1))
+                }
+            };
+
+            // Load the saved floor
+            self.grid = saved.grid;
+            game::load_floor(
+                &mut self.world,
+                &self.grid,
+                &saved.entities,
+                self.player_entity,
+                spawn_pos,
+                &self.game_clock,
+                &mut self.action_scheduler,
+                &mut self.events,
+            );
+        } else {
+            // Generate new floor
+            self.grid = Grid::new_floor(DUNGEON_DEFAULT_WIDTH, DUNGEON_DEFAULT_HEIGHT, target_floor);
+
+            // Determine spawn position
+            let spawn_pos = match direction {
+                StairDirection::Down => {
+                    // Coming from above, spawn at stairs up
+                    self.grid.stairs_up_pos.unwrap_or((1, 1))
+                }
+                StairDirection::Up => {
+                    // Coming from below, spawn at stairs down
+                    self.grid.stairs_down_pos.unwrap_or((1, 1))
+                }
+            };
+
+            game::spawn_floor_entities(
+                &mut self.world,
+                &self.grid,
+                self.player_entity,
+                spawn_pos,
+                &self.game_clock,
+                &mut self.action_scheduler,
+                &mut self.events,
+            );
+        }
+
+        self.current_floor = target_floor;
+
+        // Clear click-to-move path
+        self.input.clear_path();
+
+        // Update camera to player's new position
+        if let Ok(vis_pos) = self.world.get::<&components::VisualPosition>(self.player_entity) {
+            self.camera.set_tracking_target(glam::Vec2::new(vis_pos.x, vis_pos.y));
         }
     }
 }

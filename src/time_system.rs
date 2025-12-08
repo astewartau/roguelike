@@ -162,6 +162,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::OpenChest { .. } => ACTION_CHEST_DURATION,
         ActionType::Wait => ACTION_WAIT_DURATION,
         ActionType::ShootBow { .. } => ACTION_SHOOT_DURATION,
+        ActionType::UseStairs { .. } => ACTION_WALK_DURATION, // Same as walking
     };
 
     // Speed modifies duration: higher speed = shorter duration
@@ -299,6 +300,9 @@ fn apply_action_effects(
         ActionType::Wait => ActionResult::Completed,
         ActionType::ShootBow { target_x, target_y } => {
             apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
+        }
+        ActionType::UseStairs { x, y, direction } => {
+            apply_use_stairs(world, entity, *x, *y, *direction, events)
         }
     }
 }
@@ -492,6 +496,43 @@ fn apply_open_chest(
     }
 
     events.push(GameEvent::ContainerOpened { container: chest, opener });
+
+    ActionResult::Completed
+}
+
+/// Apply use stairs effect - moves entity to stairs and emits floor transition event
+fn apply_use_stairs(
+    world: &mut World,
+    entity: Entity,
+    x: i32,
+    y: i32,
+    direction: crate::events::StairDirection,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Get current position
+    let current_pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    // Move entity to the stairs position
+    if let Ok(mut pos) = world.get::<&mut Position>(entity) {
+        pos.x = x;
+        pos.y = y;
+    }
+
+    // Emit movement event
+    events.push(GameEvent::EntityMoved {
+        entity,
+        from: current_pos,
+        to: (x, y),
+    });
+
+    // Emit floor transition event
+    events.push(GameEvent::FloorTransition {
+        direction,
+        from_floor: 0, // The actual floor number is tracked by AppState
+    });
 
     ActionResult::Completed
 }
@@ -751,11 +792,14 @@ pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&m
 /// Determine what action type results from a movement input
 pub fn determine_action_type(
     world: &World,
-    _grid: &Grid,
+    grid: &Grid,
     entity: Entity,
     dx: i32,
     dy: i32,
 ) -> ActionType {
+    use crate::events::StairDirection;
+    use crate::tile::TileType;
+
     let is_diagonal = dx != 0 && dy != 0;
 
     // Get entity position
@@ -790,6 +834,27 @@ pub fn determine_action_type(
             if !container.is_open || !container.is_empty() {
                 return ActionType::OpenChest { chest: id };
             }
+        }
+    }
+
+    // Check for stairs at target
+    if let Some(tile) = grid.get(target_x, target_y) {
+        match tile.tile_type {
+            TileType::StairsDown => {
+                return ActionType::UseStairs {
+                    x: target_x,
+                    y: target_y,
+                    direction: StairDirection::Down,
+                };
+            }
+            TileType::StairsUp => {
+                return ActionType::UseStairs {
+                    x: target_x,
+                    y: target_y,
+                    direction: StairDirection::Up,
+                };
+            }
+            _ => {}
         }
     }
 

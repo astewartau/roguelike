@@ -121,6 +121,8 @@ pub enum DevTool {
     SpawnChest,
     SpawnEnemy,
     SpawnFire,
+    SpawnStairsDown,
+    SpawnStairsUp,
 }
 
 impl DevTool {
@@ -129,6 +131,8 @@ impl DevTool {
             DevTool::SpawnChest => "Chest",
             DevTool::SpawnEnemy => "Enemy",
             DevTool::SpawnFire => "Fire",
+            DevTool::SpawnStairsDown => "Stairs Down",
+            DevTool::SpawnStairsUp => "Stairs Up",
         }
     }
 
@@ -137,6 +141,8 @@ impl DevTool {
             DevTool::SpawnChest => tile_ids::CHEST_CLOSED,
             DevTool::SpawnEnemy => tile_ids::SKELETON,
             DevTool::SpawnFire => tile_ids::RED_POTION, // Use potion icon as placeholder
+            DevTool::SpawnStairsDown => tile_ids::STAIRS_DOWN,
+            DevTool::SpawnStairsUp => tile_ids::STAIRS_UP,
         }
     }
 }
@@ -191,7 +197,7 @@ pub fn draw_dev_menu(
         .collapsible(false)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let tools = [DevTool::SpawnChest, DevTool::SpawnEnemy, DevTool::SpawnFire];
+                let tools = [DevTool::SpawnChest, DevTool::SpawnEnemy, DevTool::SpawnFire, DevTool::SpawnStairsDown, DevTool::SpawnStairsUp];
 
                 for tool in tools {
                     let is_selected = dev_menu.selected_tool == Some(tool);

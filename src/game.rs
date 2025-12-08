@@ -17,6 +17,39 @@ use glam::Vec2;
 use hecs::{Entity, World};
 use rand::Rng;
 
+/// Saved state of a floor for when the player leaves and returns
+pub struct SavedFloor {
+    pub grid: Grid,
+    /// Saved entity data for restoration
+    pub entities: Vec<SavedEntity>,
+}
+
+/// Saved entity data (non-player entities like enemies, chests, doors)
+pub struct SavedEntity {
+    pub pos: (i32, i32),
+    pub entity_type: SavedEntityType,
+}
+
+/// Types of entities that can be saved
+pub enum SavedEntityType {
+    Enemy {
+        health_current: i32,
+        health_max: i32,
+    },
+    Chest {
+        is_open: bool,
+        gold: u32,
+        items: Vec<ItemType>,
+    },
+    Door {
+        is_open: bool,
+    },
+    Bones {
+        gold: u32,
+        items: Vec<ItemType>,
+    },
+}
+
 /// Initialize the game world with player, enemies, and objects
 /// Returns (world, player_entity, player_start_position)
 pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
@@ -163,4 +196,251 @@ pub fn initialize_single_ai_actor(
     rng: &mut impl Rng,
 ) {
     crate::systems::ai::decide_action(world, grid, entity, player_entity, clock, scheduler, events, rng);
+}
+
+/// Save the current floor state (non-player entities)
+pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloor {
+    let mut entities = Vec::new();
+
+    // Save enemies (entities with ChaseAI and Health)
+    for (id, (pos, health, _)) in world.query::<(&Position, &Health, &ChaseAI)>().iter() {
+        if id == player_entity {
+            continue;
+        }
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type: SavedEntityType::Enemy {
+                health_current: health.current,
+                health_max: health.max,
+            },
+        });
+    }
+
+    // Save chests/containers
+    for (id, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
+        if id == player_entity {
+            continue;
+        }
+        // Check if it's bones (has no BlocksMovement when open and empty, but we check the name via sprite)
+        let sprite = world.get::<&Sprite>(id).ok();
+        let is_bones = sprite.map(|s| s.tile_id == tile_ids::BONES).unwrap_or(false);
+
+        if is_bones {
+            entities.push(SavedEntity {
+                pos: (pos.x, pos.y),
+                entity_type: SavedEntityType::Bones {
+                    gold: container.gold,
+                    items: container.items.clone(),
+                },
+            });
+        } else {
+            entities.push(SavedEntity {
+                pos: (pos.x, pos.y),
+                entity_type: SavedEntityType::Chest {
+                    is_open: container.is_open,
+                    gold: container.gold,
+                    items: container.items.clone(),
+                },
+            });
+        }
+    }
+
+    // Save doors
+    for (id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
+        if id == player_entity {
+            continue;
+        }
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type: SavedEntityType::Door {
+                is_open: door.is_open,
+            },
+        });
+    }
+
+    SavedFloor { grid, entities }
+}
+
+/// Clear all non-player entities from the world
+pub fn clear_floor_entities(world: &mut World, player_entity: Entity, scheduler: &mut ActionScheduler) {
+    // Collect all entities except player
+    let to_remove: Vec<Entity> = world
+        .iter()
+        .map(|e| e.entity())
+        .filter(|&id| id != player_entity)
+        .collect();
+
+    // Cancel scheduled actions for all removed entities
+    for entity in &to_remove {
+        scheduler.cancel_for_entity(*entity);
+    }
+
+    // Despawn all non-player entities
+    for entity in to_remove {
+        let _ = world.despawn(entity);
+    }
+}
+
+/// Load a saved floor, spawning entities
+pub fn load_floor(
+    world: &mut World,
+    grid: &Grid,
+    saved_entities: &[SavedEntity],
+    player_entity: Entity,
+    player_spawn_pos: (i32, i32),
+    clock: &GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut crate::events::EventQueue,
+) {
+    // Update player position
+    if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
+        pos.x = player_spawn_pos.0;
+        pos.y = player_spawn_pos.1;
+    }
+    if let Ok(mut vis_pos) = world.get::<&mut VisualPosition>(player_entity) {
+        vis_pos.x = player_spawn_pos.0 as f32;
+        vis_pos.y = player_spawn_pos.1 as f32;
+    }
+
+    let mut rng = rand::thread_rng();
+
+    // Spawn saved entities
+    for saved_entity in saved_entities {
+        let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
+        match &saved_entity.entity_type {
+            SavedEntityType::Enemy { health_current, health_max } => {
+                // Spawn enemy with saved health
+                let enemy = spawning::enemies::SKELETON.spawn(world, pos.x, pos.y);
+                if let Ok(mut health) = world.get::<&mut Health>(enemy) {
+                    health.current = *health_current;
+                    health.max = *health_max;
+                }
+                // Initialize AI
+                crate::systems::ai::decide_action(
+                    world, grid, enemy, player_entity, clock, scheduler, events, &mut rng,
+                );
+            }
+            SavedEntityType::Chest { is_open, gold, items } => {
+                let sprite_id = if *is_open { tile_ids::CHEST_OPEN } else { tile_ids::CHEST_CLOSED };
+                let mut container = Container::new(items.clone());
+                container.is_open = *is_open;
+                container.gold = *gold;
+
+                if *is_open && container.is_empty() {
+                    // Open empty chest - no BlocksMovement
+                    world.spawn((
+                        pos,
+                        VisualPosition::from_position(&pos),
+                        Sprite::new(sprite_id),
+                        container,
+                    ));
+                } else {
+                    world.spawn((
+                        pos,
+                        VisualPosition::from_position(&pos),
+                        Sprite::new(sprite_id),
+                        container,
+                        BlocksMovement,
+                    ));
+                }
+            }
+            SavedEntityType::Door { is_open } => {
+                if *is_open {
+                    // Open door - no BlocksMovement or BlocksVision
+                    let mut door = Door::new();
+                    door.is_open = true;
+                    world.spawn((
+                        pos,
+                        VisualPosition::from_position(&pos),
+                        Sprite::new(tile_ids::DOOR),
+                        door,
+                    ));
+                } else {
+                    world.spawn((
+                        pos,
+                        VisualPosition::from_position(&pos),
+                        Sprite::new(tile_ids::DOOR),
+                        Door::new(),
+                        BlocksVision,
+                        BlocksMovement,
+                    ));
+                }
+            }
+            SavedEntityType::Bones { gold, items } => {
+                let mut container = Container::new(items.clone());
+                container.is_open = true; // Bones are always "open"
+                container.gold = *gold;
+                world.spawn((
+                    pos,
+                    VisualPosition::from_position(&pos),
+                    Sprite::new(tile_ids::BONES),
+                    container,
+                ));
+            }
+        }
+    }
+}
+
+/// Spawn floor entities for a new (unsaved) floor
+pub fn spawn_floor_entities(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    player_spawn_pos: (i32, i32),
+    clock: &GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut crate::events::EventQueue,
+) {
+    // Update player position
+    if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
+        pos.x = player_spawn_pos.0;
+        pos.y = player_spawn_pos.1;
+    }
+    if let Ok(mut vis_pos) = world.get::<&mut VisualPosition>(player_entity) {
+        vis_pos.x = player_spawn_pos.0 as f32;
+        vis_pos.y = player_spawn_pos.1 as f32;
+    }
+
+    // Spawn chests
+    for (x, y) in &grid.chest_positions {
+        let pos = Position::new(*x, *y);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(tile_ids::CHEST_CLOSED),
+            Container::new(vec![ItemType::HealthPotion]),
+            BlocksMovement,
+        ));
+    }
+
+    // Spawn doors
+    for (x, y) in &grid.door_positions {
+        let pos = Position::new(*x, *y);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(tile_ids::DOOR),
+            Door::new(),
+            BlocksVision,
+            BlocksMovement,
+        ));
+    }
+
+    // Spawn enemies
+    let mut rng = rand::thread_rng();
+    let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
+        .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
+        .filter(|&(x, y)| grid.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false))
+        .collect();
+
+    let spawn_config = spawning::SpawnConfig::level_1();
+    spawn_config.spawn_all(
+        world,
+        &walkable_tiles,
+        &[player_spawn_pos],
+        &mut rng,
+    );
+
+    // Initialize AI for all enemies
+    initialize_ai_actors(world, grid, player_entity, clock, scheduler, events, &mut rng);
 }

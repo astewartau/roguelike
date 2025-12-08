@@ -160,6 +160,8 @@ pub enum ActionType {
     Wait,
     /// Shooting a bow at a target position
     ShootBow { target_x: i32, target_y: i32 },
+    /// Using stairs to change floors
+    UseStairs { x: i32, y: i32, direction: crate::events::StairDirection },
 }
 
 impl ActionType {
@@ -174,6 +176,7 @@ impl ActionType {
             ActionType::OpenChest { .. } => 1,
             ActionType::Wait => 1,
             ActionType::ShootBow { .. } => 1,
+            ActionType::UseStairs { .. } => 1,
         }
     }
 }

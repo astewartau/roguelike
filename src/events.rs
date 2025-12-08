@@ -5,6 +5,13 @@
 
 use hecs::Entity;
 
+/// Direction of floor transition
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StairDirection {
+    Up,
+    Down,
+}
+
 /// Game events that systems can emit and subscribe to
 #[derive(Debug, Clone)]
 pub enum GameEvent {
@@ -82,6 +89,11 @@ pub enum GameEvent {
         target: Option<Entity>,
         position: (i32, i32),
         damage: i32,
+    },
+    /// Player used stairs to change floors
+    FloorTransition {
+        direction: StairDirection,
+        from_floor: u32,
     },
 }
 

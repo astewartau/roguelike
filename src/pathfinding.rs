@@ -155,6 +155,9 @@ mod tests {
             tiles: vec![Tile::new(TileType::Floor); width * height],
             chest_positions: vec![],
             door_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
         }
     }
 
@@ -172,6 +175,9 @@ mod tests {
             tiles,
             chest_positions: vec![],
             door_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
         }
     }
 
@@ -263,6 +269,9 @@ mod tests {
             tiles,
             chest_positions: vec![],
             door_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
@@ -279,6 +288,9 @@ mod tests {
             tiles,
             chest_positions: vec![],
             door_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());

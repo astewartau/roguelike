@@ -197,6 +197,9 @@ mod tests {
             tiles: vec![Tile::new(TileType::Floor); width * height],
             chest_positions: vec![],
             door_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
         };
         for &(x, y) in walls {
             if let Some(tile) = grid.get_mut(x, y) {

@@ -37,6 +37,10 @@ pub mod tile_ids {
     pub const MUSHROOM: u32 = 48;
     pub const FLOWERS: u32 = 51;
     pub const SKULL: u32 = 148;
+
+    // Stairs
+    pub const STAIRS_DOWN: u32 = 4;  // Stairs going down
+    pub const STAIRS_UP: u32 = 5;    // Stairs going up
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,6 +51,8 @@ pub enum TileType {
     Water,
     Grass,
     Stone,
+    StairsDown,
+    StairsUp,
 }
 
 impl TileType {
@@ -59,11 +65,13 @@ impl TileType {
             TileType::Water => tile_ids::WATER,
             TileType::Grass => tile_ids::GRASS,
             TileType::Stone => tile_ids::STONE,
+            TileType::StairsDown => tile_ids::STAIRS_DOWN,
+            TileType::StairsUp => tile_ids::STAIRS_UP,
         }
     }
 
     pub fn is_walkable(&self) -> bool {
-        matches!(self, TileType::Floor | TileType::Grass)
+        matches!(self, TileType::Floor | TileType::Grass | TileType::StairsDown | TileType::StairsUp)
     }
 
     pub fn blocks_vision(&self) -> bool {
