@@ -380,7 +380,7 @@ impl AppState {
 
         self.egui_glow.run(&self.window, |ctx| {
             // Status bar (always visible)
-            ui::draw_status_bar(ctx, &status_data, icons.tileset_texture_id, icons.coins_uv);
+            ui::draw_status_bar(ctx, &status_data, icons);
 
             // Floating damage numbers
             ui::draw_damage_numbers(ctx, vfx_effects, camera);

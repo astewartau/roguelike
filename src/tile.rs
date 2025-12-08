@@ -22,6 +22,10 @@ pub mod tile_ids {
     pub const ARROW: u32 = 70;
     pub const RED_POTION: u32 = 52;
     pub const COINS: u32 = 36;
+
+    // UI icons
+    pub const HEART: u32 = 151;
+    pub const DIAMOND: u32 = 38;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

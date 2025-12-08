@@ -247,12 +247,11 @@ pub fn draw_dev_menu(
 pub fn draw_status_bar(
     ctx: &egui::Context,
     data: &StatusBarData,
-    tileset_texture_id: egui::TextureId,
-    coins_uv: egui::Rect,
+    icons: &UiIcons,
 ) {
     egui::Window::new("Status")
         .fixed_pos([10.0, 10.0])
-        .fixed_size([200.0, 90.0])
+        .fixed_size([220.0, 90.0])
         .title_bar(false)
         .show(ctx, |ui| {
             let health_percent = if data.health_max > 0 {
@@ -260,25 +259,50 @@ pub fn draw_status_bar(
             } else {
                 0.0
             };
-            ui.add(
-                egui::ProgressBar::new(health_percent)
-                    .text(format!("HP: {}/{}", data.health_current, data.health_max)),
-            );
-            ui.add(
-                egui::ProgressBar::new(data.xp_progress)
-                    .fill(egui::Color32::from_rgb(100, 149, 237))
-                    .text(format!(
-                        "Lv {} - XP: {:.0}%",
-                        data.xp_level,
-                        data.xp_progress * 100.0
-                    )),
-            );
+
+            // HP bar with heart icon
             ui.horizontal(|ui| {
-                let coin_img = egui::Image::new(egui::load::SizedTexture::new(
-                    tileset_texture_id,
+                let heart_img = egui::Image::new(egui::load::SizedTexture::new(
+                    icons.tileset_texture_id,
                     egui::vec2(16.0, 16.0),
                 ))
-                .uv(coins_uv);
+                .uv(icons.heart_uv);
+                ui.add(heart_img);
+                ui.add_sized(
+                    [180.0, 18.0],
+                    egui::ProgressBar::new(health_percent)
+                        .fill(egui::Color32::from_rgb(180, 40, 40))
+                        .text(format!("{}/{}", data.health_current, data.health_max)),
+                );
+            });
+
+            // XP bar with diamond icon
+            ui.horizontal(|ui| {
+                let diamond_img = egui::Image::new(egui::load::SizedTexture::new(
+                    icons.tileset_texture_id,
+                    egui::vec2(16.0, 16.0),
+                ))
+                .uv(icons.diamond_uv);
+                ui.add(diamond_img);
+                ui.add_sized(
+                    [180.0, 18.0],
+                    egui::ProgressBar::new(data.xp_progress)
+                        .fill(egui::Color32::from_rgb(100, 149, 237))
+                        .text(format!(
+                            "Lv {} - {:.0}%",
+                            data.xp_level,
+                            data.xp_progress * 100.0
+                        )),
+                );
+            });
+
+            // Gold with coins icon
+            ui.horizontal(|ui| {
+                let coin_img = egui::Image::new(egui::load::SizedTexture::new(
+                    icons.tileset_texture_id,
+                    egui::vec2(16.0, 16.0),
+                ))
+                .uv(icons.coins_uv);
                 ui.add(coin_img);
                 ui.label(format!("{}", data.gold));
             });
@@ -575,6 +599,8 @@ pub struct UiIcons {
     pub bow_uv: egui::Rect,
     pub potion_uv: egui::Rect,
     pub coins_uv: egui::Rect,
+    pub heart_uv: egui::Rect,
+    pub diamond_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -585,6 +611,8 @@ impl UiIcons {
             bow_uv: tileset.get_egui_uv(tile_ids::BOW),
             potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION),
             coins_uv: tileset.get_egui_uv(tile_ids::COINS),
+            heart_uv: tileset.get_egui_uv(tile_ids::HEART),
+            diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND),
         }
     }
 }
