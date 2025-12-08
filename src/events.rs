@@ -8,6 +8,12 @@ use hecs::Entity;
 /// Game events that systems can emit and subscribe to
 #[derive(Debug, Clone)]
 pub enum GameEvent {
+    /// An entity moved to a new position
+    EntityMoved {
+        entity: Entity,
+        from: (i32, i32),
+        to: (i32, i32),
+    },
     /// An entity attacked another entity
     AttackHit {
         attacker: Entity,
@@ -29,6 +35,21 @@ pub enum GameEvent {
     ChestOpened {
         chest: Entity,
         opener: Entity,
+    },
+    /// An entity picked up an item
+    ItemPickedUp {
+        entity: Entity,
+        item: crate::components::ItemType,
+    },
+    /// An entity picked up gold
+    GoldPickedUp {
+        entity: Entity,
+        amount: u32,
+    },
+    /// An entity regenerated health
+    HealthRegenerated {
+        entity: Entity,
+        amount: i32,
     },
     /// Player leveled up
     LevelUp {

@@ -62,13 +62,32 @@ pub const DUNGEON_DEFAULT_WIDTH: usize = 100;
 pub const DUNGEON_DEFAULT_HEIGHT: usize = 100;
 
 // =============================================================================
+// TIME SYSTEM
+// =============================================================================
+
+/// Base duration for walking one tile (seconds)
+pub const ACTION_WALK_DURATION: f32 = 1.0;
+/// Base duration for attacking (seconds)
+pub const ACTION_ATTACK_DURATION: f32 = 0.8;
+/// Base duration for opening a door (seconds)
+pub const ACTION_DOOR_DURATION: f32 = 0.5;
+/// Base duration for opening/interacting with a chest (seconds)
+pub const ACTION_CHEST_DURATION: f32 = 0.5;
+/// Base duration for waiting/passing (seconds)
+pub const ACTION_WAIT_DURATION: f32 = 0.5;
+/// Multiplier for diagonal movement duration (sqrt(2))
+pub const DIAGONAL_MOVEMENT_MULTIPLIER: f32 = 1.414;
+
+// =============================================================================
 // GAMEPLAY
 // =============================================================================
 
 /// Player's default starting health
 pub const PLAYER_STARTING_HEALTH: i32 = 50;
-/// Player's action speed (higher = slower, costs more energy)
-pub const PLAYER_SPEED: i32 = 3;
+/// Player's maximum energy pool
+pub const PLAYER_MAX_ENERGY: i32 = 5;
+/// Player's action speed multiplier (1.0 = baseline)
+pub const PLAYER_SPEED: f32 = 1.0;
 /// Player's starting strength
 pub const PLAYER_STRENGTH: i32 = 14;
 /// Player's starting intelligence
@@ -102,10 +121,10 @@ pub const COMBAT_CRIT_MULTIPLIER: f32 = 2.0;
 // REGENERATION
 // =============================================================================
 
-/// Player HP regenerated per regen tick
+/// Player HP regenerated per regen event
 pub const PLAYER_HP_REGEN_AMOUNT: i32 = 1;
-/// Game ticks between each player HP regen tick
-pub const PLAYER_HP_REGEN_INTERVAL: i32 = 20;
+/// Seconds between each player HP regen event
+pub const PLAYER_HP_REGEN_INTERVAL: f32 = 2.0;
 
 // =============================================================================
 // ENEMIES
@@ -114,19 +133,21 @@ pub const PLAYER_HP_REGEN_INTERVAL: i32 = 20;
 /// Number of skeletons to spawn
 pub const SKELETON_SPAWN_COUNT: usize = 10;
 /// Skeleton health
-pub const SKELETON_HEALTH: i32 = 15;
-/// Skeleton action speed (lower = faster)
-pub const SKELETON_SPEED: i32 = 2;
+pub const SKELETON_HEALTH: i32 = 25;
+/// Skeleton maximum energy pool
+pub const SKELETON_MAX_ENERGY: i32 = 3;
+/// Skeleton action speed multiplier (1.5 = 50% faster than player)
+pub const SKELETON_SPEED: f32 = 1.5;
 /// Skeleton sight radius for chase AI
 pub const SKELETON_SIGHT_RADIUS: i32 = 8;
 /// Skeleton strength
-pub const SKELETON_STRENGTH: i32 = 4;
+pub const SKELETON_STRENGTH: i32 = 10;
 /// Skeleton intelligence
 pub const SKELETON_INTELLIGENCE: i32 = 1;
 /// Skeleton agility
 pub const SKELETON_AGILITY: i32 = 3;
 /// Skeleton attack damage
-pub const SKELETON_DAMAGE: i32 = 3;
+pub const SKELETON_DAMAGE: i32 = 6;
 
 /// Gold dropped by enemies (min)
 pub const ENEMY_GOLD_DROP_MIN: u32 = 1;

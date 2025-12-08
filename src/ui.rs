@@ -45,6 +45,73 @@ pub struct UiActions {
 }
 
 // =============================================================================
+// GAME UI STATE (event-driven)
+// =============================================================================
+
+use crate::events::GameEvent;
+use hecs::Entity;
+
+/// Game UI state that responds to events.
+///
+/// This centralizes UI state management and decouples it from game logic.
+/// The UI reacts to game events rather than being set imperatively.
+pub struct GameUiState {
+    /// Currently open chest/container (for loot window)
+    pub open_chest: Option<Entity>,
+    /// Show inventory window
+    pub show_inventory: bool,
+    /// Show grid overlay
+    pub show_grid_lines: bool,
+    /// The player entity (needed to filter events)
+    player_entity: Entity,
+}
+
+impl GameUiState {
+    pub fn new(player_entity: Entity) -> Self {
+        Self {
+            open_chest: None,
+            show_inventory: false,
+            show_grid_lines: false,
+            player_entity,
+        }
+    }
+
+    /// Handle a game event, updating UI state as needed
+    pub fn handle_event(&mut self, event: &GameEvent) {
+        match event {
+            GameEvent::ChestOpened { chest, opener } => {
+                // Only open loot window if player opened the chest
+                if *opener == self.player_entity {
+                    self.open_chest = Some(*chest);
+                }
+            }
+            GameEvent::EntityMoved { entity, .. } => {
+                // Close chest when player moves away
+                if *entity == self.player_entity {
+                    self.open_chest = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle inventory visibility
+    pub fn toggle_inventory(&mut self) {
+        self.show_inventory = !self.show_inventory;
+    }
+
+    /// Toggle grid lines visibility
+    pub fn toggle_grid_lines(&mut self) {
+        self.show_grid_lines = !self.show_grid_lines;
+    }
+
+    /// Close the currently open chest
+    pub fn close_chest(&mut self) {
+        self.open_chest = None;
+    }
+}
+
+// =============================================================================
 // DEVELOPER MENU
 // =============================================================================
 

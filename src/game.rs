@@ -4,15 +4,19 @@
 
 use crate::camera::Camera;
 use crate::components::{
-    Actor, Attackable, BlocksMovement, BlocksVision, Container, Door, Equipment, Experience, Health,
-    Inventory, ItemType, Player, Position, Sprite, Stats, VisualPosition, Weapon,
+    Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment,
+    Experience, Health, Inventory, ItemType, Player, Position, Sprite, Stats, VisualPosition,
+    Weapon,
 };
 use crate::constants::*;
 use crate::grid::Grid;
+use crate::game_loop;
 use crate::spawning;
 use crate::tile::tile_ids;
+use crate::time_system::{ActionScheduler, GameClock};
 use glam::Vec2;
 use hecs::{Entity, World};
+use rand::Rng;
 
 /// Initialize the game world with player, enemies, and objects
 /// Returns (world, player_entity, player_start_position)
@@ -32,14 +36,18 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         }
     }
 
-    // Spawn player
+    // Spawn player with new time system Actor
     let player_entity = world.spawn((
         player_start,
         VisualPosition::from_position(&player_start),
         Sprite::new(tile_ids::PLAYER),
         Player,
-        Actor::new(PLAYER_SPEED),
-        Health::with_regen(PLAYER_STARTING_HEALTH, PLAYER_HP_REGEN_AMOUNT, PLAYER_HP_REGEN_INTERVAL),
+        Actor::new(PLAYER_MAX_ENERGY, PLAYER_SPEED),
+        Health::with_regen(
+            PLAYER_STARTING_HEALTH,
+            PLAYER_HP_REGEN_AMOUNT,
+            PLAYER_HP_REGEN_INTERVAL,
+        ),
         Stats::new(PLAYER_STRENGTH, PLAYER_INTELLIGENCE, PLAYER_AGILITY),
         Inventory::new(),
         Equipment::with_weapon(Weapon::sword()),
@@ -118,18 +126,54 @@ pub fn handle_chest_interaction(
     take_all: bool,
     take_gold: bool,
     item_to_take: Option<usize>,
+    events: Option<&mut crate::events::EventQueue>,
 ) -> bool {
     // Returns true if chest should be closed
     if take_all {
-        crate::systems::take_all_from_container(world, player_entity, chest_id);
+        crate::systems::take_all_from_container(world, player_entity, chest_id, events);
         true
     } else if take_gold {
-        crate::systems::take_gold_from_container(world, player_entity, chest_id);
+        crate::systems::take_gold_from_container(world, player_entity, chest_id, events);
         false
     } else if let Some(item_index) = item_to_take {
-        crate::systems::take_item_from_container(world, player_entity, chest_id, item_index);
+        crate::systems::take_item_from_container(world, player_entity, chest_id, item_index, events);
         false
     } else {
         false
     }
+}
+
+/// Initialize all AI actors with their first action in the time system
+pub fn initialize_ai_actors(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    clock: &GameClock,
+    scheduler: &mut ActionScheduler,
+    rng: &mut impl Rng,
+) {
+    // Collect all AI entities (entities with both Actor and ChaseAI)
+    let ai_entities: Vec<Entity> = world
+        .query::<(&Actor, &ChaseAI)>()
+        .iter()
+        .map(|(id, _)| id)
+        .collect();
+
+    // Initialize each AI entity's first action
+    for entity in ai_entities {
+        game_loop::ai_decide_action(world, grid, entity, player_entity, clock, scheduler, rng);
+    }
+}
+
+/// Initialize a single AI actor (used when spawning new enemies mid-game)
+pub fn initialize_single_ai_actor(
+    world: &mut World,
+    grid: &Grid,
+    entity: Entity,
+    player_entity: Entity,
+    clock: &GameClock,
+    scheduler: &mut ActionScheduler,
+    rng: &mut impl Rng,
+) {
+    game_loop::ai_decide_action(world, grid, entity, player_entity, clock, scheduler, rng);
 }

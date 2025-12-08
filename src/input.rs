@@ -1,14 +1,12 @@
 //! Input handling and player control.
 //!
 //! Processes keyboard and mouse input, manages click-to-move pathing.
+//! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{BlocksMovement, Position};
+use crate::components::{Actor, BlocksMovement, Position};
 use crate::grid::Grid;
 use crate::pathfinding;
-use crate::systems::{self, MoveResult};
-use crate::events::EventQueue;
-use crate::vfx::VfxManager;
 use hecs::{Entity, World};
 use std::collections::{HashSet, VecDeque};
 use winit::keyboard::KeyCode;
@@ -42,6 +40,26 @@ impl InputState {
         self.player_path.clear();
         self.player_path_destination = None;
     }
+
+    /// Get the next step in the path, if any
+    pub fn peek_next_step(&self) -> Option<(i32, i32)> {
+        self.player_path.front().copied()
+    }
+
+    /// Remove the front step from the path (call after successfully moving)
+    pub fn consume_step(&mut self) {
+        self.player_path.pop_front();
+    }
+
+    /// Check if we've arrived at our destination
+    pub fn has_arrived(&self) -> bool {
+        self.player_path.is_empty() && self.player_path_destination.is_some()
+    }
+
+    /// Clear the destination (call after handling arrival)
+    pub fn clear_destination(&mut self) {
+        self.player_path_destination = None;
+    }
 }
 
 impl Default for InputState {
@@ -50,7 +68,7 @@ impl Default for InputState {
     }
 }
 
-/// Result of processing input
+/// Result of processing keyboard input
 pub struct InputResult {
     /// Player wants to toggle fullscreen
     pub toggle_fullscreen: bool,
@@ -60,7 +78,7 @@ pub struct InputResult {
     pub toggle_grid_lines: bool,
     /// Player pressed Enter (take all / loot)
     pub enter_pressed: bool,
-    /// Movement to execute (dx, dy)
+    /// Movement intent (dx, dy)
     pub movement: Option<(i32, i32)>,
 }
 
@@ -76,7 +94,8 @@ impl Default for InputResult {
     }
 }
 
-/// Process keyboard input and return actions to take
+/// Process keyboard input and return actions to take.
+/// Does NOT execute any game logic - just returns intents.
 pub fn process_keyboard(input: &mut InputState) -> InputResult {
     let mut result = InputResult::default();
 
@@ -120,7 +139,8 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     result
 }
 
-/// Handle click-to-move: calculate path to clicked tile
+/// Handle click-to-move: calculate path to clicked tile.
+/// Does NOT execute movement - just calculates and stores the path.
 pub fn handle_click_to_move(
     input: &mut InputState,
     camera: &Camera,
@@ -161,107 +181,37 @@ pub fn handle_click_to_move(
     }
 }
 
-/// Follow the click-to-move path, executing one step
-/// Returns Some(container_id) if player arrived at a lootable container
-pub fn follow_player_path(
-    input: &mut InputState,
-    world: &mut World,
-    grid: &Grid,
+/// Get the next movement from click-to-move path, if player can act.
+/// Returns the (dx, dy) movement intent, or None if no path or can't act.
+pub fn get_path_movement(
+    input: &InputState,
+    world: &World,
     player_entity: Entity,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-) -> Option<Entity> {
-    // Get the next step (peek at front)
-    let (next_x, next_y) = *input.player_path.front()?;
+) -> Option<(i32, i32)> {
+    // Check if player can act
+    let player_can_act = world
+        .get::<&Actor>(player_entity)
+        .map(|a| a.can_act())
+        .unwrap_or(false);
+
+    if !player_can_act {
+        return None;
+    }
+
+    // Get the next step
+    let (next_x, next_y) = input.peek_next_step()?;
 
     // Get player position
     let player_pos = match world.get::<&Position>(player_entity) {
         Ok(p) => (p.x, p.y),
-        Err(_) => {
-            input.clear_path();
-            return None;
-        }
+        Err(_) => return None,
     };
 
     // Calculate movement direction
     let dx = next_x - player_pos.0;
     let dy = next_y - player_pos.1;
 
-    // Execute the move
-    let result = run_ticks_until_player_acts(world, grid, player_entity, dx, dy, events, vfx);
-
-    match result {
-        MoveResult::Moved => {
-            // Remove the step we just took (O(1) with VecDeque)
-            input.player_path.pop_front();
-
-            // If path is now empty, we've arrived - check for auto-interact
-            if input.player_path.is_empty() {
-                if let Some(_dest) = input.player_path_destination.take() {
-                    // Check for lootable container at current position
-                    return systems::find_container_at_player(world, player_entity);
-                }
-            }
-            None
-        }
-        MoveResult::Attacked(_) | MoveResult::OpenedChest(_) => {
-            // Stop pathing if we attacked or opened something
-            input.clear_path();
-            if let MoveResult::OpenedChest(chest) = result {
-                Some(chest)
-            } else {
-                None
-            }
-        }
-        MoveResult::Blocked => {
-            // Path is blocked, clear it
-            input.clear_path();
-            None
-        }
-    }
-}
-
-/// Run game ticks until the player can act, then execute their move
-pub fn run_ticks_until_player_acts(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    dx: i32,
-    dy: i32,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-) -> MoveResult {
-    let mut rng = rand::thread_rng();
-
-    loop {
-        // Check if player can act
-        let player_can_act = world
-            .get::<&crate::components::Actor>(player_entity)
-            .map(|a| a.energy >= a.speed)
-            .unwrap_or(true);
-
-        if player_can_act {
-            let result = systems::player_move(world, grid, player_entity, dx, dy, events);
-            // Process events (VFX spawning, etc.)
-            process_events(events, vfx);
-            return result;
-        }
-
-        // Player can't act yet - run one tick
-        systems::tick_energy(world);
-        systems::tick_health_regen(world);
-        systems::ai_chase(world, grid, player_entity, &mut rng, events);
-        // Process events from AI actions too
-        process_events(events, vfx);
-    }
-}
-
-/// Process all pending events, dispatching to appropriate handlers
-pub fn process_events(events: &mut EventQueue, vfx: &mut VfxManager) {
-    for event in events.drain() {
-        vfx.handle_event(&event);
-        // Future: audio.handle_event(&event), ui.handle_event(&event), etc.
-    }
+    Some((dx, dy))
 }
 
 /// Process mouse drag for camera panning

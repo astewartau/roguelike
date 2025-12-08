@@ -8,6 +8,7 @@ use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::systems::experience::{calculate_xp_value, grant_xp};
 use crate::tile::tile_ids;
+use crate::time_system::ActionScheduler;
 use hecs::{Entity, World};
 use rand::Rng;
 
@@ -41,25 +42,29 @@ pub fn open_door(world: &mut World, door_id: Entity) {
     let _ = world.remove_one::<BlocksMovement>(door_id);
 }
 
-/// Open a chest - mark as open and change sprite (keeps blocking movement)
+/// Open a chest - mark as open (sprite change handled by event system)
 pub fn open_chest(world: &mut World, chest_id: Entity) {
     // Mark as open
     if let Ok(mut container) = world.get::<&mut Container>(chest_id) {
         container.is_open = true;
     }
+}
 
-    // Change sprite to open chest
+/// Handle a ChestOpened event - update sprite
+pub fn handle_chest_opened(world: &mut World, chest_id: Entity) {
     if let Ok(mut sprite) = world.get::<&mut Sprite>(chest_id) {
         sprite.tile_id = tile_ids::CHEST_OPEN;
     }
 }
 
 /// Turn dead entities into bones (health <= 0) and grant XP to player
+/// Also cancels any pending actions for dead entities in the scheduler
 pub fn remove_dead_entities(
     world: &mut World,
     player_entity: Entity,
     rng: &mut impl Rng,
     events: &mut EventQueue,
+    mut scheduler: Option<&mut ActionScheduler>,
 ) {
     let mut to_convert = Vec::new();
 
@@ -85,6 +90,11 @@ pub fn remove_dead_entities(
     }
 
     for (id, position, _xp) in to_convert {
+        // Cancel any pending actions for this entity
+        if let Some(ref mut sched) = scheduler {
+            sched.cancel_for_entity(id);
+        }
+
         // Emit death event
         events.push(GameEvent::EntityDied {
             entity: id,
@@ -107,27 +117,6 @@ pub fn remove_dead_entities(
         // Add loot container with random gold
         let gold = rng.gen_range(ENEMY_GOLD_DROP_MIN..=ENEMY_GOLD_DROP_MAX);
         let _ = world.insert_one(id, Container::with_gold(vec![], gold));
-    }
-}
-
-/// Tick HP regeneration for all entities with regen
-/// Called each game tick (when energy is ticked)
-pub fn tick_health_regen(world: &mut World) {
-    for (_id, health) in world.query_mut::<&mut Health>() {
-        // Skip if no regen, at full health, or dead
-        if health.regen_interval <= 0 || health.current >= health.max || health.current <= 0 {
-            health.regen_counter = 0;
-            continue;
-        }
-
-        // Increment counter
-        health.regen_counter += 1;
-
-        // Regen when counter reaches interval
-        if health.regen_counter >= health.regen_interval {
-            health.current = (health.current + health.regen_amount).min(health.max);
-            health.regen_counter = 0;
-        }
     }
 }
 

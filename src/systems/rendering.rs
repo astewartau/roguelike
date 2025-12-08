@@ -59,9 +59,12 @@ pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius:
     }
 }
 
-/// Collect entities that should be rendered, with fog of war applied
+/// Collect entities that should be rendered, with fog of war applied.
+/// Entities are sorted by layer: ground items first, then actors, then player on top.
 pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) -> Vec<RenderEntity> {
-    let mut entities_to_render: Vec<RenderEntity> = Vec::new();
+    // Separate entities by render layer
+    let mut ground_layer: Vec<RenderEntity> = Vec::new();  // Bones, items on ground
+    let mut actor_layer: Vec<RenderEntity> = Vec::new();   // Enemies and NPCs
     let mut player_render: Option<RenderEntity> = None;
 
     for (id, (pos, vis_pos, sprite)) in
@@ -74,7 +77,6 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
 
         // Actors (enemies) are only visible in FOV, not in fog
         let is_actor = world.get::<&Actor>(id).is_ok();
-
 
         // Check if this is an open door (render darker)
         let is_open_door = world.get::<&Door>(id).map(|door| door.is_open).unwrap_or(false);
@@ -92,18 +94,24 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
         } else if is_visible {
             // Open doors render at 50% brightness
             let brightness = if is_open_door { 0.5 } else { 1.0 };
-            entities_to_render.push(RenderEntity {
+            let render_entity = RenderEntity {
                 x: vis_pos.x,
                 y: vis_pos.y,
                 sprite: *sprite,
                 brightness,
                 effects: entity_effects,
-            });
+            };
+            // Actors go on top layer, everything else on ground layer
+            if is_actor {
+                actor_layer.push(render_entity);
+            } else {
+                ground_layer.push(render_entity);
+            }
         } else if is_explored && !is_actor {
             // In fog but explored - only show non-actors (chests, items)
             // Open doors in fog render even darker
             let brightness = if is_open_door { 0.25 } else { 0.5 };
-            entities_to_render.push(RenderEntity {
+            ground_layer.push(RenderEntity {
                 x: vis_pos.x,
                 y: vis_pos.y,
                 sprite: *sprite,
@@ -113,7 +121,9 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
         }
     }
 
-    // Player is always rendered last (on top)
+    // Combine layers: ground first, then actors, then player on top
+    let mut entities_to_render = ground_layer;
+    entities_to_render.append(&mut actor_layer);
     if let Some(player) = player_render {
         entities_to_render.push(player);
     }

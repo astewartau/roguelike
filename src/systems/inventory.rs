@@ -1,6 +1,7 @@
 //! Inventory and container interaction systems.
 
 use crate::components::{BlocksMovement, Container, Inventory, Position};
+use crate::events::{EventQueue, GameEvent};
 use crate::systems::items::item_weight;
 use hecs::{Entity, World};
 
@@ -10,6 +11,7 @@ pub fn take_item_from_container(
     player_entity: Entity,
     container_entity: Entity,
     item_index: usize,
+    events: Option<&mut EventQueue>,
 ) -> bool {
     // Get the item from the container
     let item = {
@@ -26,6 +28,12 @@ pub fn take_item_from_container(
     if let Ok(mut inventory) = world.get::<&mut Inventory>(player_entity) {
         inventory.current_weight_kg += item_weight(item);
         inventory.items.push(item);
+        if let Some(events) = events {
+            events.push(GameEvent::ItemPickedUp {
+                entity: player_entity,
+                item,
+            });
+        }
         true
     } else {
         false
@@ -37,6 +45,7 @@ pub fn take_all_from_container(
     world: &mut World,
     player_entity: Entity,
     container_entity: Entity,
+    mut events: Option<&mut EventQueue>,
 ) {
     // Get all items and gold from the container
     let (items, gold) = {
@@ -54,8 +63,22 @@ pub fn take_all_from_container(
         for item in items {
             inventory.current_weight_kg += item_weight(item);
             inventory.items.push(item);
+            if let Some(ref mut events) = events {
+                events.push(GameEvent::ItemPickedUp {
+                    entity: player_entity,
+                    item,
+                });
+            }
         }
         inventory.gold += gold;
+        if gold > 0 {
+            if let Some(events) = events {
+                events.push(GameEvent::GoldPickedUp {
+                    entity: player_entity,
+                    amount: gold,
+                });
+            }
+        }
     }
 }
 
@@ -64,6 +87,7 @@ pub fn take_gold_from_container(
     world: &mut World,
     player_entity: Entity,
     container_entity: Entity,
+    events: Option<&mut EventQueue>,
 ) {
     let gold = {
         let Ok(mut container) = world.get::<&mut Container>(container_entity) else {
@@ -74,8 +98,16 @@ pub fn take_gold_from_container(
         gold
     };
 
-    if let Ok(mut inventory) = world.get::<&mut Inventory>(player_entity) {
-        inventory.gold += gold;
+    if gold > 0 {
+        if let Ok(mut inventory) = world.get::<&mut Inventory>(player_entity) {
+            inventory.gold += gold;
+            if let Some(events) = events {
+                events.push(GameEvent::GoldPickedUp {
+                    entity: player_entity,
+                    amount: gold,
+                });
+            }
+        }
     }
 }
 
@@ -114,7 +146,7 @@ mod tests {
             Container::with_gold(vec![], 100),
         ));
 
-        take_gold_from_container(&mut world, player, chest);
+        take_gold_from_container(&mut world, player, chest, None);
 
         let inventory = world.get::<&Inventory>(player).unwrap();
         assert_eq!(inventory.gold, 100);
@@ -137,7 +169,7 @@ mod tests {
             Container::with_gold(vec![ItemType::HealthPotion], 50),
         ));
 
-        take_all_from_container(&mut world, player, chest);
+        take_all_from_container(&mut world, player, chest, None);
 
         let inventory = world.get::<&Inventory>(player).unwrap();
         assert_eq!(inventory.gold, 50);
@@ -162,7 +194,7 @@ mod tests {
             Container::new(vec![ItemType::HealthPotion]),
         ));
 
-        let success = take_item_from_container(&mut world, player, chest, 0);
+        let success = take_item_from_container(&mut world, player, chest, 0, None);
         assert!(success);
 
         let inventory = world.get::<&Inventory>(player).unwrap();
@@ -186,7 +218,7 @@ mod tests {
             Container::new(vec![ItemType::HealthPotion]),
         ));
 
-        let success = take_item_from_container(&mut world, player, chest, 5);
+        let success = take_item_from_container(&mut world, player, chest, 5, None);
         assert!(!success);
     }
 }

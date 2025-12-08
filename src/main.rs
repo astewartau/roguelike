@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-mod actions;
 mod camera;
 mod components;
 mod constants;
@@ -8,6 +7,7 @@ mod dungeon_gen;
 mod events;
 mod fov;
 mod game;
+mod game_loop;
 mod grid;
 mod input;
 mod pathfinding;
@@ -16,6 +16,7 @@ mod spawning;
 mod systems;
 mod tile;
 mod tileset;
+mod time_system;
 mod ui;
 mod vfx;
 
@@ -78,10 +79,12 @@ struct AppState {
     vfx: vfx::VfxManager,
     events: events::EventQueue,
 
+    // Time system
+    game_clock: time_system::GameClock,
+    action_scheduler: time_system::ActionScheduler,
+
     // UI state
-    show_inventory: bool,
-    open_chest: Option<hecs::Entity>,
-    show_grid_lines: bool,
+    ui_state: ui::GameUiState,
     dev_menu: ui::DevMenu,
 
     // Input state
@@ -181,8 +184,23 @@ impl ApplicationHandler for App {
         let ui_icons = ui::UiIcons::new(&tileset, tileset_egui_id);
 
         // Initialize game world
-        let (world, player_entity, player_start) = game::init_world(&grid);
+        let (mut world, player_entity, player_start) = game::init_world(&grid);
         game::setup_camera(&mut camera, &player_start);
+
+        // Initialize time system
+        let game_clock = time_system::GameClock::new();
+        let mut action_scheduler = time_system::ActionScheduler::new();
+
+        // Initialize AI entities with their first actions
+        let mut rng = rand::thread_rng();
+        game::initialize_ai_actors(
+            &mut world,
+            &grid,
+            player_entity,
+            &game_clock,
+            &mut action_scheduler,
+            &mut rng,
+        );
 
         self.state = Some(AppState {
             window,
@@ -199,9 +217,9 @@ impl ApplicationHandler for App {
             player_entity,
             vfx: vfx::VfxManager::new(),
             events: events::EventQueue::new(),
-            show_inventory: false,
-            open_chest: None,
-            show_grid_lines: false,
+            game_clock,
+            action_scheduler,
+            ui_state: ui::GameUiState::new(player_entity),
             dev_menu: ui::DevMenu::new(),
             input: input::InputState::new(),
             last_frame_time: Instant::now(),
@@ -335,8 +353,10 @@ impl AppState {
             self.player_entity,
             &mut rng,
             &mut self.events,
+            Some(&mut self.action_scheduler),
         );
-        input::process_events(&mut self.events, &mut self.vfx);
+        // Process any events from remove_dead_entities (death VFX, etc.)
+        game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
 
         // Lerp all visual positions toward logical positions
         systems::visual_lerp(&mut self.world, dt);
@@ -371,7 +391,7 @@ impl AppState {
         }
 
         self.renderer
-            .render(&self.camera, &self.grid, &self.tileset, self.show_grid_lines)
+            .render(&self.camera, &self.grid, &self.tileset, self.ui_state.show_grid_lines)
             .unwrap();
         self.renderer
             .render_entities(&self.camera, &entities_to_render, &self.tileset)
@@ -394,13 +414,13 @@ impl AppState {
         // Get loot window data if chest is open
         let loot_data = ui::get_loot_window_data(
             &self.world,
-            self.open_chest,
+            self.ui_state.open_chest,
             self.camera.viewport_width,
             self.camera.viewport_height,
         );
 
         let icons = &self.ui_icons;
-        let show_inventory = self.show_inventory;
+        let show_inventory = self.ui_state.show_inventory;
         let world = &self.world;
         let player_entity = self.player_entity;
         let viewport_width = self.camera.viewport_width;
@@ -457,20 +477,21 @@ impl AppState {
 
     fn process_ui_actions(&mut self, actions: ui::UiActions) {
         // Handle chest/loot interactions
-        if let Some(chest_id) = self.open_chest {
+        if let Some(chest_id) = self.ui_state.open_chest {
             if actions.chest_take_all || actions.close_chest {
                 if actions.chest_take_all {
-                    systems::take_all_from_container(&mut self.world, self.player_entity, chest_id);
+                    systems::take_all_from_container(&mut self.world, self.player_entity, chest_id, Some(&mut self.events));
                 }
-                self.open_chest = None;
+                self.ui_state.close_chest();
             } else if actions.chest_take_gold {
-                systems::take_gold_from_container(&mut self.world, self.player_entity, chest_id);
+                systems::take_gold_from_container(&mut self.world, self.player_entity, chest_id, Some(&mut self.events));
             } else if let Some(item_index) = actions.chest_item_to_take {
                 systems::take_item_from_container(
                     &mut self.world,
                     self.player_entity,
                     chest_id,
                     item_index,
+                    Some(&mut self.events),
                 );
             }
         }
@@ -482,7 +503,7 @@ impl AppState {
     }
 
     fn handle_input(&mut self) {
-        // Process keyboard input
+        // Process keyboard input (pure input handling - no game logic)
         let result = input::process_keyboard(&mut self.input);
 
         // Handle toggle actions
@@ -497,27 +518,26 @@ impl AppState {
         }
 
         if result.toggle_inventory {
-            self.show_inventory = !self.show_inventory;
+            self.ui_state.toggle_inventory();
         }
 
         if result.toggle_grid_lines {
-            self.show_grid_lines = !self.show_grid_lines;
+            self.ui_state.toggle_grid_lines();
         }
 
-        // Enter key: Take All if chest open, otherwise loot at player position
+        // Enter key: Take All if chest open, otherwise open chest at player position
         if result.enter_pressed {
-            if let Some(chest_id) = self.open_chest {
-                systems::take_all_from_container(&mut self.world, self.player_entity, chest_id);
-                self.open_chest = None;
+            if let Some(chest_id) = self.ui_state.open_chest {
+                systems::take_all_from_container(&mut self.world, self.player_entity, chest_id, Some(&mut self.events));
+                self.ui_state.close_chest();
             } else if let Some(container_id) =
                 systems::find_container_at_player(&self.world, self.player_entity)
             {
-                self.open_chest = Some(container_id);
+                self.ui_state.open_chest = Some(container_id);
             }
         }
 
         // Check if player is dead - no movement allowed
-        // If Health component is missing (removed on death), treat as dead
         let is_dead = self
             .world
             .get::<&components::Health>(self.player_entity)
@@ -525,57 +545,86 @@ impl AppState {
             .unwrap_or(true);
 
         if is_dead {
-            // Clear any pending path and skip movement processing
             self.input.clear_path();
-        } else if let Some((dx, dy)) = result.movement {
+            input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
+            return;
+        }
+
+        // Determine movement intent (keyboard takes priority over click-to-move)
+        let (movement_intent, from_keyboard) = if let Some((dx, dy)) = result.movement {
             // Keyboard movement cancels click-to-move path
             self.input.clear_path();
+            (Some((dx, dy)), true)
+        } else {
+            // Try click-to-move path
+            (input::get_path_movement(&self.input, &self.world, self.player_entity), false)
+        };
 
-            // Get player position (copy to avoid borrow issues)
+        // Execute movement if we have an intent
+        if let Some((dx, dy)) = movement_intent {
+            // Validate target tile is walkable
             let player_pos = self
                 .world
                 .get::<&components::Position>(self.player_entity)
                 .ok()
                 .map(|p| (p.x, p.y));
 
-            if let Some((px, py)) = player_pos {
-                let target_x = px + dx;
-                let target_y = py + dy;
-                if let Some(tile) = self.grid.get(target_x, target_y) {
-                    if tile.tile_type.is_walkable() {
-                        let result = input::run_ticks_until_player_acts(
-                            &mut self.world,
-                            &self.grid,
-                            self.player_entity,
-                            dx,
-                            dy,
-                            &mut self.events,
-                            &mut self.vfx,
-                        );
-                        if let systems::MoveResult::OpenedChest(chest) = result {
-                            self.open_chest = Some(chest);
-                        } else if let systems::MoveResult::Moved = result {
-                            self.open_chest = None;
-                        }
-                    }
+            let tile_walkable = player_pos
+                .and_then(|(px, py)| self.grid.get(px + dx, py + dy))
+                .map(|t| t.tile_type.is_walkable())
+                .unwrap_or(false);
+
+            // For click-to-move, check if this would open a chest and stop instead
+            // (chests require explicit keyboard interaction)
+            if !from_keyboard {
+                let action_type = game_loop::peek_action_type(
+                    &self.world,
+                    &self.grid,
+                    self.player_entity,
+                    dx,
+                    dy,
+                );
+                if matches!(action_type, components::ActionType::OpenChest { .. }) {
+                    // Stop at the chest, don't auto-open it
+                    self.input.clear_path();
+                    input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
+                    return;
                 }
             }
-        } else {
-            // No keyboard movement - follow click-to-move path
-            if let Some(container) = input::follow_player_path(
-                &mut self.input,
-                &mut self.world,
-                &self.grid,
-                self.player_entity,
-                &mut self.events,
-                &mut self.vfx,
-            ) {
-                self.open_chest = Some(container);
+
+            if tile_walkable {
+                // Execute the turn via game_loop (handles time advancement, AI, events, UI state)
+                let turn_result = game_loop::execute_player_turn(
+                    &mut self.world,
+                    &self.grid,
+                    self.player_entity,
+                    dx,
+                    dy,
+                    &mut self.game_clock,
+                    &mut self.action_scheduler,
+                    &mut self.events,
+                    &mut self.vfx,
+                    &mut self.ui_state,
+                );
+
+                // Handle path consumption based on result
+                match turn_result {
+                    game_loop::TurnResult::Started => {
+                        // For path-following, consume the step we just took
+                        if !from_keyboard {
+                            self.input.consume_step();
+                        }
+                    }
+                    game_loop::TurnResult::Blocked | game_loop::TurnResult::NotReady => {
+                        // Clear path on blocked movement
+                        self.input.clear_path();
+                    }
+                }
             }
         }
 
         // Process mouse drag for camera panning
-        input::process_mouse_drag(&mut self.input, &mut self.camera, self.show_inventory);
+        input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
     }
 
     fn handle_dev_spawn(&mut self) {
@@ -622,7 +671,18 @@ impl AppState {
                 ));
             }
             ui::DevTool::SpawnEnemy => {
-                spawning::enemies::SKELETON.spawn(&mut self.world, tile_x, tile_y);
+                let enemy = spawning::enemies::SKELETON.spawn(&mut self.world, tile_x, tile_y);
+                // Initialize the AI actor's first action
+                let mut rng = rand::thread_rng();
+                game::initialize_single_ai_actor(
+                    &mut self.world,
+                    &self.grid,
+                    enemy,
+                    self.player_entity,
+                    &self.game_clock,
+                    &mut self.action_scheduler,
+                    &mut rng,
+                );
             }
         }
     }

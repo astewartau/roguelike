@@ -19,8 +19,10 @@ pub struct EnemyDef {
     pub tile_id: u32,
     /// Maximum health
     pub health: i32,
-    /// Action speed (lower = faster, costs less energy to act)
-    pub speed: i32,
+    /// Maximum energy pool
+    pub max_energy: i32,
+    /// Action speed multiplier (higher = faster)
+    pub speed: f32,
     /// Sight radius for chase AI
     pub sight_radius: i32,
     /// Base attack damage
@@ -39,7 +41,7 @@ impl EnemyDef {
             pos,
             VisualPosition::from_position(&pos),
             Sprite::new(self.tile_id),
-            Actor::new(self.speed),
+            Actor::new(self.max_energy, self.speed),
             ChaseAI::new(self.sight_radius),
             Health::new(self.health),
             Stats::new(self.strength, self.intelligence, self.agility),
@@ -59,6 +61,7 @@ pub mod enemies {
         name: "Skeleton",
         tile_id: tile_ids::SKELETON,
         health: SKELETON_HEALTH,
+        max_energy: SKELETON_MAX_ENERGY,
         speed: SKELETON_SPEED,
         sight_radius: SKELETON_SIGHT_RADIUS,
         damage: SKELETON_DAMAGE,

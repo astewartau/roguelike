@@ -1,4 +1,5 @@
 use crate::constants::*;
+use hecs::Entity;
 
 /// Position component - world coordinates (grid-based)
 #[derive(Debug, Clone, Copy)]
@@ -34,12 +35,12 @@ pub struct Player;
 pub struct Health {
     pub current: i32,
     pub max: i32,
-    /// HP regenerated per regen tick
+    /// HP regenerated per regen event
     pub regen_amount: i32,
-    /// Number of game ticks between regen ticks (0 = no regen)
-    pub regen_interval: i32,
-    /// Counter tracking ticks until next regen
-    pub regen_counter: i32,
+    /// Seconds between regen events (0.0 = no regen)
+    pub regen_interval: f32,
+    /// Game time of last regen event
+    pub last_regen_time: f32,
 }
 
 impl Health {
@@ -48,19 +49,19 @@ impl Health {
             current: max,
             max,
             regen_amount: 0,
-            regen_interval: 0,
-            regen_counter: 0,
+            regen_interval: 0.0,
+            last_regen_time: 0.0,
         }
     }
 
-    /// Create health with regeneration
-    pub fn with_regen(max: i32, regen_amount: i32, regen_interval: i32) -> Self {
+    /// Create health with regeneration (time-based)
+    pub fn with_regen(max: i32, regen_amount: i32, regen_interval: f32) -> Self {
         Self {
             current: max,
             max,
             regen_amount,
             regen_interval,
-            regen_counter: 0,
+            last_regen_time: 0.0,
         }
     }
 
@@ -140,17 +141,100 @@ pub struct Container {
     pub is_open: bool,
 }
 
-/// Actor component - for entities that take turns
-/// Pure data: energy accumulates, speed is cost to act
+// =============================================================================
+// TIME SYSTEM COMPONENTS
+// =============================================================================
+
+/// Types of actions an actor can perform
 #[derive(Debug, Clone, Copy)]
-pub struct Actor {
-    pub energy: i32,
-    pub speed: i32, // Lower = faster. Cost to take an action.
+pub enum ActionType {
+    /// Moving in a direction
+    Move { dx: i32, dy: i32, is_diagonal: bool },
+    /// Attacking a target entity
+    Attack { target: Entity },
+    /// Opening a door
+    OpenDoor { door: Entity },
+    /// Opening/interacting with a chest
+    OpenChest { chest: Entity },
+    /// Waiting in place (pass turn)
+    Wait,
 }
 
+impl ActionType {
+    /// Energy cost to start this action
+    pub fn energy_cost(&self) -> i32 {
+        match self {
+            // All basic actions cost 1 energy by default
+            // This can be customized per-action as needed
+            ActionType::Move { .. } => 1,
+            ActionType::Attack { .. } => 1,
+            ActionType::OpenDoor { .. } => 1,
+            ActionType::OpenChest { .. } => 1,
+            ActionType::Wait => 1,
+        }
+    }
+}
+
+/// An action currently being executed by an entity
+#[derive(Debug, Clone, Copy)]
+pub struct ActionInProgress {
+    pub action_type: ActionType,
+    pub start_time: f32,
+    pub completion_time: f32,
+}
+
+/// Actor component - for entities that take actions in game time
+/// Energy is a budget: spend to start actions, regen over time
+#[derive(Debug, Clone, Copy)]
+pub struct Actor {
+    /// Current energy pool (0 to max_energy)
+    pub energy: i32,
+    /// Maximum energy (budget cap)
+    pub max_energy: i32,
+    /// Speed multiplier (1.0 = normal, higher = faster)
+    pub speed: f32,
+    /// Currently executing action (None if idle and ready)
+    pub current_action: Option<ActionInProgress>,
+    /// Seconds between energy regeneration events
+    pub energy_regen_interval: f32,
+    /// Game time of last energy regen event
+    pub last_energy_regen_time: f32,
+}
+
+/// Default energy regen interval (1 second per energy point)
+pub const DEFAULT_ENERGY_REGEN_INTERVAL: f32 = 1.0;
+
 impl Actor {
-    pub fn new(speed: i32) -> Self {
-        Self { energy: 0, speed }
+    pub fn new(max_energy: i32, speed: f32) -> Self {
+        Self {
+            energy: max_energy, // Start with full energy
+            max_energy,
+            speed,
+            current_action: None,
+            energy_regen_interval: DEFAULT_ENERGY_REGEN_INTERVAL,
+            last_energy_regen_time: 0.0,
+        }
+    }
+
+    pub fn with_energy_regen(max_energy: i32, speed: f32, energy_regen_interval: f32) -> Self {
+        Self {
+            energy: max_energy,
+            max_energy,
+            speed,
+            current_action: None,
+            energy_regen_interval,
+            last_energy_regen_time: 0.0,
+        }
+    }
+
+    /// Can start a new action (has energy and not mid-action)
+    pub fn can_act(&self) -> bool {
+        self.energy > 0 && self.current_action.is_none()
+    }
+
+    /// Is currently busy with an action
+    pub fn is_busy(&self) -> bool {
+        self.current_action.is_some()
     }
 }
 
