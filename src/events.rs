@@ -31,9 +31,9 @@ pub enum GameEvent {
         door: Entity,
         opener: Entity,
     },
-    /// An entity opened a chest/container
-    ChestOpened {
-        chest: Entity,
+    /// An entity opened a container (chest, bones, etc.)
+    ContainerOpened {
+        container: Entity,
         opener: Entity,
     },
     /// An entity picked up an item
@@ -54,6 +54,22 @@ pub enum GameEvent {
     /// Player leveled up
     LevelUp {
         new_level: u32,
+    },
+    /// An entity spent energy to perform an action
+    EnergySpent {
+        entity: Entity,
+        amount: i32,
+        remaining: i32,
+    },
+    /// An entity regenerated energy
+    EnergyRegenerated {
+        entity: Entity,
+        amount: i32,
+    },
+    /// AI state changed (for debugging/UI feedback)
+    AIStateChanged {
+        entity: Entity,
+        new_state: crate::components::AIState,
     },
 }
 

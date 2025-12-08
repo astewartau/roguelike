@@ -10,7 +10,6 @@ use crate::components::{
 };
 use crate::constants::*;
 use crate::grid::Grid;
-use crate::game_loop;
 use crate::spawning;
 use crate::tile::tile_ids;
 use crate::time_system::{ActionScheduler, GameClock};
@@ -104,20 +103,6 @@ pub fn setup_camera(camera: &mut Camera, player_start: &Position) {
     camera.set_tracking_target(Vec2::new(player_start.x as f32, player_start.y as f32));
 }
 
-/// Use an item from the player's inventory
-pub fn use_item(world: &mut World, player_entity: Entity, item_index: usize) {
-    if let Ok(mut inv) = world.get::<&mut Inventory>(player_entity) {
-        if item_index < inv.items.len() {
-            let item = inv.items.remove(item_index);
-            inv.current_weight_kg -= crate::systems::item_weight(item);
-            if let Ok(mut health) = world.get::<&mut Health>(player_entity) {
-                health.current =
-                    (health.current + crate::systems::item_heal_amount(item)).min(health.max);
-            }
-        }
-    }
-}
-
 /// Handle interactions with open chests/containers
 pub fn handle_chest_interaction(
     world: &mut World,
@@ -150,6 +135,7 @@ pub fn initialize_ai_actors(
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    events: &mut crate::events::EventQueue,
     rng: &mut impl Rng,
 ) {
     // Collect all AI entities (entities with both Actor and ChaseAI)
@@ -161,7 +147,7 @@ pub fn initialize_ai_actors(
 
     // Initialize each AI entity's first action
     for entity in ai_entities {
-        game_loop::ai_decide_action(world, grid, entity, player_entity, clock, scheduler, rng);
+        crate::systems::ai::decide_action(world, grid, entity, player_entity, clock, scheduler, events, rng);
     }
 }
 
@@ -173,7 +159,8 @@ pub fn initialize_single_ai_actor(
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    events: &mut crate::events::EventQueue,
     rng: &mut impl Rng,
 ) {
-    game_loop::ai_decide_action(world, grid, entity, player_entity, clock, scheduler, rng);
+    crate::systems::ai::decide_action(world, grid, entity, player_entity, clock, scheduler, events, rng);
 }

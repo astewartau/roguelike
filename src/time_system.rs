@@ -179,6 +179,18 @@ pub fn start_action(
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
 ) -> Result<(), &'static str> {
+    start_action_with_events(world, entity, action_type, clock, scheduler, None)
+}
+
+/// Start an action for an entity with optional event emission. Returns Ok(()) if successful.
+pub fn start_action_with_events(
+    world: &mut World,
+    entity: Entity,
+    action_type: ActionType,
+    clock: &GameClock,
+    scheduler: &mut ActionScheduler,
+    events: Option<&mut EventQueue>,
+) -> Result<(), &'static str> {
     // Get actor component
     let mut actor = world
         .get::<&mut Actor>(entity)
@@ -196,6 +208,7 @@ pub fn start_action(
 
     // Spend energy to start (per-action cost)
     actor.energy -= energy_cost;
+    let remaining = actor.energy;
 
     // Calculate completion time
     let duration = calculate_action_duration(&action_type, actor.speed);
@@ -210,6 +223,15 @@ pub fn start_action(
 
     // Schedule completion
     scheduler.schedule(entity, completion_time);
+
+    // Emit energy spent event
+    if let Some(events) = events {
+        events.push(GameEvent::EnergySpent {
+            entity,
+            amount: energy_cost,
+            remaining,
+        });
+    }
 
     Ok(())
 }
@@ -463,7 +485,7 @@ fn apply_open_chest(
         container.is_open = true;
     }
 
-    events.push(GameEvent::ChestOpened { chest, opener });
+    events.push(GameEvent::ContainerOpened { container: chest, opener });
 
     ActionResult::Completed
 }
@@ -507,8 +529,11 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
 }
 
 /// Process time-based energy regeneration for all actors
-pub fn tick_energy_regen(world: &mut World, current_time: f32) {
-    for (_id, actor) in world.query_mut::<&mut Actor>() {
+pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&mut EventQueue>) {
+    // Collect regen info first to avoid borrow issues
+    let mut regen_events: Vec<(Entity, i32)> = Vec::new();
+
+    for (id, actor) in world.query_mut::<&mut Actor>() {
         // Skip if no regen interval set, or already at max
         if actor.energy_regen_interval <= 0.0 || actor.energy >= actor.max_energy {
             continue;
@@ -518,10 +543,23 @@ pub fn tick_energy_regen(world: &mut World, current_time: f32) {
         let time_since_last = current_time - actor.last_energy_regen_time;
         if time_since_last >= actor.energy_regen_interval {
             let regen_ticks = (time_since_last / actor.energy_regen_interval) as i32;
+            let old_energy = actor.energy;
             actor.energy = (actor.energy + regen_ticks).min(actor.max_energy);
+            let amount = actor.energy - old_energy;
             // Update last regen time, accounting for partial intervals
             actor.last_energy_regen_time =
                 current_time - (time_since_last % actor.energy_regen_interval);
+
+            if amount > 0 {
+                regen_events.push((id, amount));
+            }
+        }
+    }
+
+    // Emit events
+    if let Some(events) = events {
+        for (entity, amount) in regen_events {
+            events.push(GameEvent::EnergyRegenerated { entity, amount });
         }
     }
 }

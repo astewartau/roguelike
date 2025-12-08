@@ -1,12 +1,26 @@
 //! Item system functions.
 
-use crate::components::ItemType;
+use crate::components::{Health, Inventory, ItemType};
 use crate::constants::*;
+use hecs::{Entity, World};
 
 /// Get the display name of an item
 pub fn item_name(item: ItemType) -> &'static str {
     match item {
         ItemType::HealthPotion => "Health Potion",
+    }
+}
+
+/// Use an item from an entity's inventory
+pub fn use_item(world: &mut World, entity: Entity, item_index: usize) {
+    if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
+        if item_index < inv.items.len() {
+            let item = inv.items.remove(item_index);
+            inv.current_weight_kg -= item_weight(item);
+            if let Ok(mut health) = world.get::<&mut Health>(entity) {
+                health.current = (health.current + item_heal_amount(item)).min(health.max);
+            }
+        }
     }
 }
 

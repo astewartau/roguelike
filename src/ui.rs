@@ -79,10 +79,10 @@ impl GameUiState {
     /// Handle a game event, updating UI state as needed
     pub fn handle_event(&mut self, event: &GameEvent) {
         match event {
-            GameEvent::ChestOpened { chest, opener } => {
-                // Only open loot window if player opened the chest
+            GameEvent::ContainerOpened { container, opener } => {
+                // Only open loot window if player opened the container
                 if *opener == self.player_entity {
-                    self.open_chest = Some(*chest);
+                    self.open_chest = Some(*container);
                 }
             }
             GameEvent::EntityMoved { entity, .. } => {

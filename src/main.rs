@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod app;
 mod camera;
 mod components;
 mod constants;
@@ -26,24 +27,16 @@ use grid::Grid;
 use hecs::World;
 use renderer::Renderer;
 use tileset::Tileset;
-use std::ffi::CString;
-use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
 
-use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextApi, ContextAttributesBuilder, Version};
-use glutin::display::GetGlDisplay;
 use glutin::prelude::*;
-use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
-use glutin_winit::DisplayBuilder;
-use raw_window_handle::HasWindowHandle;
+use glutin::surface::WindowSurface;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Window, WindowId};
 
 use egui_glow::EguiGlow;
 
@@ -106,71 +99,17 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // Create window
-        let window_attrs = WindowAttributes::default()
-            .with_title("Grid Roguelike")
-            .with_inner_size(PhysicalSize::new(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT))
-            .with_resizable(true);
-
-        let template = ConfigTemplateBuilder::new().with_alpha_size(8);
-        let display_builder = DisplayBuilder::new().with_window_attributes(Some(window_attrs));
-
-        let (window, gl_config) = display_builder
-            .build(event_loop, template, |configs| {
-                configs
-                    .reduce(|accum, config| {
-                        if config.num_samples() > accum.num_samples() {
-                            config
-                        } else {
-                            accum
-                        }
-                    })
-                    .unwrap()
-            })
-            .expect("Failed to create window");
-
-        let window = window.expect("Failed to create window");
-        let window_handle = window.window_handle().unwrap();
-        let gl_display = gl_config.display();
-
-        let context_attrs = ContextAttributesBuilder::new()
-            .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
-            .build(Some(window_handle.as_raw()));
-
-        let gl_context = unsafe {
-            gl_display
-                .create_context(&gl_config, &context_attrs)
-                .expect("Failed to create OpenGL context")
-        };
-
-        let size = window.inner_size();
-        let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-            window_handle.as_raw(),
-            NonZeroU32::new(size.width).unwrap(),
-            NonZeroU32::new(size.height).unwrap(),
-        );
-
-        let gl_surface = unsafe {
-            gl_display
-                .create_window_surface(&gl_config, &surface_attrs)
-                .expect("Failed to create surface")
-        };
-
-        let gl_context = gl_context
-            .make_current(&gl_surface)
-            .expect("Failed to make context current");
-
-        let gl = Arc::new(unsafe {
-            glow::Context::from_loader_function(|s| {
-                let s = CString::new(s).unwrap();
-                gl_display.get_proc_address(&s) as *const _
-            })
-        });
-
-        // Initialize egui
-        let mut egui_glow = EguiGlow::new(event_loop, gl.clone(), None, None, false);
+        // Create window and GL context
+        let app::WindowContext {
+            window,
+            gl_surface,
+            gl_context,
+            gl,
+            mut egui_glow,
+        } = app::create_window(event_loop);
 
         // Initialize game state
+        let size = window.inner_size();
         let mut camera = Camera::new(size.width as f32, size.height as f32);
         let grid = Grid::new(DUNGEON_DEFAULT_WIDTH, DUNGEON_DEFAULT_HEIGHT);
         let renderer = Renderer::new(gl.clone()).expect("Failed to create renderer");
@@ -190,6 +129,7 @@ impl ApplicationHandler for App {
         // Initialize time system
         let game_clock = time_system::GameClock::new();
         let mut action_scheduler = time_system::ActionScheduler::new();
+        let mut event_queue = events::EventQueue::new();
 
         // Initialize AI entities with their first actions
         let mut rng = rand::thread_rng();
@@ -199,6 +139,7 @@ impl ApplicationHandler for App {
             player_entity,
             &game_clock,
             &mut action_scheduler,
+            &mut event_queue,
             &mut rng,
         );
 
@@ -216,7 +157,7 @@ impl ApplicationHandler for App {
             world,
             player_entity,
             vfx: vfx::VfxManager::new(),
-            events: events::EventQueue::new(),
+            events: event_queue,
             game_clock,
             action_scheduler,
             ui_state: ui::GameUiState::new(player_entity),
@@ -240,15 +181,9 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0 {
-                    state.gl_surface.resize(
-                        &state.gl_context,
-                        NonZeroU32::new(size.width).unwrap(),
-                        NonZeroU32::new(size.height).unwrap(),
-                    );
-                    state.camera.viewport_width = size.width as f32;
-                    state.camera.viewport_height = size.height as f32;
-                }
+                app::resize_surface(&state.gl_surface, &state.gl_context, size.width, size.height);
+                state.camera.viewport_width = size.width as f32;
+                state.camera.viewport_height = size.height as f32;
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if !egui_consumed.consumed {
@@ -498,7 +433,7 @@ impl AppState {
 
         // Use item if clicked
         if let Some(item_index) = actions.item_to_use {
-            game::use_item(&mut self.world, self.player_entity, item_index);
+            systems::use_item(&mut self.world, self.player_entity, item_index);
         }
     }
 
@@ -533,7 +468,12 @@ impl AppState {
             } else if let Some(container_id) =
                 systems::find_container_at_player(&self.world, self.player_entity)
             {
-                self.ui_state.open_chest = Some(container_id);
+                self.events.push(crate::events::GameEvent::ContainerOpened {
+                    container: container_id,
+                    opener: self.player_entity,
+                });
+                // Process immediately so UI updates this frame
+                game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
             }
         }
 
@@ -681,6 +621,7 @@ impl AppState {
                     self.player_entity,
                     &self.game_clock,
                     &mut self.action_scheduler,
+                    &mut self.events,
                     &mut rng,
                 );
             }

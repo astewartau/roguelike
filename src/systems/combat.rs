@@ -50,10 +50,13 @@ pub fn open_chest(world: &mut World, chest_id: Entity) {
     }
 }
 
-/// Handle a ChestOpened event - update sprite
-pub fn handle_chest_opened(world: &mut World, chest_id: Entity) {
-    if let Ok(mut sprite) = world.get::<&mut Sprite>(chest_id) {
-        sprite.tile_id = tile_ids::CHEST_OPEN;
+/// Handle a ContainerOpened event - update sprite for chests only
+pub fn handle_container_opened(world: &mut World, container_id: Entity) {
+    if let Ok(mut sprite) = world.get::<&mut Sprite>(container_id) {
+        // Only change sprite for actual chests, not bones
+        if sprite.tile_id == tile_ids::CHEST_CLOSED {
+            sprite.tile_id = tile_ids::CHEST_OPEN;
+        }
     }
 }
 
