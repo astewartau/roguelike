@@ -239,6 +239,12 @@ impl ApplicationHandler for App {
                         state.camera.release_pan();
                     }
                 }
+                // Handle right-click for shooting bow
+                if !egui_consumed.consumed && button == MouseButton::Right {
+                    if btn_state == ElementState::Released {
+                        state.handle_right_click_shoot();
+                    }
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if !egui_consumed.consumed {
@@ -295,6 +301,13 @@ impl AppState {
 
         // Lerp all visual positions toward logical positions
         systems::visual_lerp(&mut self.world, dt);
+
+        // Lerp projectiles at their own speed (faster than normal entities)
+        systems::lerp_projectiles_realtime(&mut self.world, dt, ARROW_SPEED);
+
+        // Clean up finished projectiles whose visuals have caught up
+        let finished = systems::cleanup_finished_projectiles(&self.world);
+        systems::despawn_projectiles(&mut self.world, finished);
 
         // Update camera to follow player's visual position
         if let Ok(vis_pos) = self.world.get::<&components::VisualPosition>(self.player_entity) {
@@ -400,6 +413,7 @@ impl AppState {
                     &inv_data,
                     icons.tileset_texture_id,
                     icons.sword_uv,
+                    icons.bow_uv,
                     icons.coins_uv,
                     icons.potion_uv,
                     &mut actions,
@@ -625,6 +639,76 @@ impl AppState {
                     &mut rng,
                 );
             }
+        }
+    }
+
+    fn handle_right_click_shoot(&mut self) {
+        // Check if player is alive and can act
+        let can_act = self
+            .world
+            .get::<&components::Actor>(self.player_entity)
+            .map(|a| a.can_act())
+            .unwrap_or(false);
+
+        let is_dead = self
+            .world
+            .get::<&components::Health>(self.player_entity)
+            .map(|h| h.is_dead())
+            .unwrap_or(true);
+
+        if !can_act || is_dead {
+            return;
+        }
+
+        // Check if player has a bow equipped
+        let has_bow = self
+            .world
+            .get::<&components::Equipment>(self.player_entity)
+            .map(|e| e.ranged_weapon.is_some())
+            .unwrap_or(false);
+
+        if !has_bow {
+            return;
+        }
+
+        // Get target tile from mouse position
+        let (target_x, target_y) = input::get_shoot_target(&self.input, &self.camera);
+
+        // Clear any click-to-move path
+        self.input.clear_path();
+
+        // Create the shoot action
+        let action_type = components::ActionType::ShootBow { target_x, target_y };
+
+        // Try to start the action
+        if time_system::start_action(
+            &mut self.world,
+            self.player_entity,
+            action_type,
+            &self.game_clock,
+            &mut self.action_scheduler,
+        )
+        .is_ok()
+        {
+            // Advance time until player can act again
+            let mut rng = rand::thread_rng();
+            game_loop::advance_until_player_ready_public(
+                &mut self.world,
+                &self.grid,
+                self.player_entity,
+                &mut self.game_clock,
+                &mut self.action_scheduler,
+                &mut self.events,
+                &mut rng,
+            );
+
+            // Process events
+            game_loop::process_events(
+                &mut self.events,
+                &mut self.world,
+                &mut self.vfx,
+                &mut self.ui_state,
+            );
         }
     }
 }

@@ -88,6 +88,7 @@ pub fn peek_action_type(
 /// - Completes scheduled actions
 /// - Runs AI for non-player entities
 /// - Ticks regeneration
+/// - Updates projectiles
 fn advance_until_player_ready(
     world: &mut World,
     grid: &Grid,
@@ -99,12 +100,19 @@ fn advance_until_player_ready(
 ) {
     loop {
         // Check if player can act
-        if let Ok(actor) = world.get::<&Actor>(player_entity) {
-            if actor.can_act() {
-                return;
-            }
-        } else {
-            // Player has no Actor component (shouldn't happen)
+        let player_can_act = world
+            .get::<&Actor>(player_entity)
+            .map(|a| a.can_act())
+            .unwrap_or(false);
+
+        if player_can_act {
+            // Final projectile update before returning
+            update_projectiles_at_time(world, grid, clock.time, events);
+            return;
+        }
+
+        // If player has no Actor component, shouldn't happen but bail out
+        if world.get::<&Actor>(player_entity).is_err() {
             return;
         }
 
@@ -117,18 +125,46 @@ fn advance_until_player_ready(
         // Advance time to the completion
         clock.advance_to(completion_time);
 
+        // Update projectiles at this time point
+        update_projectiles_at_time(world, grid, clock.time, events);
+
         // Process time-based effects (HP regen, energy regen)
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
 
         // Complete the action
-        time_system::complete_action(world, grid, next_entity, events);
+        time_system::complete_action(world, grid, next_entity, events, clock.time);
 
         // If not player, have AI decide next action
         if next_entity != player_entity {
             systems::ai::decide_action(world, grid, next_entity, player_entity, clock, scheduler, events, rng);
         }
     }
+}
+
+/// Update projectiles based on game time (marks finished but doesn't despawn)
+fn update_projectiles_at_time(
+    world: &mut World,
+    grid: &Grid,
+    current_time: f32,
+    events: &mut EventQueue,
+) {
+    // Update projectiles - this marks them as finished but doesn't despawn
+    // Despawning happens in the render loop after visual catch-up
+    systems::update_projectiles(world, grid, current_time, events);
+}
+
+/// Public wrapper for advance_until_player_ready (used by bow shooting)
+pub fn advance_until_player_ready_public(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    clock: &mut GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut EventQueue,
+    rng: &mut impl Rng,
+) {
+    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, rng);
 }
 
 use crate::ui::GameUiState;

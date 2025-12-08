@@ -80,6 +80,8 @@ pub struct InputResult {
     pub enter_pressed: bool,
     /// Movement intent (dx, dy)
     pub movement: Option<(i32, i32)>,
+    /// Right-click shoot intent (target_x, target_y)
+    pub shoot_target: Option<(i32, i32)>,
 }
 
 impl Default for InputResult {
@@ -90,6 +92,7 @@ impl Default for InputResult {
             toggle_grid_lines: false,
             enter_pressed: false,
             movement: None,
+            shoot_target: None,
         }
     }
 }
@@ -225,4 +228,15 @@ pub fn process_mouse_drag(input: &mut InputState, camera: &mut Camera, show_inve
     }
     // Consume the mouse delta so it's not applied again next frame
     input.last_mouse_pos = input.mouse_pos;
+}
+
+/// Convert right-click position to a shoot target (tile coordinates)
+pub fn get_shoot_target(
+    input: &InputState,
+    camera: &Camera,
+) -> (i32, i32) {
+    let world_pos = camera.screen_to_world(input.mouse_pos.0, input.mouse_pos.1);
+    let tile_x = world_pos.x.floor() as i32;
+    let tile_y = world_pos.y.floor() as i32;
+    (tile_x, tile_y)
 }

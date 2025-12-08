@@ -388,6 +388,7 @@ pub fn draw_inventory_window(
     data: &InventoryWindowData,
     tileset_texture_id: egui::TextureId,
     sword_uv: egui::Rect,
+    bow_uv: egui::Rect,
     coins_uv: egui::Rect,
     potion_uv: egui::Rect,
     actions: &mut UiActions,
@@ -404,7 +405,7 @@ pub fn draw_inventory_window(
             if let Ok(stats) = world.get::<&Stats>(player_entity) {
                 ui.columns(2, |columns| {
                     // Left column: Stats + Equipment
-                    draw_stats_column(&mut columns[0], world, player_entity, &stats, tileset_texture_id, sword_uv, coins_uv);
+                    draw_stats_column(&mut columns[0], world, player_entity, &stats, tileset_texture_id, sword_uv, bow_uv, coins_uv);
 
                     // Right column: Inventory
                     draw_inventory_column(&mut columns[1], world, player_entity, tileset_texture_id, potion_uv, actions);
@@ -420,6 +421,7 @@ fn draw_stats_column(
     stats: &Stats,
     tileset_texture_id: egui::TextureId,
     sword_uv: egui::Rect,
+    bow_uv: egui::Rect,
     coins_uv: egui::Rect,
 ) {
     ui.vertical(|ui| {
@@ -458,10 +460,10 @@ fn draw_stats_column(
         ui.separator();
         ui.add_space(10.0);
 
-        // Weapon slot
-        ui.horizontal(|ui| {
-            ui.label("Weapon:");
-            if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
+        if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
+            // Weapon slot (melee)
+            ui.horizontal(|ui| {
+                ui.label("Melee:");
                 if let Some(weapon) = &equipment.weapon {
                     let image = egui::Image::new(egui::load::SizedTexture::new(
                         tileset_texture_id,
@@ -483,8 +485,35 @@ fn draw_stats_column(
                             .color(egui::Color32::GRAY),
                     );
                 }
-            }
-        });
+            });
+
+            ui.add_space(5.0);
+
+            // Ranged weapon slot
+            ui.horizontal(|ui| {
+                ui.label("Ranged:");
+                if let Some(ranged) = &equipment.ranged_weapon {
+                    let image = egui::Image::new(egui::load::SizedTexture::new(
+                        tileset_texture_id,
+                        egui::vec2(48.0, 48.0),
+                    ))
+                    .uv(bow_uv);
+
+                    ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
+                        "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nRight-click to shoot",
+                        ranged.name,
+                        ranged.base_damage,
+                        ranged.arrow_speed
+                    ));
+                } else {
+                    ui.label(
+                        egui::RichText::new("(none)")
+                            .italics()
+                            .color(egui::Color32::GRAY),
+                    );
+                }
+            });
+        }
     });
 }
 
@@ -543,6 +572,7 @@ fn draw_inventory_column(
 pub struct UiIcons {
     pub tileset_texture_id: egui::TextureId,
     pub sword_uv: egui::Rect,
+    pub bow_uv: egui::Rect,
     pub potion_uv: egui::Rect,
     pub coins_uv: egui::Rect,
 }
@@ -552,6 +582,7 @@ impl UiIcons {
         Self {
             tileset_texture_id: tileset_egui_id,
             sword_uv: tileset.get_egui_uv(tile_ids::SWORD),
+            bow_uv: tileset.get_egui_uv(tile_ids::BOW),
             potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION),
             coins_uv: tileset.get_egui_uv(tile_ids::COINS),
         }

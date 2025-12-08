@@ -158,6 +158,8 @@ pub enum ActionType {
     OpenChest { chest: Entity },
     /// Waiting in place (pass turn)
     Wait,
+    /// Shooting a bow at a target position
+    ShootBow { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -171,6 +173,7 @@ impl ActionType {
             ActionType::OpenDoor { .. } => 1,
             ActionType::OpenChest { .. } => 1,
             ActionType::Wait => 1,
+            ActionType::ShootBow { .. } => 1,
         }
     }
 }
@@ -347,15 +350,20 @@ impl Weapon {
 #[derive(Debug, Clone)]
 pub struct Equipment {
     pub weapon: Option<Weapon>,
+    pub ranged_weapon: Option<RangedWeapon>,
 }
 
 impl Equipment {
     pub fn new() -> Self {
-        Self { weapon: None }
+        Self { weapon: None, ranged_weapon: None }
     }
 
     pub fn with_weapon(weapon: Weapon) -> Self {
-        Self { weapon: Some(weapon) }
+        Self { weapon: Some(weapon), ranged_weapon: None }
+    }
+
+    pub fn with_weapons(weapon: Weapon, ranged: RangedWeapon) -> Self {
+        Self { weapon: Some(weapon), ranged_weapon: Some(ranged) }
     }
 }
 
@@ -394,3 +402,48 @@ impl HitFlash {
         Self { timer: HIT_FLASH_DURATION }
     }
 }
+
+/// Ranged weapon data
+#[derive(Debug, Clone)]
+pub struct RangedWeapon {
+    pub name: String,
+    pub tile_id: u32,
+    pub base_damage: i32,
+    pub arrow_speed: f32,  // Tiles per second
+}
+
+impl RangedWeapon {
+    pub fn bow() -> Self {
+        Self {
+            name: "Bow".to_string(),
+            tile_id: crate::tile::tile_ids::BOW,
+            base_damage: BOW_BASE_DAMAGE,
+            arrow_speed: ARROW_SPEED,
+        }
+    }
+}
+
+/// Projectile component - for arrows and other flying objects
+#[derive(Debug, Clone)]
+pub struct Projectile {
+    /// The entity that fired this projectile
+    pub source: Entity,
+    /// Damage dealt on hit
+    pub damage: i32,
+    /// Remaining path: list of (x, y, time_to_reach) for each tile
+    /// time_to_reach is relative to spawn_time
+    pub path: Vec<(i32, i32, f32)>,
+    /// Index into path - which tile we're heading toward
+    pub path_index: usize,
+    /// Direction for sprite rotation (normalized)
+    pub direction: (f32, f32),
+    /// Game time when the projectile was spawned
+    pub spawn_time: f32,
+    /// If Some, the projectile has finished its game-time journey and is
+    /// waiting for visual catch-up. Contains the final position and game time when it finished.
+    pub finished: Option<(i32, i32, f32)>,
+}
+
+/// Marker component for projectiles (for queries)
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectileMarker;

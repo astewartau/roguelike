@@ -5,8 +5,8 @@
 use crate::camera::Camera;
 use crate::components::{
     Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment,
-    Experience, Health, Inventory, ItemType, Player, Position, Sprite, Stats, VisualPosition,
-    Weapon,
+    Experience, Health, Inventory, ItemType, Player, Position, RangedWeapon, Sprite, Stats,
+    VisualPosition, Weapon,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -49,7 +49,7 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         ),
         Stats::new(PLAYER_STRENGTH, PLAYER_INTELLIGENCE, PLAYER_AGILITY),
         Inventory::new(),
-        Equipment::with_weapon(Weapon::sword()),
+        Equipment::with_weapons(Weapon::sword(), RangedWeapon::bow()),
         BlocksMovement,
         Experience::new(),
         Attackable,

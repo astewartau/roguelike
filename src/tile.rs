@@ -18,6 +18,8 @@ pub mod tile_ids {
 
     // Item tiles
     pub const SWORD: u32 = 65;
+    pub const BOW: u32 = 69;
+    pub const ARROW: u32 = 70;
     pub const RED_POTION: u32 = 52;
     pub const COINS: u32 = 36;
 }

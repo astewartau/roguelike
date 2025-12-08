@@ -8,6 +8,7 @@
 //! - `combat`: Damage, attacks, and death handling
 //! - `inventory`: Container and inventory interactions
 //! - `rendering`: FOV, visibility, and render data collection
+//! - `projectile`: Arrow and projectile movement
 
 pub mod ai;
 pub mod animation;
@@ -15,6 +16,7 @@ pub mod combat;
 pub mod experience;
 pub mod inventory;
 pub mod items;
+pub mod projectile;
 pub mod rendering;
 
 // Re-export commonly used items
@@ -26,4 +28,5 @@ pub use inventory::{
     take_item_from_container,
 };
 pub use items::{item_heal_amount, item_name, item_weight, use_item};
+pub use projectile::{cleanup_finished_projectiles, despawn_projectiles, has_active_projectiles, lerp_projectiles_realtime, update_projectiles};
 pub use rendering::{collect_renderables, effects, update_fov, RenderEntity};

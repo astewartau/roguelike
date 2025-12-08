@@ -168,6 +168,13 @@ pub const SWORD_BASE_DAMAGE: i32 = 10;
 /// Sword damage bonus
 pub const SWORD_DAMAGE_BONUS: i32 = 4;
 
+/// Bow base damage
+pub const BOW_BASE_DAMAGE: i32 = 8;
+/// Arrow speed in tiles per second
+pub const ARROW_SPEED: f32 = 15.0;
+/// Duration for shooting action (recovery time)
+pub const ACTION_SHOOT_DURATION: f32 = 0.5;
+
 // =============================================================================
 // UI / WINDOW
 // =============================================================================

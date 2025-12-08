@@ -71,6 +71,18 @@ pub enum GameEvent {
         entity: Entity,
         new_state: crate::components::AIState,
     },
+    /// A projectile was spawned
+    ProjectileSpawned {
+        projectile: Entity,
+        source: Entity,
+    },
+    /// A projectile hit something
+    ProjectileHit {
+        projectile: Entity,
+        target: Option<Entity>,
+        position: (i32, i32),
+        damage: i32,
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

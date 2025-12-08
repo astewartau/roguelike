@@ -161,6 +161,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::OpenDoor { .. } => ACTION_DOOR_DURATION,
         ActionType::OpenChest { .. } => ACTION_CHEST_DURATION,
         ActionType::Wait => ACTION_WAIT_DURATION,
+        ActionType::ShootBow { .. } => ACTION_SHOOT_DURATION,
     };
 
     // Speed modifies duration: higher speed = shorter duration
@@ -257,6 +258,7 @@ pub fn complete_action(
     grid: &Grid,
     entity: Entity,
     events: &mut EventQueue,
+    current_time: f32,
 ) -> ActionResult {
     // Get the action to complete
     let action = {
@@ -270,7 +272,7 @@ pub fn complete_action(
     };
 
     // Apply action effects
-    let result = apply_action_effects(world, grid, entity, &action.action_type, events);
+    let result = apply_action_effects(world, grid, entity, &action.action_type, events, current_time);
 
     // Clear action (energy regen is now time-based, not action-based)
     if let Ok(mut actor) = world.get::<&mut Actor>(entity) {
@@ -287,6 +289,7 @@ fn apply_action_effects(
     entity: Entity,
     action_type: &ActionType,
     events: &mut EventQueue,
+    current_time: f32,
 ) -> ActionResult {
     match action_type {
         ActionType::Move { dx, dy, .. } => apply_move(world, grid, entity, *dx, *dy, events),
@@ -294,6 +297,9 @@ fn apply_action_effects(
         ActionType::OpenDoor { door } => apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => apply_open_chest(world, entity, *chest, events),
         ActionType::Wait => ActionResult::Completed,
+        ActionType::ShootBow { target_x, target_y } => {
+            apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
+        }
     }
 }
 
@@ -488,6 +494,180 @@ fn apply_open_chest(
     events.push(GameEvent::ContainerOpened { container: chest, opener });
 
     ActionResult::Completed
+}
+
+/// Apply shoot bow effect - spawns an arrow projectile
+fn apply_shoot_bow(
+    world: &mut World,
+    grid: &Grid,
+    shooter: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+    current_time: f32,
+) -> ActionResult {
+    use crate::components::{Equipment, Projectile, ProjectileMarker, Sprite, Stats, VisualPosition};
+    use crate::tile::tile_ids;
+
+    // Get shooter position
+    let (start_x, start_y) = match world.get::<&Position>(shooter) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    // Can't shoot at yourself
+    if start_x == target_x && start_y == target_y {
+        return ActionResult::Blocked;
+    }
+
+    // Get bow stats
+    let (base_damage, arrow_speed) = {
+        let equipment = world.get::<&Equipment>(shooter).ok();
+        let ranged = equipment.as_ref().and_then(|e| e.ranged_weapon.as_ref());
+        match ranged {
+            Some(bow) => (bow.base_damage, bow.arrow_speed),
+            None => return ActionResult::Blocked, // No bow equipped
+        }
+    };
+
+    // Calculate damage with stats
+    let strength = world.get::<&Stats>(shooter).map(|s| s.agility).unwrap_or(10);
+    let damage = base_damage + (strength - 10) / 2;
+
+    // Calculate line from shooter to target using Bresenham
+    let path = calculate_arrow_path(start_x, start_y, target_x, target_y, arrow_speed, grid);
+
+    if path.is_empty() {
+        return ActionResult::Blocked;
+    }
+
+    // Calculate normalized direction
+    let dx = target_x - start_x;
+    let dy = target_y - start_y;
+    let len = ((dx * dx + dy * dy) as f32).sqrt();
+    let direction = if len > 0.0 {
+        (dx as f32 / len, dy as f32 / len)
+    } else {
+        (1.0, 0.0)
+    };
+
+    // Spawn arrow at shooter's position
+    let pos = Position::new(start_x, start_y);
+    let arrow = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::new(tile_ids::ARROW),
+        Projectile {
+            source: shooter,
+            damage,
+            path,
+            path_index: 0,
+            direction,
+            spawn_time: current_time,
+            finished: None,
+        },
+        ProjectileMarker,
+    ));
+
+    events.push(GameEvent::ProjectileSpawned {
+        projectile: arrow,
+        source: shooter,
+    });
+
+    ActionResult::Completed
+}
+
+/// Calculate arrow path by extending a ray from start through target until hitting a wall.
+/// Returns a list of (x, y, cumulative_time) for each tile the arrow passes through.
+/// The time represents when the arrow arrives at each tile, accounting for
+/// diagonal vs cardinal movement distances.
+fn calculate_arrow_path(
+    start_x: i32,
+    start_y: i32,
+    target_x: i32,
+    target_y: i32,
+    arrow_speed: f32,
+    grid: &Grid,
+) -> Vec<(i32, i32, f32)> {
+    let mut path = Vec::new();
+
+    // Calculate direction vector (doesn't need to be normalized for Bresenham)
+    let dir_x = target_x - start_x;
+    let dir_y = target_y - start_y;
+
+    // Can't shoot at yourself
+    if dir_x == 0 && dir_y == 0 {
+        return path;
+    }
+
+    // Use Bresenham's line algorithm but continue past target until wall
+    let dx = dir_x.abs();
+    let dy = dir_y.abs();
+    let sx = if dir_x >= 0 { 1 } else { -1 };
+    let sy = if dir_y >= 0 { 1 } else { -1 };
+    let mut err = dx - dy;
+
+    let mut x = start_x;
+    let mut y = start_y;
+    let mut prev_x = start_x;
+    let mut prev_y = start_y;
+    let mut cumulative_time: f32 = 0.0;
+
+    // Take first step to skip the starting tile (where the shooter is)
+    let e2 = 2 * err;
+    if e2 > -dy {
+        err -= dy;
+        x += sx;
+    }
+    if e2 < dx {
+        err += dx;
+        y += sy;
+    }
+
+    // Maximum range (prevent infinite loops)
+    let max_range = 50;
+    let mut steps = 0;
+
+    while steps < max_range {
+        steps += 1;
+
+        // Calculate time to reach this tile based on distance from previous
+        let step_dx = (x - prev_x).abs();
+        let step_dy = (y - prev_y).abs();
+        let distance = if step_dx != 0 && step_dy != 0 {
+            // Diagonal: sqrt(2) ≈ 1.414
+            std::f32::consts::SQRT_2
+        } else {
+            // Cardinal: 1.0
+            1.0
+        };
+        cumulative_time += distance / arrow_speed;
+
+        path.push((x, y, cumulative_time));
+
+        // Check if we hit a wall - this is the ONLY stopping condition now
+        // (enemy collision is handled separately in update_projectiles)
+        let tile = grid.get(x, y);
+        let blocks = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
+        if blocks {
+            break;
+        }
+
+        // Continue Bresenham (no target check - arrow flies until it hits a wall)
+        prev_x = x;
+        prev_y = y;
+        let e2 = 2 * err;
+        if e2 > -dy {
+            err -= dy;
+            x += sx;
+        }
+        if e2 < dx {
+            err += dx;
+            y += sy;
+        }
+    }
+
+    path
 }
 
 // =============================================================================

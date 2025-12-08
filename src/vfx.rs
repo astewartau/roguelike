@@ -98,6 +98,12 @@ impl VfxManager {
                 self.spawn_slash(target_pos.0, target_pos.1);
                 self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
             }
+            GameEvent::ProjectileHit { position, damage, target, .. } => {
+                // Only show damage number if we hit an enemy (not a wall)
+                if target.is_some() {
+                    self.spawn_damage_number(position.0 as f32, position.1 as f32, *damage);
+                }
+            }
             GameEvent::EntityDied { position, .. } => {
                 // Could spawn death particles here in the future
                 let _ = position;
