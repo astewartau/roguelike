@@ -876,6 +876,30 @@ impl Renderer {
 
             self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, entities.len() as i32);
 
+            // Second pass: render overlay sprites on top
+            let mut overlay_data = Vec::new();
+            let mut overlay_count = 0;
+
+            for entity in entities {
+                if let Some(overlay) = &entity.overlay {
+                    let uv = tileset.get_uv(overlay.tile_id);
+                    overlay_data.push(entity.x);
+                    overlay_data.push(entity.y);
+                    overlay_data.push(uv.u0);
+                    overlay_data.push(uv.v0);
+                    overlay_data.push(uv.u1);
+                    overlay_data.push(uv.v1);
+                    overlay_data.push(entity.brightness);
+                    overlay_data.push(entity.effects as f32);
+                    overlay_count += 1;
+                }
+            }
+
+            if overlay_count > 0 {
+                self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&overlay_data), DYNAMIC_DRAW);
+                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, overlay_count);
+            }
+
             self.gl.bind_vertex_array(None);
         }
 

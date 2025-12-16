@@ -283,8 +283,11 @@ impl ApplicationHandler for App {
 impl AppState {
     fn update_and_render(&mut self) {
         let current_time = Instant::now();
-        let dt = (current_time - self.last_frame_time).as_secs_f32();
+        let raw_dt = (current_time - self.last_frame_time).as_secs_f32();
         self.last_frame_time = current_time;
+
+        // Cap dt to prevent animation snapping after long frames (e.g., lots of AI processing)
+        let dt = raw_dt.min(MAX_ANIMATION_DT);
 
         // Handle input
         self.handle_input();

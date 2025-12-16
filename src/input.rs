@@ -285,11 +285,14 @@ pub fn handle_click_to_move(
         }
 
         ClickTarget::Door { x, y, .. } | ClickTarget::Chest { x, y, .. } => {
-            // Path to adjacent tile - bumping will open
+            // Path to adjacent tile, then bump into target to open
             input.pursuit_target = None;
             input.pursuit_origin = None;
 
-            if let Some(path) = path_to_adjacent(grid, world, player_entity, player_pos, (x, y)) {
+            if let Some(mut path) = path_to_adjacent(grid, world, player_entity, player_pos, (x, y))
+            {
+                // Append the target tile - walking "into" it triggers the open action
+                path.push((x, y));
                 input.player_path = VecDeque::from(path);
                 input.player_path_destination = Some((x, y));
             }

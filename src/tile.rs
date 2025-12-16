@@ -12,6 +12,7 @@ pub mod tile_ids {
     // Entity tiles
     pub const PLAYER: u32 = 85;    // character_1
     pub const SKELETON: u32 = 105; // Skeleton enemy
+    pub const RAT: u32 = 111;      // Rat enemy
     pub const CHEST_CLOSED: u32 = 32;  // Closed chest
     pub const CHEST_OPEN: u32 = 33;    // Open chest (if available)
     pub const BONES: u32 = 22;     // bones_1 - remains of defeated enemies

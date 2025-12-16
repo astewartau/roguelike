@@ -26,6 +26,19 @@ impl Sprite {
     }
 }
 
+/// Overlay sprite component - rendered on top of the main sprite
+/// Used for displaying equipped weapons on enemies
+#[derive(Debug, Clone, Copy)]
+pub struct OverlaySprite {
+    pub tile_id: u32,
+}
+
+impl OverlaySprite {
+    pub fn new(tile_id: u32) -> Self {
+        Self { tile_id }
+    }
+}
+
 /// Player marker component
 #[derive(Debug, Clone, Copy)]
 pub struct Player;
@@ -261,6 +274,10 @@ pub struct ChaseAI {
     pub sight_radius: i32,
     pub state: AIState,
     pub last_known_pos: Option<(i32, i32)>,
+    /// Minimum range to use ranged attack (0 = melee only)
+    pub ranged_min: i32,
+    /// Maximum range for ranged attack (0 = melee only)
+    pub ranged_max: i32,
 }
 
 impl ChaseAI {
@@ -269,7 +286,25 @@ impl ChaseAI {
             sight_radius,
             state: AIState::Idle,
             last_known_pos: None,
+            ranged_min: 0,
+            ranged_max: 0,
         }
+    }
+
+    /// Create a ChaseAI with ranged attack capability
+    pub fn with_ranged(sight_radius: i32, ranged_min: i32, ranged_max: i32) -> Self {
+        Self {
+            sight_radius,
+            state: AIState::Idle,
+            last_known_pos: None,
+            ranged_min,
+            ranged_max,
+        }
+    }
+
+    /// Returns true if this AI has ranged attack capability
+    pub fn has_ranged(&self) -> bool {
+        self.ranged_max > 0
     }
 }
 
@@ -421,6 +456,16 @@ impl RangedWeapon {
             name: "Bow".to_string(),
             tile_id: crate::tile::tile_ids::BOW,
             base_damage: BOW_BASE_DAMAGE,
+            arrow_speed: ARROW_SPEED,
+        }
+    }
+
+    /// Create a bow for enemies with custom damage
+    pub fn enemy_bow(damage: i32) -> Self {
+        Self {
+            name: "Bow".to_string(),
+            tile_id: crate::tile::tile_ids::BOW,
+            base_damage: damage,
             arrow_speed: ARROW_SPEED,
         }
     }

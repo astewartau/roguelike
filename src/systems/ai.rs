@@ -8,7 +8,8 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 use rand::Rng;
 
-use crate::components::{ActionType, Actor, AIState, BlocksMovement, BlocksVision, ChaseAI, Position};
+use crate::components::{ActionType, Actor, AIState, BlocksMovement, BlocksVision, ChaseAI, Equipment, Position};
+use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
 use crate::fov::FOV;
 use crate::grid::Grid;
@@ -51,6 +52,21 @@ pub fn decide_action(
         return;
     }
 
+    // Performance optimization: Skip AI for distant enemies
+    // Get positions early to check distance before expensive operations
+    let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
+    let player_pos = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y));
+
+    if let (Some(epos), Some(ppos)) = (entity_pos, player_pos) {
+        let distance = (epos.0 - ppos.0).abs() + (epos.1 - ppos.1).abs();
+        if distance > AI_ACTIVE_RADIUS {
+            // Too far from player - schedule a wakeup check later and skip this turn
+            let wakeup_delay = 0.5; // Check again in half a second of game time
+            scheduler.schedule(entity, clock.time + wakeup_delay);
+            return;
+        }
+    }
+
     // Determine AI action (and emit state change events)
     let action_type = determine_action(world, grid, entity, player_entity, events, rng);
 
@@ -79,14 +95,46 @@ fn determine_action(
         Err(_) => return ActionType::Wait,
     };
 
-    // Get AI state and sight radius
-    let (sight_radius, current_state, last_known) = match world.get::<&ChaseAI>(entity) {
-        Ok(ai) => (ai.sight_radius, ai.state, ai.last_known_pos),
-        Err(_) => return ActionType::Wait,
-    };
+    // Get AI state, sight radius, and ranged parameters
+    let (sight_radius, current_state, last_known, ranged_min, ranged_max) =
+        match world.get::<&ChaseAI>(entity) {
+            Ok(ai) => (
+                ai.sight_radius,
+                ai.state,
+                ai.last_known_pos,
+                ai.ranged_min,
+                ai.ranged_max,
+            ),
+            Err(_) => return ActionType::Wait,
+        };
+
+    // Check if entity has ranged weapon
+    let has_ranged_weapon = world
+        .get::<&Equipment>(entity)
+        .map(|e| e.ranged_weapon.is_some())
+        .unwrap_or(false);
 
     // Calculate visibility
     let can_see_player = can_see_target(world, grid, entity_pos, player_pos, sight_radius);
+
+    // Calculate distance to player (Chebyshev distance for ranged check)
+    let distance = (entity_pos.0 - player_pos.0)
+        .abs()
+        .max((entity_pos.1 - player_pos.1).abs());
+
+    // Check for ranged attack opportunity
+    if can_see_player && has_ranged_weapon && ranged_max > 0 {
+        // In range for ranged attack?
+        if distance >= ranged_min && distance <= ranged_max {
+            // Check line of sight for projectile (no blocking entities in the way)
+            if has_clear_shot(world, entity_pos, player_pos) {
+                return ActionType::ShootBow {
+                    target_x: player_pos.0,
+                    target_y: player_pos.1,
+                };
+            }
+        }
+    }
 
     // Update state machine
     let (new_state, target, new_last_known) = update_state_machine(
@@ -121,6 +169,46 @@ fn determine_action(
 
     // Determine action type (may convert to attack)
     time_system::determine_action_type(world, grid, entity, dx, dy)
+}
+
+/// Check if there's a clear line of sight for a projectile (no blocking entities)
+fn has_clear_shot(world: &World, from: (i32, i32), to: (i32, i32)) -> bool {
+    // Collect positions of entities that block movement (potential obstacles)
+    let blocking: HashSet<(i32, i32)> = world
+        .query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .map(|(_, (pos, _))| (pos.x, pos.y))
+        .collect();
+
+    // Simple line check using Bresenham-like iteration
+    let dx = (to.0 - from.0).abs();
+    let dy = (to.1 - from.1).abs();
+    let sx = if from.0 < to.0 { 1 } else { -1 };
+    let sy = if from.1 < to.1 { 1 } else { -1 };
+    let mut err = dx - dy;
+    let mut x = from.0;
+    let mut y = from.1;
+
+    while (x, y) != to {
+        let e2 = 2 * err;
+        if e2 > -dy {
+            err -= dy;
+            x += sx;
+        }
+        if e2 < dx {
+            err += dx;
+            y += sy;
+        }
+
+        // Skip the starting position and target position
+        if (x, y) != from && (x, y) != to {
+            if blocking.contains(&(x, y)) {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 /// Check if an entity can see a target position.

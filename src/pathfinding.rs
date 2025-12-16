@@ -1,4 +1,5 @@
 use crate::grid::Grid;
+use crate::tile::TileType;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
 
@@ -73,13 +74,19 @@ pub fn find_path(
             let neighbor = Node { x: nx, y: ny };
 
             // Check if walkable
-            let walkable = if let Some(tile) = grid.get(nx, ny) {
-                tile.tile_type.is_walkable()
+            let (walkable, is_stairs) = if let Some(tile) = grid.get(nx, ny) {
+                let is_stairs = matches!(tile.tile_type, TileType::StairsUp | TileType::StairsDown);
+                (tile.tile_type.is_walkable(), is_stairs)
             } else {
-                false
+                (false, false)
             };
 
             if !walkable {
+                continue;
+            }
+
+            // Avoid stairs unless they're the goal (prevents accidental floor transitions)
+            if is_stairs && (nx, ny) != goal {
                 continue;
             }
 

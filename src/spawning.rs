@@ -4,8 +4,8 @@
 //! without modifying spawning code.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Equipment, Health, Position, Sprite, Stats,
-    VisualPosition, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, Equipment, Health, OverlaySprite, Position,
+    RangedWeapon, Sprite, Stats, VisualPosition, Weapon,
 };
 use crate::tile::tile_ids;
 use hecs::World;
@@ -70,15 +70,54 @@ pub mod enemies {
         agility: SKELETON_AGILITY,
     };
 
-    // Easy to add more enemy types:
-    // pub const ZOMBIE: EnemyDef = EnemyDef { ... };
-    // pub const ORC: EnemyDef = EnemyDef { ... };
-    // pub const GOBLIN: EnemyDef = EnemyDef { ... };
+    pub const RAT: EnemyDef = EnemyDef {
+        name: "Rat",
+        tile_id: tile_ids::RAT,
+        health: RAT_HEALTH,
+        max_energy: RAT_MAX_ENERGY,
+        speed: RAT_SPEED,
+        sight_radius: RAT_SIGHT_RADIUS,
+        damage: RAT_DAMAGE,
+        strength: RAT_STRENGTH,
+        intelligence: RAT_INTELLIGENCE,
+        agility: RAT_AGILITY,
+    };
+
+    /// Spawn a skeleton archer (special enemy with ranged attack and bow overlay)
+    pub fn spawn_skeleton_archer(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+        let pos = Position::new(x, y);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(tile_ids::SKELETON),
+            OverlaySprite::new(tile_ids::BOW), // Bow displayed on top
+            Actor::new(SKELETON_ARCHER_MAX_ENERGY, SKELETON_ARCHER_SPEED),
+            ChaseAI::with_ranged(
+                SKELETON_ARCHER_SIGHT_RADIUS,
+                SKELETON_ARCHER_MIN_RANGE,
+                SKELETON_ARCHER_MAX_RANGE,
+            ),
+            Health::new(SKELETON_ARCHER_HEALTH),
+            Stats::new(
+                SKELETON_ARCHER_STRENGTH,
+                SKELETON_ARCHER_INTELLIGENCE,
+                SKELETON_ARCHER_AGILITY,
+            ),
+            Equipment::with_weapons(
+                Weapon::claws(SKELETON_ARCHER_MELEE_DAMAGE),
+                RangedWeapon::enemy_bow(SKELETON_ARCHER_BOW_DAMAGE),
+            ),
+            Attackable,
+            BlocksMovement,
+        ))
+    }
 }
 
 /// Spawn configuration for a dungeon level
 pub struct SpawnConfig {
     pub entries: Vec<SpawnEntry>,
+    /// Number of skeleton archers to spawn (handled separately due to custom spawn)
+    pub skeleton_archer_count: usize,
 }
 
 /// A single spawn entry: which enemy and how many
@@ -90,12 +129,19 @@ pub struct SpawnEntry {
 impl SpawnConfig {
     /// Create a default spawn config for the first dungeon level
     pub fn level_1() -> Self {
-        use crate::constants::SKELETON_SPAWN_COUNT;
+        use crate::constants::{RAT_SPAWN_COUNT, SKELETON_ARCHER_SPAWN_COUNT, SKELETON_SPAWN_COUNT};
         Self {
-            entries: vec![SpawnEntry {
-                enemy: enemies::SKELETON.clone(),
-                count: SKELETON_SPAWN_COUNT,
-            }],
+            entries: vec![
+                SpawnEntry {
+                    enemy: enemies::RAT.clone(),
+                    count: RAT_SPAWN_COUNT,
+                },
+                SpawnEntry {
+                    enemy: enemies::SKELETON.clone(),
+                    count: SKELETON_SPAWN_COUNT,
+                },
+            ],
+            skeleton_archer_count: SKELETON_ARCHER_SPAWN_COUNT,
         }
     }
 
@@ -111,6 +157,7 @@ impl SpawnConfig {
         let mut spawned = 0;
         let mut used_positions: Vec<(i32, i32)> = excluded_positions.to_vec();
 
+        // Spawn regular enemies
         for entry in &self.entries {
             for _ in 0..entry.count {
                 // Find a valid spawn position
@@ -128,6 +175,23 @@ impl SpawnConfig {
                 used_positions.push((x, y));
                 spawned += 1;
             }
+        }
+
+        // Spawn skeleton archers (custom spawn function)
+        for _ in 0..self.skeleton_archer_count {
+            let available: Vec<_> = walkable_tiles
+                .iter()
+                .filter(|pos| !used_positions.contains(pos))
+                .collect();
+
+            if available.is_empty() {
+                break;
+            }
+
+            let &(x, y) = available[rng.gen_range(0..available.len())];
+            enemies::spawn_skeleton_archer(world, x, y);
+            used_positions.push((x, y));
+            spawned += 1;
         }
 
         spawned

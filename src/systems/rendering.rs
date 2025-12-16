@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, BlocksVision, Door, Position, Sprite, VisualPosition};
+use crate::components::{Actor, BlocksVision, Door, OverlaySprite, Position, Sprite, VisualPosition};
 use crate::fov::FOV;
 use crate::grid::Grid;
 use hecs::{Entity, World};
@@ -23,6 +23,7 @@ pub struct RenderEntity {
     pub sprite: Sprite,
     pub brightness: f32,
     pub effects: u32, // Bitfield of active effects
+    pub overlay: Option<Sprite>, // Optional overlay sprite (e.g., weapon)
 }
 
 /// Update field of view from player position
@@ -81,6 +82,9 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
         // Check if this is an open door (render darker)
         let is_open_door = world.get::<&Door>(id).map(|door| door.is_open).unwrap_or(false);
 
+        // Check for overlay sprite (e.g., weapon)
+        let overlay = world.get::<&OverlaySprite>(id).ok().map(|o| Sprite::new(o.tile_id));
+
         let entity_effects = effects::NONE;
 
         if id == player_entity {
@@ -90,6 +94,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
                 sprite: *sprite,
                 brightness: 1.0,
                 effects: effects::NONE,
+                overlay,
             });
         } else if is_visible {
             // Open doors render at 50% brightness
@@ -100,6 +105,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
                 sprite: *sprite,
                 brightness,
                 effects: entity_effects,
+                overlay,
             };
             // Actors go on top layer, everything else on ground layer
             if is_actor {
@@ -117,6 +123,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
                 sprite: *sprite,
                 brightness,
                 effects: effects::NONE,
+                overlay: None, // Don't show overlays in fog
             });
         }
     }
