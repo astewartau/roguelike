@@ -303,9 +303,13 @@ impl AppState {
             Some(&mut self.action_scheduler),
         );
         // Process any events from remove_dead_entities (death VFX, etc.)
-        let event_result = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
+        let event_result = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state, self.player_entity);
         if let Some(direction) = event_result.floor_transition {
             self.handle_floor_transition(direction);
+        }
+        // Stop pursuit if player attacked or took damage
+        if event_result.player_attacked || event_result.player_took_damage || event_result.enemy_spotted_player {
+            self.input.clear_path();
         }
 
         // Lerp all visual positions toward logical positions
@@ -397,6 +401,9 @@ impl AppState {
 
             // Floating damage numbers
             ui::draw_damage_numbers(ctx, vfx_effects, camera);
+
+            // Alert indicators (enemy spotted player)
+            ui::draw_alert_indicators(ctx, vfx_effects, camera);
 
             // Developer menu
             ui::draw_dev_menu(ctx, dev_menu, icons.tileset_texture_id, tileset);
@@ -500,7 +507,7 @@ impl AppState {
                     opener: self.player_entity,
                 });
                 // Process immediately so UI updates this frame
-                let _ = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state);
+                let _ = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state, self.player_entity);
             }
         }
 
@@ -523,6 +530,8 @@ impl AppState {
             self.input.clear_path();
             (Some((dx, dy)), true)
         } else {
+            // Update pursuit path if chasing an enemy (recalculates path to moving target)
+            input::update_pursuit(&mut self.input, &self.world, &self.grid, self.player_entity);
             // Try click-to-move path
             (input::get_path_movement(&self.input, &self.world, self.player_entity), false)
         };
@@ -540,24 +549,6 @@ impl AppState {
                 .and_then(|(px, py)| self.grid.get(px + dx, py + dy))
                 .map(|t| t.tile_type.is_walkable())
                 .unwrap_or(false);
-
-            // For click-to-move, check if this would open a chest and stop instead
-            // (chests require explicit keyboard interaction)
-            if !from_keyboard {
-                let action_type = game_loop::peek_action_type(
-                    &self.world,
-                    &self.grid,
-                    self.player_entity,
-                    dx,
-                    dy,
-                );
-                if matches!(action_type, components::ActionType::OpenChest { .. }) {
-                    // Stop at the chest, don't auto-open it
-                    self.input.clear_path();
-                    input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
-                    return;
-                }
-            }
 
             if tile_walkable {
                 // Execute the turn via game_loop (handles time advancement, AI, events, UI state)
@@ -580,6 +571,19 @@ impl AppState {
                         // For path-following, consume the step we just took
                         if !from_keyboard {
                             self.input.consume_step();
+
+                            // Check if we've arrived at destination - auto-loot any container (bones)
+                            if self.input.has_arrived() {
+                                self.input.clear_destination();
+                                if let Some(container_id) =
+                                    systems::find_container_at_player(&self.world, self.player_entity)
+                                {
+                                    self.events.push(crate::events::GameEvent::ContainerOpened {
+                                        container: container_id,
+                                        opener: self.player_entity,
+                                    });
+                                }
+                            }
                         }
                         // Handle floor transition if player used stairs
                         if let Some(direction) = turn_result.floor_transition {
@@ -590,6 +594,11 @@ impl AppState {
                         // Clear path on blocked movement
                         self.input.clear_path();
                     }
+                }
+
+                // Stop pursuit if player attacked, took damage, or enemy spotted them
+                if turn_result.player_attacked || turn_result.player_took_damage || turn_result.enemy_spotted_player {
+                    self.input.clear_path();
                 }
             }
         }
@@ -738,12 +747,17 @@ impl AppState {
             );
 
             // Process events
-            let _ = game_loop::process_events(
+            let event_result = game_loop::process_events(
                 &mut self.events,
                 &mut self.world,
                 &mut self.vfx,
                 &mut self.ui_state,
+                self.player_entity,
             );
+            // Stop pursuit if player attacked, took damage, or enemy spotted them
+            if event_result.player_attacked || event_result.player_took_damage || event_result.enemy_spotted_player {
+                self.input.clear_path();
+            }
         }
     }
 

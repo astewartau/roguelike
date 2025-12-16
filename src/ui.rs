@@ -719,3 +719,68 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         );
     }
 }
+
+/// Render alert indicators ("!") when enemies spot the player
+pub fn draw_alert_indicators(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("alert_indicators"),
+    ));
+
+    // Get egui's pixels per point for HiDPI scaling
+    let ppp = ctx.pixels_per_point();
+
+    for effect in effects {
+        let EffectType::Alert = &effect.effect_type else {
+            continue;
+        };
+
+        let progress = effect.progress();
+
+        // Pop up animation: start small, grow to full size, then shrink slightly
+        let scale = if progress < 0.2 {
+            // Quick pop-in (0.0 to 0.2 progress -> 0.0 to 1.2 scale)
+            progress * 6.0
+        } else if progress < 0.4 {
+            // Settle to normal size (0.2 to 0.4 progress -> 1.2 to 1.0 scale)
+            1.2 - (progress - 0.2) * 1.0
+        } else {
+            // Hold at normal size, then fade
+            1.0
+        };
+
+        // Rise slightly above the entity
+        let rise_offset = 0.8;
+        let world_x = effect.x;
+        let world_y = effect.y + rise_offset;
+
+        // Transform from world to screen coordinates
+        let screen_pos = camera.world_to_screen(world_x, world_y);
+
+        // Convert to egui points
+        let egui_x = screen_pos.0 / ppp;
+        let egui_y = screen_pos.1 / ppp;
+
+        // Fade out near the end
+        let alpha = if progress > 0.7 {
+            ((1.0 - progress) / 0.3 * 255.0) as u8
+        } else {
+            255
+        };
+
+        // Yellow/orange color for alert
+        let color = egui::Color32::from_rgba_unmultiplied(255, 200, 50, alpha);
+
+        // Draw the "!"
+        let font_size = 28.0 * scale;
+        let font_id = egui::FontId::proportional(font_size);
+
+        painter.text(
+            egui::pos2(egui_x, egui_y),
+            egui::Align2::CENTER_CENTER,
+            "!",
+            font_id,
+            color,
+        );
+    }
+}

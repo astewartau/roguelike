@@ -28,7 +28,7 @@
         {
          "id":4,
          "type":"stair_down"
-        },
+        }, 
         {
          "id":5,
          "type":"stair_up"
@@ -111,7 +111,7 @@
         }, 
         {
          "id":31,
-         "type":"doot_5"
+         "type":"door_5"
         }, 
         {
          "id":32,

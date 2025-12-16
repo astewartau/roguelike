@@ -52,7 +52,12 @@ pub enum EffectType {
     DamageNumber { amount: i32 },
     /// Fire particle effect (looping)
     Fire { seed: f32 },
+    /// Alert indicator "!" when enemy spots player
+    Alert,
 }
+
+/// Duration for alert indicator
+const ALERT_DURATION: f32 = 0.8;
 
 impl EffectType {
     pub fn duration(&self) -> f32 {
@@ -60,6 +65,7 @@ impl EffectType {
             EffectType::Slash { .. } => SLASH_VFX_DURATION,
             EffectType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
             EffectType::Fire { .. } => f32::INFINITY, // Fire loops forever
+            EffectType::Alert => ALERT_DURATION,
         }
     }
 }
@@ -106,6 +112,11 @@ impl VfxManager {
     /// Spawn a floating damage number
     pub fn spawn_damage_number(&mut self, x: f32, y: f32, amount: i32) {
         self.spawn(x, y, EffectType::DamageNumber { amount });
+    }
+
+    /// Spawn an alert indicator "!" above an entity
+    pub fn spawn_alert(&mut self, x: f32, y: f32) {
+        self.spawn(x, y, EffectType::Alert);
     }
 
     /// Spawn a persistent fire effect

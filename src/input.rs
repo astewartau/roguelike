@@ -4,12 +4,32 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{Actor, BlocksMovement, Position};
+use crate::components::{Actor, Attackable, BlocksMovement, Container, Door, Position};
 use crate::grid::Grid;
 use crate::pathfinding;
 use hecs::{Entity, World};
 use std::collections::{HashSet, VecDeque};
 use winit::keyboard::KeyCode;
+
+/// Maximum distance an enemy can move from the click origin before pursuit is abandoned
+pub const MAX_PURSUIT_DISTANCE: i32 = 8;
+
+/// What the player clicked on - determines interaction behavior
+#[derive(Debug, Clone, Copy)]
+pub enum ClickTarget {
+    /// Empty ground - just walk there
+    Ground { x: i32, y: i32 },
+    /// Enemy - pursue and attack
+    Enemy { entity: Entity, x: i32, y: i32 },
+    /// Closed door - path to and bump to open
+    Door { entity: Entity, x: i32, y: i32 },
+    /// Chest - path to and bump to open
+    Chest { entity: Entity, x: i32, y: i32 },
+    /// Walkable container (bones) - walk onto and auto-loot
+    WalkableContainer { entity: Entity, x: i32, y: i32 },
+    /// Blocked terrain or entity we can't interact with
+    Blocked,
+}
 
 /// Input state tracking
 pub struct InputState {
@@ -21,6 +41,10 @@ pub struct InputState {
     pub player_path: VecDeque<(i32, i32)>,
     /// Destination of click-to-move (for auto-interact on arrival)
     pub player_path_destination: Option<(i32, i32)>,
+    /// Enemy being pursued (for click-to-attack)
+    pub pursuit_target: Option<Entity>,
+    /// Original click position when pursuit started (bounds how far we'll chase)
+    pub pursuit_origin: Option<(i32, i32)>,
 }
 
 impl InputState {
@@ -32,13 +56,17 @@ impl InputState {
             last_mouse_pos: (0.0, 0.0),
             player_path: VecDeque::new(),
             player_path_destination: None,
+            pursuit_target: None,
+            pursuit_origin: None,
         }
     }
 
-    /// Clear the current path
+    /// Clear the current path and any pursuit state
     pub fn clear_path(&mut self) {
         self.player_path.clear();
         self.player_path_destination = None;
+        self.pursuit_target = None;
+        self.pursuit_origin = None;
     }
 
     /// Get the next step in the path, if any
@@ -142,7 +170,67 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     result
 }
 
-/// Handle click-to-move: calculate path to clicked tile.
+/// Identify what the player clicked on at a given tile position.
+/// Checks entities at the tile and terrain type to determine interaction.
+pub fn identify_click_target(
+    world: &World,
+    grid: &Grid,
+    tile_x: i32,
+    tile_y: i32,
+) -> ClickTarget {
+    // Check terrain first - is it even a valid tile?
+    let tile = match grid.get(tile_x, tile_y) {
+        Some(t) => t,
+        None => return ClickTarget::Blocked,
+    };
+
+    // Check for entities at this tile (order matters - check most specific first)
+
+    // 1. Check for attackable enemy
+    for (id, (pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+        if pos.x == tile_x && pos.y == tile_y {
+            return ClickTarget::Enemy { entity: id, x: tile_x, y: tile_y };
+        }
+    }
+
+    // 2. Check for closed door
+    for (id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
+        if pos.x == tile_x && pos.y == tile_y && !door.is_open {
+            return ClickTarget::Door { entity: id, x: tile_x, y: tile_y };
+        }
+    }
+
+    // 3. Check for chest (container that blocks movement)
+    for (id, (pos, _container)) in world.query::<(&Position, &Container)>().iter() {
+        if pos.x == tile_x && pos.y == tile_y {
+            // Is it a blocking container (chest) or walkable (bones)?
+            if world.get::<&BlocksMovement>(id).is_ok() {
+                return ClickTarget::Chest { entity: id, x: tile_x, y: tile_y };
+            } else {
+                return ClickTarget::WalkableContainer { entity: id, x: tile_x, y: tile_y };
+            }
+        }
+    }
+
+    // 4. Check for other blocking entities we can't interact with
+    for (id, (pos, _)) in world.query::<(&Position, &BlocksMovement)>().iter() {
+        if pos.x == tile_x && pos.y == tile_y {
+            // Something is blocking but not interactive
+            let _ = id;
+            return ClickTarget::Blocked;
+        }
+    }
+
+    // 5. Check terrain walkability
+    if !tile.tile_type.is_walkable() {
+        return ClickTarget::Blocked;
+    }
+
+    // Nothing special - just ground
+    ClickTarget::Ground { x: tile_x, y: tile_y }
+}
+
+/// Handle click-to-move: calculate path to clicked tile based on what was clicked.
 /// Does NOT execute movement - just calculates and stores the path.
 pub fn handle_click_to_move(
     input: &mut InputState,
@@ -169,19 +257,112 @@ pub fn handle_click_to_move(
         return;
     }
 
-    // Collect blocking positions (other entities)
+    // Identify what was clicked
+    let target = identify_click_target(world, grid, tile_x, tile_y);
+
+    // Handle based on target type
+    match target {
+        ClickTarget::Enemy { entity, x, y } => {
+            // Set up pursuit mode for enemies
+            input.pursuit_target = Some(entity);
+            input.pursuit_origin = Some((x, y));
+
+            // Check if already adjacent - queue attack immediately
+            let dx = (x - player_pos.0).abs();
+            let dy = (y - player_pos.1).abs();
+            if dx <= 1 && dy <= 1 {
+                input.player_path.clear();
+                input.player_path.push_back((x, y));
+                input.player_path_destination = Some((x, y));
+                return;
+            }
+
+            // Path to adjacent tile (will attack when we arrive)
+            if let Some(path) = path_to_adjacent(grid, world, player_entity, player_pos, (x, y)) {
+                input.player_path = VecDeque::from(path);
+                input.player_path_destination = Some((x, y));
+            }
+        }
+
+        ClickTarget::Door { x, y, .. } | ClickTarget::Chest { x, y, .. } => {
+            // Path to adjacent tile - bumping will open
+            input.pursuit_target = None;
+            input.pursuit_origin = None;
+
+            if let Some(path) = path_to_adjacent(grid, world, player_entity, player_pos, (x, y)) {
+                input.player_path = VecDeque::from(path);
+                input.player_path_destination = Some((x, y));
+            }
+        }
+
+        ClickTarget::WalkableContainer { x, y, .. } | ClickTarget::Ground { x, y } => {
+            // Path directly to the tile (arrival handles auto-loot for containers)
+            input.pursuit_target = None;
+            input.pursuit_origin = None;
+
+            let blocked: HashSet<(i32, i32)> = world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .filter(|(id, _)| *id != player_entity)
+                .map(|(_, (pos, _))| (pos.x, pos.y))
+                .collect();
+
+            if let Some(path) = pathfinding::find_path(grid, player_pos, (x, y), &blocked) {
+                input.player_path = VecDeque::from(path);
+                input.player_path_destination = Some((x, y));
+            }
+        }
+
+        ClickTarget::Blocked => {
+            // Can't interact - do nothing
+        }
+    }
+}
+
+/// Calculate a path to a tile adjacent to the target (for attacking)
+fn path_to_adjacent(
+    grid: &Grid,
+    world: &World,
+    player_entity: Entity,
+    player_pos: (i32, i32),
+    target_pos: (i32, i32),
+) -> Option<Vec<(i32, i32)>> {
+    // Collect blocking positions, excluding the target tile itself
     let blocked: HashSet<(i32, i32)> = world
         .query::<(&Position, &BlocksMovement)>()
         .iter()
         .filter(|(id, _)| *id != player_entity)
         .map(|(_, (pos, _))| (pos.x, pos.y))
+        .filter(|pos| *pos != target_pos)
         .collect();
 
-    // Calculate path
-    if let Some(path) = pathfinding::find_path(grid, player_pos, (tile_x, tile_y), &blocked) {
-        input.player_path = VecDeque::from(path);
-        input.player_path_destination = Some((tile_x, tile_y));
+    // Try to find path to any adjacent tile
+    let adjacents = [
+        (target_pos.0 - 1, target_pos.1),
+        (target_pos.0 + 1, target_pos.1),
+        (target_pos.0, target_pos.1 - 1),
+        (target_pos.0, target_pos.1 + 1),
+    ];
+
+    let mut best_path: Option<Vec<(i32, i32)>> = None;
+
+    for adj in adjacents {
+        // Skip if blocked or not walkable
+        if blocked.contains(&adj) {
+            continue;
+        }
+        if !grid.get(adj.0, adj.1).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+            continue;
+        }
+
+        if let Some(path) = pathfinding::find_path(grid, player_pos, adj, &blocked) {
+            if best_path.as_ref().map(|p| path.len() < p.len()).unwrap_or(true) {
+                best_path = Some(path);
+            }
+        }
     }
+
+    best_path
 }
 
 /// Get the next movement from click-to-move path, if player can act.
@@ -215,6 +396,101 @@ pub fn get_path_movement(
     let dy = next_y - player_pos.1;
 
     Some((dx, dy))
+}
+
+/// Update pursuit path if we're chasing an enemy.
+/// Call this before get_path_movement to recalculate path to moving targets.
+/// Returns true if still pursuing, false if pursuit ended.
+pub fn update_pursuit(
+    input: &mut InputState,
+    world: &World,
+    grid: &Grid,
+    player_entity: Entity,
+) -> bool {
+    let (target, origin) = match (input.pursuit_target, input.pursuit_origin) {
+        (Some(t), Some(o)) => (t, o),
+        _ => return false, // Not in pursuit mode
+    };
+
+    // Check if target still exists and is attackable
+    let target_pos = match world.get::<&Position>(target) {
+        Ok(pos) => (pos.x, pos.y),
+        Err(_) => {
+            // Target no longer exists (dead?)
+            input.clear_path();
+            return false;
+        }
+    };
+
+    // Check if target is still attackable
+    if world.get::<&Attackable>(target).is_err() {
+        input.clear_path();
+        return false;
+    }
+
+    // Check if target moved too far from origin
+    let dist_from_origin = (target_pos.0 - origin.0).abs() + (target_pos.1 - origin.1).abs();
+    if dist_from_origin > MAX_PURSUIT_DISTANCE {
+        input.clear_path();
+        return false;
+    }
+
+    // Get player position
+    let player_pos = match world.get::<&Position>(player_entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => {
+            input.clear_path();
+            return false;
+        }
+    };
+
+    // Check if we're already adjacent to target - queue movement into enemy to trigger attack
+    let dx = (target_pos.0 - player_pos.0).abs();
+    let dy = (target_pos.1 - player_pos.1).abs();
+    if dx <= 1 && dy <= 1 {
+        // Adjacent - set path to enemy's tile, moving "into" them triggers attack
+        input.player_path.clear();
+        input.player_path.push_back(target_pos);
+        input.player_path_destination = Some(target_pos);
+        return true;
+    }
+
+    // Only recalculate path if current path is empty or next step is blocked
+    let needs_recalc = if let Some(next_step) = input.player_path.front() {
+        // Check if next step is blocked (by another entity, not the target)
+        let step_blocked = world
+            .query::<(&Position, &BlocksMovement)>()
+            .iter()
+            .filter(|(id, _)| *id != player_entity && *id != target)
+            .any(|(_, (pos, _))| pos.x == next_step.0 && pos.y == next_step.1);
+
+        // Check if next step is not walkable terrain
+        let step_unwalkable = !grid
+            .get(next_step.0, next_step.1)
+            .map(|t| t.tile_type.is_walkable())
+            .unwrap_or(false);
+
+        step_blocked || step_unwalkable
+    } else {
+        // Path is empty, need to recalculate
+        true
+    };
+
+    if needs_recalc {
+        // Recalculate path to target's current position
+        if let Some(path) = path_to_adjacent(grid, world, player_entity, player_pos, target_pos) {
+            input.player_path = VecDeque::from(path);
+            input.player_path_destination = Some(target_pos);
+            true
+        } else {
+            // Can't reach target
+            input.clear_path();
+            false
+        }
+    } else {
+        // Keep following current path
+        true
+    }
 }
 
 /// Process mouse drag for camera panning

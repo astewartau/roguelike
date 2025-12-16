@@ -901,6 +901,7 @@ impl Renderer {
                     crate::vfx::EffectType::Slash { angle } => *angle,
                     crate::vfx::EffectType::DamageNumber { .. } => continue, // Rendered via egui
                     crate::vfx::EffectType::Fire { .. } => continue, // Rendered separately
+                    crate::vfx::EffectType::Alert => continue, // Rendered via egui
                 };
 
                 // Center the effect on the tile (effect.x/y is already centered)

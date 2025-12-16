@@ -8,8 +8,8 @@
  <tile id="1" type="floor_1"/>
  <tile id="2" type="floor_2"/>
  <tile id="3" type="wall"/>
- <tile id="4" type="stair_up"/>
- <tile id="5" type="stair_down"/>
+ <tile id="4" type="stair_down"/>
+ <tile id="5" type="stair_up"/>
  <tile id="9" type="grass_1"/>
  <tile id="10" type="grass_2"/>
  <tile id="11" type="grass_3"/>
@@ -29,7 +29,7 @@
  <tile id="28" type="door_2"/>
  <tile id="29" type="door_3"/>
  <tile id="30" type="door_4"/>
- <tile id="31" type="doot_5"/>
+ <tile id="31" type="door_5"/>
  <tile id="32" type="chest_gold_closed"/>
  <tile id="33" type="chest_gold_open"/>
  <tile id="34" type="silver_chest_closed"/>

@@ -27,6 +27,12 @@ pub enum TurnResult {
 pub struct TurnExecutionResult {
     pub turn_result: TurnResult,
     pub floor_transition: Option<StairDirection>,
+    /// Player performed an attack this turn
+    pub player_attacked: bool,
+    /// Player took damage this turn
+    pub player_took_damage: bool,
+    /// An enemy spotted the player this turn
+    pub enemy_spotted_player: bool,
 }
 
 /// Start a player action and advance time until player can act again.
@@ -58,6 +64,9 @@ pub fn execute_player_turn(
         return TurnExecutionResult {
             turn_result: TurnResult::NotReady,
             floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
         };
     }
 
@@ -69,6 +78,9 @@ pub fn execute_player_turn(
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
             floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
         };
     }
 
@@ -77,11 +89,14 @@ pub fn execute_player_turn(
     advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
 
     // Process events (VFX, UI state, world state changes)
-    let event_result = process_events(events, world, vfx, ui_state);
+    let event_result = process_events(events, world, vfx, ui_state, player_entity);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
         floor_transition: event_result.floor_transition,
+        player_attacked: event_result.player_attacked,
+        player_took_damage: event_result.player_took_damage,
+        enemy_spotted_player: event_result.enemy_spotted_player,
     }
 }
 
@@ -188,6 +203,12 @@ use crate::ui::GameUiState;
 /// Result of processing events, contains any floor transitions that need handling
 pub struct EventProcessingResult {
     pub floor_transition: Option<StairDirection>,
+    /// Player performed an attack this turn
+    pub player_attacked: bool,
+    /// Player took damage this turn
+    pub player_took_damage: bool,
+    /// An enemy spotted the player this turn
+    pub enemy_spotted_player: bool,
 }
 
 /// Process all pending events, dispatching to appropriate handlers.
@@ -197,9 +218,13 @@ pub fn process_events(
     world: &mut World,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
+    player_entity: Entity,
 ) -> EventProcessingResult {
     let mut result = EventProcessingResult {
         floor_transition: None,
+        player_attacked: false,
+        player_took_damage: false,
+        enemy_spotted_player: false,
     };
 
     for event in events.drain() {
@@ -217,6 +242,24 @@ pub fn process_events(
             GameEvent::FloorTransition { direction, .. } => {
                 // Capture floor transition for handling by caller
                 result.floor_transition = Some(*direction);
+            }
+            GameEvent::AttackHit { attacker, target, .. } => {
+                // Track if player was involved in combat
+                if *attacker == player_entity {
+                    result.player_attacked = true;
+                }
+                if *target == player_entity {
+                    result.player_took_damage = true;
+                }
+            }
+            GameEvent::AIStateChanged { entity, new_state } => {
+                // Enemy spotted player - spawn alert VFX
+                if *new_state == crate::components::AIState::Chasing {
+                    if let Ok(pos) = world.get::<&crate::components::Position>(*entity) {
+                        vfx.spawn_alert(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
+                    }
+                    result.enemy_spotted_player = true;
+                }
             }
             _ => {}
         }
