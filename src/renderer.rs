@@ -11,14 +11,14 @@ layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
 layout (location = 3) in float aFogMult;
-layout (location = 4) in float aEffects;    // Bitfield of visual effects
+layout (location = 4) in float aAlpha;      // Transparency (1.0 = opaque)
 
 uniform mat4 uProjection;
 
 out vec2 vTexCoord;
 out vec2 vLocalPos;
 out float vFog;
-out float vEffects;
+out float vAlpha;
 
 void main() {
     vec2 worldPos = aInstancePos + aPos;
@@ -28,13 +28,14 @@ void main() {
     vTexCoord = mix(aInstanceUV.xy, aInstanceUV.zw, aPos);
     vLocalPos = aPos;
     vFog = aFogMult;
-    vEffects = aEffects;
+    vAlpha = aAlpha;
 }
 "#;
 
 const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
 in vec2 vTexCoord;
 in float vFog;
+in float vAlpha;
 
 uniform sampler2D uTileset;
 
@@ -45,7 +46,7 @@ void main() {
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
 
     vec3 color = texColor.rgb * vFog;
-    FragColor = vec4(color, texColor.a);
+    FragColor = vec4(color, texColor.a * vAlpha);
 }
 "#;
 
@@ -864,8 +865,7 @@ impl Renderer {
                 instance_data.push(uv.u1);
                 instance_data.push(uv.v1);
                 instance_data.push(entity.brightness);
-                // Pass effects bitfield as float (shader will cast to int)
-                instance_data.push(entity.effects as f32);
+                instance_data.push(entity.alpha);
             }
 
             self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
@@ -890,7 +890,7 @@ impl Renderer {
                     overlay_data.push(uv.u1);
                     overlay_data.push(uv.v1);
                     overlay_data.push(entity.brightness);
-                    overlay_data.push(entity.effects as f32);
+                    overlay_data.push(entity.alpha);
                     overlay_count += 1;
                 }
             }

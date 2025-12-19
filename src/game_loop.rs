@@ -89,7 +89,67 @@ pub fn execute_player_turn(
     advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
 
     // Process events (VFX, UI state, world state changes)
-    let event_result = process_events(events, world, vfx, ui_state, player_entity);
+    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
+
+    TurnExecutionResult {
+        turn_result: TurnResult::Started,
+        floor_transition: event_result.floor_transition,
+        player_attacked: event_result.player_attacked,
+        player_took_damage: event_result.player_took_damage,
+        enemy_spotted_player: event_result.enemy_spotted_player,
+    }
+}
+
+/// Execute a player attack direction action (Shift+direction).
+/// Similar to execute_player_turn but uses AttackDirection action type.
+pub fn execute_player_attack_direction(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    dx: i32,
+    dy: i32,
+    clock: &mut GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+) -> TurnExecutionResult {
+    // Check if player can act
+    let can_act = world
+        .get::<&Actor>(player_entity)
+        .map(|a| a.can_act())
+        .unwrap_or(false);
+
+    if !can_act {
+        return TurnExecutionResult {
+            turn_result: TurnResult::NotReady,
+            floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
+        };
+    }
+
+    // Create attack direction action
+    let action_type = ActionType::AttackDirection { dx, dy };
+
+    // Try to start the action
+    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
+        return TurnExecutionResult {
+            turn_result: TurnResult::Blocked,
+            floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
+        };
+    }
+
+    // Advance time until player can act again
+    let mut rng = rand::thread_rng();
+    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
+
+    // Process events (VFX, UI state, world state changes)
+    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
@@ -153,14 +213,17 @@ fn advance_until_player_ready(
         };
 
         // Advance time to the completion
+        let previous_time = clock.time;
         clock.advance_to(completion_time);
+        let elapsed = clock.time - previous_time;
 
         // Update projectiles at this time point
         update_projectiles_at_time(world, grid, clock.time, events);
 
-        // Process time-based effects (HP regen, energy regen)
+        // Process time-based effects (HP regen, energy regen, status effects)
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
+        time_system::tick_status_effects(world, elapsed);
 
         // Complete the action
         time_system::complete_action(world, grid, next_entity, events, clock.time);
@@ -216,6 +279,7 @@ pub struct EventProcessingResult {
 pub fn process_events(
     events: &mut EventQueue,
     world: &mut World,
+    grid: &Grid,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     player_entity: Entity,
@@ -228,8 +292,8 @@ pub fn process_events(
     };
 
     for event in events.drain() {
-        // Visual effects
-        vfx.handle_event(&event);
+        // Visual effects (only spawn if position is visible to player)
+        vfx.handle_event(&event, grid);
 
         // UI state
         ui_state.handle_event(&event);

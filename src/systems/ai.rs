@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 use rand::Rng;
 
-use crate::components::{ActionType, Actor, AIState, BlocksMovement, BlocksVision, ChaseAI, Equipment, Position};
+use crate::components::{ActionType, Actor, AIState, BlocksMovement, BlocksVision, ChaseAI, EffectType, Equipment, Position, StatusEffects};
 use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
 use crate::fov::FOV;
@@ -114,8 +114,8 @@ fn determine_action(
         .map(|e| e.ranged_weapon.is_some())
         .unwrap_or(false);
 
-    // Calculate visibility
-    let can_see_player = can_see_target(world, grid, entity_pos, player_pos, sight_radius);
+    // Calculate visibility (checks for invisibility effect on player)
+    let can_see_player = can_see_target(world, grid, entity_pos, player_pos, sight_radius, Some(player_entity));
 
     // Calculate distance to player (Chebyshev distance for ranged check)
     let distance = (entity_pos.0 - player_pos.0)
@@ -212,13 +212,24 @@ fn has_clear_shot(world: &World, from: (i32, i32), to: (i32, i32)) -> bool {
 }
 
 /// Check if an entity can see a target position.
+/// If target_entity is provided, also checks if the target is invisible.
 fn can_see_target(
     world: &World,
     grid: &Grid,
     from: (i32, i32),
     target: (i32, i32),
     sight_radius: i32,
+    target_entity: Option<Entity>,
 ) -> bool {
+    // Check if target entity is invisible
+    if let Some(entity) = target_entity {
+        if let Ok(effects) = world.get::<&StatusEffects>(entity) {
+            if effects.has_effect(EffectType::Invisible) {
+                return false;
+            }
+        }
+    }
+
     // Collect vision-blocking positions
     let vision_blocking: HashSet<(i32, i32)> = world
         .query::<(&Position, &BlocksVision)>()
@@ -283,37 +294,44 @@ fn calculate_movement(
     target: Option<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
-    if let Some((tx, ty)) = target {
-        // Collect movement-blocking positions
-        let movement_blocking: HashSet<(i32, i32)> = world
-            .query::<(&Position, &BlocksMovement)>()
-            .iter()
-            .filter(|(id, _)| *id != entity)
-            .map(|(_, (pos, _))| (pos.x, pos.y))
-            .collect();
+    // Collect movement-blocking positions (used by both pathfinding and wandering)
+    let movement_blocking: HashSet<(i32, i32)> = world
+        .query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .filter(|(id, _)| *id != entity)
+        .map(|(_, (pos, _))| (pos.x, pos.y))
+        .collect();
 
+    if let Some((tx, ty)) = target {
         // Pathfind to target
         pathfinding::next_step_toward(grid, entity_pos, (tx, ty), &movement_blocking)
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
     } else {
         // Idle: wander randomly
-        random_wander(grid, entity_pos, rng)
+        random_wander(grid, entity_pos, &movement_blocking, rng)
     }
 }
 
 /// Pick a random adjacent walkable tile for wandering.
-fn random_wander(grid: &Grid, pos: (i32, i32), rng: &mut impl Rng) -> (i32, i32) {
+fn random_wander(
+    grid: &Grid,
+    pos: (i32, i32),
+    blocked: &HashSet<(i32, i32)>,
+    rng: &mut impl Rng,
+) -> (i32, i32) {
     let dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)];
     let (dx, dy) = dirs[rng.gen_range(0..4)];
     let target_x = pos.0 + dx;
     let target_y = pos.1 + dy;
 
-    if grid
+    // Check both tile walkability AND that no entity blocks the position
+    let tile_walkable = grid
         .get(target_x, target_y)
         .map(|t| t.tile_type.is_walkable())
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+
+    if tile_walkable && !blocked.contains(&(target_x, target_y)) {
         (dx, dy)
     } else {
         (0, 0)

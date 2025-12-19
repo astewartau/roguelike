@@ -6,7 +6,7 @@ use crate::camera::Camera;
 use crate::components::{
     Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment,
     Experience, Health, Inventory, ItemType, Player, Position, RangedWeapon, Sprite, Stats,
-    VisualPosition, Weapon,
+    StatusEffects, VisualPosition, Weapon,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -15,6 +15,7 @@ use crate::tile::tile_ids;
 use crate::time_system::{ActionScheduler, GameClock};
 use glam::Vec2;
 use hecs::{Entity, World};
+use rand::seq::SliceRandom;
 use rand::Rng;
 
 /// Saved state of a floor for when the player leaves and returns
@@ -48,6 +49,35 @@ pub enum SavedEntityType {
         gold: u32,
         items: Vec<ItemType>,
     },
+}
+
+/// Generate randomized chest contents
+/// Chests can contain: potions, scrolls, or just gold (more than bones drop)
+fn generate_chest_contents(rng: &mut impl Rng) -> Container {
+    let roll: f32 = rng.gen();
+
+    if roll < 0.3 {
+        // 30% chance: Health potion
+        Container::with_gold(vec![ItemType::HealthPotion], rng.gen_range(5..15))
+    } else if roll < 0.5 {
+        // 20% chance: Scroll of Invisibility
+        Container::with_gold(vec![ItemType::ScrollOfInvisibility], rng.gen_range(5..15))
+    } else if roll < 0.7 {
+        // 20% chance: Scroll of Speed
+        Container::with_gold(vec![ItemType::ScrollOfSpeed], rng.gen_range(5..15))
+    } else if roll < 0.85 {
+        // 15% chance: Two random items
+        let items = vec![
+            *[ItemType::HealthPotion, ItemType::ScrollOfInvisibility, ItemType::ScrollOfSpeed]
+                .choose(rng).unwrap(),
+            *[ItemType::HealthPotion, ItemType::ScrollOfInvisibility, ItemType::ScrollOfSpeed]
+                .choose(rng).unwrap(),
+        ];
+        Container::with_gold(items, rng.gen_range(10..25))
+    } else {
+        // 15% chance: Just gold (more than bones)
+        Container::with_gold(vec![], rng.gen_range(20..50))
+    }
 }
 
 /// Initialize the game world with player, enemies, and objects
@@ -86,16 +116,19 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         BlocksMovement,
         Experience::new(),
         Attackable,
+        StatusEffects::new(),
     ));
 
-    // Spawn chests (block movement until opened)
+    // Spawn chests with randomized contents
+    let mut rng = rand::thread_rng();
     for (x, y) in &grid.chest_positions {
         let pos = Position::new(*x, *y);
+        let container = generate_chest_contents(&mut rng);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
             Sprite::new(tile_ids::CHEST_CLOSED),
-            Container::new(vec![ItemType::HealthPotion]),
+            container,
             BlocksMovement,
         ));
     }
@@ -114,7 +147,6 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
     }
 
     // Spawn enemies using data-driven spawning system
-    let mut rng = rand::thread_rng();
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
         .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| grid.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false))
@@ -401,14 +433,16 @@ pub fn spawn_floor_entities(
         vis_pos.y = player_spawn_pos.1 as f32;
     }
 
-    // Spawn chests
+    // Spawn chests with randomized contents
+    let mut rng = rand::thread_rng();
     for (x, y) in &grid.chest_positions {
         let pos = Position::new(*x, *y);
+        let container = generate_chest_contents(&mut rng);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
             Sprite::new(tile_ids::CHEST_CLOSED),
-            Container::new(vec![ItemType::HealthPotion]),
+            container,
             BlocksMovement,
         ));
     }

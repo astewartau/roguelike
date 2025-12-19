@@ -5,6 +5,7 @@
 
 use crate::constants::*;
 use crate::events::GameEvent;
+use crate::grid::Grid;
 
 /// A one-shot visual effect
 pub struct VisualEffect {
@@ -134,17 +135,25 @@ impl VfxManager {
         }
     }
 
-    /// Handle a game event, spawning appropriate VFX
-    pub fn handle_event(&mut self, event: &GameEvent) {
+    /// Handle a game event, spawning appropriate VFX.
+    /// Only spawns VFX for positions visible to the player (not in fog of war).
+    pub fn handle_event(&mut self, event: &GameEvent, grid: &Grid) {
         match event {
             GameEvent::AttackHit { target_pos, damage, .. } => {
-                self.spawn_slash(target_pos.0, target_pos.1);
-                self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
+                // Only show VFX if the position is visible to the player
+                let tile_x = target_pos.0 as i32;
+                let tile_y = target_pos.1 as i32;
+                if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
+                    self.spawn_slash(target_pos.0, target_pos.1);
+                    self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
+                }
             }
             GameEvent::ProjectileHit { position, damage, target, .. } => {
-                // Only show damage number if we hit an enemy (not a wall)
+                // Only show damage number if we hit an enemy (not a wall) AND position is visible
                 if target.is_some() {
-                    self.spawn_damage_number(position.0 as f32, position.1 as f32, *damage);
+                    if grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) {
+                        self.spawn_damage_number(position.0 as f32, position.1 as f32, *damage);
+                    }
                 }
             }
             GameEvent::EntityDied { position, .. } => {

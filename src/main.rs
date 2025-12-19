@@ -306,7 +306,7 @@ impl AppState {
             Some(&mut self.action_scheduler),
         );
         // Process any events from remove_dead_entities (death VFX, etc.)
-        let event_result = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state, self.player_entity);
+        let event_result = game_loop::process_events(&mut self.events, &mut self.world, &self.grid, &mut self.vfx, &mut self.ui_state, self.player_entity);
         if let Some(direction) = event_result.floor_transition {
             self.handle_floor_transition(direction);
         }
@@ -419,6 +419,7 @@ impl AppState {
                     icons.tileset_texture_id,
                     icons.coins_uv,
                     icons.potion_uv,
+                    icons.scroll_uv,
                     &mut actions,
                 );
             }
@@ -439,6 +440,7 @@ impl AppState {
                     icons.bow_uv,
                     icons.coins_uv,
                     icons.potion_uv,
+                    icons.scroll_uv,
                     &mut actions,
                 );
             }
@@ -510,7 +512,7 @@ impl AppState {
                     opener: self.player_entity,
                 });
                 // Process immediately so UI updates this frame
-                let _ = game_loop::process_events(&mut self.events, &mut self.world, &mut self.vfx, &mut self.ui_state, self.player_entity);
+                let _ = game_loop::process_events(&mut self.events, &mut self.world, &self.grid, &mut self.vfx, &mut self.ui_state, self.player_entity);
             }
         }
 
@@ -523,6 +525,26 @@ impl AppState {
 
         if is_dead {
             self.input.clear_path();
+            input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
+            return;
+        }
+
+        // Handle attack direction (Shift+movement) - takes priority over regular movement
+        if let Some((dx, dy)) = result.attack_direction {
+            self.input.clear_path();
+            let _turn_result = game_loop::execute_player_attack_direction(
+                &mut self.world,
+                &self.grid,
+                self.player_entity,
+                dx,
+                dy,
+                &mut self.game_clock,
+                &mut self.action_scheduler,
+                &mut self.events,
+                &mut self.vfx,
+                &mut self.ui_state,
+            );
+            // Process mouse drag and return early
             input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
             return;
         }
@@ -753,6 +775,7 @@ impl AppState {
             let event_result = game_loop::process_events(
                 &mut self.events,
                 &mut self.world,
+                &self.grid,
                 &mut self.vfx,
                 &mut self.ui_state,
                 self.player_entity,

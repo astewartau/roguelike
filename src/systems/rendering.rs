@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, BlocksVision, Door, OverlaySprite, Position, Sprite, VisualPosition};
+use crate::components::{Actor, BlocksVision, Door, EffectType, OverlaySprite, Position, Sprite, StatusEffects, VisualPosition};
 use crate::fov::FOV;
 use crate::grid::Grid;
 use hecs::{Entity, World};
@@ -22,6 +22,7 @@ pub struct RenderEntity {
     pub y: f32,
     pub sprite: Sprite,
     pub brightness: f32,
+    pub alpha: f32, // Transparency (1.0 = opaque, 0.0 = invisible)
     pub effects: u32, // Bitfield of active effects
     pub overlay: Option<Sprite>, // Optional overlay sprite (e.g., weapon)
 }
@@ -88,11 +89,23 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
         let entity_effects = effects::NONE;
 
         if id == player_entity {
+            // Check if player is invisible for transparency effect
+            let alpha = if world
+                .get::<&StatusEffects>(id)
+                .map(|e| e.has_effect(EffectType::Invisible))
+                .unwrap_or(false)
+            {
+                0.4 // Semi-transparent when invisible
+            } else {
+                1.0
+            };
+
             player_render = Some(RenderEntity {
                 x: vis_pos.x,
                 y: vis_pos.y,
                 sprite: *sprite,
                 brightness: 1.0,
+                alpha,
                 effects: effects::NONE,
                 overlay,
             });
@@ -104,6 +117,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
                 y: vis_pos.y,
                 sprite: *sprite,
                 brightness,
+                alpha: 1.0,
                 effects: entity_effects,
                 overlay,
             };
@@ -122,6 +136,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
                 y: vis_pos.y,
                 sprite: *sprite,
                 brightness,
+                alpha: 1.0,
                 effects: effects::NONE,
                 overlay: None, // Don't show overlays in fog
             });

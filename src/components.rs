@@ -114,6 +114,67 @@ impl Experience {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemType {
     HealthPotion,
+    ScrollOfInvisibility,
+    ScrollOfSpeed,
+}
+
+// =============================================================================
+// STATUS EFFECTS
+// =============================================================================
+
+/// Types of status effects that can be applied to entities
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EffectType {
+    /// Entity cannot be seen by enemies
+    Invisible,
+    /// Entity moves and acts faster (multiplier applied to speed)
+    SpeedBoost,
+}
+
+/// An active status effect with remaining duration
+#[derive(Debug, Clone, Copy)]
+pub struct ActiveEffect {
+    pub effect_type: EffectType,
+    /// Remaining duration in game-time seconds
+    pub remaining_duration: f32,
+}
+
+/// Component for entities with active status effects
+#[derive(Debug, Clone, Default)]
+pub struct StatusEffects {
+    pub effects: Vec<ActiveEffect>,
+}
+
+impl StatusEffects {
+    pub fn new() -> Self {
+        Self { effects: Vec::new() }
+    }
+
+    /// Check if entity has a specific effect active
+    pub fn has_effect(&self, effect_type: EffectType) -> bool {
+        self.effects.iter().any(|e| e.effect_type == effect_type)
+    }
+
+    /// Add or refresh an effect with the given duration
+    pub fn add_effect(&mut self, effect_type: EffectType, duration: f32) {
+        // Refresh duration if already have effect, otherwise add new
+        if let Some(existing) = self.effects.iter_mut().find(|e| e.effect_type == effect_type) {
+            existing.remaining_duration = duration;
+        } else {
+            self.effects.push(ActiveEffect {
+                effect_type,
+                remaining_duration: duration,
+            });
+        }
+    }
+
+    /// Get remaining duration of an effect (None if not active)
+    pub fn get_duration(&self, effect_type: EffectType) -> Option<f32> {
+        self.effects
+            .iter()
+            .find(|e| e.effect_type == effect_type)
+            .map(|e| e.remaining_duration)
+    }
 }
 
 /// Item component
@@ -165,6 +226,8 @@ pub enum ActionType {
     Move { dx: i32, dy: i32, is_diagonal: bool },
     /// Attacking a target entity
     Attack { target: Entity },
+    /// Attacking in a direction (hits whatever is there at completion, or whiffs)
+    AttackDirection { dx: i32, dy: i32 },
     /// Opening a door
     OpenDoor { door: Entity },
     /// Opening/interacting with a chest
@@ -185,6 +248,7 @@ impl ActionType {
             // This can be customized per-action as needed
             ActionType::Move { .. } => 1,
             ActionType::Attack { .. } => 1,
+            ActionType::AttackDirection { .. } => 1,
             ActionType::OpenDoor { .. } => 1,
             ActionType::OpenChest { .. } => 1,
             ActionType::Wait => 1,

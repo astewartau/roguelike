@@ -5,7 +5,7 @@
 
 use crate::components::{
     ActionInProgress, ActionType, Actor, Attackable, BlocksMovement, Container, Door,
-    Health, Position,
+    EffectType, Health, Position, StatusEffects,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -158,6 +158,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
             }
         }
         ActionType::Attack { .. } => ACTION_ATTACK_DURATION,
+        ActionType::AttackDirection { .. } => ACTION_ATTACK_DURATION,
         ActionType::OpenDoor { .. } => ACTION_DOOR_DURATION,
         ActionType::OpenChest { .. } => ACTION_CHEST_DURATION,
         ActionType::Wait => ACTION_WAIT_DURATION,
@@ -193,6 +194,12 @@ pub fn start_action_with_events(
     scheduler: &mut ActionScheduler,
     events: Option<&mut EventQueue>,
 ) -> Result<(), &'static str> {
+    // Check for speed boost effect before borrowing Actor
+    let has_speed_boost = world
+        .get::<&StatusEffects>(entity)
+        .map(|e| e.has_effect(EffectType::SpeedBoost))
+        .unwrap_or(false);
+
     // Get actor component
     let mut actor = world
         .get::<&mut Actor>(entity)
@@ -212,8 +219,15 @@ pub fn start_action_with_events(
     actor.energy -= energy_cost;
     let remaining = actor.energy;
 
+    // Calculate effective speed (base speed * speed boost if active)
+    let effective_speed = if has_speed_boost {
+        actor.speed * SPEED_BOOST_MULTIPLIER
+    } else {
+        actor.speed
+    };
+
     // Calculate completion time
-    let duration = calculate_action_duration(&action_type, actor.speed);
+    let duration = calculate_action_duration(&action_type, effective_speed);
     let completion_time = clock.time + duration;
 
     // Record action in progress
@@ -295,6 +309,9 @@ fn apply_action_effects(
     match action_type {
         ActionType::Move { dx, dy, .. } => apply_move(world, grid, entity, *dx, *dy, events),
         ActionType::Attack { target } => apply_attack(world, entity, *target, events),
+        ActionType::AttackDirection { dx, dy } => {
+            apply_attack_direction(world, entity, *dx, *dy, events)
+        }
         ActionType::OpenDoor { door } => apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => apply_open_chest(world, entity, *chest, events),
         ActionType::Wait => ActionResult::Completed,
@@ -335,16 +352,14 @@ fn apply_move(
         return ActionResult::Blocked;
     }
 
-    // Check for attackable entity at target (convert to attack)
-    let mut enemy_to_attack: Option<Entity> = None;
+    // Check for attackable entity at target - block movement instead of auto-attacking.
+    // This prevents accidental attacks when an entity moves into a tile that was empty
+    // at decision time but occupied at completion time (race condition).
+    // Players use AttackDirection (Shift+direction) for intentional attacks.
     for (id, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
         if id != entity && enemy_pos.x == target_x && enemy_pos.y == target_y {
-            enemy_to_attack = Some(id);
-            break;
+            return ActionResult::Blocked;
         }
-    }
-    if let Some(enemy_id) = enemy_to_attack {
-        return apply_attack(world, entity, enemy_id, events);
     }
 
     // Check for closed door at target
@@ -462,6 +477,47 @@ fn apply_attack(
     });
 
     ActionResult::Completed
+}
+
+/// Apply attack direction effect - attacks whatever is at the target tile, or whiffs
+fn apply_attack_direction(
+    world: &mut World,
+    attacker: Entity,
+    dx: i32,
+    dy: i32,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::components::LungeAnimation;
+
+    // Get attacker position
+    let attacker_pos = match world.get::<&Position>(attacker) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    let target_x = attacker_pos.0 + dx;
+    let target_y = attacker_pos.1 + dy;
+
+    // Find any Attackable entity at the target position
+    let mut target_entity: Option<Entity> = None;
+    for (id, (pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+        if id != attacker && pos.x == target_x && pos.y == target_y {
+            target_entity = Some(id);
+            break;
+        }
+    }
+
+    if let Some(target) = target_entity {
+        // Found a target - attack it
+        apply_attack(world, attacker, target, events)
+    } else {
+        // No target - whiff (swing at air), but still add lunge animation
+        let _ = world.insert_one(
+            attacker,
+            LungeAnimation::new(target_x as f32 + 0.5, target_y as f32 + 0.5),
+        );
+        ActionResult::Completed
+    }
 }
 
 /// Apply open door effect
@@ -751,7 +807,22 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
 
 /// Process time-based energy regeneration for all actors
 pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&mut EventQueue>) {
-    // Collect regen info first to avoid borrow issues
+    use std::collections::HashSet;
+
+    // First pass: collect entities with speed boost (separate query to avoid borrow issues)
+    let speed_boosted: HashSet<Entity> = world
+        .query::<(&Actor, &StatusEffects)>()
+        .iter()
+        .filter_map(|(id, (_, effects))| {
+            if effects.has_effect(EffectType::SpeedBoost) {
+                Some(id)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Second pass: process energy regen
     let mut regen_events: Vec<(Entity, i32)> = Vec::new();
 
     for (id, actor) in world.query_mut::<&mut Actor>() {
@@ -760,16 +831,23 @@ pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&m
             continue;
         }
 
+        // Apply speed boost multiplier to regen interval (faster regen = shorter interval)
+        let effective_regen_interval = if speed_boosted.contains(&id) {
+            actor.energy_regen_interval / SPEED_BOOST_MULTIPLIER
+        } else {
+            actor.energy_regen_interval
+        };
+
         // Calculate how many regen events have occurred
         let time_since_last = current_time - actor.last_energy_regen_time;
-        if time_since_last >= actor.energy_regen_interval {
-            let regen_ticks = (time_since_last / actor.energy_regen_interval) as i32;
+        if time_since_last >= effective_regen_interval {
+            let regen_ticks = (time_since_last / effective_regen_interval) as i32;
             let old_energy = actor.energy;
             actor.energy = (actor.energy + regen_ticks).min(actor.max_energy);
             let amount = actor.energy - old_energy;
             // Update last regen time, accounting for partial intervals
             actor.last_energy_regen_time =
-                current_time - (time_since_last % actor.energy_regen_interval);
+                current_time - (time_since_last % effective_regen_interval);
 
             if amount > 0 {
                 regen_events.push((id, amount));
@@ -782,6 +860,20 @@ pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&m
         for (entity, amount) in regen_events {
             events.push(GameEvent::EnergyRegenerated { entity, amount });
         }
+    }
+}
+
+/// Process status effect duration ticks, removing expired effects
+pub fn tick_status_effects(world: &mut World, elapsed: f32) {
+    if elapsed <= 0.0 {
+        return;
+    }
+
+    for (_, effects) in world.query_mut::<&mut StatusEffects>() {
+        effects.effects.retain_mut(|effect| {
+            effect.remaining_duration -= elapsed;
+            effect.remaining_duration > 0.0
+        });
     }
 }
 

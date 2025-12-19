@@ -3,12 +3,12 @@
 //! Handles all game UI: status bars, inventory, loot windows, etc.
 
 use crate::camera::Camera;
-use crate::components::{Container, Equipment, Health, Inventory, ItemType, Stats};
+use crate::components::{Container, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, Stats, StatusEffects};
 use crate::constants::DAMAGE_NUMBER_RISE;
 use crate::systems;
 use crate::tile::tile_ids;
 use crate::tileset::Tileset;
-use crate::vfx::{EffectType, VisualEffect};
+use crate::vfx::{EffectType as VfxEffectType, VisualEffect};
 use hecs::World;
 
 /// Data needed to render the status bar
@@ -18,6 +18,8 @@ pub struct StatusBarData {
     pub xp_progress: f32,
     pub xp_level: u32,
     pub gold: u32,
+    /// Active status effects with remaining duration
+    pub active_effects: Vec<(StatusEffectType, f32)>,
 }
 
 /// Data needed to render the loot window
@@ -252,15 +254,20 @@ pub fn draw_dev_menu(
         });
 }
 
-/// Render the status bar (health, XP, gold)
+/// Render the status bar (health, XP, gold, status effects)
 pub fn draw_status_bar(
     ctx: &egui::Context,
     data: &StatusBarData,
     icons: &UiIcons,
 ) {
+    // Calculate window height based on number of status effects
+    let base_height = 90.0;
+    let effects_height = if data.active_effects.is_empty() { 0.0 } else { 25.0 };
+    let window_height = base_height + effects_height;
+
     egui::Window::new("Status")
         .fixed_pos([10.0, 10.0])
-        .fixed_size([220.0, 90.0])
+        .fixed_size([220.0, window_height])
         .title_bar(false)
         .show(ctx, |ui| {
             let health_percent = if data.health_max > 0 {
@@ -315,6 +322,24 @@ pub fn draw_status_bar(
                 ui.add(coin_img);
                 ui.label(format!("{}", data.gold));
             });
+
+            // Active status effects
+            if !data.active_effects.is_empty() {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    for (effect_type, duration) in &data.active_effects {
+                        let (label, color) = match effect_type {
+                            StatusEffectType::Invisible => ("Invisible", egui::Color32::from_rgb(180, 180, 255)),
+                            StatusEffectType::SpeedBoost => ("Speed", egui::Color32::from_rgb(255, 220, 100)),
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("{} ({:.0}s)", label, duration))
+                                .color(color)
+                                .small(),
+                        );
+                    }
+                });
+            }
         });
 }
 
@@ -325,6 +350,7 @@ pub fn draw_loot_window(
     tileset_texture_id: egui::TextureId,
     coins_uv: egui::Rect,
     potion_uv: egui::Rect,
+    scroll_uv: egui::Rect,
     actions: &mut UiActions,
 ) {
     egui::Window::new("Loot")
@@ -375,6 +401,7 @@ pub fn draw_loot_window(
                     for (i, item_type) in data.items.iter().enumerate() {
                         let uv = match item_type {
                             ItemType::HealthPotion => potion_uv,
+                            ItemType::ScrollOfInvisibility | ItemType::ScrollOfSpeed => scroll_uv,
                         };
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
@@ -424,6 +451,7 @@ pub fn draw_inventory_window(
     bow_uv: egui::Rect,
     coins_uv: egui::Rect,
     potion_uv: egui::Rect,
+    scroll_uv: egui::Rect,
     actions: &mut UiActions,
 ) {
     egui::Window::new("Character")
@@ -441,7 +469,7 @@ pub fn draw_inventory_window(
                     draw_stats_column(&mut columns[0], world, player_entity, &stats, tileset_texture_id, sword_uv, bow_uv, coins_uv);
 
                     // Right column: Inventory
-                    draw_inventory_column(&mut columns[1], world, player_entity, tileset_texture_id, potion_uv, actions);
+                    draw_inventory_column(&mut columns[1], world, player_entity, tileset_texture_id, potion_uv, scroll_uv, actions);
                 });
             }
         });
@@ -556,6 +584,7 @@ fn draw_inventory_column(
     player_entity: hecs::Entity,
     tileset_texture_id: egui::TextureId,
     potion_uv: egui::Rect,
+    scroll_uv: egui::Rect,
     actions: &mut UiActions,
 ) {
     ui.vertical(|ui| {
@@ -575,6 +604,7 @@ fn draw_inventory_column(
                     for (i, item_type) in inventory.items.iter().enumerate() {
                         let uv = match item_type {
                             ItemType::HealthPotion => potion_uv,
+                            ItemType::ScrollOfInvisibility | ItemType::ScrollOfSpeed => scroll_uv,
                         };
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
@@ -607,6 +637,7 @@ pub struct UiIcons {
     pub sword_uv: egui::Rect,
     pub bow_uv: egui::Rect,
     pub potion_uv: egui::Rect,
+    pub scroll_uv: egui::Rect,
     pub coins_uv: egui::Rect,
     pub heart_uv: egui::Rect,
     pub diamond_uv: egui::Rect,
@@ -619,6 +650,7 @@ impl UiIcons {
             sword_uv: tileset.get_egui_uv(tile_ids::SWORD),
             bow_uv: tileset.get_egui_uv(tile_ids::BOW),
             potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION),
+            scroll_uv: tileset.get_egui_uv(tile_ids::SCROLL),
             coins_uv: tileset.get_egui_uv(tile_ids::COINS),
             heart_uv: tileset.get_egui_uv(tile_ids::HEART),
             diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND),
@@ -643,12 +675,25 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
         .map(|exp| (systems::xp_progress(&exp), exp.level))
         .unwrap_or((0.0, 1));
 
+    // Collect active status effects
+    let active_effects = world
+        .get::<&StatusEffects>(player_entity)
+        .map(|effects| {
+            effects
+                .effects
+                .iter()
+                .map(|e| (e.effect_type, e.remaining_duration))
+                .collect()
+        })
+        .unwrap_or_default();
+
     StatusBarData {
         health_current,
         health_max,
         xp_progress,
         xp_level,
         gold,
+        active_effects,
     }
 }
 
@@ -681,7 +726,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
     let ppp = ctx.pixels_per_point();
 
     for effect in effects {
-        let EffectType::DamageNumber { amount } = &effect.effect_type else {
+        let VfxEffectType::DamageNumber { amount } = &effect.effect_type else {
             continue;
         };
 
@@ -731,7 +776,7 @@ pub fn draw_alert_indicators(ctx: &egui::Context, effects: &[VisualEffect], came
     let ppp = ctx.pixels_per_point();
 
     for effect in effects {
-        let EffectType::Alert = &effect.effect_type else {
+        let VfxEffectType::Alert = &effect.effect_type else {
             continue;
         };
 

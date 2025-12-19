@@ -108,6 +108,8 @@ pub struct InputResult {
     pub enter_pressed: bool,
     /// Movement intent (dx, dy)
     pub movement: Option<(i32, i32)>,
+    /// Attack direction intent (dx, dy) - Shift+movement
+    pub attack_direction: Option<(i32, i32)>,
     /// Right-click shoot intent (target_x, target_y)
     pub shoot_target: Option<(i32, i32)>,
 }
@@ -120,6 +122,7 @@ impl Default for InputResult {
             toggle_grid_lines: false,
             enter_pressed: false,
             movement: None,
+            attack_direction: None,
             shoot_target: None,
         }
     }
@@ -150,21 +153,38 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
         result.enter_pressed = true;
     }
 
-    // Movement (only process once per key press)
-    if input.keys_pressed.remove(&KeyCode::KeyW) || input.keys_pressed.remove(&KeyCode::ArrowUp) {
-        result.movement = Some((0, 1));
+    // Check if shift is held (don't consume - it's a modifier)
+    let shift_held = input.keys_pressed.contains(&KeyCode::ShiftLeft)
+        || input.keys_pressed.contains(&KeyCode::ShiftRight);
+
+    // Movement or attack direction (only process once per key press)
+    // Shift+direction = attack direction, plain direction = movement
+    let direction = if input.keys_pressed.remove(&KeyCode::KeyW)
+        || input.keys_pressed.remove(&KeyCode::ArrowUp)
+    {
+        Some((0, 1))
     } else if input.keys_pressed.remove(&KeyCode::KeyS)
         || input.keys_pressed.remove(&KeyCode::ArrowDown)
     {
-        result.movement = Some((0, -1));
+        Some((0, -1))
     } else if input.keys_pressed.remove(&KeyCode::KeyA)
         || input.keys_pressed.remove(&KeyCode::ArrowLeft)
     {
-        result.movement = Some((-1, 0));
+        Some((-1, 0))
     } else if input.keys_pressed.remove(&KeyCode::KeyD)
         || input.keys_pressed.remove(&KeyCode::ArrowRight)
     {
-        result.movement = Some((1, 0));
+        Some((1, 0))
+    } else {
+        None
+    };
+
+    if let Some(dir) = direction {
+        if shift_held {
+            result.attack_direction = Some(dir);
+        } else {
+            result.movement = Some(dir);
+        }
     }
 
     result

@@ -215,6 +215,22 @@ pub const HEALTH_POTION_HEAL: i32 = 20;
 /// Health potion weight in kg
 pub const HEALTH_POTION_WEIGHT: f32 = 0.5;
 
+/// Scroll weight in kg
+pub const SCROLL_WEIGHT: f32 = 0.1;
+
+// =============================================================================
+// STATUS EFFECTS
+// =============================================================================
+
+/// Duration of invisibility effect in game-time seconds
+pub const INVISIBILITY_DURATION: f32 = 60.0;
+
+/// Duration of speed boost effect in game-time seconds
+pub const SPEED_BOOST_DURATION: f32 = 45.0;
+
+/// Speed multiplier when speed boost is active (2.0 = twice as fast)
+pub const SPEED_BOOST_MULTIPLIER: f32 = 2.0;
+
 /// Sword base damage
 pub const SWORD_BASE_DAMAGE: i32 = 10;
 /// Sword damage bonus

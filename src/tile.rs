@@ -22,6 +22,7 @@ pub mod tile_ids {
     pub const BOW: u32 = 69;
     pub const ARROW: u32 = 70;
     pub const RED_POTION: u32 = 52;
+    pub const SCROLL: u32 = 58;  // Book tile for scrolls
     pub const COINS: u32 = 36;
 
     // UI icons
