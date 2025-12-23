@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{Actor, Attackable, BlocksMovement, Container, Door, Position};
+use crate::components::{Actor, Attackable, BlocksMovement, Container, Door, ItemType, Position};
 use crate::grid::Grid;
 use crate::pathfinding;
 use hecs::{Entity, World};
@@ -13,6 +13,19 @@ use winit::keyboard::KeyCode;
 
 /// Maximum distance an enemy can move from the click origin before pursuit is abandoned
 pub const MAX_PURSUIT_DISTANCE: i32 = 8;
+
+/// Targeting mode for items that require click-to-target
+#[derive(Clone, Debug)]
+pub struct TargetingMode {
+    /// The item type being used
+    pub item_type: ItemType,
+    /// The index of the item in inventory
+    pub item_index: usize,
+    /// Maximum range for targeting
+    pub max_range: i32,
+    /// Radius of effect (0 for single-tile effects like Blink)
+    pub radius: i32,
+}
 
 /// What the player clicked on - determines interaction behavior
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +58,8 @@ pub struct InputState {
     pub pursuit_target: Option<Entity>,
     /// Original click position when pursuit started (bounds how far we'll chase)
     pub pursuit_origin: Option<(i32, i32)>,
+    /// Targeting mode for items that require click-to-target (Blink, Fireball)
+    pub targeting_mode: Option<TargetingMode>,
 }
 
 impl InputState {
@@ -58,6 +73,7 @@ impl InputState {
             player_path_destination: None,
             pursuit_target: None,
             pursuit_origin: None,
+            targeting_mode: None,
         }
     }
 
@@ -88,6 +104,28 @@ impl InputState {
     pub fn clear_destination(&mut self) {
         self.player_path_destination = None;
     }
+
+    /// Enter targeting mode for an item
+    pub fn enter_targeting_mode(&mut self, item_type: ItemType, item_index: usize, max_range: i32, radius: i32) {
+        self.targeting_mode = Some(TargetingMode {
+            item_type,
+            item_index,
+            max_range,
+            radius,
+        });
+        // Clear any movement path when entering targeting mode
+        self.clear_path();
+    }
+
+    /// Exit targeting mode
+    pub fn cancel_targeting(&mut self) {
+        self.targeting_mode = None;
+    }
+
+    /// Check if in targeting mode
+    pub fn is_targeting(&self) -> bool {
+        self.targeting_mode.is_some()
+    }
 }
 
 impl Default for InputState {
@@ -112,6 +150,8 @@ pub struct InputResult {
     pub attack_direction: Option<(i32, i32)>,
     /// Right-click shoot intent (target_x, target_y)
     pub shoot_target: Option<(i32, i32)>,
+    /// Player pressed Escape (cancel targeting, close menus, etc.)
+    pub escape_pressed: bool,
 }
 
 impl Default for InputResult {
@@ -124,6 +164,7 @@ impl Default for InputResult {
             movement: None,
             attack_direction: None,
             shoot_target: None,
+            escape_pressed: false,
         }
     }
 }

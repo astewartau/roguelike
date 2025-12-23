@@ -197,7 +197,12 @@ impl ApplicationHandler for App {
                         match event.state {
                             ElementState::Pressed => {
                                 if key == KeyCode::Escape {
-                                    event_loop.exit();
+                                    // If in targeting mode, cancel it instead of exiting
+                                    if state.input.is_targeting() {
+                                        state.input.cancel_targeting();
+                                    } else {
+                                        event_loop.exit();
+                                    }
                                 }
                                 if key == KeyCode::Backquote {
                                     state.dev_menu.toggle();
@@ -228,8 +233,11 @@ impl ApplicationHandler for App {
                             && (dx.abs() > CLICK_DRAG_THRESHOLD || dy.abs() > CLICK_DRAG_THRESHOLD);
 
                         if !was_drag {
-                            // Check if a dev tool is active
-                            if state.dev_menu.has_active_tool() {
+                            // Check if in targeting mode first
+                            if state.input.is_targeting() {
+                                state.handle_targeting_click();
+                            } else if state.dev_menu.has_active_tool() {
+                                // Check if a dev tool is active
                                 state.handle_dev_spawn();
                             } else {
                                 input::handle_click_to_move(
@@ -245,10 +253,15 @@ impl ApplicationHandler for App {
                         state.camera.release_pan();
                     }
                 }
-                // Handle right-click for shooting bow
+                // Handle right-click for shooting bow or canceling targeting
                 if !egui_consumed.consumed && button == MouseButton::Right {
                     if btn_state == ElementState::Released {
-                        state.handle_right_click_shoot();
+                        if state.input.is_targeting() {
+                            // Right-click cancels targeting mode
+                            state.input.cancel_targeting();
+                        } else {
+                            state.handle_right_click_shoot();
+                        }
                     }
                 }
             }
@@ -406,7 +419,88 @@ impl AppState {
         let tileset = &self.tileset;
         let dev_menu = &mut self.dev_menu;
 
+        // Prepare player buff aura data
+        let buff_aura_data = {
+            let player_vis_pos = self.world.get::<&components::VisualPosition>(self.player_entity)
+                .ok()
+                .map(|p| (p.x, p.y));
+            let has_regen = self.world.get::<&components::StatusEffects>(self.player_entity)
+                .map(|e| e.has_effect(components::EffectType::Regenerating))
+                .unwrap_or(false);
+            let has_protected = self.world.get::<&components::StatusEffects>(self.player_entity)
+                .map(|e| e.has_effect(components::EffectType::Protected))
+                .unwrap_or(false);
+
+            player_vis_pos.map(|(x, y)| ui::PlayerBuffAuraData {
+                player_x: x,
+                player_y: y,
+                has_regen,
+                has_protected,
+                time: self.game_clock.time,
+            })
+        };
+
+        // Prepare targeting overlay data if in targeting mode
+        let targeting_data = if let Some(ref targeting) = self.input.targeting_mode {
+            // Get player position
+            let player_pos = self.world.get::<&components::Position>(self.player_entity)
+                .ok()
+                .map(|p| (p.x, p.y))
+                .unwrap_or((0, 0));
+
+            // Get cursor tile from mouse position
+            let world_pos = self.camera.screen_to_world(
+                self.input.mouse_pos.0,
+                self.input.mouse_pos.1,
+            );
+            let cursor_x = world_pos.x.floor() as i32;
+            let cursor_y = world_pos.y.floor() as i32;
+
+            Some(ui::TargetingOverlayData {
+                player_x: player_pos.0,
+                player_y: player_pos.1,
+                cursor_x,
+                cursor_y,
+                max_range: targeting.max_range,
+                radius: targeting.radius,
+                is_blink: matches!(targeting.item_type, components::ItemType::ScrollOfBlink),
+            })
+        } else {
+            None
+        };
+
+        // Collect enemy status effect data for visible enemies
+        let enemy_status_data: Vec<ui::EnemyStatusData> = {
+            use components::{ChaseAI, StatusEffects, VisualPosition, EffectType};
+            self.world
+                .query::<(&VisualPosition, &ChaseAI, &StatusEffects)>()
+                .iter()
+                .filter(|(_, (pos, _, _))| {
+                    // Only show for visible tiles
+                    self.grid.get(pos.x as i32, pos.y as i32)
+                        .map(|t| t.visible)
+                        .unwrap_or(false)
+                })
+                .map(|(_, (pos, _, effects))| ui::EnemyStatusData {
+                    x: pos.x,
+                    y: pos.y,
+                    is_feared: effects.has_effect(EffectType::Feared),
+                    is_slowed: effects.has_effect(EffectType::Slowed),
+                    is_confused: effects.has_effect(EffectType::Confused),
+                })
+                .collect()
+        };
+        let game_time = self.game_clock.time;
+
         self.egui_glow.run(&self.window, |ctx| {
+            // Player buff auras (draw first so they're behind everything)
+            ui::draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());
+
+            // Targeting overlay (draw first so it's behind other UI)
+            if let Some(ref data) = targeting_data {
+                ui::draw_targeting_overlay(ctx, camera, data);
+            }
+
             // Status bar (always visible)
             ui::draw_status_bar(ctx, &status_data, icons);
 
@@ -415,6 +509,12 @@ impl AppState {
 
             // Alert indicators (enemy spotted player)
             ui::draw_alert_indicators(ctx, vfx_effects, camera);
+
+            // Enemy status effect indicators (fear, slow, confusion)
+            ui::draw_enemy_status_indicators(ctx, camera, &enemy_status_data, game_time);
+
+            // Explosion effects (fireball)
+            ui::draw_explosions(ctx, vfx_effects, camera);
 
             // Developer menu
             ui::draw_dev_menu(ctx, dev_menu, icons.tileset_texture_id, tileset);
@@ -463,6 +563,16 @@ impl AppState {
     }
 
     fn process_ui_actions(&mut self, actions: ui::UiActions) {
+        // Handle dev menu item giving
+        if let Some(item) = self.dev_menu.take_item_to_give() {
+            // Add item to player's inventory (dev tool - no weight limit)
+            if let Ok(mut inv) = self.world.get::<&mut components::Inventory>(self.player_entity) {
+                let weight = systems::item_weight(item);
+                inv.items.push(item);
+                inv.current_weight_kg += weight;
+            }
+        }
+
         // Handle chest/loot interactions
         if let Some(chest_id) = self.ui_state.open_chest {
             if actions.chest_take_all || actions.close_chest {
@@ -503,7 +613,46 @@ impl AppState {
 
         // Use item if clicked
         if let Some(item_index) = actions.item_to_use {
-            systems::use_item(&mut self.world, self.player_entity, item_index);
+            let result = systems::use_item(&mut self.world, self.player_entity, item_index);
+
+            // Handle special item use results
+            match result {
+                systems::ItemUseResult::RequiresTarget { item_type, item_index } => {
+                    // Enter targeting mode
+                    use crate::components::ItemType;
+                    let (max_range, radius) = match item_type {
+                        ItemType::ScrollOfBlink => (constants::BLINK_RANGE, 0),
+                        ItemType::ScrollOfFireball => (constants::FIREBALL_RANGE, constants::FIREBALL_RADIUS),
+                        _ => (8, 0), // Default fallback
+                    };
+                    self.input.enter_targeting_mode(item_type, item_index, max_range, radius);
+                }
+                systems::ItemUseResult::RevealEnemies => {
+                    systems::reveal_enemies(&self.world, &mut self.grid);
+                    systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
+                }
+                systems::ItemUseResult::RevealMap => {
+                    systems::reveal_entire_map(&mut self.grid);
+                    systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
+                }
+                systems::ItemUseResult::ApplyFearToVisible => {
+                    self.apply_effect_to_visible_enemies(components::EffectType::Feared, constants::FEAR_DURATION);
+                    systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
+                }
+                systems::ItemUseResult::ApplySlowToVisible => {
+                    self.apply_effect_to_visible_enemies(components::EffectType::Slowed, constants::SLOW_DURATION);
+                    systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
+                }
+                systems::ItemUseResult::IsThrowable { item_type, item_index } => {
+                    // Equip the throwable in the ranged slot
+                    let tile_id = systems::item_tile_id(item_type);
+                    if let Ok(mut equipment) = self.world.get::<&mut components::Equipment>(self.player_entity) {
+                        equipment.ranged = Some(components::RangedSlot::Throwable { item_type, tile_id });
+                    }
+                    systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -742,6 +891,39 @@ impl AppState {
         }
     }
 
+    /// Apply an effect to all enemies visible to the player
+    fn apply_effect_to_visible_enemies(&mut self, effect: components::EffectType, duration: f32) {
+        use components::{ChaseAI, Position, StatusEffects};
+
+        // Get player position
+        let player_pos = self.world.get::<&Position>(self.player_entity)
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0, 0));
+
+        // Calculate visible tiles from player's perspective
+        let visible_tiles: std::collections::HashSet<(i32, i32)> = fov::FOV::calculate(
+            &self.grid,
+            player_pos.0,
+            player_pos.1,
+            constants::FOV_RADIUS,
+            None::<fn(i32, i32) -> bool>,
+        ).into_iter().collect();
+
+        // Find all enemies in visible tiles and apply effect
+        let enemies_to_affect: Vec<(hecs::Entity, i32, i32)> = self.world
+            .query::<(&Position, &ChaseAI)>()
+            .iter()
+            .filter(|(_, (pos, _))| visible_tiles.contains(&(pos.x, pos.y)))
+            .map(|(entity, (pos, _))| (entity, pos.x, pos.y))
+            .collect();
+
+        for (entity, _x, _y) in enemies_to_affect {
+            if let Ok(mut effects) = self.world.get::<&mut StatusEffects>(entity) {
+                effects.add_effect(effect, duration);
+            }
+        }
+    }
+
     fn handle_right_click_shoot(&mut self) {
         // Check if player is alive and can act
         let can_act = self
@@ -760,16 +942,17 @@ impl AppState {
             return;
         }
 
-        // Check if player has a bow equipped
-        let has_bow = self
+        // Check what's equipped in ranged slot
+        let ranged_slot = self
             .world
             .get::<&components::Equipment>(self.player_entity)
-            .map(|e| e.ranged_weapon.is_some())
-            .unwrap_or(false);
+            .ok()
+            .and_then(|e| e.ranged.clone());
 
-        if !has_bow {
-            return;
-        }
+        let ranged_slot = match ranged_slot {
+            Some(slot) => slot,
+            None => return,
+        };
 
         // Get target tile from mouse position
         let (target_x, target_y) = input::get_shoot_target(&self.input, &self.camera);
@@ -777,8 +960,119 @@ impl AppState {
         // Clear any click-to-move path
         self.input.clear_path();
 
-        // Create the shoot action
-        let action_type = components::ActionType::ShootBow { target_x, target_y };
+        // Create the appropriate action based on what's equipped
+        let action_type = match ranged_slot {
+            components::RangedSlot::Bow(_) => {
+                components::ActionType::ShootBow { target_x, target_y }
+            }
+            components::RangedSlot::Throwable { .. } => {
+                components::ActionType::ThrowPotion { target_x, target_y }
+            }
+        };
+
+        // Try to start the action
+        if time_system::start_action(
+            &mut self.world,
+            self.player_entity,
+            action_type,
+            &self.game_clock,
+            &mut self.action_scheduler,
+        )
+        .is_ok()
+        {
+            // Advance time until player can act again
+            let mut rng = rand::thread_rng();
+            game_loop::advance_until_player_ready_public(
+                &mut self.world,
+                &self.grid,
+                self.player_entity,
+                &mut self.game_clock,
+                &mut self.action_scheduler,
+                &mut self.events,
+                &mut rng,
+            );
+
+            // Process events
+            let event_result = game_loop::process_events(
+                &mut self.events,
+                &mut self.world,
+                &self.grid,
+                &mut self.vfx,
+                &mut self.ui_state,
+                self.player_entity,
+            );
+            // Stop pursuit if player attacked, took damage, or enemy spotted them
+            if event_result.player_attacked || event_result.player_took_damage || event_result.enemy_spotted_player {
+                self.input.clear_path();
+            }
+        }
+    }
+
+    /// Handle a click while in targeting mode (for Blink, Fireball, etc.)
+    fn handle_targeting_click(&mut self) {
+        // Get targeting info before we potentially consume it
+        let targeting = match self.input.targeting_mode.clone() {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Get target tile from mouse position
+        let world_pos = self.camera.screen_to_world(
+            self.input.mouse_pos.0,
+            self.input.mouse_pos.1,
+        );
+        let target_x = world_pos.x.floor() as i32;
+        let target_y = world_pos.y.floor() as i32;
+
+        // Get player position
+        let player_pos = match self.world.get::<&components::Position>(self.player_entity) {
+            Ok(p) => (p.x, p.y),
+            Err(_) => {
+                self.input.cancel_targeting();
+                return;
+            }
+        };
+
+        // Check if in range (Chebyshev distance for better diagonal targeting)
+        let distance = (target_x - player_pos.0).abs().max((target_y - player_pos.1).abs());
+        if distance > targeting.max_range {
+            // Out of range - don't execute, just ignore the click
+            return;
+        }
+
+        // Determine the action type based on item
+        let action_type = match targeting.item_type {
+            components::ItemType::ScrollOfBlink => {
+                // Validate target is walkable and not blocked
+                let walkable = self.grid.get(target_x, target_y)
+                    .map(|t| t.tile_type.is_walkable())
+                    .unwrap_or(false);
+                if !walkable {
+                    return;
+                }
+                // Check no entity blocks this position
+                let blocked = self.world.query::<(&components::Position, &components::BlocksMovement)>()
+                    .iter()
+                    .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
+                if blocked {
+                    return;
+                }
+                components::ActionType::Blink { target_x, target_y }
+            }
+            components::ItemType::ScrollOfFireball => {
+                components::ActionType::CastFireball { target_x, target_y }
+            }
+            _ => {
+                self.input.cancel_targeting();
+                return;
+            }
+        };
+
+        // Remove the item from inventory
+        systems::remove_item_from_inventory(&mut self.world, self.player_entity, targeting.item_index);
+
+        // Exit targeting mode before starting action
+        self.input.cancel_targeting();
 
         // Try to start the action
         if time_system::start_action(

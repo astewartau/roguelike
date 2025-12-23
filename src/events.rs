@@ -100,6 +100,12 @@ pub enum GameEvent {
         npc: Entity,
         player: Entity,
     },
+    /// A fireball exploded at a location
+    FireballExplosion {
+        x: i32,
+        y: i32,
+        radius: i32,
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

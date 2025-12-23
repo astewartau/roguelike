@@ -54,24 +54,65 @@ pub enum SavedEntityType {
 /// Generate randomized chest contents
 /// Chests can contain: potions, scrolls, or just gold (more than bones drop)
 fn generate_chest_contents(rng: &mut impl Rng) -> Container {
+    // Common items (higher weight)
+    let common_items = [
+        ItemType::HealthPotion,
+        ItemType::RegenerationPotion,
+        ItemType::ScrollOfSpeed,
+        ItemType::ScrollOfProtection,
+    ];
+
+    // Uncommon items
+    let uncommon_items = [
+        ItemType::StrengthPotion,
+        ItemType::ScrollOfInvisibility,
+        ItemType::ScrollOfSlow,
+        ItemType::ScrollOfMapping,
+    ];
+
+    // Rare items
+    let rare_items = [
+        ItemType::ConfusionPotion, // Throwable
+        ItemType::ScrollOfBlink,
+        ItemType::ScrollOfFear,
+        ItemType::ScrollOfReveal,
+        ItemType::ScrollOfFireball,
+    ];
+
     let roll: f32 = rng.gen();
 
-    if roll < 0.3 {
-        // 30% chance: Health potion
-        Container::with_gold(vec![ItemType::HealthPotion], rng.gen_range(5..15))
-    } else if roll < 0.5 {
-        // 20% chance: Scroll of Invisibility
-        Container::with_gold(vec![ItemType::ScrollOfInvisibility], rng.gen_range(5..15))
-    } else if roll < 0.7 {
-        // 20% chance: Scroll of Speed
-        Container::with_gold(vec![ItemType::ScrollOfSpeed], rng.gen_range(5..15))
+    if roll < 0.35 {
+        // 35% chance: Single common item
+        let item = *common_items.choose(rng).unwrap();
+        Container::with_gold(vec![item], rng.gen_range(5..15))
+    } else if roll < 0.55 {
+        // 20% chance: Single uncommon item
+        let item = *uncommon_items.choose(rng).unwrap();
+        Container::with_gold(vec![item], rng.gen_range(8..20))
+    } else if roll < 0.70 {
+        // 15% chance: Single rare item
+        let item = *rare_items.choose(rng).unwrap();
+        Container::with_gold(vec![item], rng.gen_range(10..25))
     } else if roll < 0.85 {
-        // 15% chance: Two random items
+        // 15% chance: Two random items (common + any)
+        let all_items = [
+            ItemType::HealthPotion,
+            ItemType::RegenerationPotion,
+            ItemType::StrengthPotion,
+            ItemType::ConfusionPotion,
+            ItemType::ScrollOfInvisibility,
+            ItemType::ScrollOfSpeed,
+            ItemType::ScrollOfProtection,
+            ItemType::ScrollOfBlink,
+            ItemType::ScrollOfFear,
+            ItemType::ScrollOfFireball,
+            ItemType::ScrollOfReveal,
+            ItemType::ScrollOfMapping,
+            ItemType::ScrollOfSlow,
+        ];
         let items = vec![
-            *[ItemType::HealthPotion, ItemType::ScrollOfInvisibility, ItemType::ScrollOfSpeed]
-                .choose(rng).unwrap(),
-            *[ItemType::HealthPotion, ItemType::ScrollOfInvisibility, ItemType::ScrollOfSpeed]
-                .choose(rng).unwrap(),
+            *common_items.choose(rng).unwrap(),
+            *all_items.choose(rng).unwrap(),
         ];
         Container::with_gold(items, rng.gen_range(10..25))
     } else {

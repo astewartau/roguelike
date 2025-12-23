@@ -231,6 +231,51 @@ pub const SPEED_BOOST_DURATION: f32 = 45.0;
 /// Speed multiplier when speed boost is active (2.0 = twice as fast)
 pub const SPEED_BOOST_MULTIPLIER: f32 = 2.0;
 
+// New status effect durations
+/// Duration of regeneration effect in game-time seconds
+pub const REGENERATION_DURATION: f32 = 60.0;
+/// HP regenerated per tick when Regenerating effect is active
+pub const REGENERATION_BOOST_AMOUNT: i32 = 3;
+/// Seconds between regen ticks when Regenerating effect is active
+pub const REGENERATION_BOOST_INTERVAL: f32 = 3.0;
+
+/// Duration of strength effect in game-time seconds
+pub const STRENGTH_DURATION: f32 = 45.0;
+/// Damage multiplier when Strengthened effect is active
+pub const STRENGTH_DAMAGE_MULTIPLIER: f32 = 1.5;
+
+/// Duration of protection effect in game-time seconds
+pub const PROTECTION_DURATION: f32 = 60.0;
+/// Damage reduction multiplier when Protected effect is active (0.5 = 50% reduction)
+pub const PROTECTION_DAMAGE_REDUCTION: f32 = 0.5;
+
+/// Duration of confusion effect in game-time seconds
+pub const CONFUSION_DURATION: f32 = 30.0;
+
+/// Duration of fear effect in game-time seconds
+pub const FEAR_DURATION: f32 = 45.0;
+
+/// Duration of slow effect in game-time seconds
+pub const SLOW_DURATION: f32 = 45.0;
+/// Speed multiplier when Slowed effect is active (0.5 = half speed)
+pub const SLOW_MULTIPLIER: f32 = 0.5;
+
+// Scroll ranges and parameters
+/// Maximum teleport range for Blink scroll
+pub const BLINK_RANGE: i32 = 8;
+/// Maximum casting range for Fireball scroll
+pub const FIREBALL_RANGE: i32 = 10;
+/// Explosion radius for Fireball scroll
+pub const FIREBALL_RADIUS: i32 = 2;
+/// Damage dealt by Fireball scroll
+pub const FIREBALL_DAMAGE: i32 = 25;
+
+// Throwable parameters
+/// Speed of thrown potions (tiles per second)
+pub const POTION_THROW_SPEED: f32 = 12.0;
+/// Splash radius for confusion potion effect
+pub const CONFUSION_SPLASH_RADIUS: i32 = 1;
+
 /// Sword base damage
 pub const SWORD_BASE_DAMAGE: i32 = 10;
 /// Sword damage bonus

@@ -55,10 +55,14 @@ pub enum EffectType {
     Fire { seed: f32 },
     /// Alert indicator "!" when enemy spots player
     Alert,
+    /// Explosion effect (fireball impact)
+    Explosion { radius: i32 },
 }
 
 /// Duration for alert indicator
 const ALERT_DURATION: f32 = 0.8;
+/// Duration for explosion effect
+const EXPLOSION_DURATION: f32 = 0.5;
 
 impl EffectType {
     pub fn duration(&self) -> f32 {
@@ -67,6 +71,7 @@ impl EffectType {
             EffectType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
             EffectType::Fire { .. } => f32::INFINITY, // Fire loops forever
             EffectType::Alert => ALERT_DURATION,
+            EffectType::Explosion { .. } => EXPLOSION_DURATION,
         }
     }
 }
@@ -120,6 +125,11 @@ impl VfxManager {
         self.spawn(x, y, EffectType::Alert);
     }
 
+    /// Spawn an explosion effect (fireball)
+    pub fn spawn_explosion(&mut self, x: f32, y: f32, radius: i32) {
+        self.spawn(x, y, EffectType::Explosion { radius });
+    }
+
     /// Spawn a persistent fire effect
     pub fn spawn_fire(&mut self, x: f32, y: f32) {
         let seed = rand::random::<f32>() * 1000.0;
@@ -159,6 +169,12 @@ impl VfxManager {
             GameEvent::EntityDied { position, .. } => {
                 // Could spawn death particles here in the future
                 let _ = position;
+            }
+            GameEvent::FireballExplosion { x, y, radius } => {
+                // Spawn explosion at center
+                if grid.get(*x, *y).map(|t| t.visible).unwrap_or(false) {
+                    self.spawn_explosion(*x as f32 + 0.5, *y as f32 + 0.5, *radius);
+                }
             }
             _ => {}
         }

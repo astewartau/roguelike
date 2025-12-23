@@ -95,6 +95,49 @@ fn determine_action(
         Err(_) => return ActionType::Wait,
     };
 
+    // Check for status effects that override normal AI behavior
+    let is_confused = world
+        .get::<&StatusEffects>(entity)
+        .map(|e| e.has_effect(EffectType::Confused))
+        .unwrap_or(false);
+
+    let is_feared = world
+        .get::<&StatusEffects>(entity)
+        .map(|e| e.has_effect(EffectType::Feared))
+        .unwrap_or(false);
+
+    // Confused: move randomly, ignore player entirely
+    if is_confused {
+        let movement_blocking: HashSet<(i32, i32)> = world
+            .query::<(&Position, &BlocksMovement)>()
+            .iter()
+            .filter(|(id, _)| *id != entity)
+            .map(|(_, (pos, _))| (pos.x, pos.y))
+            .collect();
+
+        let (dx, dy) = random_wander(grid, entity_pos, &movement_blocking, rng);
+        if dx == 0 && dy == 0 {
+            return ActionType::Wait;
+        }
+        return time_system::determine_action_type(world, grid, entity, dx, dy);
+    }
+
+    // Feared: flee from player
+    if is_feared {
+        let movement_blocking: HashSet<(i32, i32)> = world
+            .query::<(&Position, &BlocksMovement)>()
+            .iter()
+            .filter(|(id, _)| *id != entity)
+            .map(|(_, (pos, _))| (pos.x, pos.y))
+            .collect();
+
+        let (dx, dy) = flee_from_target(grid, entity_pos, player_pos, &movement_blocking, rng);
+        if dx == 0 && dy == 0 {
+            return ActionType::Wait;
+        }
+        return time_system::determine_action_type(world, grid, entity, dx, dy);
+    }
+
     // Get AI state, sight radius, and ranged parameters
     let (sight_radius, current_state, last_known, ranged_min, ranged_max) =
         match world.get::<&ChaseAI>(entity) {
@@ -108,10 +151,10 @@ fn determine_action(
             Err(_) => return ActionType::Wait,
         };
 
-    // Check if entity has ranged weapon
+    // Check if entity has a bow equipped (for ranged attacks)
     let has_ranged_weapon = world
         .get::<&Equipment>(entity)
-        .map(|e| e.ranged_weapon.is_some())
+        .map(|e| e.has_bow())
         .unwrap_or(false);
 
     // Calculate visibility (checks for invisibility effect on player)
@@ -346,4 +389,63 @@ fn random_wander(
     } else {
         (0, 0)
     }
+}
+
+/// Flee from a target position - move in the opposite direction.
+/// Falls back to random movement if direct flee path is blocked.
+fn flee_from_target(
+    grid: &Grid,
+    pos: (i32, i32),
+    target: (i32, i32),
+    blocked: &HashSet<(i32, i32)>,
+    rng: &mut impl Rng,
+) -> (i32, i32) {
+    // Calculate direction away from target
+    let flee_dx = (pos.0 - target.0).signum();
+    let flee_dy = (pos.1 - target.1).signum();
+
+    // Try to move directly away
+    if flee_dx != 0 || flee_dy != 0 {
+        let nx = pos.0 + flee_dx;
+        let ny = pos.1 + flee_dy;
+        let tile_walkable = grid
+            .get(nx, ny)
+            .map(|t| t.tile_type.is_walkable())
+            .unwrap_or(false);
+
+        if tile_walkable && !blocked.contains(&(nx, ny)) {
+            return (flee_dx, flee_dy);
+        }
+
+        // Try fleeing in just X direction
+        if flee_dx != 0 {
+            let nx = pos.0 + flee_dx;
+            let ny = pos.1;
+            let tile_walkable = grid
+                .get(nx, ny)
+                .map(|t| t.tile_type.is_walkable())
+                .unwrap_or(false);
+
+            if tile_walkable && !blocked.contains(&(nx, ny)) {
+                return (flee_dx, 0);
+            }
+        }
+
+        // Try fleeing in just Y direction
+        if flee_dy != 0 {
+            let nx = pos.0;
+            let ny = pos.1 + flee_dy;
+            let tile_walkable = grid
+                .get(nx, ny)
+                .map(|t| t.tile_type.is_walkable())
+                .unwrap_or(false);
+
+            if tile_walkable && !blocked.contains(&(nx, ny)) {
+                return (0, flee_dy);
+            }
+        }
+    }
+
+    // Fallback to random movement if can't flee directly
+    random_wander(grid, pos, blocked, rng)
 }

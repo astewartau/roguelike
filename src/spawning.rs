@@ -6,7 +6,7 @@
 use crate::components::{
     Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueNode, DialogueOption,
     Equipment, FriendlyNPC, Health, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
-    VisualPosition, Weapon,
+    StatusEffects, VisualPosition, Weapon,
 };
 use crate::tile::tile_ids;
 use hecs::World;
@@ -47,6 +47,7 @@ impl EnemyDef {
             Health::new(self.health),
             Stats::new(self.strength, self.intelligence, self.agility),
             Equipment::with_weapon(Weapon::claws(self.damage)),
+            StatusEffects::new(),
             Attackable,
             BlocksMovement,
         ))
@@ -108,6 +109,7 @@ pub mod enemies {
                 Weapon::claws(SKELETON_ARCHER_MELEE_DAMAGE),
                 RangedWeapon::enemy_bow(SKELETON_ARCHER_BOW_DAMAGE),
             ),
+            StatusEffects::new(),
             Attackable,
             BlocksMovement,
         ))

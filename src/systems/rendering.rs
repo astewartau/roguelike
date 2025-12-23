@@ -152,3 +152,27 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
 
     entities_to_render
 }
+
+/// Reveal all tiles on the map (Scroll of Mapping effect)
+pub fn reveal_entire_map(grid: &mut Grid) {
+    for tile in &mut grid.tiles {
+        tile.explored = true;
+    }
+}
+
+/// Mark tiles containing enemies as explored (Scroll of Reveal effect)
+/// Also marks a small radius around each enemy for visibility
+pub fn reveal_enemies(world: &World, grid: &mut Grid) {
+    use crate::components::ChaseAI;
+
+    for (_, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
+        // Mark enemy tile and surrounding tiles as explored
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(tile) = grid.get_mut(pos.x + dx, pos.y + dy) {
+                    tile.explored = true;
+                }
+            }
+        }
+    }
+}

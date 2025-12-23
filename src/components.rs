@@ -113,9 +113,21 @@ impl Experience {
 /// Item type - pure data enum, properties defined in systems
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemType {
+    // Potions
     HealthPotion,
+    RegenerationPotion,
+    StrengthPotion,
+    ConfusionPotion, // Throwable
+    // Scrolls
     ScrollOfInvisibility,
     ScrollOfSpeed,
+    ScrollOfProtection,
+    ScrollOfBlink,
+    ScrollOfFear,
+    ScrollOfFireball,
+    ScrollOfReveal,
+    ScrollOfMapping,
+    ScrollOfSlow,
 }
 
 // =============================================================================
@@ -129,6 +141,18 @@ pub enum EffectType {
     Invisible,
     /// Entity moves and acts faster (multiplier applied to speed)
     SpeedBoost,
+    /// Boosted HP regeneration
+    Regenerating,
+    /// Increased damage output
+    Strengthened,
+    /// Reduced incoming damage
+    Protected,
+    /// Random movement, ignores player (enemies only)
+    Confused,
+    /// Flees from player (enemies only)
+    Feared,
+    /// Reduced speed (enemies only)
+    Slowed,
 }
 
 /// An active status effect with remaining duration
@@ -240,6 +264,12 @@ pub enum ActionType {
     UseStairs { x: i32, y: i32, direction: crate::events::StairDirection },
     /// Talking to a friendly NPC
     TalkTo { npc: Entity },
+    /// Throwing a potion at a target position
+    ThrowPotion { target_x: i32, target_y: i32 },
+    /// Teleporting to a target position (Blink)
+    Blink { target_x: i32, target_y: i32 },
+    /// Casting fireball at a target position
+    CastFireball { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -257,6 +287,9 @@ impl ActionType {
             ActionType::ShootBow { .. } => 1,
             ActionType::UseStairs { .. } => 1,
             ActionType::TalkTo { .. } => 1,
+            ActionType::ThrowPotion { .. } => 1,
+            ActionType::Blink { .. } => 1,
+            ActionType::CastFireball { .. } => 1,
         }
     }
 }
@@ -455,20 +488,38 @@ impl Weapon {
 #[derive(Debug, Clone)]
 pub struct Equipment {
     pub weapon: Option<Weapon>,
-    pub ranged_weapon: Option<RangedWeapon>,
+    pub ranged: Option<RangedSlot>,
 }
 
 impl Equipment {
     pub fn new() -> Self {
-        Self { weapon: None, ranged_weapon: None }
+        Self { weapon: None, ranged: None }
     }
 
     pub fn with_weapon(weapon: Weapon) -> Self {
-        Self { weapon: Some(weapon), ranged_weapon: None }
+        Self { weapon: Some(weapon), ranged: None }
     }
 
     pub fn with_weapons(weapon: Weapon, ranged: RangedWeapon) -> Self {
-        Self { weapon: Some(weapon), ranged_weapon: Some(ranged) }
+        Self { weapon: Some(weapon), ranged: Some(RangedSlot::Bow(ranged)) }
+    }
+
+    /// Check if a bow is equipped
+    pub fn has_bow(&self) -> bool {
+        matches!(self.ranged, Some(RangedSlot::Bow(_)))
+    }
+
+    /// Check if a throwable is equipped
+    pub fn has_throwable(&self) -> bool {
+        matches!(self.ranged, Some(RangedSlot::Throwable { .. }))
+    }
+
+    /// Get the equipped bow, if any
+    pub fn get_bow(&self) -> Option<&RangedWeapon> {
+        match &self.ranged {
+            Some(RangedSlot::Bow(bow)) => Some(bow),
+            _ => None,
+        }
     }
 }
 
@@ -536,6 +587,18 @@ impl RangedWeapon {
             arrow_speed: ARROW_SPEED,
         }
     }
+}
+
+/// What's equipped in the ranged slot - either a bow or a throwable potion
+#[derive(Debug, Clone)]
+pub enum RangedSlot {
+    /// A bow that shoots arrows
+    Bow(RangedWeapon),
+    /// A throwable potion that can be thrown at enemies
+    Throwable {
+        item_type: ItemType,
+        tile_id: u32,
+    },
 }
 
 /// Projectile component - for arrows and other flying objects

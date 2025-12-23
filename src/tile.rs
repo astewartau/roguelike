@@ -21,9 +21,15 @@ pub mod tile_ids {
     pub const SWORD: u32 = 65;
     pub const BOW: u32 = 69;
     pub const ARROW: u32 = 70;
-    pub const RED_POTION: u32 = 52;
-    pub const SCROLL: u32 = 58;  // Book tile for scrolls
     pub const COINS: u32 = 36;
+    pub const SCROLL: u32 = 58;  // Book tile for scrolls
+
+    // Potion tiles
+    pub const RED_POTION: u32 = 52;    // Health potion
+    pub const BLUE_POTION: u32 = 53;   // Confusion potion (throwable)
+    pub const BLACK_POTION: u32 = 54;  // Reserved
+    pub const GREEN_POTION: u32 = 55;  // Regeneration potion
+    pub const AMBER_POTION: u32 = 56;  // Strength potion
 
     // NPC tiles
     pub const WIZARD: u32 = 90;    // Friendly wizard NPC

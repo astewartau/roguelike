@@ -154,7 +154,7 @@ mod tests {
             base_damage: 10,
             damage_bonus: 3,
         };
-        let entity = world.spawn((Equipment { weapon: Some(weapon), ranged_weapon: None },));
+        let entity = world.spawn((Equipment { weapon: Some(weapon), ranged: None },));
         assert_eq!(get_attack_damage(&world, entity), 13);
     }
 }

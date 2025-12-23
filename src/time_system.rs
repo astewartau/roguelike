@@ -5,7 +5,7 @@
 
 use crate::components::{
     ActionInProgress, ActionType, Actor, Attackable, BlocksMovement, Container, Door,
-    EffectType, FriendlyNPC, Health, Position, StatusEffects,
+    EffectType, Equipment, FriendlyNPC, Health, Position, RangedSlot, StatusEffects,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -165,6 +165,9 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::ShootBow { .. } => ACTION_SHOOT_DURATION,
         ActionType::UseStairs { .. } => ACTION_WALK_DURATION, // Same as walking
         ActionType::TalkTo { .. } => ACTION_DOOR_DURATION, // Quick interaction
+        ActionType::ThrowPotion { .. } => ACTION_SHOOT_DURATION, // Same as shooting
+        ActionType::Blink { .. } => ACTION_WAIT_DURATION, // Instant teleport
+        ActionType::CastFireball { .. } => ACTION_SHOOT_DURATION, // Same as shooting
     };
 
     // Speed modifies duration: higher speed = shorter duration
@@ -195,10 +198,15 @@ pub fn start_action_with_events(
     scheduler: &mut ActionScheduler,
     events: Option<&mut EventQueue>,
 ) -> Result<(), &'static str> {
-    // Check for speed boost effect before borrowing Actor
+    // Check for speed-modifying effects before borrowing Actor
     let has_speed_boost = world
         .get::<&StatusEffects>(entity)
         .map(|e| e.has_effect(EffectType::SpeedBoost))
+        .unwrap_or(false);
+
+    let has_slow = world
+        .get::<&StatusEffects>(entity)
+        .map(|e| e.has_effect(EffectType::Slowed))
         .unwrap_or(false);
 
     // Get actor component
@@ -220,9 +228,11 @@ pub fn start_action_with_events(
     actor.energy -= energy_cost;
     let remaining = actor.energy;
 
-    // Calculate effective speed (base speed * speed boost if active)
+    // Calculate effective speed (base speed modified by effects)
     let effective_speed = if has_speed_boost {
         actor.speed * SPEED_BOOST_MULTIPLIER
+    } else if has_slow {
+        actor.speed * SLOW_MULTIPLIER
     } else {
         actor.speed
     };
@@ -323,6 +333,15 @@ fn apply_action_effects(
             apply_use_stairs(world, entity, *x, *y, *direction, events)
         }
         ActionType::TalkTo { npc } => apply_talk_to(entity, *npc, events),
+        ActionType::ThrowPotion { target_x, target_y } => {
+            apply_throw_potion(world, grid, entity, *target_x, *target_y, events, current_time)
+        }
+        ActionType::Blink { target_x, target_y } => {
+            apply_blink(world, grid, entity, *target_x, *target_y, events)
+        }
+        ActionType::CastFireball { target_x, target_y } => {
+            apply_fireball(world, entity, *target_x, *target_y, events)
+        }
     }
 }
 
@@ -443,6 +462,18 @@ fn apply_attack(
         Err(_) => return ActionResult::Invalid,
     };
 
+    // Check for Strengthened effect on attacker
+    let has_strength_boost = world
+        .get::<&StatusEffects>(attacker)
+        .map(|e| e.has_effect(EffectType::Strengthened))
+        .unwrap_or(false);
+
+    // Check for Protected effect on target
+    let has_protection = world
+        .get::<&StatusEffects>(target)
+        .map(|e| e.has_effect(EffectType::Protected))
+        .unwrap_or(false);
+
     // Calculate damage
     let base_damage = {
         let strength = world
@@ -466,6 +497,17 @@ fn apply_attack(
     if is_crit {
         damage = (damage as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
     }
+
+    // Apply Strengthened bonus (1.5x damage)
+    if has_strength_boost {
+        damage = (damage as f32 * STRENGTH_DAMAGE_MULTIPLIER) as i32;
+    }
+
+    // Apply Protected reduction (0.5x damage)
+    if has_protection {
+        damage = (damage as f32 * PROTECTION_DAMAGE_REDUCTION) as i32;
+    }
+
     damage = damage.max(1); // Minimum 1 damage
 
     // Apply damage to target
@@ -628,8 +670,8 @@ fn apply_shoot_bow(
     // Get bow stats
     let (base_damage, arrow_speed) = {
         let equipment = world.get::<&Equipment>(shooter).ok();
-        let ranged = equipment.as_ref().and_then(|e| e.ranged_weapon.as_ref());
-        match ranged {
+        let bow = equipment.as_ref().and_then(|e| e.get_bow());
+        match bow {
             Some(bow) => (bow.base_damage, bow.arrow_speed),
             None => return ActionResult::Blocked, // No bow equipped
         }
@@ -776,28 +818,249 @@ fn calculate_arrow_path(
 }
 
 // =============================================================================
+// NEW ACTION IMPLEMENTATIONS
+// =============================================================================
+
+/// Apply throw potion action - throws a confusion potion at target
+fn apply_throw_potion(
+    world: &mut World,
+    grid: &Grid,
+    thrower: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+    current_time: f32,
+) -> ActionResult {
+    use crate::components::{Position, StatusEffects, VisualPosition, ChaseAI, Sprite, Projectile, ProjectileMarker};
+    use crate::tile::tile_ids;
+
+    // Get thrower position
+    let (start_x, start_y) = match world.get::<&Position>(thrower) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    // Calculate path to target (similar to arrow but shorter range)
+    let path = calculate_arrow_path(start_x, start_y, target_x, target_y, POTION_THROW_SPEED, grid);
+
+    if path.is_empty() {
+        return ActionResult::Blocked;
+    }
+
+    // Find the final position (either target or wall before)
+    let final_pos = path.last().map(|(x, y, _)| (*x, *y)).unwrap_or((target_x, target_y));
+
+    // Apply confusion to all enemies in splash radius around final position
+    let mut confused_entities = Vec::new();
+    for (id, (pos, _, effects)) in world.query_mut::<(&Position, &ChaseAI, &mut StatusEffects)>() {
+        let dx = (pos.x - final_pos.0).abs();
+        let dy = (pos.y - final_pos.1).abs();
+        if dx <= CONFUSION_SPLASH_RADIUS && dy <= CONFUSION_SPLASH_RADIUS {
+            effects.add_effect(EffectType::Confused, CONFUSION_DURATION);
+            confused_entities.push(id);
+        }
+    }
+
+    // Spawn visual projectile (potion flying through air)
+    let pos = Position::new(start_x, start_y);
+    let direction = {
+        let dx = (target_x - start_x) as f32;
+        let dy = (target_y - start_y) as f32;
+        let len = (dx * dx + dy * dy).sqrt().max(0.001);
+        (dx / len, dy / len)
+    };
+
+    let potion_projectile = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::new(tile_ids::BLUE_POTION),
+        Projectile {
+            source: thrower,
+            damage: 0, // Confusion potion does no direct damage
+            path,
+            path_index: 0,
+            direction,
+            spawn_time: current_time,
+            finished: None,
+        },
+        ProjectileMarker,
+    ));
+
+    events.push(GameEvent::ProjectileSpawned {
+        projectile: potion_projectile,
+        source: thrower,
+    });
+
+    // Remove the throwable from equipment slot (it's been thrown)
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(thrower) {
+        if matches!(equipment.ranged, Some(RangedSlot::Throwable { .. })) {
+            equipment.ranged = None;
+        }
+    }
+
+    ActionResult::Completed
+}
+
+/// Apply blink (teleport) action
+fn apply_blink(
+    world: &mut World,
+    grid: &Grid,
+    entity: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::components::{Position, VisualPosition, BlocksMovement};
+
+    // Get current position
+    let current_pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    // Check range
+    let dist = (target_x - current_pos.0).abs().max((target_y - current_pos.1).abs());
+    if dist > BLINK_RANGE {
+        return ActionResult::Blocked;
+    }
+
+    // Check target is walkable
+    if !grid.get(target_x, target_y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+        return ActionResult::Blocked;
+    }
+
+    // Check no blocking entity at target
+    let blocked = world.query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .any(|(id, (pos, _))| id != entity && pos.x == target_x && pos.y == target_y);
+
+    if blocked {
+        return ActionResult::Blocked;
+    }
+
+    // Teleport: update position
+    if let Ok(mut pos) = world.get::<&mut Position>(entity) {
+        pos.x = target_x;
+        pos.y = target_y;
+    }
+
+    // Snap visual position (instant teleport, no lerping)
+    if let Ok(mut vis_pos) = world.get::<&mut VisualPosition>(entity) {
+        vis_pos.x = target_x as f32;
+        vis_pos.y = target_y as f32;
+    }
+
+    events.push(GameEvent::EntityMoved {
+        entity,
+        from: current_pos,
+        to: (target_x, target_y),
+    });
+
+    ActionResult::Completed
+}
+
+/// Apply fireball action - AoE damage at target location
+fn apply_fireball(
+    world: &mut World,
+    caster: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::components::{Position, Health, Attackable};
+
+    let caster_pos = match world.get::<&Position>(caster) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    // Check range
+    let dist = (target_x - caster_pos.0).abs().max((target_y - caster_pos.1).abs());
+    if dist > FIREBALL_RANGE {
+        return ActionResult::Blocked;
+    }
+
+    // Emit explosion VFX event
+    events.push(GameEvent::FireballExplosion {
+        x: target_x,
+        y: target_y,
+        radius: FIREBALL_RADIUS,
+    });
+
+    // Collect all attackable entities in radius
+    let mut damaged: Vec<(Entity, i32, i32)> = Vec::new();
+    for (id, (pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+        let dx = (pos.x - target_x).abs();
+        let dy = (pos.y - target_y).abs();
+        if dx <= FIREBALL_RADIUS && dy <= FIREBALL_RADIUS {
+            damaged.push((id, pos.x, pos.y));
+        }
+    }
+
+    // Apply damage to all
+    for (entity, x, y) in damaged {
+        if let Ok(mut health) = world.get::<&mut Health>(entity) {
+            health.current -= FIREBALL_DAMAGE;
+        }
+        events.push(GameEvent::AttackHit {
+            attacker: caster,
+            target: entity,
+            target_pos: (x as f32 + 0.5, y as f32 + 0.5),
+            damage: FIREBALL_DAMAGE,
+        });
+    }
+
+    ActionResult::Completed
+}
+
+// =============================================================================
 // TIME-BASED REGENERATION
 // =============================================================================
 
 /// Process time-based health regeneration
 pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&mut EventQueue>) {
+    use std::collections::HashSet;
+
+    // First pass: collect entities with Regenerating effect (boosted regen)
+    let regenerating: HashSet<Entity> = world
+        .query::<(&Health, &StatusEffects)>()
+        .iter()
+        .filter_map(|(id, (_, effects))| {
+            if effects.has_effect(EffectType::Regenerating) {
+                Some(id)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Collect regen info first to avoid borrow issues
     let mut regen_events: Vec<(Entity, i32)> = Vec::new();
 
     for (id, health) in world.query_mut::<&mut Health>() {
+        // Check if this entity has boosted regen from Regenerating effect
+        let has_regen_boost = regenerating.contains(&id);
+
+        // Determine regen parameters (boosted if Regenerating effect active)
+        let (regen_amount, regen_interval) = if has_regen_boost {
+            (REGENERATION_BOOST_AMOUNT, REGENERATION_BOOST_INTERVAL)
+        } else {
+            (health.regen_amount, health.regen_interval)
+        };
+
         // Skip if no regen, already full, or dead
-        if health.regen_interval <= 0.0 || health.current >= health.max || health.current <= 0 {
+        if regen_interval <= 0.0 || health.current >= health.max || health.current <= 0 {
             continue;
         }
 
         // Calculate how many regen events have occurred
         let time_since_last = current_time - health.last_regen_time;
-        if time_since_last >= health.regen_interval {
-            let regen_ticks = (time_since_last / health.regen_interval) as i32;
-            let amount = (health.regen_amount * regen_ticks).min(health.max - health.current);
+        if time_since_last >= regen_interval {
+            let regen_ticks = (time_since_last / regen_interval) as i32;
+            let amount = (regen_amount * regen_ticks).min(health.max - health.current);
             health.current += amount;
             // Update last regen time, accounting for partial intervals
-            health.last_regen_time = current_time - (time_since_last % health.regen_interval);
+            health.last_regen_time = current_time - (time_since_last % regen_interval);
 
             if amount > 0 {
                 regen_events.push((id, amount));

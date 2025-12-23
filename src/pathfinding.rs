@@ -165,6 +165,7 @@ mod tests {
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
+            starting_room: None,
         }
     }
 
@@ -185,6 +186,7 @@ mod tests {
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
+            starting_room: None,
         }
     }
 
@@ -279,6 +281,7 @@ mod tests {
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
+            starting_room: None,
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
@@ -298,6 +301,7 @@ mod tests {
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
+            starting_room: None,
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());

@@ -200,6 +200,7 @@ mod tests {
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
+            starting_room: None,
         };
         for &(x, y) in walls {
             if let Some(tile) = grid.get_mut(x, y) {
