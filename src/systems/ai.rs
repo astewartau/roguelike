@@ -122,6 +122,16 @@ fn determine_action(
         .abs()
         .max((entity_pos.1 - player_pos.1).abs());
 
+    // Always update last_known_pos when we can see the player.
+    // This ensures we have the correct position even if we return early for ranged attacks.
+    // Without this, archers who keep shooting would have a stale last_known_pos from when
+    // they first spotted the player, causing them to investigate the wrong location.
+    if can_see_player {
+        if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
+            ai.last_known_pos = Some(player_pos);
+        }
+    }
+
     // Check for ranged attack opportunity
     if can_see_player && has_ranged_weapon && ranged_max > 0 {
         // In range for ranged attack?
