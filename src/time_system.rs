@@ -5,7 +5,7 @@
 
 use crate::components::{
     ActionInProgress, ActionType, Actor, Attackable, BlocksMovement, Container, Door,
-    EffectType, Health, Position, StatusEffects,
+    EffectType, FriendlyNPC, Health, Position, StatusEffects,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -164,6 +164,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::Wait => ACTION_WAIT_DURATION,
         ActionType::ShootBow { .. } => ACTION_SHOOT_DURATION,
         ActionType::UseStairs { .. } => ACTION_WALK_DURATION, // Same as walking
+        ActionType::TalkTo { .. } => ACTION_DOOR_DURATION, // Quick interaction
     };
 
     // Speed modifies duration: higher speed = shorter duration
@@ -321,7 +322,14 @@ fn apply_action_effects(
         ActionType::UseStairs { x, y, direction } => {
             apply_use_stairs(world, entity, *x, *y, *direction, events)
         }
+        ActionType::TalkTo { npc } => apply_talk_to(entity, *npc, events),
     }
+}
+
+/// Apply talk to NPC effect - emits dialogue started event
+fn apply_talk_to(player: Entity, npc: Entity, events: &mut EventQueue) -> ActionResult {
+    events.push(GameEvent::DialogueStarted { npc, player });
+    ActionResult::Completed
 }
 
 /// Apply movement effect
@@ -902,6 +910,13 @@ pub fn determine_action_type(
 
     let target_x = pos.x + dx;
     let target_y = pos.y + dy;
+
+    // Check for friendly NPC at target (must check before attackable!)
+    for (id, (npc_pos, _)) in world.query::<(&Position, &FriendlyNPC)>().iter() {
+        if npc_pos.x == target_x && npc_pos.y == target_y {
+            return ActionType::TalkTo { npc: id };
+        }
+    }
 
     // Check for attackable entity at target
     for (id, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {

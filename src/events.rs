@@ -95,6 +95,11 @@ pub enum GameEvent {
         direction: StairDirection,
         from_floor: u32,
     },
+    /// Player initiated dialogue with an NPC
+    DialogueStarted {
+        npc: Entity,
+        player: Entity,
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

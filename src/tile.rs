@@ -25,6 +25,9 @@ pub mod tile_ids {
     pub const SCROLL: u32 = 58;  // Book tile for scrolls
     pub const COINS: u32 = 36;
 
+    // NPC tiles
+    pub const WIZARD: u32 = 90;    // Friendly wizard NPC
+
     // UI icons
     pub const HEART: u32 = 151;
     pub const DIAMOND: u32 = 38;

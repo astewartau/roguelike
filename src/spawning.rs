@@ -1,11 +1,12 @@
 //! Data-driven entity spawning system.
 //!
 //! Defines enemy types and their properties, allowing easy addition of new enemies
-//! without modifying spawning code.
+//! without modifying spawning code. Also defines NPC types with dialogue.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Equipment, Health, OverlaySprite, Position,
-    RangedWeapon, Sprite, Stats, VisualPosition, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueNode, DialogueOption,
+    Equipment, FriendlyNPC, Health, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
+    VisualPosition, Weapon,
 };
 use crate::tile::tile_ids;
 use hecs::World;
@@ -147,23 +148,32 @@ impl SpawnConfig {
 
     /// Spawn all enemies according to this config
     /// Returns the number of enemies spawned
+    ///
+    /// - `excluded_positions`: Individual tiles to exclude (e.g., player spawn)
+    /// - `excluded_room`: Optional room rectangle to exclude entirely (e.g., starting room)
     pub fn spawn_all(
         &self,
         world: &mut World,
         walkable_tiles: &[(i32, i32)],
         excluded_positions: &[(i32, i32)],
+        excluded_room: Option<&crate::dungeon_gen::Rect>,
         rng: &mut impl rand::Rng,
     ) -> usize {
         let mut spawned = 0;
         let mut used_positions: Vec<(i32, i32)> = excluded_positions.to_vec();
 
+        // Helper to check if a position is in the excluded room
+        let is_in_excluded_room = |x: i32, y: i32| -> bool {
+            excluded_room.map(|r| r.contains(x, y)).unwrap_or(false)
+        };
+
         // Spawn regular enemies
         for entry in &self.entries {
             for _ in 0..entry.count {
-                // Find a valid spawn position
+                // Find a valid spawn position (not in used positions and not in excluded room)
                 let available: Vec<_> = walkable_tiles
                     .iter()
-                    .filter(|pos| !used_positions.contains(pos))
+                    .filter(|&&(x, y)| !used_positions.contains(&(x, y)) && !is_in_excluded_room(x, y))
                     .collect();
 
                 if available.is_empty() {
@@ -181,7 +191,7 @@ impl SpawnConfig {
         for _ in 0..self.skeleton_archer_count {
             let available: Vec<_> = walkable_tiles
                 .iter()
-                .filter(|pos| !used_positions.contains(pos))
+                .filter(|&&(x, y)| !used_positions.contains(&(x, y)) && !is_in_excluded_room(x, y))
                 .collect();
 
             if available.is_empty() {
@@ -196,4 +206,95 @@ impl SpawnConfig {
 
         spawned
     }
+}
+
+// =============================================================================
+// NPC SPAWNING
+// =============================================================================
+
+/// Definition of an NPC type - data needed to spawn a friendly NPC
+pub struct NPCDef {
+    /// Display name (shown in dialogue window)
+    pub name: &'static str,
+    /// Tile ID from the tileset
+    pub tile_id: u32,
+    /// Function to create the NPC's dialogue tree
+    pub dialogue_fn: fn() -> Dialogue,
+}
+
+impl NPCDef {
+    /// Spawn this NPC type at the given position
+    pub fn spawn(&self, world: &mut World, x: i32, y: i32) -> hecs::Entity {
+        let pos = Position::new(x, y);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(self.tile_id),
+            FriendlyNPC,
+            (self.dialogue_fn)(),
+            BlocksMovement,
+        ))
+    }
+}
+
+/// Predefined NPC types
+pub mod npcs {
+    use super::*;
+
+    /// Create the wizard's dialogue tree
+    fn wizard_dialogue() -> Dialogue {
+        Dialogue::new(
+            "Old Wizard",
+            vec![
+                // Node 0: Greeting
+                DialogueNode {
+                    text: "Greetings, adventurer! I am the last survivor of this cursed dungeon. \
+                           Beware - the creatures here grow stronger the deeper you venture."
+                        .to_string(),
+                    options: vec![
+                        DialogueOption {
+                            label: "Any advice for survival?".to_string(),
+                            next_node: Some(1),
+                        },
+                        DialogueOption {
+                            label: "Farewell".to_string(),
+                            next_node: None,
+                        },
+                    ],
+                },
+                // Node 1: Advice
+                DialogueNode {
+                    text: "Collect potions and scrolls from chests. The invisibility scroll can \
+                           save your life when surrounded. And watch out for the skeleton archers!"
+                        .to_string(),
+                    options: vec![
+                        DialogueOption {
+                            label: "Thank you".to_string(),
+                            next_node: None,
+                        },
+                        DialogueOption {
+                            label: "Tell me more".to_string(),
+                            next_node: Some(2),
+                        },
+                    ],
+                },
+                // Node 2: More info
+                DialogueNode {
+                    text: "The stairs lead deeper into the dungeon. Each floor is more dangerous \
+                           than the last. Good luck, you'll need it."
+                        .to_string(),
+                    options: vec![DialogueOption {
+                        label: "Farewell".to_string(),
+                        next_node: None,
+                    }],
+                },
+            ],
+        )
+    }
+
+    pub const WIZARD: NPCDef = NPCDef {
+        name: "Old Wizard",
+        tile_id: tile_ids::WIZARD,
+        dialogue_fn: wizard_dialogue,
+    };
 }

@@ -1,4 +1,4 @@
-use crate::dungeon_gen::DungeonGenerator;
+use crate::dungeon_gen::{DungeonGenerator, Rect};
 use crate::tile::Tile;
 
 /// A decorative decal placed on a tile
@@ -18,6 +18,8 @@ pub struct Grid {
     pub decals: Vec<Decal>,
     pub stairs_up_pos: Option<(i32, i32)>,
     pub stairs_down_pos: Option<(i32, i32)>,
+    /// The starting room where the player spawns (for NPC placement and enemy exclusion)
+    pub starting_room: Option<Rect>,
 }
 
 impl Grid {
@@ -39,6 +41,7 @@ impl Grid {
             decals: result.decals,
             stairs_up_pos: result.stairs_up_pos,
             stairs_down_pos: result.stairs_down_pos,
+            starting_room: result.starting_room,
         }
     }
 

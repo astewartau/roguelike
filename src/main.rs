@@ -387,6 +387,14 @@ impl AppState {
             self.camera.viewport_height,
         );
 
+        // Get dialogue window data if talking to an NPC
+        let dialogue_data = ui::get_dialogue_window_data(
+            &self.world,
+            self.ui_state.talking_to,
+            self.camera.viewport_width,
+            self.camera.viewport_height,
+        );
+
         let icons = &self.ui_icons;
         let show_inventory = self.ui_state.show_inventory;
         let world = &self.world;
@@ -422,6 +430,11 @@ impl AppState {
                     icons.scroll_uv,
                     &mut actions,
                 );
+            }
+
+            // Dialogue window (if talking to NPC)
+            if let Some(ref data) = dialogue_data {
+                ui::draw_dialogue_window(ctx, data, &mut actions);
             }
 
             // Inventory window (if toggled)
@@ -467,6 +480,24 @@ impl AppState {
                     item_index,
                     Some(&mut self.events),
                 );
+            }
+        }
+
+        // Handle dialogue interactions
+        if let Some(npc_id) = self.ui_state.talking_to {
+            if let Some(option_index) = actions.dialogue_option_selected {
+                // Get the dialogue component and advance it
+                if let Ok(mut dialogue) = self.world.get::<&mut components::Dialogue>(npc_id) {
+                    let continues = dialogue.select_option(option_index);
+                    if !continues {
+                        // Dialogue ended - close window and reset for next conversation
+                        dialogue.reset();
+                        self.ui_state.close_dialogue();
+                    }
+                } else {
+                    // NPC no longer has dialogue component - close window
+                    self.ui_state.close_dialogue();
+                }
             }
         }
 

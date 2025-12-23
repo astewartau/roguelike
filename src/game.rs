@@ -85,14 +85,35 @@ fn generate_chest_contents(rng: &mut impl Rng) -> Container {
 pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
     let mut world = World::new();
 
-    // Find a walkable tile to spawn the player
+    // Find a walkable tile to spawn the player - prefer center of starting room
     let mut player_start = Position::new(50, 50);
-    'find_spawn: for y in 0..grid.height as i32 {
-        for x in 0..grid.width as i32 {
-            if let Some(tile) = grid.get(x, y) {
-                if tile.tile_type.is_walkable() {
-                    player_start = Position::new(x, y);
-                    break 'find_spawn;
+    if let Some(starting_room) = &grid.starting_room {
+        // Spawn player at center of starting room
+        let (cx, cy) = starting_room.center();
+        if grid.get(cx, cy).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+            player_start = Position::new(cx, cy);
+        } else {
+            // Fallback: find any walkable tile in the starting room
+            'find_in_room: for dy in 1..starting_room.height - 1 {
+                for dx in 1..starting_room.width - 1 {
+                    let x = starting_room.x + dx;
+                    let y = starting_room.y + dy;
+                    if grid.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+                        player_start = Position::new(x, y);
+                        break 'find_in_room;
+                    }
+                }
+            }
+        }
+    } else {
+        // No starting room - fall back to first walkable tile
+        'find_spawn: for y in 0..grid.height as i32 {
+            for x in 0..grid.width as i32 {
+                if let Some(tile) = grid.get(x, y) {
+                    if tile.tile_type.is_walkable() {
+                        player_start = Position::new(x, y);
+                        break 'find_spawn;
+                    }
                 }
             }
         }
@@ -146,7 +167,38 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         ));
     }
 
-    // Spawn enemies using data-driven spawning system
+    // Spawn the wizard NPC in the starting room
+    if let Some(starting_room) = &grid.starting_room {
+        // Find a walkable tile in the starting room that isn't the player position
+        // Scan the room interior (excluding walls) for a valid position
+        let mut npc_spawned = false;
+        'find_npc_pos: for dy in 1..starting_room.height - 1 {
+            for dx in 1..starting_room.width - 1 {
+                let x = starting_room.x + dx;
+                let y = starting_room.y + dy;
+                // Skip the player's position
+                if x == player_start.x && y == player_start.y {
+                    continue;
+                }
+                if grid.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+                    spawning::npcs::WIZARD.spawn(&mut world, x, y);
+                    npc_spawned = true;
+                    break 'find_npc_pos;
+                }
+            }
+        }
+        // Fallback: try center of room if interior scan failed
+        if !npc_spawned {
+            let (cx, cy) = starting_room.center();
+            if (cx != player_start.x || cy != player_start.y)
+                && grid.get(cx, cy).map(|t| t.tile_type.is_walkable()).unwrap_or(false)
+            {
+                spawning::npcs::WIZARD.spawn(&mut world, cx, cy);
+            }
+        }
+    }
+
+    // Spawn enemies using data-driven spawning system (excluding starting room)
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
         .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| grid.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false))
@@ -157,6 +209,7 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         &mut world,
         &walkable_tiles,
         &[(player_start.x, player_start.y)],
+        grid.starting_room.as_ref(),
         &mut rng,
     );
 
@@ -460,7 +513,7 @@ pub fn spawn_floor_entities(
         ));
     }
 
-    // Spawn enemies
+    // Spawn enemies (excluding starting room for safety)
     let mut rng = rand::thread_rng();
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
         .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
@@ -472,6 +525,7 @@ pub fn spawn_floor_entities(
         world,
         &walkable_tiles,
         &[player_spawn_pos],
+        grid.starting_room.as_ref(),
         &mut rng,
     );
 

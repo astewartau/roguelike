@@ -238,6 +238,8 @@ pub enum ActionType {
     ShootBow { target_x: i32, target_y: i32 },
     /// Using stairs to change floors
     UseStairs { x: i32, y: i32, direction: crate::events::StairDirection },
+    /// Talking to a friendly NPC
+    TalkTo { npc: Entity },
 }
 
 impl ActionType {
@@ -254,6 +256,7 @@ impl ActionType {
             ActionType::Wait => 1,
             ActionType::ShootBow { .. } => 1,
             ActionType::UseStairs { .. } => 1,
+            ActionType::TalkTo { .. } => 1,
         }
     }
 }
@@ -559,3 +562,74 @@ pub struct Projectile {
 /// Marker component for projectiles (for queries)
 #[derive(Debug, Clone, Copy)]
 pub struct ProjectileMarker;
+
+// =============================================================================
+// NPC / DIALOGUE COMPONENTS
+// =============================================================================
+
+/// Marker for friendly NPCs (not attackable, triggers dialogue on bump)
+#[derive(Debug, Clone, Copy)]
+pub struct FriendlyNPC;
+
+/// A dialogue option the player can choose
+#[derive(Debug, Clone)]
+pub struct DialogueOption {
+    /// Button text shown to player
+    pub label: String,
+    /// Index of next dialogue node (None = end dialogue)
+    pub next_node: Option<usize>,
+}
+
+/// A single node in a dialogue tree
+#[derive(Debug, Clone)]
+pub struct DialogueNode {
+    /// What the NPC says
+    pub text: String,
+    /// Player response choices
+    pub options: Vec<DialogueOption>,
+}
+
+/// Dialogue tree stored on NPCs
+#[derive(Debug, Clone)]
+pub struct Dialogue {
+    /// NPC name for dialogue window title
+    pub name: String,
+    /// All dialogue nodes
+    pub nodes: Vec<DialogueNode>,
+    /// Current position in dialogue (for active conversations)
+    pub current_node: usize,
+}
+
+impl Dialogue {
+    pub fn new(name: impl Into<String>, nodes: Vec<DialogueNode>) -> Self {
+        Self {
+            name: name.into(),
+            nodes,
+            current_node: 0,
+        }
+    }
+
+    /// Get the current dialogue node
+    pub fn current(&self) -> Option<&DialogueNode> {
+        self.nodes.get(self.current_node)
+    }
+
+    /// Advance to the next node based on option selection
+    /// Returns true if dialogue continues, false if it ended
+    pub fn select_option(&mut self, option_index: usize) -> bool {
+        if let Some(node) = self.nodes.get(self.current_node) {
+            if let Some(option) = node.options.get(option_index) {
+                if let Some(next) = option.next_node {
+                    self.current_node = next;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Reset dialogue to start
+    pub fn reset(&mut self) {
+        self.current_node = 0;
+    }
+}

@@ -3,7 +3,7 @@
 //! Handles all game UI: status bars, inventory, loot windows, etc.
 
 use crate::camera::Camera;
-use crate::components::{Container, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, Stats, StatusEffects};
+use crate::components::{Container, Dialogue, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, Stats, StatusEffects};
 use crate::constants::DAMAGE_NUMBER_RISE;
 use crate::systems;
 use crate::tile::tile_ids;
@@ -36,6 +36,15 @@ pub struct InventoryWindowData {
     pub viewport_height: f32,
 }
 
+/// Data needed to render the dialogue window
+pub struct DialogueWindowData {
+    pub npc_name: String,
+    pub text: String,
+    pub options: Vec<String>,
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+}
+
 /// Actions the UI wants to perform (returned to game logic)
 #[derive(Default)]
 pub struct UiActions {
@@ -44,6 +53,8 @@ pub struct UiActions {
     pub chest_take_all: bool,
     pub chest_take_gold: bool,
     pub close_chest: bool,
+    /// Index of dialogue option selected by player
+    pub dialogue_option_selected: Option<usize>,
 }
 
 // =============================================================================
@@ -60,6 +71,8 @@ use hecs::Entity;
 pub struct GameUiState {
     /// Currently open chest/container (for loot window)
     pub open_chest: Option<Entity>,
+    /// Currently talking to NPC (for dialogue window)
+    pub talking_to: Option<Entity>,
     /// Show inventory window
     pub show_inventory: bool,
     /// Show grid overlay
@@ -72,6 +85,7 @@ impl GameUiState {
     pub fn new(player_entity: Entity) -> Self {
         Self {
             open_chest: None,
+            talking_to: None,
             show_inventory: false,
             show_grid_lines: false,
             player_entity,
@@ -87,14 +101,26 @@ impl GameUiState {
                     self.open_chest = Some(*container);
                 }
             }
+            GameEvent::DialogueStarted { npc, player } => {
+                // Open dialogue window if player started the conversation
+                if *player == self.player_entity {
+                    self.talking_to = Some(*npc);
+                }
+            }
             GameEvent::EntityMoved { entity, .. } => {
-                // Close chest when player moves away
+                // Close windows when player moves away
                 if *entity == self.player_entity {
                     self.open_chest = None;
+                    self.talking_to = None;
                 }
             }
             _ => {}
         }
+    }
+
+    /// Close the dialogue window
+    pub fn close_dialogue(&mut self) {
+        self.talking_to = None;
     }
 
     /// Toggle inventory visibility
@@ -438,6 +464,61 @@ pub fn draw_loot_window(
                 }
             });
         });
+}
+
+/// Render the dialogue window for NPC conversations
+pub fn draw_dialogue_window(
+    ctx: &egui::Context,
+    data: &DialogueWindowData,
+    actions: &mut UiActions,
+) {
+    egui::Window::new(&data.npc_name)
+        .default_pos([
+            data.viewport_width / 2.0 - 200.0,
+            data.viewport_height / 2.0 - 100.0,
+        ])
+        .default_size([400.0, 200.0])
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            // NPC's dialogue text
+            ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new(&data.text)
+                    .size(14.0),
+            );
+            ui.add_space(15.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+            // Response options as buttons
+            for (i, option_text) in data.options.iter().enumerate() {
+                if ui.button(option_text).clicked() {
+                    actions.dialogue_option_selected = Some(i);
+                }
+                ui.add_space(3.0);
+            }
+        });
+}
+
+/// Extract dialogue window data from the world
+pub fn get_dialogue_window_data(
+    world: &World,
+    talking_to: Option<hecs::Entity>,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Option<DialogueWindowData> {
+    let npc_id = talking_to?;
+    let dialogue = world.get::<&Dialogue>(npc_id).ok()?;
+    let node = dialogue.current()?;
+
+    Some(DialogueWindowData {
+        npc_name: dialogue.name.clone(),
+        text: node.text.clone(),
+        options: node.options.iter().map(|o| o.label.clone()).collect(),
+        viewport_width,
+        viewport_height,
+    })
 }
 
 /// Render the inventory/character window

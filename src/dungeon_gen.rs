@@ -3,21 +3,27 @@ use crate::grid::Decal;
 use crate::tile::{tile_ids, Tile, TileType};
 use rand::Rng;
 
-#[derive(Clone, Copy)]
-struct Rect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+/// A rectangle representing a room or region
+#[derive(Clone, Copy, Debug)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 impl Rect {
-    fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+    pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self { x, y, width, height }
     }
 
-    fn center(&self) -> (i32, i32) {
+    pub fn center(&self) -> (i32, i32) {
         (self.x + self.width / 2, self.y + self.height / 2)
+    }
+
+    /// Check if a point is inside this rectangle
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
 }
 
@@ -196,6 +202,8 @@ pub struct DungeonResult {
     pub decals: Vec<Decal>,
     pub stairs_up_pos: Option<(i32, i32)>,
     pub stairs_down_pos: Option<(i32, i32)>,
+    /// The starting room where the player spawns (for NPC placement and enemy exclusion)
+    pub starting_room: Option<Rect>,
 }
 
 pub struct DungeonGenerator {
@@ -282,6 +290,9 @@ impl DungeonGenerator {
             .map(|(_, room)| room.center())
             .collect();
 
+        // Starting room is the first room (where player spawns)
+        let starting_room = rooms.first().copied();
+
         DungeonResult {
             tiles: gen.tiles,
             chest_positions,
@@ -289,6 +300,7 @@ impl DungeonGenerator {
             decals,
             stairs_up_pos,
             stairs_down_pos,
+            starting_room,
         }
     }
 
