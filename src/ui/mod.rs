@@ -275,6 +275,61 @@ fn draw_tile_button(
     response.on_hover_text(tooltip)
 }
 
+/// Draw a list item with icon and label (for dev menu)
+fn draw_list_item(
+    ui: &mut egui::Ui,
+    tileset_texture_id: egui::TextureId,
+    uv_rect: egui::Rect,
+    is_selected: bool,
+    label: &str,
+) -> egui::Response {
+    let icon_size = 24.0;
+    let total_height = 28.0;
+    let available_width = ui.available_width();
+
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(available_width, total_height),
+        egui::Sense::click(),
+    );
+
+    let bg_color = if is_selected {
+        egui::Color32::from_rgb(60, 80, 120)
+    } else if response.hovered() {
+        egui::Color32::from_rgb(50, 50, 60)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+
+    ui.painter().rect_filled(rect, 2.0, bg_color);
+
+    // Draw icon
+    let icon_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(4.0, (total_height - icon_size) / 2.0),
+        egui::vec2(icon_size, icon_size),
+    );
+    ui.painter().image(
+        tileset_texture_id,
+        icon_rect,
+        uv_rect,
+        egui::Color32::WHITE,
+    );
+
+    // Draw label
+    let text_pos = egui::pos2(
+        rect.min.x + icon_size + 12.0,
+        rect.center().y,
+    );
+    ui.painter().text(
+        text_pos,
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(14.0),
+        egui::Color32::WHITE,
+    );
+
+    response
+}
+
 /// Draw the developer menu
 pub fn draw_dev_menu(
     ctx: &egui::Context,
@@ -288,39 +343,38 @@ pub fn draw_dev_menu(
 
     egui::Window::new("Developer Tools")
         .fixed_pos([10.0, 120.0])
-        .min_width(280.0)
-        .max_height(400.0)
+        .min_width(200.0)
+        .max_height(500.0)
         .title_bar(true)
         .collapsible(true)
         .scroll([false, true])
         .show(ctx, |ui| {
             // === PLACEMENT TOOLS ===
             ui.heading("Placement (click map)");
-            ui.horizontal_wrapped(|ui| {
-                for tool in DevTool::ALL {
-                    let is_selected = dev_menu.selected_tool == Some(tool);
-                    let uv_rect = tileset.get_egui_uv(tool.tile_id());
+            for tool in DevTool::ALL {
+                let is_selected = dev_menu.selected_tool == Some(tool);
+                let uv_rect = tileset.get_egui_uv(tool.tile_id());
 
-                    let response = draw_tile_button(
-                        ui,
-                        tileset_texture_id,
-                        uv_rect,
-                        is_selected,
-                        tool.name(),
-                    );
+                let response = draw_list_item(
+                    ui,
+                    tileset_texture_id,
+                    uv_rect,
+                    is_selected,
+                    tool.name(),
+                );
 
-                    if response.clicked() {
-                        if is_selected {
-                            dev_menu.selected_tool = None;
-                        } else {
-                            dev_menu.selected_tool = Some(tool);
-                        }
+                if response.clicked() {
+                    if is_selected {
+                        dev_menu.selected_tool = None;
+                    } else {
+                        dev_menu.selected_tool = Some(tool);
                     }
                 }
-            });
+            }
 
             if let Some(tool) = dev_menu.selected_tool {
-                ui.label(format!("Selected: {} - click map to place", tool.name()));
+                ui.add_space(4.0);
+                ui.label(format!("→ Click map to place {}", tool.name()));
             }
 
             ui.add_space(8.0);
@@ -331,41 +385,39 @@ pub fn draw_dev_menu(
 
             // Potions
             ui.label("Potions:");
-            ui.horizontal_wrapped(|ui| {
-                for item in ALL_ITEMS.iter().take(4) {
-                    let uv_rect = tileset.get_egui_uv(item_tile_id(*item));
-                    let response = draw_tile_button(
-                        ui,
-                        tileset_texture_id,
-                        uv_rect,
-                        false,
-                        item_name(*item),
-                    );
+            for item in ALL_ITEMS.iter().take(4) {
+                let uv_rect = tileset.get_egui_uv(item_tile_id(*item));
+                let response = draw_list_item(
+                    ui,
+                    tileset_texture_id,
+                    uv_rect,
+                    false,
+                    item_name(*item),
+                );
 
-                    if response.clicked() {
-                        dev_menu.item_to_give = Some(*item);
-                    }
+                if response.clicked() {
+                    dev_menu.item_to_give = Some(*item);
                 }
-            });
+            }
+
+            ui.add_space(4.0);
 
             // Scrolls
             ui.label("Scrolls:");
-            ui.horizontal_wrapped(|ui| {
-                for item in ALL_ITEMS.iter().skip(4) {
-                    let uv_rect = tileset.get_egui_uv(item_tile_id(*item));
-                    let response = draw_tile_button(
-                        ui,
-                        tileset_texture_id,
-                        uv_rect,
-                        false,
-                        item_name(*item),
-                    );
+            for item in ALL_ITEMS.iter().skip(4) {
+                let uv_rect = tileset.get_egui_uv(item_tile_id(*item));
+                let response = draw_list_item(
+                    ui,
+                    tileset_texture_id,
+                    uv_rect,
+                    false,
+                    item_name(*item),
+                );
 
-                    if response.clicked() {
-                        dev_menu.item_to_give = Some(*item);
-                    }
+                if response.clicked() {
+                    dev_menu.item_to_give = Some(*item);
                 }
-            });
+            }
         });
 }
 
