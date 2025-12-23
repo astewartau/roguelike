@@ -12,6 +12,7 @@ mod game_loop;
 mod grid;
 mod input;
 mod pathfinding;
+mod queries;
 mod renderer;
 mod spawning;
 mod systems;
@@ -712,12 +713,12 @@ impl AppState {
         // Handle attack direction (Shift+movement) - takes priority over regular movement
         if let Some((dx, dy)) = result.attack_direction {
             self.input.clear_path();
-            let _turn_result = game_loop::execute_player_attack_direction(
+            let intent = systems::player_input::PlayerIntent::AttackDirection { dx, dy };
+            let _turn_result = game_loop::execute_player_intent(
                 &mut self.world,
                 &self.grid,
                 self.player_entity,
-                dx,
-                dy,
+                intent,
                 &mut self.game_clock,
                 &mut self.action_scheduler,
                 &mut self.events,
@@ -827,132 +828,48 @@ impl AppState {
         let tile_x = world_pos.x.round() as i32;
         let tile_y = world_pos.y.round() as i32;
 
-        // Check if the tile is walkable
-        let Some(tile) = self.grid.get(tile_x, tile_y) else {
-            return;
-        };
-        if !tile.tile_type.is_walkable() {
-            return;
-        }
+        // Execute the spawn via the dev_tools system
+        let result = systems::dev_tools::execute_dev_spawn(
+            &mut self.world,
+            &mut self.grid,
+            tool,
+            tile_x,
+            tile_y,
+            self.player_entity,
+            &self.game_clock,
+            &mut self.action_scheduler,
+            &mut self.events,
+        );
 
-        // Check if something is already blocking this tile
-        let is_blocked = self.world.query::<(&components::Position, &components::BlocksMovement)>()
-            .iter()
-            .any(|(_, (pos, _))| pos.x == tile_x && pos.y == tile_y);
-        if is_blocked {
-            return;
-        }
-
-        // Spawn the entity based on the selected tool
-        match tool {
-            ui::DevTool::SpawnChest => {
-                let pos = components::Position::new(tile_x, tile_y);
-                self.world.spawn((
-                    pos,
-                    components::VisualPosition::from_position(&pos),
-                    components::Sprite::new(tile::tile_ids::CHEST_CLOSED),
-                    components::Container::new(vec![components::ItemType::HealthPotion]),
-                    components::BlocksMovement,
-                ));
-            }
-            ui::DevTool::SpawnEnemy => {
-                let enemy = spawning::enemies::SKELETON.spawn(&mut self.world, tile_x, tile_y);
-                // Initialize the AI actor's first action
-                let mut rng = rand::thread_rng();
-                game::initialize_single_ai_actor(
-                    &mut self.world,
-                    &self.grid,
-                    enemy,
-                    self.player_entity,
-                    &self.game_clock,
-                    &mut self.action_scheduler,
-                    &mut self.events,
-                    &mut rng,
-                );
-            }
-            ui::DevTool::SpawnFire => {
-                // Spawn a fire particle effect at this location
+        // Handle VFX requests (not ECS, stays here)
+        if matches!(result, systems::dev_tools::DevSpawnResult::VfxRequested) {
+            if matches!(tool, ui::DevTool::SpawnFire) {
                 self.vfx.spawn_fire(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-            }
-            ui::DevTool::SpawnStairsDown => {
-                // Change the tile to stairs down
-                if let Some(tile) = self.grid.get_mut(tile_x, tile_y) {
-                    tile.tile_type = tile::TileType::StairsDown;
-                }
-                self.grid.stairs_down_pos = Some((tile_x, tile_y));
-            }
-            ui::DevTool::SpawnStairsUp => {
-                // Change the tile to stairs up
-                if let Some(tile) = self.grid.get_mut(tile_x, tile_y) {
-                    tile.tile_type = tile::TileType::StairsUp;
-                }
-                self.grid.stairs_up_pos = Some((tile_x, tile_y));
             }
         }
     }
 
     /// Apply an effect to all enemies visible to the player
     fn apply_effect_to_visible_enemies(&mut self, effect: components::EffectType, duration: f32) {
-        use components::{ChaseAI, Position, StatusEffects};
-
         // Get player position
-        let player_pos = self.world.get::<&Position>(self.player_entity)
-            .map(|p| (p.x, p.y))
+        let player_pos = queries::get_entity_position(&self.world, self.player_entity)
             .unwrap_or((0, 0));
 
-        // Calculate visible tiles from player's perspective
-        let visible_tiles: std::collections::HashSet<(i32, i32)> = fov::FOV::calculate(
+        systems::effects::apply_effect_to_visible_enemies(
+            &mut self.world,
             &self.grid,
-            player_pos.0,
-            player_pos.1,
+            player_pos,
             constants::FOV_RADIUS,
-            None::<fn(i32, i32) -> bool>,
-        ).into_iter().collect();
-
-        // Find all enemies in visible tiles and apply effect
-        let enemies_to_affect: Vec<(hecs::Entity, i32, i32)> = self.world
-            .query::<(&Position, &ChaseAI)>()
-            .iter()
-            .filter(|(_, (pos, _))| visible_tiles.contains(&(pos.x, pos.y)))
-            .map(|(entity, (pos, _))| (entity, pos.x, pos.y))
-            .collect();
-
-        for (entity, _x, _y) in enemies_to_affect {
-            if let Ok(mut effects) = self.world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(effect, duration);
-            }
-        }
+            effect,
+            duration,
+        );
     }
 
     fn handle_right_click_shoot(&mut self) {
-        // Check if player is alive and can act
-        let can_act = self
-            .world
-            .get::<&components::Actor>(self.player_entity)
-            .map(|a| a.can_act())
-            .unwrap_or(false);
-
-        let is_dead = self
-            .world
-            .get::<&components::Health>(self.player_entity)
-            .map(|h| h.is_dead())
-            .unwrap_or(true);
-
-        if !can_act || is_dead {
+        // Check if player has ranged weapon equipped
+        if !systems::player_input::has_ranged_equipped(&self.world, self.player_entity) {
             return;
         }
-
-        // Check what's equipped in ranged slot
-        let ranged_slot = self
-            .world
-            .get::<&components::Equipment>(self.player_entity)
-            .ok()
-            .and_then(|e| e.ranged.clone());
-
-        let ranged_slot = match ranged_slot {
-            Some(slot) => slot,
-            None => return,
-        };
 
         // Get target tile from mouse position
         let (target_x, target_y) = input::get_shoot_target(&self.input, &self.camera);
@@ -960,51 +877,23 @@ impl AppState {
         // Clear any click-to-move path
         self.input.clear_path();
 
-        // Create the appropriate action based on what's equipped
-        let action_type = match ranged_slot {
-            components::RangedSlot::Bow(_) => {
-                components::ActionType::ShootBow { target_x, target_y }
-            }
-            components::RangedSlot::Throwable { .. } => {
-                components::ActionType::ThrowPotion { target_x, target_y }
-            }
-        };
-
-        // Try to start the action
-        if time_system::start_action(
+        // Execute via unified intent system
+        let intent = systems::player_input::PlayerIntent::ShootRanged { target_x, target_y };
+        let result = game_loop::execute_player_intent(
             &mut self.world,
+            &self.grid,
             self.player_entity,
-            action_type,
-            &self.game_clock,
+            intent,
+            &mut self.game_clock,
             &mut self.action_scheduler,
-        )
-        .is_ok()
-        {
-            // Advance time until player can act again
-            let mut rng = rand::thread_rng();
-            game_loop::advance_until_player_ready_public(
-                &mut self.world,
-                &self.grid,
-                self.player_entity,
-                &mut self.game_clock,
-                &mut self.action_scheduler,
-                &mut self.events,
-                &mut rng,
-            );
+            &mut self.events,
+            &mut self.vfx,
+            &mut self.ui_state,
+        );
 
-            // Process events
-            let event_result = game_loop::process_events(
-                &mut self.events,
-                &mut self.world,
-                &self.grid,
-                &mut self.vfx,
-                &mut self.ui_state,
-                self.player_entity,
-            );
-            // Stop pursuit if player attacked, took damage, or enemy spotted them
-            if event_result.player_attacked || event_result.player_took_damage || event_result.enemy_spotted_player {
-                self.input.clear_path();
-            }
+        // Stop pursuit if player attacked, took damage, or enemy spotted them
+        if result.player_attacked || result.player_took_damage || result.enemy_spotted_player {
+            self.input.clear_path();
         }
     }
 
@@ -1024,7 +913,7 @@ impl AppState {
         let target_x = world_pos.x.floor() as i32;
         let target_y = world_pos.y.floor() as i32;
 
-        // Get player position
+        // Get player position for validation
         let player_pos = match self.world.get::<&components::Position>(self.player_entity) {
             Ok(p) => (p.x, p.y),
             Err(_) => {
@@ -1033,82 +922,49 @@ impl AppState {
             }
         };
 
-        // Check if in range (Chebyshev distance for better diagonal targeting)
-        let distance = (target_x - player_pos.0).abs().max((target_y - player_pos.1).abs());
-        if distance > targeting.max_range {
-            // Out of range - don't execute, just ignore the click
+        // Validate targeting using player_input system
+        let validation = systems::player_input::validate_targeting(
+            &self.world,
+            &self.grid,
+            player_pos,
+            target_x,
+            target_y,
+            &targeting,
+        );
+
+        if validation != systems::player_input::TargetingValidation::Valid {
+            // Invalid target - ignore click (don't cancel targeting, let player try again)
             return;
         }
 
-        // Determine the action type based on item
-        let action_type = match targeting.item_type {
-            components::ItemType::ScrollOfBlink => {
-                // Validate target is walkable and not blocked
-                let walkable = self.grid.get(target_x, target_y)
-                    .map(|t| t.tile_type.is_walkable())
-                    .unwrap_or(false);
-                if !walkable {
-                    return;
-                }
-                // Check no entity blocks this position
-                let blocked = self.world.query::<(&components::Position, &components::BlocksMovement)>()
-                    .iter()
-                    .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
-                if blocked {
-                    return;
-                }
-                components::ActionType::Blink { target_x, target_y }
-            }
-            components::ItemType::ScrollOfFireball => {
-                components::ActionType::CastFireball { target_x, target_y }
-            }
-            _ => {
-                self.input.cancel_targeting();
-                return;
-            }
-        };
-
-        // Remove the item from inventory
+        // Remove the item from inventory before executing
         systems::remove_item_from_inventory(&mut self.world, self.player_entity, targeting.item_index);
 
         // Exit targeting mode before starting action
         self.input.cancel_targeting();
 
-        // Try to start the action
-        if time_system::start_action(
+        // Execute via unified intent system
+        let intent = systems::player_input::PlayerIntent::UseTargetedAbility {
+            item_type: targeting.item_type,
+            item_index: targeting.item_index,
+            target_x,
+            target_y,
+        };
+        let result = game_loop::execute_player_intent(
             &mut self.world,
+            &self.grid,
             self.player_entity,
-            action_type,
-            &self.game_clock,
+            intent,
+            &mut self.game_clock,
             &mut self.action_scheduler,
-        )
-        .is_ok()
-        {
-            // Advance time until player can act again
-            let mut rng = rand::thread_rng();
-            game_loop::advance_until_player_ready_public(
-                &mut self.world,
-                &self.grid,
-                self.player_entity,
-                &mut self.game_clock,
-                &mut self.action_scheduler,
-                &mut self.events,
-                &mut rng,
-            );
+            &mut self.events,
+            &mut self.vfx,
+            &mut self.ui_state,
+        );
 
-            // Process events
-            let event_result = game_loop::process_events(
-                &mut self.events,
-                &mut self.world,
-                &self.grid,
-                &mut self.vfx,
-                &mut self.ui_state,
-                self.player_entity,
-            );
-            // Stop pursuit if player attacked, took damage, or enemy spotted them
-            if event_result.player_attacked || event_result.player_took_damage || event_result.enemy_spotted_player {
-                self.input.clear_path();
-            }
+        // Stop pursuit if player attacked, took damage, or enemy spotted them
+        if result.player_attacked || result.player_took_damage || result.enemy_spotted_player {
+            self.input.clear_path();
         }
     }
 

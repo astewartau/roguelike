@@ -43,6 +43,22 @@ pub enum GameEvent {
         container: Entity,
         opener: Entity,
     },
+    /// Take all items from a container
+    TakeAllFromContainer {
+        container: Entity,
+        taker: Entity,
+    },
+    /// Take a specific item from a container
+    TakeItemFromContainer {
+        container: Entity,
+        taker: Entity,
+        item_index: usize,
+    },
+    /// Take gold from a container
+    TakeGoldFromContainer {
+        container: Entity,
+        taker: Entity,
+    },
     /// An entity picked up an item
     ItemPickedUp {
         entity: Entity,

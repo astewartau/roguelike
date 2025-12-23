@@ -8,12 +8,13 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 use rand::Rng;
 
-use crate::components::{ActionType, Actor, AIState, BlocksMovement, BlocksVision, ChaseAI, EffectType, Equipment, Position, StatusEffects};
+use crate::components::{ActionType, Actor, AIState, ChaseAI, EffectType, Equipment, Position};
 use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
 use crate::fov::FOV;
 use crate::grid::Grid;
 use crate::pathfinding;
+use crate::queries;
 use crate::time_system::{self, ActionScheduler, GameClock};
 
 /// Have an AI entity decide and start its next action.
@@ -96,24 +97,12 @@ fn determine_action(
     };
 
     // Check for status effects that override normal AI behavior
-    let is_confused = world
-        .get::<&StatusEffects>(entity)
-        .map(|e| e.has_effect(EffectType::Confused))
-        .unwrap_or(false);
-
-    let is_feared = world
-        .get::<&StatusEffects>(entity)
-        .map(|e| e.has_effect(EffectType::Feared))
-        .unwrap_or(false);
+    let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
+    let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
 
     // Confused: move randomly, ignore player entirely
     if is_confused {
-        let movement_blocking: HashSet<(i32, i32)> = world
-            .query::<(&Position, &BlocksMovement)>()
-            .iter()
-            .filter(|(id, _)| *id != entity)
-            .map(|(_, (pos, _))| (pos.x, pos.y))
-            .collect();
+        let movement_blocking = queries::get_blocking_positions(world, Some(entity));
 
         let (dx, dy) = random_wander(grid, entity_pos, &movement_blocking, rng);
         if dx == 0 && dy == 0 {
@@ -124,12 +113,7 @@ fn determine_action(
 
     // Feared: flee from player
     if is_feared {
-        let movement_blocking: HashSet<(i32, i32)> = world
-            .query::<(&Position, &BlocksMovement)>()
-            .iter()
-            .filter(|(id, _)| *id != entity)
-            .map(|(_, (pos, _))| (pos.x, pos.y))
-            .collect();
+        let movement_blocking = queries::get_blocking_positions(world, Some(entity));
 
         let (dx, dy) = flee_from_target(grid, entity_pos, player_pos, &movement_blocking, rng);
         if dx == 0 && dy == 0 {
@@ -227,11 +211,7 @@ fn determine_action(
 /// Check if there's a clear line of sight for a projectile (no blocking entities)
 fn has_clear_shot(world: &World, from: (i32, i32), to: (i32, i32)) -> bool {
     // Collect positions of entities that block movement (potential obstacles)
-    let blocking: HashSet<(i32, i32)> = world
-        .query::<(&Position, &BlocksMovement)>()
-        .iter()
-        .map(|(_, (pos, _))| (pos.x, pos.y))
-        .collect();
+    let blocking = queries::get_blocking_positions(world, None);
 
     // Simple line check using Bresenham-like iteration
     let dx = (to.0 - from.0).abs();
@@ -276,19 +256,13 @@ fn can_see_target(
 ) -> bool {
     // Check if target entity is invisible
     if let Some(entity) = target_entity {
-        if let Ok(effects) = world.get::<&StatusEffects>(entity) {
-            if effects.has_effect(EffectType::Invisible) {
-                return false;
-            }
+        if queries::has_status_effect(world, entity, EffectType::Invisible) {
+            return false;
         }
     }
 
     // Collect vision-blocking positions
-    let vision_blocking: HashSet<(i32, i32)> = world
-        .query::<(&Position, &BlocksVision)>()
-        .iter()
-        .map(|(_, (pos, _))| (pos.x, pos.y))
-        .collect();
+    let vision_blocking = queries::get_vision_blocking_positions(world);
 
     // Calculate FOV from entity position
     let visible_tiles = FOV::calculate(
@@ -348,12 +322,7 @@ fn calculate_movement(
     rng: &mut impl Rng,
 ) -> (i32, i32) {
     // Collect movement-blocking positions (used by both pathfinding and wandering)
-    let movement_blocking: HashSet<(i32, i32)> = world
-        .query::<(&Position, &BlocksMovement)>()
-        .iter()
-        .filter(|(id, _)| *id != entity)
-        .map(|(_, (pos, _))| (pos.x, pos.y))
-        .collect();
+    let movement_blocking = queries::get_blocking_positions(world, Some(entity));
 
     if let Some((tx, ty)) = target {
         // Pathfind to target

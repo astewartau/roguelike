@@ -5,6 +5,7 @@
 
 use crate::components::{ActionType, Actor};
 use crate::events::{EventQueue, GameEvent};
+use crate::systems::player_input::{self, PlayerIntent};
 use crate::grid::Grid;
 use crate::systems;
 use crate::time_system::{self, ActionScheduler, GameClock};
@@ -132,6 +133,79 @@ pub fn execute_player_attack_direction(
 
     // Create attack direction action
     let action_type = ActionType::AttackDirection { dx, dy };
+
+    // Try to start the action
+    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
+        return TurnExecutionResult {
+            turn_result: TurnResult::Blocked,
+            floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
+        };
+    }
+
+    // Advance time until player can act again
+    let mut rng = rand::thread_rng();
+    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
+
+    // Process events (VFX, UI state, world state changes)
+    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
+
+    TurnExecutionResult {
+        turn_result: TurnResult::Started,
+        floor_transition: event_result.floor_transition,
+        player_attacked: event_result.player_attacked,
+        player_took_damage: event_result.player_took_damage,
+        enemy_spotted_player: event_result.enemy_spotted_player,
+    }
+}
+
+/// Execute a player intent - unified entry point for all player actions.
+///
+/// This handles all player action types: movement, attack direction,
+/// ranged shooting, and targeted abilities. It validates the intent,
+/// converts to an action, and advances time.
+pub fn execute_player_intent(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    intent: PlayerIntent,
+    clock: &mut GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+) -> TurnExecutionResult {
+    // Check if player can act
+    let can_act = world
+        .get::<&Actor>(player_entity)
+        .map(|a| a.can_act())
+        .unwrap_or(false);
+
+    if !can_act {
+        return TurnExecutionResult {
+            turn_result: TurnResult::NotReady,
+            floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
+        };
+    }
+
+    // Convert intent to action type
+    let action_type = match player_input::intent_to_action(world, grid, player_entity, &intent) {
+        Some(action) => action,
+        None => {
+            return TurnExecutionResult {
+                turn_result: TurnResult::Blocked,
+                floor_transition: None,
+                player_attacked: false,
+                player_took_damage: false,
+                enemy_spotted_player: false,
+            };
+        }
+    };
 
     // Try to start the action
     if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
@@ -302,6 +376,15 @@ pub fn process_events(
         match &event {
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
+            }
+            GameEvent::TakeAllFromContainer { container, taker } => {
+                systems::take_all_from_container(world, *taker, *container, None);
+            }
+            GameEvent::TakeItemFromContainer { container, taker, item_index } => {
+                systems::take_item_from_container(world, *taker, *container, *item_index, None);
+            }
+            GameEvent::TakeGoldFromContainer { container, taker } => {
+                systems::take_gold_from_container(world, *taker, *container, None);
             }
             GameEvent::FloorTransition { direction, .. } => {
                 // Capture floor transition for handling by caller

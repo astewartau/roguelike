@@ -1,0 +1,173 @@
+//! Player input interpretation and intent processing.
+//!
+//! Converts raw input into PlayerIntent, validates targeting,
+//! and provides intent-to-action conversion. This keeps game logic
+//! out of main.rs and in proper ECS systems.
+
+use hecs::{Entity, World};
+
+use crate::components::{ActionType, BlocksMovement, Equipment, ItemType, Position, RangedSlot};
+use crate::grid::Grid;
+use crate::input::TargetingMode;
+
+/// High-level player intent derived from input.
+/// This represents what the player wants to do, before validation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlayerIntent {
+    /// No action this frame
+    None,
+    /// Move in a direction
+    Move { dx: i32, dy: i32 },
+    /// Force attack in a direction (Shift+move)
+    AttackDirection { dx: i32, dy: i32 },
+    /// Shoot equipped ranged weapon at target
+    ShootRanged { target_x: i32, target_y: i32 },
+    /// Use a targeted ability (blink, fireball)
+    UseTargetedAbility {
+        item_type: ItemType,
+        item_index: usize,
+        target_x: i32,
+        target_y: i32,
+    },
+}
+
+/// Result of validating a targeting action
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetingValidation {
+    /// Target is valid
+    Valid,
+    /// Target is out of range
+    OutOfRange,
+    /// Target terrain is not walkable
+    BlockedTerrain,
+    /// Target is blocked by an entity
+    BlockedByEntity,
+    /// Item type doesn't support targeting
+    InvalidItemType,
+}
+
+/// Validate a targeting action (range, walkability, etc.)
+///
+/// Returns `Valid` if the target is acceptable for the given targeting mode.
+pub fn validate_targeting(
+    world: &World,
+    grid: &Grid,
+    player_pos: (i32, i32),
+    target_x: i32,
+    target_y: i32,
+    targeting: &TargetingMode,
+) -> TargetingValidation {
+    // Check range (Chebyshev distance for better diagonal targeting)
+    let distance = (target_x - player_pos.0)
+        .abs()
+        .max((target_y - player_pos.1).abs());
+    if distance > targeting.max_range {
+        return TargetingValidation::OutOfRange;
+    }
+
+    // Item-specific validation
+    match targeting.item_type {
+        ItemType::ScrollOfBlink => {
+            // Blink requires walkable, unblocked destination
+            let walkable = grid
+                .get(target_x, target_y)
+                .map(|t| t.tile_type.is_walkable())
+                .unwrap_or(false);
+            if !walkable {
+                return TargetingValidation::BlockedTerrain;
+            }
+
+            // Check no entity blocks this position
+            let blocked = world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
+            if blocked {
+                return TargetingValidation::BlockedByEntity;
+            }
+
+            TargetingValidation::Valid
+        }
+        ItemType::ScrollOfFireball => {
+            // Fireball can target anywhere in range
+            TargetingValidation::Valid
+        }
+        _ => TargetingValidation::InvalidItemType,
+    }
+}
+
+/// Convert a RangedSlot to the appropriate ActionType for shooting/throwing.
+pub fn ranged_slot_to_action(slot: &RangedSlot, target_x: i32, target_y: i32) -> ActionType {
+    match slot {
+        RangedSlot::Bow(_) => ActionType::ShootBow { target_x, target_y },
+        RangedSlot::Throwable { .. } => ActionType::ThrowPotion { target_x, target_y },
+    }
+}
+
+/// Convert a PlayerIntent to an ActionType.
+///
+/// Returns `None` if the intent doesn't map to an action (e.g., `PlayerIntent::None`)
+/// or if required validation fails.
+pub fn intent_to_action(
+    world: &World,
+    grid: &Grid,
+    player_entity: Entity,
+    intent: &PlayerIntent,
+) -> Option<ActionType> {
+    match intent {
+        PlayerIntent::None => None,
+
+        PlayerIntent::Move { dx, dy } => {
+            // Use the time system's determine_action_type for full movement logic
+            // (handles attacks, doors, chests, etc.)
+            Some(crate::time_system::determine_action_type(
+                world,
+                grid,
+                player_entity,
+                *dx,
+                *dy,
+            ))
+        }
+
+        PlayerIntent::AttackDirection { dx, dy } => {
+            Some(ActionType::AttackDirection { dx: *dx, dy: *dy })
+        }
+
+        PlayerIntent::ShootRanged { target_x, target_y } => {
+            // Get ranged slot from equipment
+            let ranged_slot = world
+                .get::<&Equipment>(player_entity)
+                .ok()
+                .and_then(|e| e.ranged.clone())?;
+
+            Some(ranged_slot_to_action(&ranged_slot, *target_x, *target_y))
+        }
+
+        PlayerIntent::UseTargetedAbility {
+            item_type,
+            target_x,
+            target_y,
+            ..
+        } => {
+            match item_type {
+                ItemType::ScrollOfBlink => Some(ActionType::Blink {
+                    target_x: *target_x,
+                    target_y: *target_y,
+                }),
+                ItemType::ScrollOfFireball => Some(ActionType::CastFireball {
+                    target_x: *target_x,
+                    target_y: *target_y,
+                }),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Check if the player has a ranged weapon equipped.
+pub fn has_ranged_equipped(world: &World, player_entity: Entity) -> bool {
+    world
+        .get::<&Equipment>(player_entity)
+        .map(|e| e.ranged.is_some())
+        .unwrap_or(false)
+}

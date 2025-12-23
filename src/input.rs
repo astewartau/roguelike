@@ -4,9 +4,10 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{Actor, Attackable, BlocksMovement, Container, Door, ItemType, Position};
+use crate::components::{Attackable, BlocksMovement, Container, Door, ItemType, Position};
 use crate::grid::Grid;
 use crate::pathfinding;
+use crate::queries;
 use hecs::{Entity, World};
 use std::collections::{HashSet, VecDeque};
 use winit::keyboard::KeyCode;
@@ -364,12 +365,7 @@ pub fn handle_click_to_move(
             input.pursuit_target = None;
             input.pursuit_origin = None;
 
-            let blocked: HashSet<(i32, i32)> = world
-                .query::<(&Position, &BlocksMovement)>()
-                .iter()
-                .filter(|(id, _)| *id != player_entity)
-                .map(|(_, (pos, _))| (pos.x, pos.y))
-                .collect();
+            let blocked = queries::get_blocking_positions(world, Some(player_entity));
 
             if let Some(path) = pathfinding::find_path(grid, player_pos, (x, y), &blocked) {
                 input.player_path = VecDeque::from(path);
@@ -392,13 +388,9 @@ fn path_to_adjacent(
     target_pos: (i32, i32),
 ) -> Option<Vec<(i32, i32)>> {
     // Collect blocking positions, excluding the target tile itself
-    let blocked: HashSet<(i32, i32)> = world
-        .query::<(&Position, &BlocksMovement)>()
-        .iter()
-        .filter(|(id, _)| *id != player_entity)
-        .map(|(_, (pos, _))| (pos.x, pos.y))
-        .filter(|pos| *pos != target_pos)
-        .collect();
+    let mut blocked = queries::get_blocking_positions(world, Some(player_entity));
+    // Also exclude the target position (we want to path TO it, not around it)
+    blocked.remove(&target_pos);
 
     // Try to find path to any adjacent tile
     let adjacents = [
@@ -437,12 +429,7 @@ pub fn get_path_movement(
     player_entity: Entity,
 ) -> Option<(i32, i32)> {
     // Check if player can act
-    let player_can_act = world
-        .get::<&Actor>(player_entity)
-        .map(|a| a.can_act())
-        .unwrap_or(false);
-
-    if !player_can_act {
+    if !queries::can_entity_act(world, player_entity) {
         return None;
     }
 
@@ -521,12 +508,9 @@ pub fn update_pursuit(
 
     // Only recalculate path if current path is empty or next step is blocked
     let needs_recalc = if let Some(next_step) = input.player_path.front() {
-        // Check if next step is blocked (by another entity, not the target)
-        let step_blocked = world
-            .query::<(&Position, &BlocksMovement)>()
-            .iter()
-            .filter(|(id, _)| *id != player_entity && *id != target)
-            .any(|(_, (pos, _))| pos.x == next_step.0 && pos.y == next_step.1);
+        // Check if next step is blocked (by another entity, not the target or player)
+        let blocking = queries::get_blocking_positions(world, Some(player_entity));
+        let step_blocked = blocking.contains(next_step) && *next_step != target_pos;
 
         // Check if next step is not walkable terrain
         let step_unwalkable = !grid

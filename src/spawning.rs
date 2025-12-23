@@ -11,6 +11,17 @@ use crate::components::{
 use crate::tile::tile_ids;
 use hecs::World;
 
+/// Ranged attack configuration for enemies
+#[derive(Clone, Copy)]
+pub struct RangedConfig {
+    /// Minimum range to use ranged attack
+    pub min_range: i32,
+    /// Maximum range for ranged attack
+    pub max_range: i32,
+    /// Ranged weapon damage
+    pub damage: i32,
+}
+
 /// Definition of an enemy type - all the data needed to spawn one
 #[derive(Clone)]
 pub struct EnemyDef {
@@ -18,6 +29,8 @@ pub struct EnemyDef {
     pub name: &'static str,
     /// Tile ID from the tileset
     pub tile_id: u32,
+    /// Optional overlay sprite (e.g., bow for archers)
+    pub overlay_tile_id: Option<u32>,
     /// Maximum health
     pub health: i32,
     /// Maximum energy pool
@@ -26,31 +39,75 @@ pub struct EnemyDef {
     pub speed: f32,
     /// Sight radius for chase AI
     pub sight_radius: i32,
-    /// Base attack damage
+    /// Base melee attack damage
     pub damage: i32,
     /// Base stats
     pub strength: i32,
     pub intelligence: i32,
     pub agility: i32,
+    /// Optional ranged attack configuration
+    pub ranged: Option<RangedConfig>,
 }
 
 impl EnemyDef {
     /// Spawn this enemy type at the given position
     pub fn spawn(&self, world: &mut World, x: i32, y: i32) -> hecs::Entity {
         let pos = Position::new(x, y);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::new(self.tile_id),
-            Actor::new(self.max_energy, self.speed),
-            ChaseAI::new(self.sight_radius),
-            Health::new(self.health),
-            Stats::new(self.strength, self.intelligence, self.agility),
-            Equipment::with_weapon(Weapon::claws(self.damage)),
-            StatusEffects::new(),
-            Attackable,
-            BlocksMovement,
-        ))
+
+        // Build base components
+        let sprite = Sprite::new(self.tile_id);
+        let actor = Actor::new(self.max_energy, self.speed);
+        let health = Health::new(self.health);
+        let stats = Stats::new(self.strength, self.intelligence, self.agility);
+        let status_effects = StatusEffects::new();
+
+        // Build AI and equipment based on whether enemy has ranged capability
+        let (chase_ai, equipment) = if let Some(ranged) = &self.ranged {
+            (
+                ChaseAI::with_ranged(self.sight_radius, ranged.min_range, ranged.max_range),
+                Equipment::with_weapons(
+                    Weapon::claws(self.damage),
+                    RangedWeapon::enemy_bow(ranged.damage),
+                ),
+            )
+        } else {
+            (
+                ChaseAI::new(self.sight_radius),
+                Equipment::with_weapon(Weapon::claws(self.damage)),
+            )
+        };
+
+        // Spawn with or without overlay sprite
+        if let Some(overlay_id) = self.overlay_tile_id {
+            world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                sprite,
+                OverlaySprite::new(overlay_id),
+                actor,
+                chase_ai,
+                health,
+                stats,
+                equipment,
+                status_effects,
+                Attackable,
+                BlocksMovement,
+            ))
+        } else {
+            world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                sprite,
+                actor,
+                chase_ai,
+                health,
+                stats,
+                equipment,
+                status_effects,
+                Attackable,
+                BlocksMovement,
+            ))
+        }
     }
 }
 
@@ -62,6 +119,7 @@ pub mod enemies {
     pub const SKELETON: EnemyDef = EnemyDef {
         name: "Skeleton",
         tile_id: tile_ids::SKELETON,
+        overlay_tile_id: None,
         health: SKELETON_HEALTH,
         max_energy: SKELETON_MAX_ENERGY,
         speed: SKELETON_SPEED,
@@ -70,11 +128,13 @@ pub mod enemies {
         strength: SKELETON_STRENGTH,
         intelligence: SKELETON_INTELLIGENCE,
         agility: SKELETON_AGILITY,
+        ranged: None,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
         name: "Rat",
         tile_id: tile_ids::RAT,
+        overlay_tile_id: None,
         health: RAT_HEALTH,
         max_energy: RAT_MAX_ENERGY,
         speed: RAT_SPEED,
@@ -83,44 +143,32 @@ pub mod enemies {
         strength: RAT_STRENGTH,
         intelligence: RAT_INTELLIGENCE,
         agility: RAT_AGILITY,
+        ranged: None,
     };
 
-    /// Spawn a skeleton archer (special enemy with ranged attack and bow overlay)
-    pub fn spawn_skeleton_archer(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-        let pos = Position::new(x, y);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::SKELETON),
-            OverlaySprite::new(tile_ids::BOW), // Bow displayed on top
-            Actor::new(SKELETON_ARCHER_MAX_ENERGY, SKELETON_ARCHER_SPEED),
-            ChaseAI::with_ranged(
-                SKELETON_ARCHER_SIGHT_RADIUS,
-                SKELETON_ARCHER_MIN_RANGE,
-                SKELETON_ARCHER_MAX_RANGE,
-            ),
-            Health::new(SKELETON_ARCHER_HEALTH),
-            Stats::new(
-                SKELETON_ARCHER_STRENGTH,
-                SKELETON_ARCHER_INTELLIGENCE,
-                SKELETON_ARCHER_AGILITY,
-            ),
-            Equipment::with_weapons(
-                Weapon::claws(SKELETON_ARCHER_MELEE_DAMAGE),
-                RangedWeapon::enemy_bow(SKELETON_ARCHER_BOW_DAMAGE),
-            ),
-            StatusEffects::new(),
-            Attackable,
-            BlocksMovement,
-        ))
-    }
+    pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
+        name: "Skeleton Archer",
+        tile_id: tile_ids::SKELETON,
+        overlay_tile_id: Some(tile_ids::BOW),
+        health: SKELETON_ARCHER_HEALTH,
+        max_energy: SKELETON_ARCHER_MAX_ENERGY,
+        speed: SKELETON_ARCHER_SPEED,
+        sight_radius: SKELETON_ARCHER_SIGHT_RADIUS,
+        damage: SKELETON_ARCHER_MELEE_DAMAGE,
+        strength: SKELETON_ARCHER_STRENGTH,
+        intelligence: SKELETON_ARCHER_INTELLIGENCE,
+        agility: SKELETON_ARCHER_AGILITY,
+        ranged: Some(RangedConfig {
+            min_range: SKELETON_ARCHER_MIN_RANGE,
+            max_range: SKELETON_ARCHER_MAX_RANGE,
+            damage: SKELETON_ARCHER_BOW_DAMAGE,
+        }),
+    };
 }
 
 /// Spawn configuration for a dungeon level
 pub struct SpawnConfig {
     pub entries: Vec<SpawnEntry>,
-    /// Number of skeleton archers to spawn (handled separately due to custom spawn)
-    pub skeleton_archer_count: usize,
 }
 
 /// A single spawn entry: which enemy and how many
@@ -143,8 +191,11 @@ impl SpawnConfig {
                     enemy: enemies::SKELETON.clone(),
                     count: SKELETON_SPAWN_COUNT,
                 },
+                SpawnEntry {
+                    enemy: enemies::SKELETON_ARCHER.clone(),
+                    count: SKELETON_ARCHER_SPAWN_COUNT,
+                },
             ],
-            skeleton_archer_count: SKELETON_ARCHER_SPAWN_COUNT,
         }
     }
 
@@ -169,7 +220,7 @@ impl SpawnConfig {
             excluded_room.map(|r| r.contains(x, y)).unwrap_or(false)
         };
 
-        // Spawn regular enemies
+        // Spawn all enemies using the unified template system
         for entry in &self.entries {
             for _ in 0..entry.count {
                 // Find a valid spawn position (not in used positions and not in excluded room)
@@ -187,23 +238,6 @@ impl SpawnConfig {
                 used_positions.push((x, y));
                 spawned += 1;
             }
-        }
-
-        // Spawn skeleton archers (custom spawn function)
-        for _ in 0..self.skeleton_archer_count {
-            let available: Vec<_> = walkable_tiles
-                .iter()
-                .filter(|&&(x, y)| !used_positions.contains(&(x, y)) && !is_in_excluded_room(x, y))
-                .collect();
-
-            if available.is_empty() {
-                break;
-            }
-
-            let &(x, y) = available[rng.gen_range(0..available.len())];
-            enemies::spawn_skeleton_archer(world, x, y);
-            used_positions.push((x, y));
-            spawned += 1;
         }
 
         spawned
