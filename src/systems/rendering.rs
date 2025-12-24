@@ -27,15 +27,25 @@ pub struct RenderEntity {
     pub overlay: Option<Sprite>, // Optional overlay sprite (e.g., weapon)
 }
 
-/// Update field of view from player position
-pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius: i32) {
+/// Update field of view from player position.
+/// Also applies magical reveal effects (Scroll of Reveal) based on current time.
+pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius: i32, current_time: f32) {
     let Ok(player_pos) = world.get::<&Position>(player_entity) else {
         return;
     };
 
-    // Clear visibility
+    // Clear visibility, but apply magical reveal for tiles that haven't expired
     for tile in &mut grid.tiles {
         tile.visible = false;
+        // Check if tile is magically revealed
+        if let Some(reveal_time) = tile.revealed_until {
+            if reveal_time > current_time {
+                tile.visible = true;
+            } else {
+                // Reveal expired, clear it
+                tile.revealed_until = None;
+            }
+        }
     }
 
     // Collect positions of entities that block vision
@@ -160,17 +170,27 @@ pub fn reveal_entire_map(grid: &mut Grid) {
     }
 }
 
-/// Mark tiles containing enemies as explored (Scroll of Reveal effect)
-/// Also marks a small radius around each enemy for visibility
-pub fn reveal_enemies(world: &World, grid: &mut Grid) {
+/// Magically reveal tiles around all enemies (Scroll of Reveal effect).
+/// Sets tiles as visible for a duration, making enemies and their surroundings
+/// fully visible as if in line of sight.
+pub fn reveal_enemies(world: &World, grid: &mut Grid, current_time: f32) {
     use crate::components::ChaseAI;
+    use crate::constants::{REVEAL_DURATION, REVEAL_RADIUS};
+
+    let reveal_until = current_time + REVEAL_DURATION;
 
     for (_, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
-        // Mark enemy tile and surrounding tiles as explored
-        for dy in -1..=1 {
-            for dx in -1..=1 {
+        // Reveal tiles in a radius around each enemy
+        for dy in -REVEAL_RADIUS..=REVEAL_RADIUS {
+            for dx in -REVEAL_RADIUS..=REVEAL_RADIUS {
                 if let Some(tile) = grid.get_mut(pos.x + dx, pos.y + dy) {
                     tile.explored = true;
+                    // Set or extend the magical reveal time
+                    tile.revealed_until = Some(
+                        tile.revealed_until
+                            .map(|t| t.max(reveal_until))
+                            .unwrap_or(reveal_until)
+                    );
                 }
             }
         }

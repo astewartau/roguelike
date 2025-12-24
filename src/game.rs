@@ -5,7 +5,7 @@
 use crate::camera::Camera;
 use crate::components::{
     Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment,
-    Experience, Health, Inventory, ItemType, Player, Position, RangedWeapon, Sprite, Stats,
+    Experience, Health, Inventory, ItemType, Player, Position, Sprite, Stats,
     StatusEffects, VisualPosition, Weapon,
 };
 use crate::constants::*;
@@ -161,6 +161,11 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
     }
 
     // Spawn player with new time system Actor
+    // Player starts with sword equipped and bow in inventory
+    let mut starting_inventory = Inventory::new();
+    starting_inventory.items.push(ItemType::Bow);
+    starting_inventory.current_weight_kg += crate::constants::BOW_WEIGHT;
+
     let player_entity = world.spawn((
         player_start,
         VisualPosition::from_position(&player_start),
@@ -173,8 +178,8 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
             PLAYER_HP_REGEN_INTERVAL,
         ),
         Stats::new(PLAYER_STRENGTH, PLAYER_INTELLIGENCE, PLAYER_AGILITY),
-        Inventory::new(),
-        Equipment::with_weapons(Weapon::sword(), RangedWeapon::bow()),
+        starting_inventory,
+        Equipment::with_melee(Weapon::sword()),
         BlocksMovement,
         Experience::new(),
         Attackable,

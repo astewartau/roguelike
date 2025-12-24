@@ -226,10 +226,18 @@ impl ApplicationHandler for App {
                     let was_down = state.input.mouse_down;
                     state.input.mouse_down = btn_state == ElementState::Pressed;
 
-                    if btn_state == ElementState::Released {
-                        // Check if this was a click (not a drag)
-                        let dx = state.input.mouse_pos.0 - state.input.last_mouse_pos.0;
-                        let dy = state.input.mouse_pos.1 - state.input.last_mouse_pos.1;
+                    if btn_state == ElementState::Pressed {
+                        // Record where the click started (for drag detection)
+                        state.input.mouse_down_pos = state.input.mouse_pos;
+                        // Start potential pan - record anchor point
+                        state.camera.start_pan(
+                            state.input.mouse_pos.0,
+                            state.input.mouse_pos.1,
+                        );
+                    } else if btn_state == ElementState::Released {
+                        // Check if this was a click (not a drag) by comparing to where we pressed
+                        let dx = state.input.mouse_pos.0 - state.input.mouse_down_pos.0;
+                        let dy = state.input.mouse_pos.1 - state.input.mouse_down_pos.1;
                         let was_drag = was_down
                             && (dx.abs() > CLICK_DRAG_THRESHOLD || dy.abs() > CLICK_DRAG_THRESHOLD);
 
@@ -348,8 +356,8 @@ impl AppState {
         // Update camera (pass mouse_down so momentum doesn't apply while dragging)
         self.camera.update(dt, self.input.mouse_down);
 
-        // Update FOV
-        systems::update_fov(&self.world, &mut self.grid, self.player_entity, FOV_RADIUS);
+        // Update FOV (includes magical reveal from Scroll of Reveal)
+        systems::update_fov(&self.world, &mut self.grid, self.player_entity, FOV_RADIUS, self.game_clock.time);
 
         // Collect entities for rendering
         let entities_to_render =
@@ -419,6 +427,7 @@ impl AppState {
         let camera = &self.camera;
         let tileset = &self.tileset;
         let dev_menu = &mut self.dev_menu;
+        let ui_state = &mut self.ui_state;
 
         // Prepare player buff aura data
         let buff_aura_data = {
@@ -465,6 +474,7 @@ impl AppState {
                 max_range: targeting.max_range,
                 radius: targeting.radius,
                 is_blink: matches!(targeting.item_type, components::ItemType::ScrollOfBlink),
+                item_type: Some(targeting.item_type),
             })
         } else {
             None
@@ -517,20 +527,15 @@ impl AppState {
             // Explosion effects (fireball)
             ui::draw_explosions(ctx, vfx_effects, camera);
 
+            // Potion splash effects
+            ui::draw_potion_splashes(ctx, vfx_effects, camera);
+
             // Developer menu
             ui::draw_dev_menu(ctx, dev_menu, icons.tileset_texture_id, tileset);
 
             // Loot window (if chest is open)
             if let Some(ref data) = loot_data {
-                ui::draw_loot_window(
-                    ctx,
-                    data,
-                    icons.tileset_texture_id,
-                    icons.coins_uv,
-                    icons.potion_uv,
-                    icons.scroll_uv,
-                    &mut actions,
-                );
+                ui::draw_loot_window(ctx, data, icons, &mut actions);
             }
 
             // Dialogue window (if talking to NPC)
@@ -544,19 +549,7 @@ impl AppState {
                     viewport_width,
                     viewport_height,
                 };
-                ui::draw_inventory_window(
-                    ctx,
-                    world,
-                    player_entity,
-                    &inv_data,
-                    icons.tileset_texture_id,
-                    icons.sword_uv,
-                    icons.bow_uv,
-                    icons.coins_uv,
-                    icons.potion_uv,
-                    icons.scroll_uv,
-                    &mut actions,
-                );
+                ui::draw_inventory_window(ctx, world, player_entity, &inv_data, icons, ui_state, &mut actions);
             }
         });
 
@@ -627,9 +620,12 @@ impl AppState {
                         _ => (8, 0), // Default fallback
                     };
                     self.input.enter_targeting_mode(item_type, item_index, max_range, radius);
+                    // Close inventory when entering targeting mode
+                    self.ui_state.show_inventory = false;
+                    self.ui_state.close_context_menu();
                 }
                 systems::ItemUseResult::RevealEnemies => {
-                    systems::reveal_enemies(&self.world, &mut self.grid);
+                    systems::reveal_enemies(&self.world, &mut self.grid, self.game_clock.time);
                     systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
                 }
                 systems::ItemUseResult::RevealMap => {
@@ -644,15 +640,33 @@ impl AppState {
                     self.apply_effect_to_visible_enemies(components::EffectType::Slowed, constants::SLOW_DURATION);
                     systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
                 }
-                systems::ItemUseResult::IsThrowable { item_type, item_index } => {
-                    // Equip the throwable in the ranged slot
-                    let tile_id = systems::item_tile_id(item_type);
-                    if let Ok(mut equipment) = self.world.get::<&mut components::Equipment>(self.player_entity) {
-                        equipment.ranged = Some(components::RangedSlot::Throwable { item_type, tile_id });
-                    }
-                    systems::remove_item_from_inventory(&mut self.world, self.player_entity, item_index);
+                systems::ItemUseResult::IsWeapon { item_index, .. } => {
+                    // Equip the weapon (swap with current if any)
+                    systems::actions::apply_equip_weapon(&mut self.world, self.player_entity, item_index);
                 }
                 _ => {}
+            }
+        }
+
+        // Throw potion if selected from context menu
+        if let Some(item_index) = actions.item_to_throw {
+            // Get the item type from inventory
+            if let Ok(inv) = self.world.get::<&components::Inventory>(self.player_entity) {
+                if let Some(&item_type) = inv.items.get(item_index) {
+                    // Only throwable items can be thrown
+                    if systems::items::item_is_throwable(item_type) {
+                        // Enter targeting mode for throwing
+                        self.input.enter_targeting_mode(
+                            item_type,
+                            item_index,
+                            constants::POTION_THROW_RANGE,
+                            constants::POTION_SPLASH_RADIUS,
+                        );
+                        // Close inventory when entering targeting mode
+                        self.ui_state.show_inventory = false;
+                        self.ui_state.close_context_menu();
+                    }
+                }
             }
         }
     }
@@ -726,6 +740,25 @@ impl AppState {
                 &mut self.ui_state,
             );
             // Process mouse drag and return early
+            input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
+            return;
+        }
+
+        // Handle wait action (period key)
+        if result.wait {
+            self.input.clear_path();
+            let intent = systems::player_input::PlayerIntent::Wait;
+            let _turn_result = game_loop::execute_player_intent(
+                &mut self.world,
+                &self.grid,
+                self.player_entity,
+                intent,
+                &mut self.game_clock,
+                &mut self.action_scheduler,
+                &mut self.events,
+                &mut self.vfx,
+                &mut self.ui_state,
+            );
             input::process_mouse_drag(&mut self.input, &mut self.camera, self.ui_state.show_inventory);
             return;
         }

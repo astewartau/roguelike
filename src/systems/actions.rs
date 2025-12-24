@@ -6,9 +6,9 @@
 use hecs::{Entity, World};
 
 use crate::components::{
-    Attackable, BlocksMovement, ChaseAI, Container, Door, EffectType, Equipment,
-    Health, LungeAnimation, Position, Projectile, ProjectileMarker, RangedSlot,
-    Sprite, Stats, StatusEffects, VisualPosition,
+    Attackable, BlocksMovement, ChaseAI, Container, Door, EffectType, Equipment, EquippedWeapon,
+    Health, Inventory, ItemType, LungeAnimation, Position, Projectile, ProjectileMarker,
+    Sprite, Stats, StatusEffects, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -142,7 +142,7 @@ pub fn apply_attack(
         let weapon_damage = world
             .get::<&Equipment>(attacker)
             .ok()
-            .and_then(|e| e.weapon.as_ref().map(|w| w.base_damage + w.damage_bonus))
+            .and_then(|e| e.get_melee().map(|w| w.base_damage + w.damage_bonus))
             .unwrap_or(UNARMED_DAMAGE);
 
         weapon_damage + (strength - 10) / 2
@@ -357,6 +357,7 @@ pub fn apply_shoot_bow(
             direction,
             spawn_time: current_time,
             finished: None,
+            potion_type: None,
         },
         ProjectileMarker,
     ));
@@ -449,42 +450,119 @@ pub fn calculate_arrow_path(
     path
 }
 
-/// Apply throw potion action - throws a confusion potion at target
+/// Calculate throw path - a direct line from start to target, stopping at the target.
+/// Unlike arrows, thrown items don't continue past their target.
+pub fn calculate_throw_path(
+    start_x: i32,
+    start_y: i32,
+    target_x: i32,
+    target_y: i32,
+    throw_speed: f32,
+) -> Vec<(i32, i32, f32)> {
+    let mut path = Vec::new();
+
+    let dir_x = target_x - start_x;
+    let dir_y = target_y - start_y;
+
+    if dir_x == 0 && dir_y == 0 {
+        return path;
+    }
+
+    let dx = dir_x.abs();
+    let dy = dir_y.abs();
+    let sx = if dir_x >= 0 { 1 } else { -1 };
+    let sy = if dir_y >= 0 { 1 } else { -1 };
+    let mut err = dx - dy;
+
+    let mut x = start_x;
+    let mut y = start_y;
+    let mut prev_x = start_x;
+    let mut prev_y = start_y;
+    let mut cumulative_time: f32 = 0.0;
+
+    // Take first step to skip the starting tile
+    let e2 = 2 * err;
+    if e2 > -dy {
+        err -= dy;
+        x += sx;
+    }
+    if e2 < dx {
+        err += dx;
+        y += sy;
+    }
+
+    let max_steps = 50;
+    let mut steps = 0;
+
+    while steps < max_steps {
+        steps += 1;
+
+        let step_dx = (x - prev_x).abs();
+        let step_dy = (y - prev_y).abs();
+        let distance = if step_dx != 0 && step_dy != 0 {
+            std::f32::consts::SQRT_2
+        } else {
+            1.0
+        };
+        cumulative_time += distance / throw_speed;
+
+        path.push((x, y, cumulative_time));
+
+        // Stop when we reach the target
+        if x == target_x && y == target_y {
+            break;
+        }
+
+        prev_x = x;
+        prev_y = y;
+        let e2 = 2 * err;
+        if e2 > -dy {
+            err -= dy;
+            x += sx;
+        }
+        if e2 < dx {
+            err += dx;
+            y += sy;
+        }
+    }
+
+    path
+}
+
+/// Apply throw potion action - throws a potion at target with splash effect
 pub fn apply_throw_potion(
     world: &mut World,
-    grid: &Grid,
+    _grid: &Grid,
     thrower: Entity,
+    potion_type: ItemType,
     target_x: i32,
     target_y: i32,
     events: &mut EventQueue,
     current_time: f32,
 ) -> ActionResult {
+    // Get tile ID for the potion type
+    let tile_id = match potion_type {
+        ItemType::HealthPotion => tile_ids::RED_POTION,
+        ItemType::RegenerationPotion => tile_ids::GREEN_POTION,
+        ItemType::StrengthPotion => tile_ids::AMBER_POTION,
+        ItemType::ConfusionPotion => tile_ids::BLUE_POTION,
+        _ => return ActionResult::Invalid, // Not a throwable
+    };
+
     // Get thrower position
     let (start_x, start_y) = match queries::get_entity_position(world, thrower) {
         Some(p) => p,
         None => return ActionResult::Invalid,
     };
 
-    // Calculate path to target
-    let path = calculate_arrow_path(start_x, start_y, target_x, target_y, POTION_THROW_SPEED, grid);
+    // Calculate path to target (stops at target, unlike arrows which continue)
+    let path = calculate_throw_path(start_x, start_y, target_x, target_y, POTION_THROW_SPEED);
 
     if path.is_empty() {
         return ActionResult::Blocked;
     }
 
-    // Find the final position
-    let final_pos = path.last().map(|(x, y, _)| (*x, *y)).unwrap_or((target_x, target_y));
-
-    // Apply confusion to all enemies in splash radius
-    for (_, (pos, _, effects)) in world.query_mut::<(&Position, &ChaseAI, &mut StatusEffects)>() {
-        let dx = (pos.x - final_pos.0).abs();
-        let dy = (pos.y - final_pos.1).abs();
-        if dx <= CONFUSION_SPLASH_RADIUS && dy <= CONFUSION_SPLASH_RADIUS {
-            effects.add_effect(EffectType::Confused, CONFUSION_DURATION);
-        }
-    }
-
-    // Spawn visual projectile
+    // Spawn visual projectile (splash effect applied when projectile finishes)
     let pos = Position::new(start_x, start_y);
     let direction = {
         let dx = (target_x - start_x) as f32;
@@ -496,7 +574,7 @@ pub fn apply_throw_potion(
     let potion_projectile = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        Sprite::new(tile_ids::BLUE_POTION),
+        Sprite::new(tile_id),
         Projectile {
             source: thrower,
             damage: 0,
@@ -505,6 +583,7 @@ pub fn apply_throw_potion(
             direction,
             spawn_time: current_time,
             finished: None,
+            potion_type: Some(potion_type),
         },
         ProjectileMarker,
     ));
@@ -514,14 +593,66 @@ pub fn apply_throw_potion(
         source: thrower,
     });
 
-    // Remove the throwable from equipment slot
-    if let Ok(mut equipment) = world.get::<&mut Equipment>(thrower) {
-        if matches!(equipment.ranged, Some(RangedSlot::Throwable { .. })) {
-            equipment.ranged = None;
+    // Splash effect and status application happen when the projectile lands
+    // (handled in projectile system)
+
+    ActionResult::Completed
+}
+
+/// Apply a potion's splash effect to all entities in the splash radius
+pub fn apply_potion_splash(world: &mut World, potion_type: ItemType, center_x: i32, center_y: i32) {
+    // Collect entities in splash radius that can be affected
+    let mut affected: Vec<Entity> = Vec::new();
+    for (entity, (pos, _)) in world.query::<(&Position, &StatusEffects)>().iter() {
+        let dx = (pos.x - center_x).abs();
+        let dy = (pos.y - center_y).abs();
+        if dx <= POTION_SPLASH_RADIUS && dy <= POTION_SPLASH_RADIUS {
+            affected.push(entity);
         }
     }
 
-    ActionResult::Completed
+    // Also collect entities with Health but no StatusEffects (for healing potion)
+    if potion_type == ItemType::HealthPotion {
+        for (entity, (pos, _)) in world.query::<(&Position, &Health)>().iter() {
+            let dx = (pos.x - center_x).abs();
+            let dy = (pos.y - center_y).abs();
+            if dx <= POTION_SPLASH_RADIUS && dy <= POTION_SPLASH_RADIUS {
+                if !affected.contains(&entity) {
+                    affected.push(entity);
+                }
+            }
+        }
+    }
+
+    // Apply effect based on potion type
+    for entity in affected {
+        match potion_type {
+            ItemType::HealthPotion => {
+                if let Ok(mut health) = world.get::<&mut Health>(entity) {
+                    health.current = (health.current + HEALTH_POTION_HEAL).min(health.max);
+                }
+            }
+            ItemType::RegenerationPotion => {
+                if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
+                    effects.add_effect(EffectType::Regenerating, REGENERATION_DURATION);
+                }
+            }
+            ItemType::StrengthPotion => {
+                if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
+                    effects.add_effect(EffectType::Strengthened, STRENGTH_DURATION);
+                }
+            }
+            ItemType::ConfusionPotion => {
+                // Confusion only affects enemies (entities with ChaseAI)
+                if world.get::<&ChaseAI>(entity).is_ok() {
+                    if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
+                        effects.add_effect(EffectType::Confused, CONFUSION_DURATION);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Apply blink (teleport) action
@@ -623,6 +754,89 @@ pub fn apply_fireball(
             target_pos: (x as f32 + 0.5, y as f32 + 0.5),
             damage: FIREBALL_DAMAGE,
         });
+    }
+
+    ActionResult::Completed
+}
+
+/// Apply equip weapon action - equips a weapon from inventory
+pub fn apply_equip_weapon(
+    world: &mut World,
+    entity: Entity,
+    item_index: usize,
+) -> ActionResult {
+    // Get the item type from inventory
+    let item_type = {
+        let Ok(inventory) = world.get::<&Inventory>(entity) else {
+            return ActionResult::Invalid;
+        };
+        if item_index >= inventory.items.len() {
+            return ActionResult::Invalid;
+        }
+        inventory.items[item_index]
+    };
+
+    // Create the equipped weapon
+    let new_weapon = match item_type {
+        ItemType::Sword => EquippedWeapon::Melee(Weapon::sword()),
+        ItemType::Bow => EquippedWeapon::Ranged(RangedWeapon::bow()),
+        _ => return ActionResult::Invalid, // Not a weapon
+    };
+
+    // Check if there's currently an equipped weapon that needs to go to inventory
+    let old_weapon_item = {
+        if let Ok(equipment) = world.get::<&Equipment>(entity) {
+            match &equipment.weapon {
+                Some(EquippedWeapon::Melee(_)) => Some(ItemType::Sword),
+                Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
+                None => None,
+            }
+        } else {
+            None
+        }
+    };
+
+    // Remove the item we're equipping from inventory
+    crate::systems::items::remove_item_from_inventory(world, entity, item_index);
+
+    // Add the old weapon to inventory if there was one
+    if let Some(old_item) = old_weapon_item {
+        crate::systems::inventory::add_item_to_inventory(world, entity, old_item);
+    }
+
+    // Equip the new weapon
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
+        equipment.weapon = Some(new_weapon);
+    }
+
+    ActionResult::Completed
+}
+
+/// Apply unequip weapon action - moves current weapon to inventory
+pub fn apply_unequip_weapon(
+    world: &mut World,
+    entity: Entity,
+) -> ActionResult {
+    // Get the currently equipped weapon
+    let weapon_item = {
+        let Ok(equipment) = world.get::<&Equipment>(entity) else {
+            return ActionResult::Invalid;
+        };
+        match &equipment.weapon {
+            Some(EquippedWeapon::Melee(_)) => Some(ItemType::Sword),
+            Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
+            None => return ActionResult::Invalid, // Nothing to unequip
+        }
+    };
+
+    // Add the weapon to inventory
+    if let Some(item) = weapon_item {
+        crate::systems::inventory::add_item_to_inventory(world, entity, item);
+    }
+
+    // Remove weapon from equipment
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
+        equipment.weapon = None;
     }
 
     ActionResult::Completed

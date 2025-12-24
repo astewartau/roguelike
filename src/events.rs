@@ -122,6 +122,12 @@ pub enum GameEvent {
         y: i32,
         radius: i32,
     },
+    /// A potion splashed at a location
+    PotionSplash {
+        x: i32,
+        y: i32,
+        potion_type: crate::components::ItemType,
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

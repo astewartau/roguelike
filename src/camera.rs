@@ -13,6 +13,9 @@ pub struct Camera {
     // Auto-tracking
     tracking_target: Option<Vec2>,
     manual_control: bool,
+    // Drag anchor - world position that should stay under cursor while dragging
+    drag_anchor: Option<Vec2>,
+    last_drag_pos: Vec2,
 }
 
 impl Camera {
@@ -27,6 +30,8 @@ impl Camera {
             last_mouse_world_pos: None,
             tracking_target: None,
             manual_control: false,
+            drag_anchor: None,
+            last_drag_pos: Vec2::ZERO,
         }
     }
 
@@ -35,31 +40,52 @@ impl Camera {
         self.viewport_height = height;
     }
 
-    pub fn pan(&mut self, dx: f32, dy: f32) {
-        // Direct pan - moves exactly with cursor (no momentum while dragging)
-        let world_dx = -dx / self.zoom;
-        let world_dy = dy / self.zoom;
+    /// Start panning - records the world position under the cursor as anchor
+    pub fn start_pan(&mut self, screen_x: f32, screen_y: f32) {
+        self.drag_anchor = Some(self.screen_to_world(screen_x, screen_y));
+        self.last_drag_pos = Vec2::new(screen_x, screen_y);
+        self.velocity = Vec2::ZERO;
+    }
 
-        self.position.x += world_dx;
-        self.position.y += world_dy;
+    /// Continue panning - moves camera so the anchor stays under the cursor
+    pub fn pan(&mut self, screen_x: f32, screen_y: f32) {
+        if let Some(anchor) = self.drag_anchor {
+            // Calculate where the anchor point currently appears on screen
+            // and adjust camera so it appears at the cursor position
+            let current_world = self.screen_to_world(screen_x, screen_y);
+            let delta = anchor - current_world;
 
-        // Track velocity for momentum on release
-        self.velocity.x = world_dx;
-        self.velocity.y = world_dy;
+            self.position += delta;
 
-        // Enable manual control mode
-        self.manual_control = true;
+            // Track velocity for momentum (based on world-space movement)
+            let screen_delta = Vec2::new(screen_x, screen_y) - self.last_drag_pos;
+            self.velocity = Vec2::new(-screen_delta.x, screen_delta.y) / self.zoom;
+            self.last_drag_pos = Vec2::new(screen_x, screen_y);
+
+            // Enable manual control mode
+            self.manual_control = true;
+        }
     }
 
     pub fn release_pan(&mut self) {
         // Apply momentum scaling when mouse is released
         self.velocity *= CAMERA_MOMENTUM_SCALE;
+        self.drag_anchor = None;
     }
 
     pub fn set_tracking_target(&mut self, target: Vec2) {
+        // Only reset manual control if the target actually moved
+        // (otherwise every frame would reset manual_control and break panning)
+        let target_moved = self.tracking_target
+            .map(|old| (old - target).length() > 0.01)
+            .unwrap_or(true);
+
         self.tracking_target = Some(target);
+
         // When player moves, return to auto-tracking
-        self.manual_control = false;
+        if target_moved {
+            self.manual_control = false;
+        }
     }
 
     pub fn add_zoom_impulse(&mut self, delta: f32, mouse_x: f32, mouse_y: f32) {

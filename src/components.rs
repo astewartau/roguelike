@@ -113,11 +113,14 @@ impl Experience {
 /// Item type - pure data enum, properties defined in systems
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemType {
+    // Weapons
+    Sword,
+    Bow,
     // Potions
     HealthPotion,
     RegenerationPotion,
     StrengthPotion,
-    ConfusionPotion, // Throwable
+    ConfusionPotion,
     // Scrolls
     ScrollOfInvisibility,
     ScrollOfSpeed,
@@ -265,11 +268,15 @@ pub enum ActionType {
     /// Talking to a friendly NPC
     TalkTo { npc: Entity },
     /// Throwing a potion at a target position
-    ThrowPotion { target_x: i32, target_y: i32 },
+    ThrowPotion { potion_type: ItemType, target_x: i32, target_y: i32 },
     /// Teleporting to a target position (Blink)
     Blink { target_x: i32, target_y: i32 },
     /// Casting fireball at a target position
     CastFireball { target_x: i32, target_y: i32 },
+    /// Equip a weapon from inventory
+    EquipWeapon { item_index: usize },
+    /// Unequip current weapon to inventory
+    UnequipWeapon,
 }
 
 impl ActionType {
@@ -290,6 +297,8 @@ impl ActionType {
             ActionType::ThrowPotion { .. } => 1,
             ActionType::Blink { .. } => 1,
             ActionType::CastFireball { .. } => 1,
+            ActionType::EquipWeapon { .. } => 0, // Free action
+            ActionType::UnequipWeapon => 0,      // Free action
         }
     }
 }
@@ -484,40 +493,72 @@ impl Weapon {
     }
 }
 
+/// What type of weapon is equipped
+#[derive(Debug, Clone)]
+pub enum EquippedWeapon {
+    /// A melee weapon (sword, claws, etc.)
+    Melee(Weapon),
+    /// A ranged weapon (bow)
+    Ranged(RangedWeapon),
+}
+
 /// Equipped items for an entity
 #[derive(Debug, Clone)]
 pub struct Equipment {
-    pub weapon: Option<Weapon>,
-    pub ranged: Option<RangedSlot>,
+    /// Single weapon slot - can be melee or ranged (used by player)
+    pub weapon: Option<EquippedWeapon>,
+    /// Additional ranged weapon (used by enemies who have both melee and ranged)
+    pub enemy_ranged: Option<RangedWeapon>,
 }
 
 impl Equipment {
     pub fn new() -> Self {
-        Self { weapon: None, ranged: None }
+        Self { weapon: None, enemy_ranged: None }
     }
 
+    pub fn with_melee(weapon: Weapon) -> Self {
+        Self { weapon: Some(EquippedWeapon::Melee(weapon)), enemy_ranged: None }
+    }
+
+    pub fn with_ranged(ranged: RangedWeapon) -> Self {
+        Self { weapon: Some(EquippedWeapon::Ranged(ranged)), enemy_ranged: None }
+    }
+
+    /// Create equipment for enemies that can use both melee (claws) and ranged (bow)
+    pub fn with_weapons(melee: Weapon, ranged: RangedWeapon) -> Self {
+        Self {
+            weapon: Some(EquippedWeapon::Melee(melee)),
+            enemy_ranged: Some(ranged),
+        }
+    }
+
+    /// Create equipment with just a melee weapon (for melee-only enemies)
     pub fn with_weapon(weapon: Weapon) -> Self {
-        Self { weapon: Some(weapon), ranged: None }
+        Self { weapon: Some(EquippedWeapon::Melee(weapon)), enemy_ranged: None }
     }
 
-    pub fn with_weapons(weapon: Weapon, ranged: RangedWeapon) -> Self {
-        Self { weapon: Some(weapon), ranged: Some(RangedSlot::Bow(ranged)) }
-    }
-
-    /// Check if a bow is equipped
+    /// Check if a bow is equipped (either in main slot or enemy_ranged)
     pub fn has_bow(&self) -> bool {
-        matches!(self.ranged, Some(RangedSlot::Bow(_)))
+        matches!(self.weapon, Some(EquippedWeapon::Ranged(_))) || self.enemy_ranged.is_some()
     }
 
-    /// Check if a throwable is equipped
-    pub fn has_throwable(&self) -> bool {
-        matches!(self.ranged, Some(RangedSlot::Throwable { .. }))
+    /// Check if a melee weapon is equipped
+    pub fn has_melee(&self) -> bool {
+        matches!(self.weapon, Some(EquippedWeapon::Melee(_)))
     }
 
-    /// Get the equipped bow, if any
+    /// Get the equipped bow, if any (checks both main slot and enemy_ranged)
     pub fn get_bow(&self) -> Option<&RangedWeapon> {
-        match &self.ranged {
-            Some(RangedSlot::Bow(bow)) => Some(bow),
+        match &self.weapon {
+            Some(EquippedWeapon::Ranged(bow)) => Some(bow),
+            _ => self.enemy_ranged.as_ref(),
+        }
+    }
+
+    /// Get the equipped melee weapon, if any
+    pub fn get_melee(&self) -> Option<&Weapon> {
+        match &self.weapon {
+            Some(EquippedWeapon::Melee(weapon)) => Some(weapon),
             _ => None,
         }
     }
@@ -589,17 +630,6 @@ impl RangedWeapon {
     }
 }
 
-/// What's equipped in the ranged slot - either a bow or a throwable potion
-#[derive(Debug, Clone)]
-pub enum RangedSlot {
-    /// A bow that shoots arrows
-    Bow(RangedWeapon),
-    /// A throwable potion that can be thrown at enemies
-    Throwable {
-        item_type: ItemType,
-        tile_id: u32,
-    },
-}
 
 /// Projectile component - for arrows and other flying objects
 #[derive(Debug, Clone)]
@@ -620,6 +650,8 @@ pub struct Projectile {
     /// If Some, the projectile has finished its game-time journey and is
     /// waiting for visual catch-up. Contains the final position and game time when it finished.
     pub finished: Option<(i32, i32, f32)>,
+    /// If Some, this is a thrown potion that should splash on impact
+    pub potion_type: Option<ItemType>,
 }
 
 /// Marker component for projectiles (for queries)

@@ -218,6 +218,11 @@ pub const HEALTH_POTION_WEIGHT: f32 = 0.5;
 /// Scroll weight in kg
 pub const SCROLL_WEIGHT: f32 = 0.1;
 
+/// Sword weight in kg
+pub const SWORD_WEIGHT: f32 = 2.0;
+/// Bow weight in kg
+pub const BOW_WEIGHT: f32 = 1.5;
+
 // =============================================================================
 // STATUS EFFECTS
 // =============================================================================
@@ -269,12 +274,20 @@ pub const FIREBALL_RANGE: i32 = 10;
 pub const FIREBALL_RADIUS: i32 = 2;
 /// Damage dealt by Fireball scroll
 pub const FIREBALL_DAMAGE: i32 = 25;
+/// Duration of Scroll of Reveal effect (game-time seconds)
+pub const REVEAL_DURATION: f32 = 10.0;
+/// Radius around each enemy revealed by Scroll of Reveal
+pub const REVEAL_RADIUS: i32 = 3;
 
 // Throwable parameters
 /// Speed of thrown potions (tiles per second)
 pub const POTION_THROW_SPEED: f32 = 12.0;
-/// Splash radius for confusion potion effect
-pub const CONFUSION_SPLASH_RADIUS: i32 = 1;
+/// Range for throwing potions
+pub const POTION_THROW_RANGE: i32 = 6;
+/// Splash radius for all thrown potions
+pub const POTION_SPLASH_RADIUS: i32 = 1;
+/// Legacy alias for confusion splash radius
+pub const CONFUSION_SPLASH_RADIUS: i32 = POTION_SPLASH_RADIUS;
 
 /// Sword base damage
 pub const SWORD_BASE_DAMAGE: i32 = 10;

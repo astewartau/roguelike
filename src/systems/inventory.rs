@@ -1,9 +1,20 @@
 //! Inventory and container interaction systems.
 
-use crate::components::{BlocksMovement, Container, Inventory, Position};
+use crate::components::{BlocksMovement, Container, Inventory, ItemType, Position};
 use crate::events::{EventQueue, GameEvent};
 use crate::systems::items::item_weight;
 use hecs::{Entity, World};
+
+/// Add an item directly to an entity's inventory
+pub fn add_item_to_inventory(world: &mut World, entity: Entity, item: ItemType) -> bool {
+    if let Ok(mut inventory) = world.get::<&mut Inventory>(entity) {
+        inventory.current_weight_kg += item_weight(item);
+        inventory.items.push(item);
+        true
+    } else {
+        false
+    }
+}
 
 /// Take a single item from a container and add it to player inventory
 pub fn take_item_from_container(
@@ -130,7 +141,6 @@ pub fn find_container_at_player(world: &World, player_entity: Entity) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::ItemType;
 
     #[test]
     fn test_take_gold_from_container() {

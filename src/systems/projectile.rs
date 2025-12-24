@@ -9,9 +9,10 @@
 //! 4. Real-time visual lerp animates the arrow to its final position
 //! 5. Once visual catches up, the arrow is despawned
 
-use crate::components::{Attackable, Health, Position, Projectile, ProjectileMarker, VisualPosition};
+use crate::components::{Attackable, Health, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
+use crate::systems::actions::apply_potion_splash;
 use hecs::{Entity, World};
 
 /// Update all projectiles based on the current game time.
@@ -24,7 +25,7 @@ pub fn update_projectiles(
     events: &mut EventQueue,
 ) {
     let mut hits: Vec<(Entity, Option<Entity>, (i32, i32), i32)> = Vec::new();
-    let mut finished_projectiles: Vec<(Entity, i32, i32)> = Vec::new();
+    let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>)> = Vec::new();
 
     // Get all attackable entities and their positions for collision checking
     let attackables: Vec<(Entity, i32, i32)> = world
@@ -73,7 +74,7 @@ pub fn update_projectiles(
                 } else {
                     (pos.x, pos.y)
                 };
-                finished_projectiles.push((projectile_entity, final_pos.0, final_pos.1));
+                finished_projectiles.push((projectile_entity, final_pos.0, final_pos.1, projectile.potion_type));
                 hit_something = true;
                 break;
             }
@@ -91,7 +92,7 @@ pub fn update_projectiles(
                         (tile_x, tile_y),
                         projectile.damage,
                     ));
-                    finished_projectiles.push((projectile_entity, tile_x, tile_y));
+                    finished_projectiles.push((projectile_entity, tile_x, tile_y, projectile.potion_type));
                     hit_something = true;
                     break;
                 }
@@ -114,9 +115,9 @@ pub fn update_projectiles(
         if current_tile_index < projectile.path.len() {
             projectile.path_index = current_tile_index;
         } else {
-            // Arrow reached end of path without hitting anything - mark as finished
+            // Projectile reached end of path without hitting anything - mark as finished
             if let Some((final_x, final_y, _)) = projectile.path.last() {
-                finished_projectiles.push((projectile_entity, *final_x, *final_y));
+                finished_projectiles.push((projectile_entity, *final_x, *final_y, projectile.potion_type));
             }
         }
     }
@@ -139,7 +140,8 @@ pub fn update_projectiles(
     }
 
     // Mark projectiles as finished (don't despawn yet - wait for visual catch-up)
-    for (entity, final_x, final_y) in finished_projectiles {
+    // Also apply potion splash effects for potion projectiles
+    for (entity, final_x, final_y, potion_type) in finished_projectiles {
         if let Ok(mut projectile) = world.get::<&mut Projectile>(entity) {
             projectile.finished = Some((final_x, final_y, current_time));
         }
@@ -147,6 +149,16 @@ pub fn update_projectiles(
         if let Ok(mut pos) = world.get::<&mut Position>(entity) {
             pos.x = final_x;
             pos.y = final_y;
+        }
+
+        // If this is a potion projectile, apply splash effect and emit event
+        if let Some(ptype) = potion_type {
+            apply_potion_splash(world, ptype, final_x, final_y);
+            events.push(GameEvent::PotionSplash {
+                x: final_x,
+                y: final_y,
+                potion_type: ptype,
+            });
         }
     }
 }

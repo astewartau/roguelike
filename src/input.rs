@@ -51,6 +51,8 @@ pub struct InputState {
     pub mouse_pos: (f32, f32),
     pub mouse_down: bool,
     pub last_mouse_pos: (f32, f32),
+    /// Position where mouse button was pressed (for drag detection)
+    pub mouse_down_pos: (f32, f32),
     /// Click-to-move path (VecDeque for O(1) pop_front)
     pub player_path: VecDeque<(i32, i32)>,
     /// Destination of click-to-move (for auto-interact on arrival)
@@ -70,6 +72,7 @@ impl InputState {
             mouse_pos: (0.0, 0.0),
             mouse_down: false,
             last_mouse_pos: (0.0, 0.0),
+            mouse_down_pos: (0.0, 0.0),
             player_path: VecDeque::new(),
             player_path_destination: None,
             pursuit_target: None,
@@ -153,6 +156,8 @@ pub struct InputResult {
     pub shoot_target: Option<(i32, i32)>,
     /// Player pressed Escape (cancel targeting, close menus, etc.)
     pub escape_pressed: bool,
+    /// Player wants to wait (skip turn)
+    pub wait: bool,
 }
 
 impl Default for InputResult {
@@ -166,6 +171,7 @@ impl Default for InputResult {
             attack_direction: None,
             shoot_target: None,
             escape_pressed: false,
+            wait: false,
         }
     }
 }
@@ -193,6 +199,11 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     // Enter key
     if input.keys_pressed.remove(&KeyCode::Enter) {
         result.enter_pressed = true;
+    }
+
+    // Wait (skip turn) - period key
+    if input.keys_pressed.remove(&KeyCode::Period) {
+        result.wait = true;
     }
 
     // Check if shift is held (don't consume - it's a modifier)
@@ -544,11 +555,8 @@ pub fn update_pursuit(
 /// Process mouse drag for camera panning
 pub fn process_mouse_drag(input: &mut InputState, camera: &mut Camera, show_inventory: bool) {
     if input.mouse_down && !show_inventory {
-        let dx = input.mouse_pos.0 - input.last_mouse_pos.0;
-        let dy = input.mouse_pos.1 - input.last_mouse_pos.1;
-        if dx.abs() > 0.1 || dy.abs() > 0.1 {
-            camera.pan(dx, dy);
-        }
+        // Pan using current screen position - camera will keep anchor under cursor
+        camera.pan(input.mouse_pos.0, input.mouse_pos.1);
     }
     // Consume the mouse delta so it's not applied again next frame
     input.last_mouse_pos = input.mouse_pos;

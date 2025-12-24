@@ -1,8 +1,8 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Equipment, Experience, Health,
-    Position, Sprite, Stats, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Equipment, EquippedWeapon,
+    Experience, Health, Position, Sprite, Stats, Weapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -17,14 +17,14 @@ pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
 }
 
-/// Get the damage an entity deals (from equipped weapon or unarmed)
+/// Get the melee damage an entity deals (from equipped melee weapon or unarmed)
 pub fn get_attack_damage(world: &World, attacker: Entity) -> i32 {
     if let Ok(equipment) = world.get::<&Equipment>(attacker) {
-        equipment
-            .weapon
-            .as_ref()
-            .map(|w| weapon_damage(w))
-            .unwrap_or(UNARMED_DAMAGE)
+        match &equipment.weapon {
+            Some(EquippedWeapon::Melee(weapon)) => weapon_damage(weapon),
+            // Ranged weapon or no weapon = unarmed damage
+            _ => UNARMED_DAMAGE,
+        }
     } else {
         UNARMED_DAMAGE
     }
@@ -154,7 +154,15 @@ mod tests {
             base_damage: 10,
             damage_bonus: 3,
         };
-        let entity = world.spawn((Equipment { weapon: Some(weapon), ranged: None },));
+        let entity = world.spawn((Equipment::with_melee(weapon),));
         assert_eq!(get_attack_damage(&world, entity), 13);
+    }
+
+    #[test]
+    fn test_get_attack_damage_with_ranged_weapon() {
+        // Ranged weapon should give unarmed damage for melee attacks
+        let mut world = World::new();
+        let entity = world.spawn((Equipment::with_ranged(crate::components::RangedWeapon::bow()),));
+        assert_eq!(get_attack_damage(&world, entity), UNARMED_DAMAGE);
     }
 }

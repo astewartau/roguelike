@@ -6,7 +6,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{ActionType, BlocksMovement, Equipment, ItemType, Position, RangedSlot};
+use crate::components::{ActionType, BlocksMovement, Equipment, EquippedWeapon, ItemType, Position};
 use crate::grid::Grid;
 use crate::input::TargetingMode;
 
@@ -16,6 +16,8 @@ use crate::input::TargetingMode;
 pub enum PlayerIntent {
     /// No action this frame
     None,
+    /// Wait in place (skip turn)
+    Wait,
     /// Move in a direction
     Move { dx: i32, dy: i32 },
     /// Force attack in a direction (Shift+move)
@@ -92,15 +94,12 @@ pub fn validate_targeting(
             // Fireball can target anywhere in range
             TargetingValidation::Valid
         }
+        // Throwable potions can target anywhere in range
+        ItemType::HealthPotion
+        | ItemType::RegenerationPotion
+        | ItemType::StrengthPotion
+        | ItemType::ConfusionPotion => TargetingValidation::Valid,
         _ => TargetingValidation::InvalidItemType,
-    }
-}
-
-/// Convert a RangedSlot to the appropriate ActionType for shooting/throwing.
-pub fn ranged_slot_to_action(slot: &RangedSlot, target_x: i32, target_y: i32) -> ActionType {
-    match slot {
-        RangedSlot::Bow(_) => ActionType::ShootBow { target_x, target_y },
-        RangedSlot::Throwable { .. } => ActionType::ThrowPotion { target_x, target_y },
     }
 }
 
@@ -116,6 +115,8 @@ pub fn intent_to_action(
 ) -> Option<ActionType> {
     match intent {
         PlayerIntent::None => None,
+
+        PlayerIntent::Wait => Some(ActionType::Wait),
 
         PlayerIntent::Move { dx, dy } => {
             // Use the time system's determine_action_type for full movement logic
@@ -134,20 +135,21 @@ pub fn intent_to_action(
         }
 
         PlayerIntent::ShootRanged { target_x, target_y } => {
-            // Get ranged slot from equipment
-            let ranged_slot = world
-                .get::<&Equipment>(player_entity)
-                .ok()
-                .and_then(|e| e.ranged.clone())?;
-
-            Some(ranged_slot_to_action(&ranged_slot, *target_x, *target_y))
+            // Check if player has a bow equipped
+            if !has_ranged_equipped(world, player_entity) {
+                return None;
+            }
+            Some(ActionType::ShootBow {
+                target_x: *target_x,
+                target_y: *target_y,
+            })
         }
 
         PlayerIntent::UseTargetedAbility {
             item_type,
+            item_index: _,
             target_x,
             target_y,
-            ..
         } => {
             match item_type {
                 ItemType::ScrollOfBlink => Some(ActionType::Blink {
@@ -158,16 +160,25 @@ pub fn intent_to_action(
                     target_x: *target_x,
                     target_y: *target_y,
                 }),
+                // Throwable potions
+                ItemType::HealthPotion
+                | ItemType::RegenerationPotion
+                | ItemType::StrengthPotion
+                | ItemType::ConfusionPotion => Some(ActionType::ThrowPotion {
+                    potion_type: *item_type,
+                    target_x: *target_x,
+                    target_y: *target_y,
+                }),
                 _ => None,
             }
         }
     }
 }
 
-/// Check if the player has a ranged weapon equipped.
+/// Check if the player has a ranged weapon (bow) equipped.
 pub fn has_ranged_equipped(world: &World, player_entity: Entity) -> bool {
     world
         .get::<&Equipment>(player_entity)
-        .map(|e| e.ranged.is_some())
+        .map(|e| matches!(e.weapon, Some(EquippedWeapon::Ranged(_))))
         .unwrap_or(false)
 }

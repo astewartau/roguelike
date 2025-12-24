@@ -33,6 +33,6 @@ pub use inventory::{
     find_container_at_player, take_all_from_container, take_gold_from_container,
     take_item_from_container,
 };
-pub use items::{item_name, item_weight, item_tile_id, use_item, remove_item_from_inventory, ItemUseResult};
+pub use items::{item_name, item_weight, use_item, remove_item_from_inventory, ItemUseResult};
 pub use projectile::{cleanup_finished_projectiles, despawn_projectiles, lerp_projectiles_realtime, update_projectiles};
 pub use rendering::{collect_renderables, update_fov, reveal_entire_map, reveal_enemies, RenderEntity};

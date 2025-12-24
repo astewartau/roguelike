@@ -169,6 +169,8 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::ThrowPotion { .. } => ACTION_SHOOT_DURATION, // Same as shooting
         ActionType::Blink { .. } => ACTION_WAIT_DURATION, // Instant teleport
         ActionType::CastFireball { .. } => ACTION_SHOOT_DURATION, // Same as shooting
+        ActionType::EquipWeapon { .. } => 0.0, // Instant (free action)
+        ActionType::UnequipWeapon => 0.0, // Instant (free action)
     };
 
     // Speed modifies duration: higher speed = shorter duration
@@ -324,14 +326,20 @@ fn apply_action_effects(
             actions::apply_use_stairs(world, entity, *x, *y, *direction, events)
         }
         ActionType::TalkTo { npc } => actions::apply_talk_to(entity, *npc, events),
-        ActionType::ThrowPotion { target_x, target_y } => {
-            actions::apply_throw_potion(world, grid, entity, *target_x, *target_y, events, current_time)
+        ActionType::ThrowPotion { potion_type, target_x, target_y } => {
+            actions::apply_throw_potion(world, grid, entity, *potion_type, *target_x, *target_y, events, current_time)
         }
         ActionType::Blink { target_x, target_y } => {
             actions::apply_blink(world, grid, entity, *target_x, *target_y, events)
         }
         ActionType::CastFireball { target_x, target_y } => {
             actions::apply_fireball(world, entity, *target_x, *target_y, events)
+        }
+        ActionType::EquipWeapon { item_index } => {
+            actions::apply_equip_weapon(world, entity, *item_index)
+        }
+        ActionType::UnequipWeapon => {
+            actions::apply_unequip_weapon(world, entity)
         }
     }
 }

@@ -95,6 +95,8 @@ pub struct Tile {
     pub tile_type: TileType,
     pub explored: bool,
     pub visible: bool,
+    /// Game time until which this tile is magically revealed (Scroll of Reveal)
+    pub revealed_until: Option<f32>,
 }
 
 impl Tile {
@@ -103,6 +105,7 @@ impl Tile {
             tile_type,
             explored: false,
             visible: false,
+            revealed_until: None,
         }
     }
 }

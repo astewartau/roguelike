@@ -49,6 +49,8 @@ pub struct DialogueWindowData {
 #[derive(Default)]
 pub struct UiActions {
     pub item_to_use: Option<usize>,
+    /// Throw a potion at a target (enters targeting mode)
+    pub item_to_throw: Option<usize>,
     pub chest_item_to_take: Option<usize>,
     pub chest_take_all: bool,
     pub chest_take_gold: bool,
@@ -77,6 +79,8 @@ pub struct GameUiState {
     pub show_inventory: bool,
     /// Show grid overlay
     pub show_grid_lines: bool,
+    /// Context menu for inventory item (item index, screen position)
+    pub item_context_menu: Option<(usize, egui::Pos2)>,
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -88,6 +92,7 @@ impl GameUiState {
             talking_to: None,
             show_inventory: false,
             show_grid_lines: false,
+            item_context_menu: None,
             player_entity,
         }
     }
@@ -136,6 +141,11 @@ impl GameUiState {
     /// Close the currently open chest
     pub fn close_chest(&mut self) {
         self.open_chest = None;
+    }
+
+    /// Close the item context menu
+    pub fn close_context_menu(&mut self) {
+        self.item_context_menu = None;
     }
 }
 
@@ -520,10 +530,7 @@ pub fn draw_status_bar(
 pub fn draw_loot_window(
     ctx: &egui::Context,
     data: &LootWindowData,
-    tileset_texture_id: egui::TextureId,
-    coins_uv: egui::Rect,
-    potion_uv: egui::Rect,
-    scroll_uv: egui::Rect,
+    icons: &UiIcons,
     actions: &mut UiActions,
 ) {
     egui::Window::new("Loot")
@@ -552,10 +559,11 @@ pub fn draw_loot_window(
                 if data.gold > 0 {
                     ui.horizontal(|ui| {
                         let coin_img = egui::Image::new(egui::load::SizedTexture::new(
-                            tileset_texture_id,
+                            icons.tileset_texture_id,
                             egui::vec2(32.0, 32.0),
                         ))
-                        .uv(coins_uv);
+                        .uv(icons.coins_uv)
+                        .bg_fill(egui::Color32::BLACK);
 
                         if ui
                             .add(egui::ImageButton::new(coin_img))
@@ -572,27 +580,14 @@ pub fn draw_loot_window(
                 // Show items
                 ui.horizontal_wrapped(|ui| {
                     for (i, item_type) in data.items.iter().enumerate() {
-                        let uv = match item_type {
-                            ItemType::HealthPotion => potion_uv,
-                            ItemType::RegenerationPotion
-                            | ItemType::StrengthPotion
-                            | ItemType::ConfusionPotion => potion_uv,
-                            ItemType::ScrollOfInvisibility
-                            | ItemType::ScrollOfSpeed
-                            | ItemType::ScrollOfProtection
-                            | ItemType::ScrollOfBlink
-                            | ItemType::ScrollOfFear
-                            | ItemType::ScrollOfFireball
-                            | ItemType::ScrollOfReveal
-                            | ItemType::ScrollOfMapping
-                            | ItemType::ScrollOfSlow => scroll_uv,
-                        };
+                        let uv = icons.get_item_uv(*item_type);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            tileset_texture_id,
+                            icons.tileset_texture_id,
                             egui::vec2(48.0, 48.0),
                         ))
-                        .uv(uv);
+                        .uv(uv)
+                        .bg_fill(egui::Color32::BLACK);
 
                         let response = ui.add(egui::ImageButton::new(image));
 
@@ -685,12 +680,8 @@ pub fn draw_inventory_window(
     world: &World,
     player_entity: hecs::Entity,
     data: &InventoryWindowData,
-    tileset_texture_id: egui::TextureId,
-    sword_uv: egui::Rect,
-    bow_uv: egui::Rect,
-    coins_uv: egui::Rect,
-    potion_uv: egui::Rect,
-    scroll_uv: egui::Rect,
+    icons: &UiIcons,
+    ui_state: &mut GameUiState,
     actions: &mut UiActions,
 ) {
     egui::Window::new("Character")
@@ -705,13 +696,78 @@ pub fn draw_inventory_window(
             if let Ok(stats) = world.get::<&Stats>(player_entity) {
                 ui.columns(2, |columns| {
                     // Left column: Stats + Equipment
-                    draw_stats_column(&mut columns[0], world, player_entity, &stats, tileset_texture_id, sword_uv, bow_uv, coins_uv, potion_uv);
+                    draw_stats_column(&mut columns[0], world, player_entity, &stats, icons);
 
                     // Right column: Inventory
-                    draw_inventory_column(&mut columns[1], world, player_entity, tileset_texture_id, potion_uv, scroll_uv, actions);
+                    draw_inventory_column(&mut columns[1], world, player_entity, icons, ui_state, actions);
                 });
             }
         });
+
+    // Draw context menu popup (outside the main window)
+    if let Some((item_idx, pos)) = ui_state.item_context_menu {
+        // Get the item type to show appropriate options
+        let item_type = world
+            .get::<&Inventory>(player_entity)
+            .ok()
+            .and_then(|inv| inv.items.get(item_idx).copied());
+
+        if let Some(item_type) = item_type {
+            let is_throwable = systems::items::item_is_throwable(item_type);
+
+            egui::Area::new(egui::Id::new("item_context_menu"))
+                .fixed_pos(pos)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(120.0);
+
+                        // Drink option (for potions)
+                        if is_throwable {
+                            if ui.button("Drink").clicked() {
+                                actions.item_to_use = Some(item_idx);
+                                ui_state.item_context_menu = None;
+                            }
+                            if ui.button("Throw").clicked() {
+                                actions.item_to_throw = Some(item_idx);
+                                ui_state.item_context_menu = None;
+                            }
+                        } else {
+                            // Non-throwable items just have "Use"
+                            if ui.button("Use").clicked() {
+                                actions.item_to_use = Some(item_idx);
+                                ui_state.item_context_menu = None;
+                            }
+                        }
+
+                        ui.separator();
+                        if ui.button("Cancel").clicked() {
+                            ui_state.item_context_menu = None;
+                        }
+                    });
+                });
+
+            // Close context menu on ESC key
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                ui_state.item_context_menu = None;
+            }
+
+            // Close context menu if left-clicked elsewhere (not on the popup)
+            // Using primary_clicked to avoid closing on the same right-click that opened the menu
+            if ctx.input(|i| i.pointer.primary_clicked()) {
+                // Check if click was outside the popup
+                let popup_rect = egui::Rect::from_min_size(pos, egui::vec2(120.0, 100.0));
+                if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                    if !popup_rect.contains(pointer_pos) {
+                        ui_state.item_context_menu = None;
+                    }
+                }
+            }
+        } else {
+            // Item no longer exists, close menu
+            ui_state.item_context_menu = None;
+        }
+    }
 }
 
 fn draw_stats_column(
@@ -719,11 +775,7 @@ fn draw_stats_column(
     world: &World,
     player_entity: hecs::Entity,
     stats: &Stats,
-    tileset_texture_id: egui::TextureId,
-    sword_uv: egui::Rect,
-    bow_uv: egui::Rect,
-    coins_uv: egui::Rect,
-    potion_uv: egui::Rect,
+    icons: &UiIcons,
 ) {
     ui.vertical(|ui| {
         ui.heading("CHARACTER STATS");
@@ -747,10 +799,11 @@ fn draw_stats_column(
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let coin_img = egui::Image::new(egui::load::SizedTexture::new(
-                    tileset_texture_id,
+                    icons.tileset_texture_id,
                     egui::vec2(24.0, 24.0),
                 ))
-                .uv(coins_uv);
+                .uv(icons.coins_uv)
+                .bg_fill(egui::Color32::BLACK);
                 ui.add(coin_img);
                 ui.label(format!("{} gold", inventory.gold));
             });
@@ -762,66 +815,40 @@ fn draw_stats_column(
         ui.add_space(10.0);
 
         if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
-            // Weapon slot (melee)
+            // Single weapon slot
             ui.horizontal(|ui| {
-                ui.label("Melee:");
-                if let Some(weapon) = &equipment.weapon {
-                    let image = egui::Image::new(egui::load::SizedTexture::new(
-                        tileset_texture_id,
-                        egui::vec2(48.0, 48.0),
-                    ))
-                    .uv(sword_uv);
-
-                    ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
-                        "{}\n\nDamage: {} + {} = {}",
-                        weapon.name,
-                        weapon.base_damage,
-                        weapon.damage_bonus,
-                        systems::weapon_damage(weapon)
-                    ));
-                } else {
-                    ui.label(
-                        egui::RichText::new("(none)")
-                            .italics()
-                            .color(egui::Color32::GRAY),
-                    );
-                }
-            });
-
-            ui.add_space(5.0);
-
-            // Ranged weapon slot
-            ui.horizontal(|ui| {
-                ui.label("Ranged:");
-                match &equipment.ranged {
-                    Some(crate::components::RangedSlot::Bow(bow)) => {
+                ui.label("Weapon:");
+                match &equipment.weapon {
+                    Some(crate::components::EquippedWeapon::Melee(weapon)) => {
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            tileset_texture_id,
+                            icons.tileset_texture_id,
                             egui::vec2(48.0, 48.0),
                         ))
-                        .uv(bow_uv);
+                        .uv(icons.sword_uv)
+                        .bg_fill(egui::Color32::BLACK);
 
                         ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
-                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nRight-click to shoot",
+                            "{}\n\nDamage: {} + {} = {}\n\nClick weapon in inventory to swap",
+                            weapon.name,
+                            weapon.base_damage,
+                            weapon.damage_bonus,
+                            systems::weapon_damage(weapon)
+                        ));
+                    }
+                    Some(crate::components::EquippedWeapon::Ranged(bow)) => {
+                        let image = egui::Image::new(egui::load::SizedTexture::new(
+                            icons.tileset_texture_id,
+                            egui::vec2(48.0, 48.0),
+                        ))
+                        .uv(icons.bow_uv)
+                        .bg_fill(egui::Color32::BLACK);
+
+                        ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
+                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nRight-click to shoot\nClick weapon in inventory to swap",
                             bow.name,
                             bow.base_damage,
                             bow.arrow_speed
                         ));
-                    }
-                    Some(crate::components::RangedSlot::Throwable { item_type, tile_id }) => {
-                        // Use potion UV for throwable
-                        let image = egui::Image::new(egui::load::SizedTexture::new(
-                            tileset_texture_id,
-                            egui::vec2(48.0, 48.0),
-                        ))
-                        .uv(potion_uv);
-
-                        let name = crate::systems::item_name(*item_type);
-                        ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
-                            "{}\n\nRight-click to throw",
-                            name
-                        ));
-                        let _ = tile_id; // Silence unused warning for now
                     }
                     None => {
                         ui.label(
@@ -840,9 +867,8 @@ fn draw_inventory_column(
     ui: &mut egui::Ui,
     world: &World,
     player_entity: hecs::Entity,
-    tileset_texture_id: egui::TextureId,
-    potion_uv: egui::Rect,
-    scroll_uv: egui::Rect,
+    icons: &UiIcons,
+    ui_state: &mut GameUiState,
     actions: &mut UiActions,
 ) {
     ui.vertical(|ui| {
@@ -860,38 +886,43 @@ fn draw_inventory_column(
             } else {
                 ui.horizontal_wrapped(|ui| {
                     for (i, item_type) in inventory.items.iter().enumerate() {
-                        let uv = match item_type {
-                            ItemType::HealthPotion => potion_uv,
-                            ItemType::RegenerationPotion
-                            | ItemType::StrengthPotion
-                            | ItemType::ConfusionPotion => potion_uv,
-                            ItemType::ScrollOfInvisibility
-                            | ItemType::ScrollOfSpeed
-                            | ItemType::ScrollOfProtection
-                            | ItemType::ScrollOfBlink
-                            | ItemType::ScrollOfFear
-                            | ItemType::ScrollOfFireball
-                            | ItemType::ScrollOfReveal
-                            | ItemType::ScrollOfMapping
-                            | ItemType::ScrollOfSlow => scroll_uv,
-                        };
+                        let uv = icons.get_item_uv(*item_type);
+                        let is_throwable = systems::items::item_is_throwable(*item_type);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            tileset_texture_id,
+                            icons.tileset_texture_id,
                             egui::vec2(48.0, 48.0),
                         ))
-                        .uv(uv);
+                        .uv(uv)
+                        .bg_fill(egui::Color32::BLACK);
 
                         let response = ui.add(egui::ImageButton::new(image));
 
-                        if response
-                            .on_hover_text(format!(
+                        // Build hover text based on item type
+                        let hover_text = if is_throwable {
+                            format!(
+                                "{}\n\nLeft-click to drink\nRight-click for options",
+                                systems::item_name(*item_type)
+                            )
+                        } else {
+                            format!(
                                 "{}\n\nClick to use",
                                 systems::item_name(*item_type)
-                            ))
-                            .clicked()
-                        {
+                            )
+                        };
+
+                        let response = response.on_hover_text(hover_text);
+
+                        // Left-click: use/drink the item
+                        if response.clicked() {
                             actions.item_to_use = Some(i);
+                        }
+
+                        // Right-click: open context menu (for throwable items)
+                        if response.secondary_clicked() && is_throwable {
+                            // Get the screen position for the popup
+                            let pos = response.rect.right_top();
+                            ui_state.item_context_menu = Some((i, pos));
                         }
                     }
                 });
@@ -905,7 +936,10 @@ pub struct UiIcons {
     pub tileset_texture_id: egui::TextureId,
     pub sword_uv: egui::Rect,
     pub bow_uv: egui::Rect,
-    pub potion_uv: egui::Rect,
+    pub red_potion_uv: egui::Rect,
+    pub green_potion_uv: egui::Rect,
+    pub amber_potion_uv: egui::Rect,
+    pub blue_potion_uv: egui::Rect,
     pub scroll_uv: egui::Rect,
     pub coins_uv: egui::Rect,
     pub heart_uv: egui::Rect,
@@ -918,11 +952,35 @@ impl UiIcons {
             tileset_texture_id: tileset_egui_id,
             sword_uv: tileset.get_egui_uv(tile_ids::SWORD),
             bow_uv: tileset.get_egui_uv(tile_ids::BOW),
-            potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION),
+            red_potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION),
+            green_potion_uv: tileset.get_egui_uv(tile_ids::GREEN_POTION),
+            amber_potion_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION),
+            blue_potion_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION),
             scroll_uv: tileset.get_egui_uv(tile_ids::SCROLL),
             coins_uv: tileset.get_egui_uv(tile_ids::COINS),
             heart_uv: tileset.get_egui_uv(tile_ids::HEART),
             diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND),
+        }
+    }
+
+    /// Get the UV for a specific item type
+    pub fn get_item_uv(&self, item_type: ItemType) -> egui::Rect {
+        match item_type {
+            ItemType::Sword => self.sword_uv,
+            ItemType::Bow => self.bow_uv,
+            ItemType::HealthPotion => self.red_potion_uv,
+            ItemType::RegenerationPotion => self.green_potion_uv,
+            ItemType::StrengthPotion => self.amber_potion_uv,
+            ItemType::ConfusionPotion => self.blue_potion_uv,
+            ItemType::ScrollOfInvisibility
+            | ItemType::ScrollOfSpeed
+            | ItemType::ScrollOfProtection
+            | ItemType::ScrollOfBlink
+            | ItemType::ScrollOfFear
+            | ItemType::ScrollOfFireball
+            | ItemType::ScrollOfReveal
+            | ItemType::ScrollOfMapping
+            | ItemType::ScrollOfSlow => self.scroll_uv,
         }
     }
 }
@@ -1243,6 +1301,88 @@ pub fn draw_explosions(ctx: &egui::Context, effects: &[VisualEffect], camera: &C
     }
 }
 
+/// Render potion splash effects
+pub fn draw_potion_splashes(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("potion_splashes"),
+    ));
+
+    let ppp = ctx.pixels_per_point();
+    let tile_size = camera.zoom / ppp;
+
+    for effect in effects {
+        let VfxEffectType::PotionSplash { potion_type } = &effect.effect_type else {
+            continue;
+        };
+
+        let progress = effect.progress();
+
+        // Determine color based on potion type
+        let (base_r, base_g, base_b) = match potion_type {
+            ItemType::HealthPotion => (220, 50, 50),      // Red
+            ItemType::RegenerationPotion => (50, 200, 80), // Green
+            ItemType::StrengthPotion => (220, 160, 50),    // Amber/Orange
+            ItemType::ConfusionPotion => (80, 120, 220),   // Blue
+            _ => (200, 200, 200),                          // Fallback gray
+        };
+
+        // Splash expands outward then fades
+        let expand = if progress < 0.2 {
+            progress / 0.2
+        } else {
+            1.0
+        };
+
+        let alpha = if progress > 0.4 {
+            ((1.0 - progress) / 0.6 * 180.0) as u8
+        } else {
+            180
+        };
+
+        // Draw splash in the splash radius (1 tile)
+        let radius = crate::constants::POTION_SPLASH_RADIUS;
+        for r in 0..=radius {
+            let r_progress = r as f32 / (radius as f32).max(1.0);
+            let current_expand = expand * (1.0 - r_progress * 0.2);
+
+            // Fade color slightly outward
+            let red = (base_r as f32 * (1.0 - r_progress * 0.2)) as u8;
+            let green = (base_g as f32 * (1.0 - r_progress * 0.2)) as u8;
+            let blue = (base_b as f32 * (1.0 - r_progress * 0.2)) as u8;
+            let ring_alpha = (alpha as f32 * (1.0 - r_progress * 0.4)) as u8;
+
+            let color = egui::Color32::from_rgba_unmultiplied(red, green, blue, ring_alpha);
+
+            // Draw tiles in this ring
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    let dist = dx.abs().max(dy.abs());
+                    if dist != r {
+                        continue;
+                    }
+
+                    let world_x = effect.x + dx as f32;
+                    let world_y = effect.y + dy as f32;
+
+                    let screen_pos = camera.world_to_screen(world_x - 0.5, world_y - 0.5);
+                    let egui_x = screen_pos.0 / ppp;
+                    let egui_y = screen_pos.1 / ppp;
+
+                    let size = tile_size * current_expand;
+                    let offset = (tile_size - size) / 2.0;
+
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(egui_x + offset, egui_y - tile_size + offset),
+                        egui::vec2(size, size),
+                    );
+                    painter.rect_filled(rect, size / 3.0, color);
+                }
+            }
+        }
+    }
+}
+
 /// Data for player buff aura visualization
 pub struct PlayerBuffAuraData {
     pub player_x: f32,
@@ -1319,6 +1459,7 @@ pub struct TargetingOverlayData {
     pub max_range: i32,
     pub radius: i32,
     pub is_blink: bool,
+    pub item_type: Option<ItemType>,
 }
 
 /// Draw the targeting overlay when in targeting mode
@@ -1416,10 +1557,14 @@ pub fn draw_targeting_overlay(
 
     // Draw info text near the cursor
     let info_text = if in_range {
-        if data.is_blink {
-            "Click to teleport"
-        } else {
-            "Click to cast fireball"
+        match data.item_type {
+            Some(ItemType::ScrollOfBlink) => "Click to teleport",
+            Some(ItemType::ScrollOfFireball) => "Click to cast fireball",
+            Some(ItemType::HealthPotion) => "Click to throw healing potion",
+            Some(ItemType::RegenerationPotion) => "Click to throw regen potion",
+            Some(ItemType::StrengthPotion) => "Click to throw strength potion",
+            Some(ItemType::ConfusionPotion) => "Click to throw confusion potion",
+            _ => if data.is_blink { "Click to teleport" } else { "Click to use" },
         }
     } else {
         "Out of range"

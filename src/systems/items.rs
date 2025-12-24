@@ -11,10 +11,10 @@ pub enum ItemUseResult {
     Used,
     /// Item use failed (invalid index, missing component, etc.)
     Failed,
-    /// Item requires a target selection before use
+    /// Item requires a target selection before use (scrolls, throwable potions)
     RequiresTarget { item_type: ItemType, item_index: usize },
-    /// Item is a throwable and should be equipped, not used directly
-    IsThrowable { item_type: ItemType, item_index: usize },
+    /// Item is a weapon that should be equipped
+    IsWeapon { item_type: ItemType, item_index: usize },
     /// Scroll of Reveal: show all enemies on floor
     RevealEnemies,
     /// Scroll of Mapping: reveal entire floor layout
@@ -28,6 +28,9 @@ pub enum ItemUseResult {
 /// Get the display name of an item
 pub fn item_name(item: ItemType) -> &'static str {
     match item {
+        // Weapons
+        ItemType::Sword => "Sword",
+        ItemType::Bow => "Bow",
         // Potions
         ItemType::HealthPotion => "Health Potion",
         ItemType::RegenerationPotion => "Regeneration Potion",
@@ -48,12 +51,26 @@ pub fn item_name(item: ItemType) -> &'static str {
 
 /// Returns true if the item requires a target selection before use
 pub fn item_requires_target(item: ItemType) -> bool {
-    matches!(item, ItemType::ScrollOfBlink | ItemType::ScrollOfFireball)
+    matches!(
+        item,
+        ItemType::ScrollOfBlink | ItemType::ScrollOfFireball
+    )
 }
 
-/// Returns true if the item is a throwable (should be equipped, not used directly)
+/// Returns true if the item is a throwable potion
 pub fn item_is_throwable(item: ItemType) -> bool {
-    matches!(item, ItemType::ConfusionPotion)
+    matches!(
+        item,
+        ItemType::HealthPotion
+            | ItemType::RegenerationPotion
+            | ItemType::StrengthPotion
+            | ItemType::ConfusionPotion
+    )
+}
+
+/// Returns true if the item is a weapon that can be equipped
+pub fn item_is_weapon(item: ItemType) -> bool {
+    matches!(item, ItemType::Sword | ItemType::Bow)
 }
 
 /// Use an item from an entity's inventory
@@ -70,21 +87,27 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         inv.items[item_index]
     };
 
-    // Check if item is throwable (should be equipped instead)
-    if item_is_throwable(item_type) {
-        return ItemUseResult::IsThrowable { item_type, item_index };
+    // Check if item is a weapon (should be equipped, not "used")
+    if item_is_weapon(item_type) {
+        return ItemUseResult::IsWeapon { item_type, item_index };
     }
 
-    // Check if item requires targeting
+    // Check if item requires targeting (includes throwable potions and some scrolls)
     if item_requires_target(item_type) {
         return ItemUseResult::RequiresTarget { item_type, item_index };
     }
 
     // Apply item effect based on type
     let result = match item_type {
+        // Weapons handled above
+        ItemType::Sword | ItemType::Bow => {
+            return ItemUseResult::IsWeapon { item_type, item_index };
+        }
+        // Potions - drink them (apply effect to self)
         ItemType::HealthPotion => {
             if let Ok(mut health) = world.get::<&mut Health>(entity) {
-                health.current = (health.current + HEALTH_POTION_HEAL).min(health.max);
+                let heal = item_heal_amount(item_type);
+                health.current = (health.current + heal).min(health.max);
             }
             ItemUseResult::Used
         }
@@ -101,8 +124,11 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
             ItemUseResult::Used
         }
         ItemType::ConfusionPotion => {
-            // Shouldn't reach here due to is_throwable check above
-            return ItemUseResult::IsThrowable { item_type, item_index };
+            // Drinking a confusion potion confuses yourself (not very useful!)
+            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
+                effects.add_effect(EffectType::Confused, CONFUSION_DURATION);
+            }
+            ItemUseResult::Used
         }
         ItemType::ScrollOfInvisibility => {
             if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
@@ -169,6 +195,9 @@ pub fn remove_item_from_inventory(world: &mut World, entity: Entity, item_index:
 /// Get the weight of an item in kg
 pub fn item_weight(item: ItemType) -> f32 {
     match item {
+        // Weapons
+        ItemType::Sword => SWORD_WEIGHT,
+        ItemType::Bow => BOW_WEIGHT,
         // Potions
         ItemType::HealthPotion
         | ItemType::RegenerationPotion
@@ -199,6 +228,8 @@ pub fn item_heal_amount(item: ItemType) -> i32 {
 pub fn item_tile_id(item: ItemType) -> u32 {
     use crate::tile::tile_ids;
     match item {
+        ItemType::Sword => tile_ids::SWORD,
+        ItemType::Bow => tile_ids::BOW,
         ItemType::HealthPotion => tile_ids::RED_POTION,
         ItemType::RegenerationPotion => tile_ids::GREEN_POTION,
         ItemType::StrengthPotion => tile_ids::AMBER_POTION,
@@ -246,16 +277,29 @@ mod tests {
 
     #[test]
     fn test_item_requires_target() {
+        // Targeted scrolls
         assert!(item_requires_target(ItemType::ScrollOfBlink));
         assert!(item_requires_target(ItemType::ScrollOfFireball));
+        // Potions are drinkable by default (throwable via context menu)
         assert!(!item_requires_target(ItemType::HealthPotion));
+        assert!(!item_requires_target(ItemType::ConfusionPotion));
+        // Non-targeted scrolls
         assert!(!item_requires_target(ItemType::ScrollOfSpeed));
+        // Weapons don't require targeting
+        assert!(!item_requires_target(ItemType::Sword));
+        assert!(!item_requires_target(ItemType::Bow));
     }
 
     #[test]
     fn test_item_is_throwable() {
+        // All potions are throwable
         assert!(item_is_throwable(ItemType::ConfusionPotion));
-        assert!(!item_is_throwable(ItemType::HealthPotion));
+        assert!(item_is_throwable(ItemType::HealthPotion));
+        assert!(item_is_throwable(ItemType::RegenerationPotion));
+        assert!(item_is_throwable(ItemType::StrengthPotion));
+        // Scrolls are not throwable
         assert!(!item_is_throwable(ItemType::ScrollOfFireball));
+        // Weapons are not throwable
+        assert!(!item_is_throwable(ItemType::Sword));
     }
 }
