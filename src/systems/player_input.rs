@@ -119,9 +119,9 @@ pub fn intent_to_action(
         PlayerIntent::Wait => Some(ActionType::Wait),
 
         PlayerIntent::Move { dx, dy } => {
-            // Use the time system's determine_action_type for full movement logic
+            // Use action_dispatch for full movement logic
             // (handles attacks, doors, chests, etc.)
-            Some(crate::time_system::determine_action_type(
+            Some(crate::systems::action_dispatch::determine_action_type(
                 world,
                 grid,
                 player_entity,

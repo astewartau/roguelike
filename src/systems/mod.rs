@@ -1,6 +1,7 @@
 //! Game systems organized by domain.
 //!
 //! This module contains all game logic systems, split into focused submodules:
+//! - `action_dispatch`: Action type determination and duration calculation
 //! - `actions`: Action effect implementations (move, attack, etc.)
 //! - `ai`: AI decision-making and behavior
 //! - `animation`: Visual interpolation and animation updates
@@ -12,6 +13,7 @@
 //! - `rendering`: FOV, visibility, and render data collection
 //! - `projectile`: Arrow and projectile movement
 
+pub mod action_dispatch;
 pub mod actions;
 pub mod ai;
 pub mod animation;

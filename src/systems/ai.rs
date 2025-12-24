@@ -15,6 +15,7 @@ use crate::fov::FOV;
 use crate::grid::Grid;
 use crate::pathfinding::{self, BresenhamLineIter};
 use crate::queries;
+use crate::systems::action_dispatch;
 use crate::time_system::{self, ActionScheduler, GameClock};
 
 /// Have an AI entity decide and start its next action.
@@ -108,7 +109,7 @@ fn determine_action(
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
-        return time_system::determine_action_type(world, grid, entity, dx, dy);
+        return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
 
     // Feared: flee from player
@@ -119,7 +120,7 @@ fn determine_action(
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
-        return time_system::determine_action_type(world, grid, entity, dx, dy);
+        return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
 
     // Get AI state, sight radius, and ranged parameters
@@ -205,7 +206,7 @@ fn determine_action(
     }
 
     // Determine action type (may convert to attack)
-    time_system::determine_action_type(world, grid, entity, dx, dy)
+    action_dispatch::determine_action_type(world, grid, entity, dx, dy)
 }
 
 /// Check if there's a clear line of sight for a projectile (no blocking entities)

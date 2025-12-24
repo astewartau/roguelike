@@ -7,6 +7,7 @@ use crate::grid::Grid;
 use crate::input::TargetingMode;
 use crate::queries;
 use crate::systems;
+use crate::systems::action_dispatch;
 use crate::systems::player_input::{self, PlayerIntent};
 use crate::time_system::{self, ActionScheduler, GameClock};
 use crate::ui::{DevMenu, GameUiState, UiActions};
@@ -144,7 +145,7 @@ pub fn execute_player_turn(
         };
     }
 
-    let action_type = time_system::determine_action_type(world, grid, player_entity, dx, dy);
+    let action_type = action_dispatch::determine_action_type(world, grid, player_entity, dx, dy);
 
     if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
         return TurnExecutionResult {
@@ -178,7 +179,7 @@ pub fn peek_action_type(
     dx: i32,
     dy: i32,
 ) -> ActionType {
-    time_system::determine_action_type(world, grid, player_entity, dx, dy)
+    action_dispatch::determine_action_type(world, grid, player_entity, dx, dy)
 }
 
 /// Advance game time until the player can act again.

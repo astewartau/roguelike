@@ -11,13 +11,13 @@ use crate::grid::Grid;
 pub struct VisualEffect {
     pub x: f32,
     pub y: f32,
-    pub effect_type: EffectType,
+    pub effect_type: VfxType,
     pub timer: f32,      // Time remaining
     pub duration: f32,   // Total duration (for progress calculation)
 }
 
 impl VisualEffect {
-    pub fn new(x: f32, y: f32, effect_type: EffectType) -> Self {
+    pub fn new(x: f32, y: f32, effect_type: VfxType) -> Self {
         let duration = effect_type.duration();
         Self {
             x,
@@ -46,7 +46,7 @@ impl VisualEffect {
 }
 
 #[derive(Clone)]
-pub enum EffectType {
+pub enum VfxType {
     /// Diagonal slash mark (for melee hits)
     Slash { angle: f32 },
     /// Floating damage number
@@ -68,15 +68,15 @@ const EXPLOSION_DURATION: f32 = 0.5;
 /// Duration for potion splash effect
 const POTION_SPLASH_DURATION: f32 = 0.4;
 
-impl EffectType {
+impl VfxType {
     pub fn duration(&self) -> f32 {
         match self {
-            EffectType::Slash { .. } => SLASH_VFX_DURATION,
-            EffectType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
-            EffectType::Fire { .. } => f32::INFINITY, // Fire loops forever
-            EffectType::Alert => ALERT_DURATION,
-            EffectType::Explosion { .. } => EXPLOSION_DURATION,
-            EffectType::PotionSplash { .. } => POTION_SPLASH_DURATION,
+            VfxType::Slash { .. } => SLASH_VFX_DURATION,
+            VfxType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
+            VfxType::Fire { .. } => f32::INFINITY, // Fire loops forever
+            VfxType::Alert => ALERT_DURATION,
+            VfxType::Explosion { .. } => EXPLOSION_DURATION,
+            VfxType::PotionSplash { .. } => POTION_SPLASH_DURATION,
         }
     }
 }
@@ -111,33 +111,33 @@ impl VfxManager {
     }
 
     /// Spawn a new effect
-    pub fn spawn(&mut self, x: f32, y: f32, effect_type: EffectType) {
+    pub fn spawn(&mut self, x: f32, y: f32, effect_type: VfxType) {
         self.effects.push(VisualEffect::new(x, y, effect_type));
     }
 
     /// Spawn a slash effect at target position
     pub fn spawn_slash(&mut self, x: f32, y: f32) {
-        self.spawn(x, y, EffectType::Slash { angle: SLASH_VFX_ANGLE });
+        self.spawn(x, y, VfxType::Slash { angle: SLASH_VFX_ANGLE });
     }
 
     /// Spawn a floating damage number
     pub fn spawn_damage_number(&mut self, x: f32, y: f32, amount: i32) {
-        self.spawn(x, y, EffectType::DamageNumber { amount });
+        self.spawn(x, y, VfxType::DamageNumber { amount });
     }
 
     /// Spawn an alert indicator "!" above an entity
     pub fn spawn_alert(&mut self, x: f32, y: f32) {
-        self.spawn(x, y, EffectType::Alert);
+        self.spawn(x, y, VfxType::Alert);
     }
 
     /// Spawn an explosion effect (fireball)
     pub fn spawn_explosion(&mut self, x: f32, y: f32, radius: i32) {
-        self.spawn(x, y, EffectType::Explosion { radius });
+        self.spawn(x, y, VfxType::Explosion { radius });
     }
 
     /// Spawn a potion splash effect
     pub fn spawn_potion_splash(&mut self, x: f32, y: f32, potion_type: crate::components::ItemType) {
-        self.spawn(x, y, EffectType::PotionSplash { potion_type });
+        self.spawn(x, y, VfxType::PotionSplash { potion_type });
     }
 
     /// Spawn a persistent fire effect

@@ -10,7 +10,7 @@ use crate::input::TargetingMode;
 use crate::systems;
 use crate::tile::tile_ids;
 use crate::tileset::Tileset;
-use crate::vfx::{EffectType as VfxEffectType, VisualEffect};
+use crate::vfx::{VfxType, VisualEffect};
 use egui_glow::EguiGlow;
 use hecs::{Entity, World};
 use winit::window::Window;
@@ -1130,7 +1130,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
     let ppp = ctx.pixels_per_point();
 
     for effect in effects {
-        let VfxEffectType::DamageNumber { amount } = &effect.effect_type else {
+        let VfxType::DamageNumber { amount } = &effect.effect_type else {
             continue;
         };
 
@@ -1180,7 +1180,7 @@ pub fn draw_alert_indicators(ctx: &egui::Context, effects: &[VisualEffect], came
     let ppp = ctx.pixels_per_point();
 
     for effect in effects {
-        let VfxEffectType::Alert = &effect.effect_type else {
+        let VfxType::Alert = &effect.effect_type else {
             continue;
         };
 
@@ -1317,7 +1317,7 @@ pub fn draw_explosions(ctx: &egui::Context, effects: &[VisualEffect], camera: &C
     let tile_size = camera.zoom / ppp;
 
     for effect in effects {
-        let VfxEffectType::Explosion { radius } = &effect.effect_type else {
+        let VfxType::Explosion { radius } = &effect.effect_type else {
             continue;
         };
 
@@ -1389,7 +1389,7 @@ pub fn draw_potion_splashes(ctx: &egui::Context, effects: &[VisualEffect], camer
     let tile_size = camera.zoom / ppp;
 
     for effect in effects {
-        let VfxEffectType::PotionSplash { potion_type } = &effect.effect_type else {
+        let VfxType::PotionSplash { potion_type } = &effect.effect_type else {
             continue;
         };
 

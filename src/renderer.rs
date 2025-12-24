@@ -922,12 +922,12 @@ impl Renderer {
 
             for effect in effects {
                 let angle = match &effect.effect_type {
-                    crate::vfx::EffectType::Slash { angle } => *angle,
-                    crate::vfx::EffectType::DamageNumber { .. } => continue, // Rendered via egui
-                    crate::vfx::EffectType::Fire { .. } => continue, // Rendered separately
-                    crate::vfx::EffectType::Alert => continue, // Rendered via egui
-                    crate::vfx::EffectType::Explosion { .. } => continue, // Rendered via egui
-                    crate::vfx::EffectType::PotionSplash { .. } => continue, // Rendered via egui
+                    crate::vfx::VfxType::Slash { angle } => *angle,
+                    crate::vfx::VfxType::DamageNumber { .. } => continue, // Rendered via egui
+                    crate::vfx::VfxType::Fire { .. } => continue, // Rendered separately
+                    crate::vfx::VfxType::Alert => continue, // Rendered via egui
+                    crate::vfx::VfxType::Explosion { .. } => continue, // Rendered via egui
+                    crate::vfx::VfxType::PotionSplash { .. } => continue, // Rendered via egui
                 };
 
                 // Center the effect on the tile (effect.x/y is already centered)
