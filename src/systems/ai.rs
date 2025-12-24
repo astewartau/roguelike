@@ -13,7 +13,7 @@ use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
 use crate::fov::FOV;
 use crate::grid::Grid;
-use crate::pathfinding;
+use crate::pathfinding::{self, BresenhamLineIter};
 use crate::queries;
 use crate::time_system::{self, ActionScheduler, GameClock};
 
@@ -210,34 +210,15 @@ fn determine_action(
 
 /// Check if there's a clear line of sight for a projectile (no blocking entities)
 fn has_clear_shot(world: &World, from: (i32, i32), to: (i32, i32)) -> bool {
-    // Collect positions of entities that block movement (potential obstacles)
     let blocking = queries::get_blocking_positions(world, None);
 
-    // Simple line check using Bresenham-like iteration
-    let dx = (to.0 - from.0).abs();
-    let dy = (to.1 - from.1).abs();
-    let sx = if from.0 < to.0 { 1 } else { -1 };
-    let sy = if from.1 < to.1 { 1 } else { -1 };
-    let mut err = dx - dy;
-    let mut x = from.0;
-    let mut y = from.1;
-
-    while (x, y) != to {
-        let e2 = 2 * err;
-        if e2 > -dy {
-            err -= dy;
-            x += sx;
+    for (x, y) in BresenhamLineIter::new(from.0, from.1, to.0, to.1) {
+        // Skip the target position (we want to shoot AT the target)
+        if (x, y) == to {
+            continue;
         }
-        if e2 < dx {
-            err += dx;
-            y += sy;
-        }
-
-        // Skip the starting position and target position
-        if (x, y) != from && (x, y) != to {
-            if blocking.contains(&(x, y)) {
-                return false;
-            }
+        if blocking.contains(&(x, y)) {
+            return false;
         }
     }
 
@@ -344,16 +325,9 @@ fn random_wander(
 ) -> (i32, i32) {
     let dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)];
     let (dx, dy) = dirs[rng.gen_range(0..4)];
-    let target_x = pos.0 + dx;
-    let target_y = pos.1 + dy;
+    let target = (pos.0 + dx, pos.1 + dy);
 
-    // Check both tile walkability AND that no entity blocks the position
-    let tile_walkable = grid
-        .get(target_x, target_y)
-        .map(|t| t.tile_type.is_walkable())
-        .unwrap_or(false);
-
-    if tile_walkable && !blocked.contains(&(target_x, target_y)) {
+    if grid.is_walkable(target.0, target.1) && !blocked.contains(&target) {
         (dx, dy)
     } else {
         (0, 0)
@@ -377,12 +351,7 @@ fn flee_from_target(
     if flee_dx != 0 || flee_dy != 0 {
         let nx = pos.0 + flee_dx;
         let ny = pos.1 + flee_dy;
-        let tile_walkable = grid
-            .get(nx, ny)
-            .map(|t| t.tile_type.is_walkable())
-            .unwrap_or(false);
-
-        if tile_walkable && !blocked.contains(&(nx, ny)) {
+        if grid.is_walkable(nx, ny) && !blocked.contains(&(nx, ny)) {
             return (flee_dx, flee_dy);
         }
 
@@ -390,12 +359,7 @@ fn flee_from_target(
         if flee_dx != 0 {
             let nx = pos.0 + flee_dx;
             let ny = pos.1;
-            let tile_walkable = grid
-                .get(nx, ny)
-                .map(|t| t.tile_type.is_walkable())
-                .unwrap_or(false);
-
-            if tile_walkable && !blocked.contains(&(nx, ny)) {
+            if grid.is_walkable(nx, ny) && !blocked.contains(&(nx, ny)) {
                 return (flee_dx, 0);
             }
         }
@@ -404,12 +368,7 @@ fn flee_from_target(
         if flee_dy != 0 {
             let nx = pos.0;
             let ny = pos.1 + flee_dy;
-            let tile_walkable = grid
-                .get(nx, ny)
-                .map(|t| t.tile_type.is_walkable())
-                .unwrap_or(false);
-
-            if tile_walkable && !blocked.contains(&(nx, ny)) {
+            if grid.is_walkable(nx, ny) && !blocked.contains(&(nx, ny)) {
                 return (0, flee_dy);
             }
         }

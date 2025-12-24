@@ -17,9 +17,11 @@ pub mod ai;
 pub mod animation;
 pub mod combat;
 pub mod dev_tools;
+pub mod dialogue;
 pub mod effects;
 pub mod experience;
 pub mod inventory;
+pub mod item_defs;
 pub mod items;
 pub mod player_input;
 pub mod projectile;
@@ -33,6 +35,6 @@ pub use inventory::{
     find_container_at_player, take_all_from_container, take_gold_from_container,
     take_item_from_container,
 };
-pub use items::{item_name, item_weight, use_item, remove_item_from_inventory, ItemUseResult};
+pub use items::{item_name, use_item, remove_item_from_inventory, item_targeting_params, ItemUseResult};
 pub use projectile::{cleanup_finished_projectiles, despawn_projectiles, lerp_projectiles_realtime, update_projectiles};
 pub use rendering::{collect_renderables, update_fov, reveal_entire_map, reveal_enemies, RenderEntity};

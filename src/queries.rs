@@ -8,8 +8,9 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, BlocksVision, EffectType, Health, Position, StatusEffects,
+    Actor, Attackable, BlocksMovement, BlocksVision, EffectType, Health, Position,
 };
+use crate::systems::effects;
 
 /// Get all positions blocked by entities (for pathfinding/collision).
 /// Optionally excludes a specific entity (usually the moving entity itself).
@@ -50,10 +51,7 @@ pub fn get_attackable_at(
 
 /// Check if an entity has a specific status effect active.
 pub fn has_status_effect(world: &World, entity: Entity, effect: EffectType) -> bool {
-    world
-        .get::<&StatusEffects>(entity)
-        .map(|e| e.has_effect(effect))
-        .unwrap_or(false)
+    effects::entity_has_effect(world, entity, effect)
 }
 
 /// Check if an entity can perform an action (has energy and is not busy).

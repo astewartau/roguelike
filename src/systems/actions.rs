@@ -13,8 +13,11 @@ use crate::components::{
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::grid::Grid;
+use crate::pathfinding::{BresenhamLineIter, step_distance};
 use crate::queries;
 use crate::tile::tile_ids;
+
+use super::effects;
 
 /// Result of applying an action's effects
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,12 +55,7 @@ pub fn apply_move(
     let target_y = current_pos.1 + dy;
 
     // Check tile walkability
-    let tile_walkable = grid
-        .get(target_x, target_y)
-        .map(|t| t.tile_type.is_walkable())
-        .unwrap_or(false);
-
-    if !tile_walkable {
+    if !grid.is_walkable(target_x, target_y) {
         return ActionResult::Blocked;
     }
 
@@ -379,72 +377,30 @@ pub fn calculate_arrow_path(
     arrow_speed: f32,
     grid: &Grid,
 ) -> Vec<(i32, i32, f32)> {
-    let mut path = Vec::new();
-
-    let dir_x = target_x - start_x;
-    let dir_y = target_y - start_y;
-
-    if dir_x == 0 && dir_y == 0 {
-        return path;
+    if start_x == target_x && start_y == target_y {
+        return Vec::new();
     }
 
-    let dx = dir_x.abs();
-    let dy = dir_y.abs();
-    let sx = if dir_x >= 0 { 1 } else { -1 };
-    let sy = if dir_y >= 0 { 1 } else { -1 };
-    let mut err = dx - dy;
-
-    let mut x = start_x;
-    let mut y = start_y;
-    let mut prev_x = start_x;
-    let mut prev_y = start_y;
+    let mut path = Vec::new();
+    let mut prev = (start_x, start_y);
     let mut cumulative_time: f32 = 0.0;
 
-    // Take first step to skip the starting tile
-    let e2 = 2 * err;
-    if e2 > -dy {
-        err -= dy;
-        x += sx;
-    }
-    if e2 < dx {
-        err += dx;
-        y += sy;
-    }
+    // Extend the line well past the target to hit walls
+    let dx = target_x - start_x;
+    let dy = target_y - start_y;
+    let extended_x = start_x + dx * 50;
+    let extended_y = start_y + dy * 50;
 
-    let max_range = 50;
-    let mut steps = 0;
-
-    while steps < max_range {
-        steps += 1;
-
-        let step_dx = (x - prev_x).abs();
-        let step_dy = (y - prev_y).abs();
-        let distance = if step_dx != 0 && step_dy != 0 {
-            std::f32::consts::SQRT_2
-        } else {
-            1.0
-        };
-        cumulative_time += distance / arrow_speed;
-
+    for (x, y) in BresenhamLineIter::new(start_x, start_y, extended_x, extended_y).take(50) {
+        cumulative_time += step_distance(prev, (x, y)) / arrow_speed;
         path.push((x, y, cumulative_time));
 
-        let tile = grid.get(x, y);
-        let blocks = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
-        if blocks {
+        // Stop if we hit a wall
+        if !grid.is_walkable(x, y) {
             break;
         }
 
-        prev_x = x;
-        prev_y = y;
-        let e2 = 2 * err;
-        if e2 > -dy {
-            err -= dy;
-            x += sx;
-        }
-        if e2 < dx {
-            err += dx;
-            y += sy;
-        }
+        prev = (x, y);
     }
 
     path
@@ -459,71 +415,18 @@ pub fn calculate_throw_path(
     target_y: i32,
     throw_speed: f32,
 ) -> Vec<(i32, i32, f32)> {
-    let mut path = Vec::new();
-
-    let dir_x = target_x - start_x;
-    let dir_y = target_y - start_y;
-
-    if dir_x == 0 && dir_y == 0 {
-        return path;
+    if start_x == target_x && start_y == target_y {
+        return Vec::new();
     }
 
-    let dx = dir_x.abs();
-    let dy = dir_y.abs();
-    let sx = if dir_x >= 0 { 1 } else { -1 };
-    let sy = if dir_y >= 0 { 1 } else { -1 };
-    let mut err = dx - dy;
-
-    let mut x = start_x;
-    let mut y = start_y;
-    let mut prev_x = start_x;
-    let mut prev_y = start_y;
+    let mut path = Vec::new();
+    let mut prev = (start_x, start_y);
     let mut cumulative_time: f32 = 0.0;
 
-    // Take first step to skip the starting tile
-    let e2 = 2 * err;
-    if e2 > -dy {
-        err -= dy;
-        x += sx;
-    }
-    if e2 < dx {
-        err += dx;
-        y += sy;
-    }
-
-    let max_steps = 50;
-    let mut steps = 0;
-
-    while steps < max_steps {
-        steps += 1;
-
-        let step_dx = (x - prev_x).abs();
-        let step_dy = (y - prev_y).abs();
-        let distance = if step_dx != 0 && step_dy != 0 {
-            std::f32::consts::SQRT_2
-        } else {
-            1.0
-        };
-        cumulative_time += distance / throw_speed;
-
+    for (x, y) in BresenhamLineIter::new(start_x, start_y, target_x, target_y) {
+        cumulative_time += step_distance(prev, (x, y)) / throw_speed;
         path.push((x, y, cumulative_time));
-
-        // Stop when we reach the target
-        if x == target_x && y == target_y {
-            break;
-        }
-
-        prev_x = x;
-        prev_y = y;
-        let e2 = 2 * err;
-        if e2 > -dy {
-            err -= dy;
-            x += sx;
-        }
-        if e2 < dx {
-            err += dx;
-            y += sy;
-        }
+        prev = (x, y);
     }
 
     path
@@ -633,21 +536,15 @@ pub fn apply_potion_splash(world: &mut World, potion_type: ItemType, center_x: i
                 }
             }
             ItemType::RegenerationPotion => {
-                if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                    effects.add_effect(EffectType::Regenerating, REGENERATION_DURATION);
-                }
+                effects::add_effect_to_entity(world, entity, EffectType::Regenerating, REGENERATION_DURATION);
             }
             ItemType::StrengthPotion => {
-                if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                    effects.add_effect(EffectType::Strengthened, STRENGTH_DURATION);
-                }
+                effects::add_effect_to_entity(world, entity, EffectType::Strengthened, STRENGTH_DURATION);
             }
             ItemType::ConfusionPotion => {
                 // Confusion only affects enemies (entities with ChaseAI)
                 if world.get::<&ChaseAI>(entity).is_ok() {
-                    if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                        effects.add_effect(EffectType::Confused, CONFUSION_DURATION);
-                    }
+                    effects::add_effect_to_entity(world, entity, EffectType::Confused, CONFUSION_DURATION);
                 }
             }
             _ => {}
@@ -677,7 +574,7 @@ pub fn apply_blink(
     }
 
     // Check target is walkable
-    if !grid.get(target_x, target_y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+    if !grid.is_walkable(target_x, target_y) {
         return ActionResult::Blocked;
     }
 

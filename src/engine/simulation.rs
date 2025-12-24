@@ -1,171 +1,58 @@
-//! Game loop and time advancement.
-//!
-//! This module owns the game simulation loop, advancing time and processing
-//! actions. It separates game logic from input handling and rendering.
+//! Game simulation - turn execution, time advancement, and event processing.
 
-use crate::components::{ActionType, Actor};
-use crate::events::{EventQueue, GameEvent};
-use crate::systems::player_input::{self, PlayerIntent};
+use crate::components::{ActionType, Actor, EffectType, Inventory};
+use crate::constants;
+use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::grid::Grid;
+use crate::input::TargetingMode;
+use crate::queries;
 use crate::systems;
+use crate::systems::player_input::{self, PlayerIntent};
 use crate::time_system::{self, ActionScheduler, GameClock};
+use crate::ui::{DevMenu, GameUiState, UiActions};
 use crate::vfx::VfxManager;
+
 use hecs::{Entity, World};
 use rand::Rng;
 
-/// Result of attempting to start a player action
+/// Result of attempting to start a player action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnResult {
-    /// Action started and completed successfully
     Started,
-    /// Action was blocked (invalid target, etc.)
     Blocked,
-    /// Player can't act (busy or no energy)
     NotReady,
 }
 
-/// Full result of executing a player turn, including any events that need handling
+/// Full result of executing a player turn.
 pub struct TurnExecutionResult {
     pub turn_result: TurnResult,
     pub floor_transition: Option<StairDirection>,
-    /// Player performed an attack this turn
     pub player_attacked: bool,
-    /// Player took damage this turn
     pub player_took_damage: bool,
-    /// An enemy spotted the player this turn
     pub enemy_spotted_player: bool,
 }
 
-/// Start a player action and advance time until player can act again.
-///
-/// This is the main entry point for player turns. It:
-/// 1. Determines the action type from movement input
-/// 2. Starts the action (scheduling it)
-/// 3. Advances time, completing actions and running AI
-/// 4. Returns when the player can act again
-pub fn execute_player_turn(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    dx: i32,
-    dy: i32,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-) -> TurnExecutionResult {
-    // Check if player can act
-    let can_act = world
-        .get::<&Actor>(player_entity)
-        .map(|a| a.can_act())
-        .unwrap_or(false);
-
-    if !can_act {
-        return TurnExecutionResult {
-            turn_result: TurnResult::NotReady,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-        };
-    }
-
-    // Determine what action the player is attempting
-    let action_type = time_system::determine_action_type(world, grid, player_entity, dx, dy);
-
-    // Try to start the action
-    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
-        return TurnExecutionResult {
-            turn_result: TurnResult::Blocked,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-        };
-    }
-
-    // Advance time until player can act again
-    let mut rng = rand::thread_rng();
-    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
-
-    // Process events (VFX, UI state, world state changes)
-    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
-
-    TurnExecutionResult {
-        turn_result: TurnResult::Started,
-        floor_transition: event_result.floor_transition,
-        player_attacked: event_result.player_attacked,
-        player_took_damage: event_result.player_took_damage,
-        enemy_spotted_player: event_result.enemy_spotted_player,
+impl TurnExecutionResult {
+    pub fn should_interrupt_path(&self) -> bool {
+        self.player_attacked || self.player_took_damage || self.enemy_spotted_player
     }
 }
 
-/// Execute a player attack direction action (Shift+direction).
-/// Similar to execute_player_turn but uses AttackDirection action type.
-pub fn execute_player_attack_direction(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    dx: i32,
-    dy: i32,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-) -> TurnExecutionResult {
-    // Check if player can act
-    let can_act = world
-        .get::<&Actor>(player_entity)
-        .map(|a| a.can_act())
-        .unwrap_or(false);
+/// Result of processing events.
+pub struct EventProcessingResult {
+    pub floor_transition: Option<StairDirection>,
+    pub player_attacked: bool,
+    pub player_took_damage: bool,
+    pub enemy_spotted_player: bool,
+}
 
-    if !can_act {
-        return TurnExecutionResult {
-            turn_result: TurnResult::NotReady,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-        };
-    }
-
-    // Create attack direction action
-    let action_type = ActionType::AttackDirection { dx, dy };
-
-    // Try to start the action
-    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
-        return TurnExecutionResult {
-            turn_result: TurnResult::Blocked,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-        };
-    }
-
-    // Advance time until player can act again
-    let mut rng = rand::thread_rng();
-    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
-
-    // Process events (VFX, UI state, world state changes)
-    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
-
-    TurnExecutionResult {
-        turn_result: TurnResult::Started,
-        floor_transition: event_result.floor_transition,
-        player_attacked: event_result.player_attacked,
-        player_took_damage: event_result.player_took_damage,
-        enemy_spotted_player: event_result.enemy_spotted_player,
+impl EventProcessingResult {
+    pub fn should_interrupt_path(&self) -> bool {
+        self.player_attacked || self.player_took_damage || self.enemy_spotted_player
     }
 }
 
 /// Execute a player intent - unified entry point for all player actions.
-///
-/// This handles all player action types: movement, attack direction,
-/// ranged shooting, and targeted abilities. It validates the intent,
-/// converts to an action, and advances time.
 pub fn execute_player_intent(
     world: &mut World,
     grid: &Grid,
@@ -177,7 +64,6 @@ pub fn execute_player_intent(
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
 ) -> TurnExecutionResult {
-    // Check if player can act
     let can_act = world
         .get::<&Actor>(player_entity)
         .map(|a| a.can_act())
@@ -193,7 +79,6 @@ pub fn execute_player_intent(
         };
     }
 
-    // Convert intent to action type
     let action_type = match player_input::intent_to_action(world, grid, player_entity, &intent) {
         Some(action) => action,
         None => {
@@ -207,7 +92,6 @@ pub fn execute_player_intent(
         }
     };
 
-    // Try to start the action
     if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
@@ -218,11 +102,9 @@ pub fn execute_player_intent(
         };
     }
 
-    // Advance time until player can act again
     let mut rng = rand::thread_rng();
     advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
 
-    // Process events (VFX, UI state, world state changes)
     let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
 
     TurnExecutionResult {
@@ -234,8 +116,61 @@ pub fn execute_player_intent(
     }
 }
 
-/// Get the action type that would result from a movement input.
-/// Useful for UI feedback (showing what will happen).
+/// Execute a player turn based on movement input.
+pub fn execute_player_turn(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    dx: i32,
+    dy: i32,
+    clock: &mut GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+) -> TurnExecutionResult {
+    let can_act = world
+        .get::<&Actor>(player_entity)
+        .map(|a| a.can_act())
+        .unwrap_or(false);
+
+    if !can_act {
+        return TurnExecutionResult {
+            turn_result: TurnResult::NotReady,
+            floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
+        };
+    }
+
+    let action_type = time_system::determine_action_type(world, grid, player_entity, dx, dy);
+
+    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
+        return TurnExecutionResult {
+            turn_result: TurnResult::Blocked,
+            floor_transition: None,
+            player_attacked: false,
+            player_took_damage: false,
+            enemy_spotted_player: false,
+        };
+    }
+
+    let mut rng = rand::thread_rng();
+    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
+
+    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
+
+    TurnExecutionResult {
+        turn_result: TurnResult::Started,
+        floor_transition: event_result.floor_transition,
+        player_attacked: event_result.player_attacked,
+        player_took_damage: event_result.player_took_damage,
+        enemy_spotted_player: event_result.enemy_spotted_player,
+    }
+}
+
+/// Get the action type that would result from movement input.
 pub fn peek_action_type(
     world: &World,
     grid: &Grid,
@@ -247,12 +182,6 @@ pub fn peek_action_type(
 }
 
 /// Advance game time until the player can act again.
-///
-/// This processes the simulation:
-/// - Completes scheduled actions
-/// - Runs AI for non-player entities
-/// - Ticks regeneration
-/// - Updates projectiles
 fn advance_until_player_ready(
     world: &mut World,
     grid: &Grid,
@@ -263,93 +192,53 @@ fn advance_until_player_ready(
     rng: &mut impl Rng,
 ) {
     loop {
-        // Check if player can act
         let player_can_act = world
             .get::<&Actor>(player_entity)
             .map(|a| a.can_act())
             .unwrap_or(false);
 
         if player_can_act {
-            // Final projectile update before returning
             update_projectiles_at_time(world, grid, clock.time, events);
             return;
         }
 
-        // If player has no Actor component, shouldn't happen but bail out
         if world.get::<&Actor>(player_entity).is_err() {
             return;
         }
 
-        // Get next completion from scheduler
         let Some((next_entity, completion_time)) = scheduler.pop_next() else {
-            // No pending completions but player can't act - shouldn't happen
             return;
         };
 
-        // Advance time to the completion
         let previous_time = clock.time;
         clock.advance_to(completion_time);
         let elapsed = clock.time - previous_time;
 
-        // Update projectiles at this time point
         update_projectiles_at_time(world, grid, clock.time, events);
 
-        // Process time-based effects (HP regen, energy regen, status effects)
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
         time_system::tick_status_effects(world, elapsed);
 
-        // Complete the action
         time_system::complete_action(world, grid, next_entity, events, clock.time);
 
-        // If not player, have AI decide next action
         if next_entity != player_entity {
             systems::ai::decide_action(world, grid, next_entity, player_entity, clock, scheduler, events, rng);
         }
     }
 }
 
-/// Update projectiles based on game time (marks finished but doesn't despawn)
+/// Update projectiles at current time.
 fn update_projectiles_at_time(
     world: &mut World,
     grid: &Grid,
     current_time: f32,
     events: &mut EventQueue,
 ) {
-    // Update projectiles - this marks them as finished but doesn't despawn
-    // Despawning happens in the render loop after visual catch-up
     systems::update_projectiles(world, grid, current_time, events);
 }
 
-/// Public wrapper for advance_until_player_ready (used by bow shooting)
-pub fn advance_until_player_ready_public(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
-    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, rng);
-}
-
-use crate::events::StairDirection;
-use crate::ui::GameUiState;
-
-/// Result of processing events, contains any floor transitions that need handling
-pub struct EventProcessingResult {
-    pub floor_transition: Option<StairDirection>,
-    /// Player performed an attack this turn
-    pub player_attacked: bool,
-    /// Player took damage this turn
-    pub player_took_damage: bool,
-    /// An enemy spotted the player this turn
-    pub enemy_spotted_player: bool,
-}
-
-/// Process all pending events, dispatching to appropriate handlers.
-/// Returns any floor transitions that need to be handled by the caller.
+/// Process all pending events.
 pub fn process_events(
     events: &mut EventQueue,
     world: &mut World,
@@ -366,13 +255,9 @@ pub fn process_events(
     };
 
     for event in events.drain() {
-        // Visual effects (only spawn if position is visible to player)
         vfx.handle_event(&event, grid);
-
-        // UI state
         ui_state.handle_event(&event);
 
-        // World state changes in response to events
         match &event {
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
@@ -387,11 +272,9 @@ pub fn process_events(
                 systems::take_gold_from_container(world, *taker, *container, None);
             }
             GameEvent::FloorTransition { direction, .. } => {
-                // Capture floor transition for handling by caller
                 result.floor_transition = Some(*direction);
             }
             GameEvent::AttackHit { attacker, target, .. } => {
-                // Track if player was involved in combat
                 if *attacker == player_entity {
                     result.player_attacked = true;
                 }
@@ -400,7 +283,6 @@ pub fn process_events(
                 }
             }
             GameEvent::AIStateChanged { entity, new_state } => {
-                // Enemy spotted player - spawn alert VFX
                 if *new_state == crate::components::AIState::Chasing {
                     if let Ok(pos) = world.get::<&crate::components::Position>(*entity) {
                         vfx.spawn_alert(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
@@ -410,8 +292,137 @@ pub fn process_events(
             }
             _ => {}
         }
+    }
 
-        // Future: audio.handle_event(&event), etc.
+    result
+}
+
+/// Result of processing UI actions.
+pub struct UiActionResult {
+    pub enter_targeting: Option<TargetingMode>,
+    pub close_inventory: bool,
+    pub close_context_menu: bool,
+    pub close_chest: bool,
+    pub close_dialogue: bool,
+}
+
+impl Default for UiActionResult {
+    fn default() -> Self {
+        Self {
+            enter_targeting: None,
+            close_inventory: false,
+            close_context_menu: false,
+            close_chest: false,
+            close_dialogue: false,
+        }
+    }
+}
+
+/// Process UI actions and execute game logic.
+pub fn process_ui_actions(
+    world: &mut World,
+    grid: &mut Grid,
+    player_entity: Entity,
+    actions: &UiActions,
+    dev_menu: &mut DevMenu,
+    ui_state: &GameUiState,
+    events: &mut EventQueue,
+    game_time: f32,
+) -> UiActionResult {
+    let mut result = UiActionResult::default();
+
+    // Dev menu item giving
+    if let Some(item) = dev_menu.take_item_to_give() {
+        systems::dev_tools::give_item_to_player(world, player_entity, item);
+    }
+
+    // Chest interactions
+    if let Some(chest_id) = ui_state.open_chest {
+        if actions.chest_take_all || actions.close_chest {
+            if actions.chest_take_all {
+                systems::take_all_from_container(world, player_entity, chest_id, Some(events));
+            }
+            result.close_chest = true;
+        } else if actions.chest_take_gold {
+            systems::take_gold_from_container(world, player_entity, chest_id, Some(events));
+        } else if let Some(item_index) = actions.chest_item_to_take {
+            systems::take_item_from_container(world, player_entity, chest_id, item_index, Some(events));
+        }
+    }
+
+    // Dialogue interactions
+    if let Some(npc_id) = ui_state.talking_to {
+        if let Some(option_index) = actions.dialogue_option_selected {
+            if crate::game::advance_dialogue(world, npc_id, option_index) {
+                result.close_dialogue = true;
+            }
+        }
+    }
+
+    // Item use
+    if let Some(item_index) = actions.item_to_use {
+        let use_result = systems::use_item(world, player_entity, item_index);
+
+        match use_result {
+            systems::ItemUseResult::RequiresTarget { item_type, item_index } => {
+                let params = systems::item_targeting_params(item_type);
+                result.enter_targeting = Some(TargetingMode {
+                    item_type,
+                    item_index,
+                    max_range: params.max_range,
+                    radius: params.radius,
+                });
+                result.close_inventory = true;
+                result.close_context_menu = true;
+            }
+            systems::ItemUseResult::RevealEnemies => {
+                systems::reveal_enemies(world, grid, game_time);
+                systems::remove_item_from_inventory(world, player_entity, item_index);
+            }
+            systems::ItemUseResult::RevealMap => {
+                systems::reveal_entire_map(grid);
+                systems::remove_item_from_inventory(world, player_entity, item_index);
+            }
+            systems::ItemUseResult::ApplyFearToVisible => {
+                let player_pos = queries::get_entity_position(world, player_entity).unwrap_or((0, 0));
+                systems::effects::apply_effect_to_visible_enemies(
+                    world, grid, player_pos,
+                    constants::FOV_RADIUS, EffectType::Feared, constants::FEAR_DURATION,
+                );
+                systems::remove_item_from_inventory(world, player_entity, item_index);
+            }
+            systems::ItemUseResult::ApplySlowToVisible => {
+                let player_pos = queries::get_entity_position(world, player_entity).unwrap_or((0, 0));
+                systems::effects::apply_effect_to_visible_enemies(
+                    world, grid, player_pos,
+                    constants::FOV_RADIUS, EffectType::Slowed, constants::SLOW_DURATION,
+                );
+                systems::remove_item_from_inventory(world, player_entity, item_index);
+            }
+            systems::ItemUseResult::IsWeapon { item_index, .. } => {
+                systems::actions::apply_equip_weapon(world, player_entity, item_index);
+            }
+            _ => {}
+        }
+    }
+
+    // Throw item
+    if let Some(item_index) = actions.item_to_throw {
+        if let Ok(inv) = world.get::<&Inventory>(player_entity) {
+            if let Some(&item_type) = inv.items.get(item_index) {
+                if systems::items::item_is_throwable(item_type) {
+                    let params = systems::item_targeting_params(item_type);
+                    result.enter_targeting = Some(TargetingMode {
+                        item_type,
+                        item_index,
+                        max_range: params.max_range,
+                        radius: params.radius,
+                    });
+                    result.close_inventory = true;
+                    result.close_context_menu = true;
+                }
+            }
+        }
     }
 
     result

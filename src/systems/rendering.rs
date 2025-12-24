@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, BlocksVision, Door, EffectType, OverlaySprite, Position, Sprite, StatusEffects, VisualPosition};
+use crate::components::{Actor, BlocksVision, Door, EffectType, OverlaySprite, Position, Sprite, VisualPosition};
 use crate::fov::FOV;
 use crate::grid::Grid;
 use hecs::{Entity, World};
@@ -100,11 +100,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
 
         if id == player_entity {
             // Check if player is invisible for transparency effect
-            let alpha = if world
-                .get::<&StatusEffects>(id)
-                .map(|e| e.has_effect(EffectType::Invisible))
-                .unwrap_or(false)
-            {
+            let alpha = if super::effects::entity_has_effect(world, id, EffectType::Invisible) {
                 0.4 // Semi-transparent when invisible
             } else {
                 1.0

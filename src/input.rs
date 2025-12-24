@@ -4,10 +4,11 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{Attackable, BlocksMovement, Container, Door, ItemType, Position};
+use crate::components::{Attackable, BlocksMovement, Container, Door, Health, ItemType, Position};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
+use crate::systems::player_input::{self, PlayerIntent};
 use hecs::{Entity, World};
 use std::collections::{HashSet, VecDeque};
 use winit::keyboard::KeyCode;
@@ -63,6 +64,10 @@ pub struct InputState {
     pub pursuit_origin: Option<(i32, i32)>,
     /// Targeting mode for items that require click-to-target (Blink, Fireball)
     pub targeting_mode: Option<TargetingMode>,
+    /// Pending right-click to process (for ranged shooting)
+    pub pending_right_click: bool,
+    /// Pending left-click to process (for targeting confirmation)
+    pub pending_left_click: bool,
 }
 
 impl InputState {
@@ -78,6 +83,8 @@ impl InputState {
             pursuit_target: None,
             pursuit_origin: None,
             targeting_mode: None,
+            pending_right_click: false,
+            pending_left_click: false,
         }
     }
 
@@ -418,7 +425,7 @@ fn path_to_adjacent(
         if blocked.contains(&adj) {
             continue;
         }
-        if !grid.get(adj.0, adj.1).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+        if !grid.is_walkable(adj.0, adj.1) {
             continue;
         }
 
@@ -571,4 +578,167 @@ pub fn get_shoot_target(
     let tile_x = world_pos.x.floor() as i32;
     let tile_y = world_pos.y.floor() as i32;
     (tile_x, tile_y)
+}
+
+/// Result of processing all input for a frame.
+///
+/// Combines keyboard, mouse, and path-following into a unified result.
+/// main.rs uses this to apply UI toggles and execute player intents.
+pub struct FrameInput {
+    /// Player wants to toggle fullscreen
+    pub toggle_fullscreen: bool,
+    /// Player wants to toggle inventory
+    pub toggle_inventory: bool,
+    /// Player wants to toggle grid lines
+    pub toggle_grid_lines: bool,
+    /// Player pressed Enter (take all / loot)
+    pub enter_pressed: bool,
+    /// Player is dead - no actions allowed
+    pub player_dead: bool,
+    /// The player's intended action, if any
+    pub player_intent: Option<PlayerIntent>,
+    /// Whether the intent came from keyboard (vs click-to-move)
+    pub from_keyboard: bool,
+    /// Item index to remove from inventory (for targeting actions)
+    pub item_to_remove: Option<usize>,
+}
+
+impl Default for FrameInput {
+    fn default() -> Self {
+        Self {
+            toggle_fullscreen: false,
+            toggle_inventory: false,
+            toggle_grid_lines: false,
+            enter_pressed: false,
+            player_dead: false,
+            player_intent: None,
+            from_keyboard: false,
+            item_to_remove: None,
+        }
+    }
+}
+
+/// Process all input for a frame and return unified results.
+///
+/// This consolidates keyboard input, click-to-move pathing, targeting,
+/// and ranged shooting into a single FrameInput that main.rs can act on.
+pub fn process_frame(
+    input: &mut InputState,
+    world: &World,
+    grid: &Grid,
+    camera: &Camera,
+    player_entity: Entity,
+) -> FrameInput {
+    let mut result = FrameInput::default();
+
+    // Process keyboard first to get raw input state
+    let kb = process_keyboard(input);
+    result.toggle_fullscreen = kb.toggle_fullscreen;
+    result.toggle_inventory = kb.toggle_inventory;
+    result.toggle_grid_lines = kb.toggle_grid_lines;
+    result.enter_pressed = kb.enter_pressed;
+
+    // Check if player is dead
+    let is_dead = world
+        .get::<&Health>(player_entity)
+        .map(|h| h.is_dead())
+        .unwrap_or(true);
+
+    if is_dead {
+        result.player_dead = true;
+        input.clear_path();
+        input.pending_left_click = false;
+        input.pending_right_click = false;
+        return result;
+    }
+
+    // Handle pending right-click (ranged shooting)
+    if input.pending_right_click {
+        input.pending_right_click = false;
+
+        if player_input::has_ranged_equipped(world, player_entity) {
+            let (target_x, target_y) = get_shoot_target(input, camera);
+            input.clear_path();
+            result.player_intent = Some(PlayerIntent::ShootRanged { target_x, target_y });
+            result.from_keyboard = false;
+            return result;
+        }
+    }
+
+    // Handle pending left-click in targeting mode
+    if input.pending_left_click && input.targeting_mode.is_some() {
+        input.pending_left_click = false;
+
+        if let Some(targeting) = input.targeting_mode.clone() {
+            // Get target tile from mouse position
+            let world_pos = camera.screen_to_world(input.mouse_pos.0, input.mouse_pos.1);
+            let target_x = world_pos.x.floor() as i32;
+            let target_y = world_pos.y.floor() as i32;
+
+            // Get player position for validation
+            if let Ok(pos) = world.get::<&Position>(player_entity) {
+                let player_pos = (pos.x, pos.y);
+
+                // Validate targeting
+                let validation = player_input::validate_targeting(
+                    world, grid, player_pos, target_x, target_y, &targeting,
+                );
+
+                if validation == player_input::TargetingValidation::Valid {
+                    // Cancel targeting mode and create intent
+                    input.cancel_targeting();
+                    result.player_intent = Some(PlayerIntent::UseTargetedAbility {
+                        item_type: targeting.item_type,
+                        item_index: targeting.item_index,
+                        target_x,
+                        target_y,
+                    });
+                    result.item_to_remove = Some(targeting.item_index);
+                    result.from_keyboard = false;
+                    return result;
+                }
+                // Invalid target - don't consume the click, let player try again
+            } else {
+                // No player position - cancel targeting
+                input.cancel_targeting();
+            }
+        }
+    } else {
+        // Clear pending left click if not in targeting mode
+        input.pending_left_click = false;
+    }
+
+    // Attack direction (Shift+movement) takes priority
+    if let Some((dx, dy)) = kb.attack_direction {
+        input.clear_path();
+        result.player_intent = Some(PlayerIntent::AttackDirection { dx, dy });
+        result.from_keyboard = true;
+        return result;
+    }
+
+    // Wait action
+    if kb.wait {
+        input.clear_path();
+        result.player_intent = Some(PlayerIntent::Wait);
+        result.from_keyboard = true;
+        return result;
+    }
+
+    // Keyboard movement
+    if let Some((dx, dy)) = kb.movement {
+        input.clear_path();
+        result.player_intent = Some(PlayerIntent::Move { dx, dy });
+        result.from_keyboard = true;
+        return result;
+    }
+
+    // Click-to-move path following
+    update_pursuit(input, world, grid, player_entity);
+    if let Some((dx, dy)) = get_path_movement(input, world, player_entity) {
+        result.player_intent = Some(PlayerIntent::Move { dx, dy });
+        result.from_keyboard = false;
+        return result;
+    }
+
+    result
 }

@@ -11,6 +11,7 @@ use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::systems::actions::{self, ActionResult};
+use crate::systems::effects;
 use hecs::{Entity, World};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -202,15 +203,8 @@ pub fn start_action_with_events(
     events: Option<&mut EventQueue>,
 ) -> Result<(), &'static str> {
     // Check for speed-modifying effects before borrowing Actor
-    let has_speed_boost = world
-        .get::<&StatusEffects>(entity)
-        .map(|e| e.has_effect(EffectType::SpeedBoost))
-        .unwrap_or(false);
-
-    let has_slow = world
-        .get::<&StatusEffects>(entity)
-        .map(|e| e.has_effect(EffectType::Slowed))
-        .unwrap_or(false);
+    let has_speed_boost = effects::entity_has_effect(world, entity, EffectType::SpeedBoost);
+    let has_slow = effects::entity_has_effect(world, entity, EffectType::Slowed);
 
     // Get actor component
     let mut actor = world
@@ -356,8 +350,8 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
     let regenerating: HashSet<Entity> = world
         .query::<(&Health, &StatusEffects)>()
         .iter()
-        .filter_map(|(id, (_, effects))| {
-            if effects.has_effect(EffectType::Regenerating) {
+        .filter_map(|(id, (_, status_effects))| {
+            if effects::has_effect(status_effects, EffectType::Regenerating) {
                 Some(id)
             } else {
                 None
@@ -415,8 +409,8 @@ pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&m
     let speed_boosted: HashSet<Entity> = world
         .query::<(&Actor, &StatusEffects)>()
         .iter()
-        .filter_map(|(id, (_, effects))| {
-            if effects.has_effect(EffectType::SpeedBoost) {
+        .filter_map(|(id, (_, status_effects))| {
+            if effects::has_effect(status_effects, EffectType::SpeedBoost) {
                 Some(id)
             } else {
                 None

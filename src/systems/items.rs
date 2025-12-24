@@ -1,8 +1,12 @@
 //! Item system functions.
 
-use crate::components::{EffectType, Health, Inventory, ItemType, StatusEffects};
-use crate::constants::*;
+use crate::components::{Health, Inventory, ItemType};
 use hecs::{Entity, World};
+
+use super::item_defs::{get_def, ItemCategory, UseEffect};
+
+// Re-export TargetingParams from item_defs for external use
+pub use super::item_defs::TargetingParams;
 
 /// Result of attempting to use an item
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,50 +31,27 @@ pub enum ItemUseResult {
 
 /// Get the display name of an item
 pub fn item_name(item: ItemType) -> &'static str {
-    match item {
-        // Weapons
-        ItemType::Sword => "Sword",
-        ItemType::Bow => "Bow",
-        // Potions
-        ItemType::HealthPotion => "Health Potion",
-        ItemType::RegenerationPotion => "Regeneration Potion",
-        ItemType::StrengthPotion => "Strength Potion",
-        ItemType::ConfusionPotion => "Confusion Potion",
-        // Scrolls
-        ItemType::ScrollOfInvisibility => "Scroll of Invisibility",
-        ItemType::ScrollOfSpeed => "Scroll of Speed",
-        ItemType::ScrollOfProtection => "Scroll of Protection",
-        ItemType::ScrollOfBlink => "Scroll of Blink",
-        ItemType::ScrollOfFear => "Scroll of Fear",
-        ItemType::ScrollOfFireball => "Scroll of Fireball",
-        ItemType::ScrollOfReveal => "Scroll of Reveal",
-        ItemType::ScrollOfMapping => "Scroll of Mapping",
-        ItemType::ScrollOfSlow => "Scroll of Slow",
-    }
+    get_def(item).name
 }
 
 /// Returns true if the item requires a target selection before use
 pub fn item_requires_target(item: ItemType) -> bool {
-    matches!(
-        item,
-        ItemType::ScrollOfBlink | ItemType::ScrollOfFireball
-    )
+    matches!(get_def(item).use_effect, UseEffect::RequiresTarget)
+}
+
+/// Get targeting parameters for an item (for items that require targeting or throwing)
+pub fn item_targeting_params(item: ItemType) -> TargetingParams {
+    get_def(item).targeting.unwrap_or_default()
 }
 
 /// Returns true if the item is a throwable potion
 pub fn item_is_throwable(item: ItemType) -> bool {
-    matches!(
-        item,
-        ItemType::HealthPotion
-            | ItemType::RegenerationPotion
-            | ItemType::StrengthPotion
-            | ItemType::ConfusionPotion
-    )
+    get_def(item).is_throwable
 }
 
 /// Returns true if the item is a weapon that can be equipped
 pub fn item_is_weapon(item: ItemType) -> bool {
-    matches!(item, ItemType::Sword | ItemType::Bow)
+    get_def(item).category == ItemCategory::Weapon
 }
 
 /// Use an item from an entity's inventory
@@ -87,90 +68,37 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         inv.items[item_index]
     };
 
-    // Check if item is a weapon (should be equipped, not "used")
-    if item_is_weapon(item_type) {
-        return ItemUseResult::IsWeapon { item_type, item_index };
-    }
+    let def = get_def(item_type);
 
-    // Check if item requires targeting (includes throwable potions and some scrolls)
-    if item_requires_target(item_type) {
-        return ItemUseResult::RequiresTarget { item_type, item_index };
-    }
-
-    // Apply item effect based on type
-    let result = match item_type {
-        // Weapons handled above
-        ItemType::Sword | ItemType::Bow => {
+    // Handle based on use effect from definition
+    let result = match def.use_effect {
+        UseEffect::Equip => {
             return ItemUseResult::IsWeapon { item_type, item_index };
         }
-        // Potions - drink them (apply effect to self)
-        ItemType::HealthPotion => {
-            if let Ok(mut health) = world.get::<&mut Health>(entity) {
-                let heal = item_heal_amount(item_type);
-                health.current = (health.current + heal).min(health.max);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::RegenerationPotion => {
-            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(EffectType::Regenerating, REGENERATION_DURATION);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::StrengthPotion => {
-            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(EffectType::Strengthened, STRENGTH_DURATION);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::ConfusionPotion => {
-            // Drinking a confusion potion confuses yourself (not very useful!)
-            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(EffectType::Confused, CONFUSION_DURATION);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::ScrollOfInvisibility => {
-            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(EffectType::Invisible, INVISIBILITY_DURATION);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::ScrollOfSpeed => {
-            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(EffectType::SpeedBoost, SPEED_BOOST_DURATION);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::ScrollOfProtection => {
-            if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-                effects.add_effect(EffectType::Protected, PROTECTION_DURATION);
-            }
-            ItemUseResult::Used
-        }
-        ItemType::ScrollOfBlink | ItemType::ScrollOfFireball => {
-            // Shouldn't reach here due to requires_target check above
+        UseEffect::RequiresTarget => {
             return ItemUseResult::RequiresTarget { item_type, item_index };
         }
-        ItemType::ScrollOfFear => {
-            // Special handling: apply fear to visible enemies
-            // The actual application is done by the caller
-            return ItemUseResult::ApplyFearToVisible;
+        UseEffect::Heal(amount) => {
+            apply_heal(world, entity, amount);
+            ItemUseResult::Used
         }
-        ItemType::ScrollOfReveal => {
-            // Special handling: reveal all enemies
-            // The actual revelation is done by the caller
+        UseEffect::ApplyEffect(effect_type, duration) => {
+            apply_status_effect(world, entity, effect_type, duration);
+            ItemUseResult::Used
+        }
+        UseEffect::RevealEnemies => {
             return ItemUseResult::RevealEnemies;
         }
-        ItemType::ScrollOfMapping => {
-            // Special handling: reveal entire map
-            // The actual revelation is done by the caller
+        UseEffect::RevealMap => {
             return ItemUseResult::RevealMap;
         }
-        ItemType::ScrollOfSlow => {
-            // Special handling: apply slow to visible enemies
-            // The actual application is done by the caller
-            return ItemUseResult::ApplySlowToVisible;
+        UseEffect::ApplyEffectToVisible(effect_type, _duration) => {
+            // Map to the specific result variants the caller expects
+            match effect_type {
+                crate::components::EffectType::Feared => return ItemUseResult::ApplyFearToVisible,
+                crate::components::EffectType::Slowed => return ItemUseResult::ApplySlowToVisible,
+                _ => return ItemUseResult::Failed,
+            }
         }
     };
 
@@ -180,6 +108,23 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
     }
 
     result
+}
+
+// Helper functions for applying item effects
+
+fn apply_heal(world: &mut World, entity: Entity, amount: i32) {
+    if let Ok(mut health) = world.get::<&mut Health>(entity) {
+        health.current = (health.current + amount).min(health.max);
+    }
+}
+
+fn apply_status_effect(
+    world: &mut World,
+    entity: Entity,
+    effect_type: crate::components::EffectType,
+    duration: f32,
+) {
+    super::effects::add_effect_to_entity(world, entity, effect_type, duration);
 }
 
 /// Remove an item from an entity's inventory by index
@@ -194,61 +139,26 @@ pub fn remove_item_from_inventory(world: &mut World, entity: Entity, item_index:
 
 /// Get the weight of an item in kg
 pub fn item_weight(item: ItemType) -> f32 {
-    match item {
-        // Weapons
-        ItemType::Sword => SWORD_WEIGHT,
-        ItemType::Bow => BOW_WEIGHT,
-        // Potions
-        ItemType::HealthPotion
-        | ItemType::RegenerationPotion
-        | ItemType::StrengthPotion
-        | ItemType::ConfusionPotion => HEALTH_POTION_WEIGHT,
-        // Scrolls
-        ItemType::ScrollOfInvisibility
-        | ItemType::ScrollOfSpeed
-        | ItemType::ScrollOfProtection
-        | ItemType::ScrollOfBlink
-        | ItemType::ScrollOfFear
-        | ItemType::ScrollOfFireball
-        | ItemType::ScrollOfReveal
-        | ItemType::ScrollOfMapping
-        | ItemType::ScrollOfSlow => SCROLL_WEIGHT,
-    }
+    get_def(item).weight
 }
 
 /// Get the heal amount for healing items (0 for non-healing items)
 pub fn item_heal_amount(item: ItemType) -> i32 {
-    match item {
-        ItemType::HealthPotion => HEALTH_POTION_HEAL,
+    match get_def(item).use_effect {
+        UseEffect::Heal(amount) => amount,
         _ => 0,
     }
 }
 
 /// Get the tile ID for an item's icon
 pub fn item_tile_id(item: ItemType) -> u32 {
-    use crate::tile::tile_ids;
-    match item {
-        ItemType::Sword => tile_ids::SWORD,
-        ItemType::Bow => tile_ids::BOW,
-        ItemType::HealthPotion => tile_ids::RED_POTION,
-        ItemType::RegenerationPotion => tile_ids::GREEN_POTION,
-        ItemType::StrengthPotion => tile_ids::AMBER_POTION,
-        ItemType::ConfusionPotion => tile_ids::BLUE_POTION,
-        ItemType::ScrollOfInvisibility
-        | ItemType::ScrollOfSpeed
-        | ItemType::ScrollOfProtection
-        | ItemType::ScrollOfBlink
-        | ItemType::ScrollOfFear
-        | ItemType::ScrollOfFireball
-        | ItemType::ScrollOfReveal
-        | ItemType::ScrollOfMapping
-        | ItemType::ScrollOfSlow => tile_ids::SCROLL,
-    }
+    get_def(item).tile_id
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{HEALTH_POTION_HEAL, HEALTH_POTION_WEIGHT, SCROLL_WEIGHT};
 
     #[test]
     fn test_item_name() {

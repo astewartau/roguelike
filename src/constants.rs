@@ -286,8 +286,6 @@ pub const POTION_THROW_SPEED: f32 = 12.0;
 pub const POTION_THROW_RANGE: i32 = 6;
 /// Splash radius for all thrown potions
 pub const POTION_SPLASH_RADIUS: i32 = 1;
-/// Legacy alias for confusion splash radius
-pub const CONFUSION_SPLASH_RADIUS: i32 = POTION_SPLASH_RADIUS;
 
 /// Sword base damage
 pub const SWORD_BASE_DAMAGE: i32 = 10;

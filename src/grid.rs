@@ -58,4 +58,9 @@ impl Grid {
         }
         Some(&mut self.tiles[y as usize * self.width + x as usize])
     }
+
+    /// Check if a tile is walkable (exists and has a walkable tile type)
+    pub fn is_walkable(&self, x: i32, y: i32) -> bool {
+        self.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false)
+    }
 }

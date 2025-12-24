@@ -8,7 +8,7 @@ use hecs::{Entity, World};
 
 use crate::components::{BlocksMovement, Container, ItemType, Position, Sprite, VisualPosition};
 use crate::events::EventQueue;
-use crate::game;
+use crate::engine;
 use crate::grid::Grid;
 use crate::queries;
 use crate::spawning;
@@ -76,7 +76,7 @@ pub fn execute_dev_spawn(
             let enemy = spawning::enemies::SKELETON.spawn(world, tile_x, tile_y);
             // Initialize the AI actor's first action
             let mut rng = rand::thread_rng();
-            game::initialize_single_ai_actor(
+            engine::initialize_single_ai_actor(
                 world,
                 grid,
                 enemy,
@@ -106,5 +106,17 @@ pub fn execute_dev_spawn(
             grid.stairs_up_pos = Some((tile_x, tile_y));
             DevSpawnResult::TileModified
         }
+    }
+}
+
+/// Give an item directly to the player's inventory (dev tool - no weight limit check).
+pub fn give_item_to_player(world: &mut World, player_entity: Entity, item: ItemType) {
+    use crate::components::Inventory;
+    use crate::systems::items::item_weight;
+
+    if let Ok(mut inv) = world.get::<&mut Inventory>(player_entity) {
+        let weight = item_weight(item);
+        inv.items.push(item);
+        inv.current_weight_kg += weight;
     }
 }

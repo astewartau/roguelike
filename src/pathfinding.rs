@@ -3,6 +3,99 @@ use crate::tile::TileType;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
 
+/// Iterator that yields points along a Bresenham line from start to end (exclusive of start).
+/// This is useful for projectile paths, line-of-sight checks, etc.
+pub struct BresenhamLineIter {
+    x: i32,
+    y: i32,
+    end_x: i32,
+    end_y: i32,
+    dx: i32,
+    dy: i32,
+    sx: i32,
+    sy: i32,
+    err: i32,
+    finished: bool,
+}
+
+impl BresenhamLineIter {
+    /// Create a new line iterator from start to end.
+    /// The iterator yields all points along the line, excluding the start point.
+    pub fn new(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Self {
+        let dx = (end_x - start_x).abs();
+        let dy = (end_y - start_y).abs();
+        let sx = if start_x < end_x { 1 } else { -1 };
+        let sy = if start_y < end_y { 1 } else { -1 };
+        let err = dx - dy;
+
+        // Start at the first point, we'll step to skip start
+        let mut iter = Self {
+            x: start_x,
+            y: start_y,
+            end_x,
+            end_y,
+            dx,
+            dy,
+            sx,
+            sy,
+            err,
+            finished: start_x == end_x && start_y == end_y,
+        };
+
+        // Take first step to skip the starting tile
+        if !iter.finished {
+            iter.step();
+        }
+
+        iter
+    }
+
+    /// Advance to the next point on the line
+    fn step(&mut self) {
+        let e2 = 2 * self.err;
+        if e2 > -self.dy {
+            self.err -= self.dy;
+            self.x += self.sx;
+        }
+        if e2 < self.dx {
+            self.err += self.dx;
+            self.y += self.sy;
+        }
+    }
+}
+
+impl Iterator for BresenhamLineIter {
+    type Item = (i32, i32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let current = (self.x, self.y);
+
+        // Check if we've reached the end
+        if self.x == self.end_x && self.y == self.end_y {
+            self.finished = true;
+        } else {
+            self.step();
+        }
+
+        Some(current)
+    }
+}
+
+/// Calculate the distance for a single step (1.0 for cardinal, sqrt(2) for diagonal)
+pub fn step_distance(from: (i32, i32), to: (i32, i32)) -> f32 {
+    let dx = (to.0 - from.0).abs();
+    let dy = (to.1 - from.1).abs();
+    if dx != 0 && dy != 0 {
+        std::f32::consts::SQRT_2
+    } else {
+        1.0
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Node {
     x: i32,

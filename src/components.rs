@@ -176,32 +176,6 @@ impl StatusEffects {
     pub fn new() -> Self {
         Self { effects: Vec::new() }
     }
-
-    /// Check if entity has a specific effect active
-    pub fn has_effect(&self, effect_type: EffectType) -> bool {
-        self.effects.iter().any(|e| e.effect_type == effect_type)
-    }
-
-    /// Add or refresh an effect with the given duration
-    pub fn add_effect(&mut self, effect_type: EffectType, duration: f32) {
-        // Refresh duration if already have effect, otherwise add new
-        if let Some(existing) = self.effects.iter_mut().find(|e| e.effect_type == effect_type) {
-            existing.remaining_duration = duration;
-        } else {
-            self.effects.push(ActiveEffect {
-                effect_type,
-                remaining_duration: duration,
-            });
-        }
-    }
-
-    /// Get remaining duration of an effect (None if not active)
-    pub fn get_duration(&self, effect_type: EffectType) -> Option<f32> {
-        self.effects
-            .iter()
-            .find(|e| e.effect_type == effect_type)
-            .map(|e| e.remaining_duration)
-    }
 }
 
 /// Item component
@@ -702,29 +676,5 @@ impl Dialogue {
             nodes,
             current_node: 0,
         }
-    }
-
-    /// Get the current dialogue node
-    pub fn current(&self) -> Option<&DialogueNode> {
-        self.nodes.get(self.current_node)
-    }
-
-    /// Advance to the next node based on option selection
-    /// Returns true if dialogue continues, false if it ended
-    pub fn select_option(&mut self, option_index: usize) -> bool {
-        if let Some(node) = self.nodes.get(self.current_node) {
-            if let Some(option) = node.options.get(option_index) {
-                if let Some(next) = option.next_node {
-                    self.current_node = next;
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Reset dialogue to start
-    pub fn reset(&mut self) {
-        self.current_node = 0;
     }
 }

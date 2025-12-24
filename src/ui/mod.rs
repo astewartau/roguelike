@@ -5,11 +5,15 @@
 use crate::camera::Camera;
 use crate::components::{Container, Dialogue, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, Stats, StatusEffects};
 use crate::constants::DAMAGE_NUMBER_RISE;
+use crate::grid::Grid;
+use crate::input::TargetingMode;
 use crate::systems;
 use crate::tile::tile_ids;
 use crate::tileset::Tileset;
 use crate::vfx::{EffectType as VfxEffectType, VisualEffect};
-use hecs::World;
+use egui_glow::EguiGlow;
+use hecs::{Entity, World};
+use winit::window::Window;
 
 /// Data needed to render the status bar
 pub struct StatusBarData {
@@ -64,7 +68,6 @@ pub struct UiActions {
 // =============================================================================
 
 use crate::events::GameEvent;
-use hecs::Entity;
 
 /// Game UI state that responds to events.
 ///
@@ -663,7 +666,7 @@ pub fn get_dialogue_window_data(
 ) -> Option<DialogueWindowData> {
     let npc_id = talking_to?;
     let dialogue = world.get::<&Dialogue>(npc_id).ok()?;
-    let node = dialogue.current()?;
+    let node = systems::dialogue::current_node(&dialogue)?;
 
     Some(DialogueWindowData {
         npc_name: dialogue.name.clone(),
@@ -1040,6 +1043,80 @@ pub fn get_loot_window_data(
         viewport_width,
         viewport_height,
     })
+}
+
+/// Extract player buff aura data from the world
+pub fn get_buff_aura_data(
+    world: &World,
+    player_entity: hecs::Entity,
+    game_time: f32,
+) -> Option<PlayerBuffAuraData> {
+    use crate::components::VisualPosition;
+
+    let player_vis_pos = world.get::<&VisualPosition>(player_entity).ok()?;
+    let effects = world.get::<&StatusEffects>(player_entity).ok()?;
+
+    Some(PlayerBuffAuraData {
+        player_x: player_vis_pos.x,
+        player_y: player_vis_pos.y,
+        has_regen: systems::effects::has_effect(&effects, StatusEffectType::Regenerating),
+        has_protected: systems::effects::has_effect(&effects, StatusEffectType::Protected),
+        time: game_time,
+    })
+}
+
+/// Extract targeting overlay data from targeting mode and world state
+pub fn get_targeting_overlay_data(
+    world: &World,
+    player_entity: hecs::Entity,
+    targeting_mode: Option<&crate::input::TargetingMode>,
+    cursor_screen_pos: (f32, f32),
+    camera: &Camera,
+) -> Option<TargetingOverlayData> {
+    use crate::components::Position;
+
+    let targeting = targeting_mode?;
+
+    let player_pos = world.get::<&Position>(player_entity).ok()?;
+
+    // Convert screen cursor to world coordinates
+    let world_pos = camera.screen_to_world(cursor_screen_pos.0, cursor_screen_pos.1);
+    let cursor_x = world_pos.x.floor() as i32;
+    let cursor_y = world_pos.y.floor() as i32;
+
+    Some(TargetingOverlayData {
+        player_x: player_pos.x,
+        player_y: player_pos.y,
+        cursor_x,
+        cursor_y,
+        max_range: targeting.max_range,
+        radius: targeting.radius,
+        is_blink: matches!(targeting.item_type, ItemType::ScrollOfBlink),
+        item_type: Some(targeting.item_type),
+    })
+}
+
+/// Extract enemy status effect data from the world
+pub fn get_enemy_status_data(world: &World, grid: &crate::grid::Grid) -> Vec<EnemyStatusData> {
+    use crate::components::{ChaseAI, VisualPosition, EffectType};
+
+    world
+        .query::<(&VisualPosition, &ChaseAI, &StatusEffects)>()
+        .iter()
+        .filter(|(_, (pos, _, _))| {
+            // Only show for visible tiles
+            grid.get(pos.x as i32, pos.y as i32)
+                .map(|t| t.visible)
+                .unwrap_or(false)
+        })
+        .map(|(_, (pos, _, status_effects))| EnemyStatusData {
+            x: pos.x,
+            y: pos.y,
+            is_feared: systems::effects::has_effect(status_effects, EffectType::Feared),
+            is_slowed: systems::effects::has_effect(status_effects, EffectType::Slowed),
+            is_confused: systems::effects::has_effect(status_effects, EffectType::Confused),
+        })
+        .collect()
 }
 
 /// Render floating damage numbers
@@ -1589,4 +1666,113 @@ pub fn draw_targeting_overlay(
         egui::FontId::proportional(14.0),
         text_color,
     );
+}
+
+/// Run all UI rendering for a single frame.
+///
+/// This function orchestrates drawing all UI elements and collects
+/// any actions the player triggered through the UI.
+pub fn run_ui(
+    egui_glow: &mut EguiGlow,
+    window: &Window,
+    world: &World,
+    player_entity: Entity,
+    grid: &Grid,
+    ui_state: &mut GameUiState,
+    dev_menu: &mut DevMenu,
+    camera: &Camera,
+    tileset: &Tileset,
+    icons: &UiIcons,
+    vfx_effects: &[VisualEffect],
+    targeting_mode: Option<&TargetingMode>,
+    mouse_pos: (f32, f32),
+    game_time: f32,
+) -> UiActions {
+    let mut actions = UiActions::default();
+
+    // Get status bar data
+    let status_data = get_status_bar_data(world, player_entity);
+
+    // Get loot window data if chest is open
+    let loot_data = get_loot_window_data(
+        world,
+        ui_state.open_chest,
+        camera.viewport_width,
+        camera.viewport_height,
+    );
+
+    // Get dialogue window data if talking to an NPC
+    let dialogue_data = get_dialogue_window_data(
+        world,
+        ui_state.talking_to,
+        camera.viewport_width,
+        camera.viewport_height,
+    );
+
+    let show_inventory = ui_state.show_inventory;
+    let viewport_width = camera.viewport_width;
+    let viewport_height = camera.viewport_height;
+
+    // Extract UI data using helper functions
+    let buff_aura_data = get_buff_aura_data(world, player_entity, game_time);
+    let targeting_data = get_targeting_overlay_data(
+        world,
+        player_entity,
+        targeting_mode,
+        mouse_pos,
+        camera,
+    );
+    let enemy_status_data = get_enemy_status_data(world, grid);
+
+    egui_glow.run(window, |ctx| {
+        // Player buff auras (draw first so they're behind everything)
+        draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());
+
+        // Targeting overlay (draw first so it's behind other UI)
+        if let Some(ref data) = targeting_data {
+            draw_targeting_overlay(ctx, camera, data);
+        }
+
+        // Status bar (always visible)
+        draw_status_bar(ctx, &status_data, icons);
+
+        // Floating damage numbers
+        draw_damage_numbers(ctx, vfx_effects, camera);
+
+        // Alert indicators (enemy spotted player)
+        draw_alert_indicators(ctx, vfx_effects, camera);
+
+        // Enemy status effect indicators (fear, slow, confusion)
+        draw_enemy_status_indicators(ctx, camera, &enemy_status_data, game_time);
+
+        // Explosion effects (fireball)
+        draw_explosions(ctx, vfx_effects, camera);
+
+        // Potion splash effects
+        draw_potion_splashes(ctx, vfx_effects, camera);
+
+        // Developer menu
+        draw_dev_menu(ctx, dev_menu, icons.tileset_texture_id, tileset);
+
+        // Loot window (if chest is open)
+        if let Some(ref data) = loot_data {
+            draw_loot_window(ctx, data, icons, &mut actions);
+        }
+
+        // Dialogue window (if talking to NPC)
+        if let Some(ref data) = dialogue_data {
+            draw_dialogue_window(ctx, data, &mut actions);
+        }
+
+        // Inventory window (if toggled)
+        if show_inventory {
+            let inv_data = InventoryWindowData {
+                viewport_width,
+                viewport_height,
+            };
+            draw_inventory_window(ctx, world, player_entity, &inv_data, icons, ui_state, &mut actions);
+        }
+    });
+
+    actions
 }
