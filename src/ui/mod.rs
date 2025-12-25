@@ -2,6 +2,8 @@
 //!
 //! Handles all game UI: status bars, inventory, loot windows, etc.
 
+pub mod style;
+
 use crate::camera::Camera;
 use crate::components::{Container, Dialogue, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, Stats, StatusEffects};
 use crate::constants::DAMAGE_NUMBER_RISE;
@@ -270,13 +272,13 @@ fn draw_tile_button(
     let (rect, response) = ui.allocate_exact_size(button_size, egui::Sense::click());
 
     let bg_color = if is_selected {
-        egui::Color32::from_rgb(80, 120, 200)
+        style::colors::SELECTED
     } else if response.hovered() {
-        egui::Color32::from_rgb(60, 60, 80)
+        style::colors::HOVERED
     } else {
-        egui::Color32::from_rgb(40, 40, 50)
+        style::colors::BUTTON_BG
     };
-    ui.painter().rect_filled(rect, 4.0, bg_color);
+    ui.painter().rect_filled(rect, 0.0, bg_color);
 
     let image_rect = rect.shrink(3.0);
     ui.painter().image(
@@ -307,14 +309,14 @@ fn draw_list_item(
     );
 
     let bg_color = if is_selected {
-        egui::Color32::from_rgb(60, 80, 120)
+        style::colors::SELECTED
     } else if response.hovered() {
-        egui::Color32::from_rgb(50, 50, 60)
+        style::colors::HOVERED
     } else {
         egui::Color32::TRANSPARENT
     };
 
-    ui.painter().rect_filled(rect, 2.0, bg_color);
+    ui.painter().rect_filled(rect, 0.0, bg_color);
 
     // Draw icon
     let icon_rect = egui::Rect::from_min_size(
@@ -337,8 +339,8 @@ fn draw_list_item(
         text_pos,
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(14.0),
-        egui::Color32::WHITE,
+        egui::FontId::monospace(14.0),
+        style::colors::TEXT_PRIMARY,
     );
 
     response
@@ -362,6 +364,7 @@ pub fn draw_dev_menu(
         .title_bar(true)
         .collapsible(true)
         .scroll([false, true])
+        .frame(style::dungeon_window_frame())
         .show(ctx, |ui| {
             // === PLACEMENT TOOLS ===
             ui.heading("Placement (click map)");
@@ -450,6 +453,7 @@ pub fn draw_status_bar(
         .fixed_pos([10.0, 10.0])
         .fixed_size([220.0, window_height])
         .title_bar(false)
+        .frame(style::dungeon_window_frame())
         .show(ctx, |ui| {
             let health_percent = if data.health_max > 0 {
                 data.health_current as f32 / data.health_max as f32
@@ -468,7 +472,7 @@ pub fn draw_status_bar(
                 ui.add_sized(
                     [180.0, 18.0],
                     egui::ProgressBar::new(health_percent)
-                        .fill(egui::Color32::from_rgb(180, 40, 40))
+                        .fill(style::colors::HP_BAR)
                         .text(format!("{}/{}", data.health_current, data.health_max)),
                 );
             });
@@ -484,7 +488,7 @@ pub fn draw_status_bar(
                 ui.add_sized(
                     [180.0, 18.0],
                     egui::ProgressBar::new(data.xp_progress)
-                        .fill(egui::Color32::from_rgb(100, 149, 237))
+                        .fill(style::colors::XP_BAR)
                         .text(format!(
                             "Lv {} - {:.0}%",
                             data.xp_level,
@@ -545,6 +549,7 @@ pub fn draw_loot_window(
         .default_size([300.0, 200.0])
         .collapsible(false)
         .resizable(false)
+        .frame(style::dungeon_window_frame())
         .show(ctx, |ui| {
             ui.heading("Contents");
             ui.separator();
@@ -556,7 +561,7 @@ pub fn draw_loot_window(
                 ui.label(
                     egui::RichText::new("(empty)")
                         .italics()
-                        .color(egui::Color32::GRAY),
+                        .color(style::colors::TEXT_MUTED),
                 );
             } else {
                 // Show gold if present
@@ -567,7 +572,7 @@ pub fn draw_loot_window(
                             egui::vec2(32.0, 32.0),
                         ))
                         .uv(icons.coins_uv)
-                        .bg_fill(egui::Color32::BLACK);
+                        .bg_fill(style::colors::PANEL_BG);
 
                         if ui
                             .add(egui::ImageButton::new(coin_img))
@@ -591,7 +596,7 @@ pub fn draw_loot_window(
                             egui::vec2(48.0, 48.0),
                         ))
                         .uv(uv)
-                        .bg_fill(egui::Color32::BLACK);
+                        .bg_fill(style::colors::PANEL_BG);
 
                         let response = ui.add(egui::ImageButton::new(image));
 
@@ -637,6 +642,7 @@ pub fn draw_dialogue_window(
         .default_size([400.0, 200.0])
         .collapsible(false)
         .resizable(false)
+        .frame(style::dungeon_window_frame())
         .show(ctx, |ui| {
             // NPC's dialogue text
             ui.add_space(5.0);
@@ -696,6 +702,7 @@ pub fn draw_inventory_window(
         .default_size([600.0, 500.0])
         .collapsible(false)
         .resizable(true)
+        .frame(style::dungeon_window_frame())
         .show(ctx, |ui| {
             if let Ok(stats) = world.get::<&Stats>(player_entity) {
                 ui.columns(2, |columns| {
@@ -723,7 +730,7 @@ pub fn draw_inventory_window(
                 .fixed_pos(pos)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    style::dungeon_window_frame().show(ui, |ui| {
                         ui.set_min_width(120.0);
 
                         // Drink option (for potions)
@@ -807,7 +814,7 @@ fn draw_stats_column(
                     egui::vec2(24.0, 24.0),
                 ))
                 .uv(icons.coins_uv)
-                .bg_fill(egui::Color32::BLACK);
+                .bg_fill(style::colors::PANEL_BG);
                 ui.add(coin_img);
                 ui.label(format!("{} gold", inventory.gold));
             });
@@ -829,7 +836,7 @@ fn draw_stats_column(
                             egui::vec2(48.0, 48.0),
                         ))
                         .uv(icons.sword_uv)
-                        .bg_fill(egui::Color32::BLACK);
+                        .bg_fill(style::colors::PANEL_BG);
 
                         ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
                             "{}\n\nDamage: {} + {} = {}\n\nClick weapon in inventory to swap",
@@ -845,7 +852,7 @@ fn draw_stats_column(
                             egui::vec2(48.0, 48.0),
                         ))
                         .uv(icons.bow_uv)
-                        .bg_fill(egui::Color32::BLACK);
+                        .bg_fill(style::colors::PANEL_BG);
 
                         ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
                             "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nRight-click to shoot\nClick weapon in inventory to swap",
@@ -858,7 +865,7 @@ fn draw_stats_column(
                         ui.label(
                             egui::RichText::new("(none)")
                                 .italics()
-                                .color(egui::Color32::GRAY),
+                                .color(style::colors::TEXT_MUTED),
                         );
                     }
                 }
@@ -885,7 +892,7 @@ fn draw_inventory_column(
                 ui.label(
                     egui::RichText::new("(empty)")
                         .italics()
-                        .color(egui::Color32::GRAY),
+                        .color(style::colors::TEXT_MUTED),
                 );
             } else {
                 ui.horizontal_wrapped(|ui| {
@@ -898,7 +905,7 @@ fn draw_inventory_column(
                             egui::vec2(48.0, 48.0),
                         ))
                         .uv(uv)
-                        .bg_fill(egui::Color32::BLACK);
+                        .bg_fill(style::colors::PANEL_BG);
 
                         let response = ui.add(egui::ImageButton::new(image));
 
@@ -1158,7 +1165,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
 
         // Draw the damage number
         let text = format!("{}", amount);
-        let font_id = egui::FontId::proportional(20.0);
+        let font_id = egui::FontId::monospace(20.0);
 
         painter.text(
             egui::pos2(egui_x, egui_y),
@@ -1223,7 +1230,7 @@ pub fn draw_alert_indicators(ctx: &egui::Context, effects: &[VisualEffect], came
 
         // Draw the "!"
         let font_size = 28.0 * scale;
-        let font_id = egui::FontId::proportional(font_size);
+        let font_id = egui::FontId::monospace(font_size);
 
         painter.text(
             egui::pos2(egui_x, egui_y),
@@ -1294,7 +1301,7 @@ pub fn draw_enemy_status_indicators(
         for (i, (symbol, color)) in symbols.iter().enumerate() {
             let x = start_x + i as f32 * 16.0;
             let font_size = 20.0 * pulse;
-            let font_id = egui::FontId::proportional(font_size);
+            let font_id = egui::FontId::monospace(font_size);
 
             painter.text(
                 egui::pos2(x, egui_y),
@@ -1664,7 +1671,7 @@ pub fn draw_targeting_overlay(
         text_pos,
         egui::Align2::CENTER_BOTTOM,
         info_text,
-        egui::FontId::proportional(14.0),
+        egui::FontId::monospace(14.0),
         text_color,
     );
 }

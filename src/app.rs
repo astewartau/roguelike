@@ -97,6 +97,13 @@ pub fn create_window(event_loop: &ActiveEventLoop) -> WindowContext {
     // Initialize egui
     let egui_glow = EguiGlow::new(event_loop, gl.clone(), None, None, false);
 
+    // Apply dungeon-themed styling
+    {
+        let ctx = &egui_glow.egui_ctx;
+        ctx.set_fonts(crate::ui::style::load_fonts());
+        ctx.set_visuals(crate::ui::style::dungeon_visuals());
+    }
+
     WindowContext {
         window,
         gl_surface,
