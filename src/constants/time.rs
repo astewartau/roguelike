@@ -12,5 +12,5 @@ pub const ACTION_CHEST_DURATION: f32 = 0.5;
 pub const ACTION_WAIT_DURATION: f32 = 0.5;
 /// Multiplier for diagonal movement duration (sqrt(2))
 pub const DIAGONAL_MOVEMENT_MULTIPLIER: f32 = 1.414;
-/// Duration for shooting action (recovery time)
-pub const ACTION_SHOOT_DURATION: f32 = 0.5;
+/// Duration for shooting action (draw + aim + recovery)
+pub const ACTION_SHOOT_DURATION: f32 = 1.2;

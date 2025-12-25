@@ -303,6 +303,12 @@ fn apply_action_effects(
         ActionType::UnequipWeapon => {
             actions::apply_unequip_weapon(world, entity)
         }
+        ActionType::DropItem { item_index } => {
+            actions::apply_drop_item(world, entity, *item_index, events)
+        }
+        ActionType::DropEquippedWeapon => {
+            actions::apply_drop_equipped_weapon(world, entity, events)
+        }
     }
 }
 

@@ -57,6 +57,12 @@ pub struct UiActions {
     pub item_to_use: Option<usize>,
     /// Throw a potion at a target (enters targeting mode)
     pub item_to_throw: Option<usize>,
+    /// Drop an item from inventory onto the ground
+    pub item_to_drop: Option<usize>,
+    /// Drop the currently equipped weapon onto the ground
+    pub drop_equipped_weapon: bool,
+    /// Unequip the currently equipped weapon (put back in inventory)
+    pub unequip_weapon: bool,
     pub chest_item_to_take: Option<usize>,
     pub chest_take_all: bool,
     pub chest_take_gold: bool,
@@ -86,6 +92,8 @@ pub struct GameUiState {
     pub show_grid_lines: bool,
     /// Context menu for inventory item (item index, screen position)
     pub item_context_menu: Option<(usize, egui::Pos2)>,
+    /// Context menu for equipped weapon (screen position)
+    pub equipped_context_menu: Option<egui::Pos2>,
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -98,6 +106,7 @@ impl GameUiState {
             show_inventory: false,
             show_grid_lines: false,
             item_context_menu: None,
+            equipped_context_menu: None,
             player_entity,
         }
     }
@@ -151,6 +160,7 @@ impl GameUiState {
     /// Close the item context menu
     pub fn close_context_menu(&mut self) {
         self.item_context_menu = None;
+        self.equipped_context_menu = None;
     }
 }
 
@@ -707,7 +717,7 @@ pub fn draw_inventory_window(
             if let Ok(stats) = world.get::<&Stats>(player_entity) {
                 ui.columns(2, |columns| {
                     // Left column: Stats + Equipment
-                    draw_stats_column(&mut columns[0], world, player_entity, &stats, icons);
+                    draw_stats_column(&mut columns[0], world, player_entity, &stats, icons, ui_state, actions);
 
                     // Right column: Inventory
                     draw_inventory_column(&mut columns[1], world, player_entity, icons, ui_state, actions);
@@ -733,7 +743,7 @@ pub fn draw_inventory_window(
                     style::dungeon_window_frame().show(ui, |ui| {
                         ui.set_min_width(120.0);
 
-                        // Drink option (for potions)
+                        // Show options based on item type
                         if is_throwable {
                             if ui.button("Drink").clicked() {
                                 actions.item_to_use = Some(item_idx);
@@ -744,11 +754,19 @@ pub fn draw_inventory_window(
                                 ui_state.item_context_menu = None;
                             }
                         } else {
-                            // Non-throwable items just have "Use"
-                            if ui.button("Use").clicked() {
+                            // Non-throwable items: Use/Equip
+                            let is_weapon = matches!(item_type, crate::components::ItemType::Sword | crate::components::ItemType::Bow);
+                            let button_text = if is_weapon { "Equip" } else { "Use" };
+                            if ui.button(button_text).clicked() {
                                 actions.item_to_use = Some(item_idx);
                                 ui_state.item_context_menu = None;
                             }
+                        }
+
+                        // Drop option for all items
+                        if ui.button("Drop").clicked() {
+                            actions.item_to_drop = Some(item_idx);
+                            ui_state.item_context_menu = None;
                         }
 
                         ui.separator();
@@ -779,6 +797,58 @@ pub fn draw_inventory_window(
             ui_state.item_context_menu = None;
         }
     }
+
+    // Draw equipped item context menu popup
+    if let Some(pos) = ui_state.equipped_context_menu {
+        // Check if player still has a weapon equipped
+        let has_weapon = world
+            .get::<&Equipment>(player_entity)
+            .map(|eq| eq.weapon.is_some())
+            .unwrap_or(false);
+
+        if has_weapon {
+            egui::Area::new(egui::Id::new("equipped_context_menu"))
+                .fixed_pos(pos)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    style::dungeon_window_frame().show(ui, |ui| {
+                        ui.set_min_width(120.0);
+
+                        if ui.button("Unequip").clicked() {
+                            actions.unequip_weapon = true;
+                            ui_state.equipped_context_menu = None;
+                        }
+                        if ui.button("Drop").clicked() {
+                            actions.drop_equipped_weapon = true;
+                            ui_state.equipped_context_menu = None;
+                        }
+
+                        ui.separator();
+                        if ui.button("Cancel").clicked() {
+                            ui_state.equipped_context_menu = None;
+                        }
+                    });
+                });
+
+            // Close context menu on ESC key
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                ui_state.equipped_context_menu = None;
+            }
+
+            // Close context menu if left-clicked elsewhere
+            if ctx.input(|i| i.pointer.primary_clicked()) {
+                let popup_rect = egui::Rect::from_min_size(pos, egui::vec2(120.0, 100.0));
+                if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                    if !popup_rect.contains(pointer_pos) {
+                        ui_state.equipped_context_menu = None;
+                    }
+                }
+            }
+        } else {
+            // Weapon no longer equipped, close menu
+            ui_state.equipped_context_menu = None;
+        }
+    }
 }
 
 fn draw_stats_column(
@@ -787,6 +857,8 @@ fn draw_stats_column(
     player_entity: hecs::Entity,
     stats: &Stats,
     icons: &UiIcons,
+    ui_state: &mut GameUiState,
+    actions: &mut UiActions,
 ) {
     ui.vertical(|ui| {
         ui.heading("CHARACTER STATS");
@@ -809,13 +881,18 @@ fn draw_stats_column(
 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
+                let size = egui::vec2(24.0, 24.0);
+                let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+
                 let coin_img = egui::Image::new(egui::load::SizedTexture::new(
                     icons.tileset_texture_id,
-                    egui::vec2(24.0, 24.0),
+                    size,
                 ))
-                .uv(icons.coins_uv)
-                .bg_fill(style::colors::PANEL_BG);
-                ui.add(coin_img);
+                .uv(icons.coins_uv);
+                coin_img.paint_at(ui, rect);
+
                 ui.label(format!("{} gold", inventory.gold));
             });
         }
@@ -831,35 +908,65 @@ fn draw_stats_column(
                 ui.label("Weapon:");
                 match &equipment.weapon {
                     Some(crate::components::EquippedWeapon::Melee(weapon)) => {
+                        let size = egui::vec2(48.0, 48.0);
+                        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.tileset_texture_id,
-                            egui::vec2(48.0, 48.0),
+                            size,
                         ))
-                        .uv(icons.sword_uv)
-                        .bg_fill(style::colors::PANEL_BG);
+                        .uv(icons.sword_uv);
+                        image.paint_at(ui, rect);
 
-                        ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
-                            "{}\n\nDamage: {} + {} = {}\n\nClick weapon in inventory to swap",
+                        let response = response.on_hover_text(format!(
+                            "{}\n\nDamage: {} + {} = {}\n\nClick to unequip\nRight-click for options",
                             weapon.name,
                             weapon.base_damage,
                             weapon.damage_bonus,
                             systems::weapon_damage(weapon)
                         ));
+
+                        // Left-click unequips
+                        if response.clicked() {
+                            actions.unequip_weapon = true;
+                        }
+
+                        // Right-click opens context menu
+                        if response.secondary_clicked() {
+                            ui_state.equipped_context_menu = Some(response.rect.right_top());
+                        }
                     }
                     Some(crate::components::EquippedWeapon::Ranged(bow)) => {
+                        let size = egui::vec2(48.0, 48.0);
+                        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.tileset_texture_id,
-                            egui::vec2(48.0, 48.0),
+                            size,
                         ))
-                        .uv(icons.bow_uv)
-                        .bg_fill(style::colors::PANEL_BG);
+                        .uv(icons.bow_uv);
+                        image.paint_at(ui, rect);
 
-                        ui.add(egui::ImageButton::new(image)).on_hover_text(format!(
-                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nRight-click to shoot\nClick weapon in inventory to swap",
+                        let response = response.on_hover_text(format!(
+                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nClick to unequip\nRight-click for options",
                             bow.name,
                             bow.base_damage,
                             bow.arrow_speed
                         ));
+
+                        // Left-click unequips
+                        if response.clicked() {
+                            actions.unequip_weapon = true;
+                        }
+
+                        // Right-click opens context menu
+                        if response.secondary_clicked() {
+                            ui_state.equipped_context_menu = Some(response.rect.right_top());
+                        }
                     }
                     None => {
                         ui.label(
@@ -900,14 +1007,20 @@ fn draw_inventory_column(
                         let uv = icons.get_item_uv(*item_type);
                         let is_throwable = systems::items::item_is_throwable(*item_type);
 
+                        // Allocate space and paint black background manually
+                        let size = egui::vec2(48.0, 48.0);
+                        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+                        // Paint black background first
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+
+                        // Then paint the image on top
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.tileset_texture_id,
-                            egui::vec2(48.0, 48.0),
+                            size,
                         ))
-                        .uv(uv)
-                        .bg_fill(style::colors::PANEL_BG);
-
-                        let response = ui.add(egui::ImageButton::new(image));
+                        .uv(uv);
+                        image.paint_at(ui, rect);
 
                         // Build hover text based on item type
                         let hover_text = if is_throwable {
@@ -917,7 +1030,7 @@ fn draw_inventory_column(
                             )
                         } else {
                             format!(
-                                "{}\n\nClick to use",
+                                "{}\n\nLeft-click to use\nRight-click for options",
                                 systems::item_name(*item_type)
                             )
                         };
@@ -929,8 +1042,8 @@ fn draw_inventory_column(
                             actions.item_to_use = Some(i);
                         }
 
-                        // Right-click: open context menu (for throwable items)
-                        if response.secondary_clicked() && is_throwable {
+                        // Right-click: open context menu (for all items)
+                        if response.secondary_clicked() {
                             // Get the screen position for the popup
                             let pos = response.rect.right_top();
                             ui_state.item_context_menu = Some((i, pos));

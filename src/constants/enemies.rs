@@ -51,8 +51,8 @@ pub const SKELETON_ARCHER_SPAWN_COUNT: usize = 8;
 pub const SKELETON_ARCHER_HEALTH: i32 = 40;
 /// Skeleton archer maximum energy pool
 pub const SKELETON_ARCHER_MAX_ENERGY: i32 = 3;
-/// Skeleton archer action speed
-pub const SKELETON_ARCHER_SPEED: f32 = 1.3;
+/// Skeleton archer action speed (slower than melee skeletons - careful aim)
+pub const SKELETON_ARCHER_SPEED: f32 = 1.0;
 /// Skeleton archer sight radius (good vision for ranged)
 pub const SKELETON_ARCHER_SIGHT_RADIUS: i32 = 10;
 /// Skeleton archer strength

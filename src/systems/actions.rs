@@ -738,3 +738,87 @@ pub fn apply_unequip_weapon(
 
     ActionResult::Completed
 }
+
+/// Apply drop item action - removes item from inventory and spawns on ground
+pub fn apply_drop_item(
+    world: &mut World,
+    entity: Entity,
+    item_index: usize,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Get entity position
+    let (x, y) = match queries::get_entity_position(world, entity) {
+        Some(p) => p,
+        None => return ActionResult::Invalid,
+    };
+
+    // Get the item type from inventory
+    let item_type = {
+        let Ok(inventory) = world.get::<&Inventory>(entity) else {
+            return ActionResult::Invalid;
+        };
+        if item_index >= inventory.items.len() {
+            return ActionResult::Invalid;
+        }
+        inventory.items[item_index]
+    };
+
+    // Remove from inventory
+    crate::systems::items::remove_item_from_inventory(world, entity, item_index);
+
+    // Spawn on ground
+    crate::systems::inventory::spawn_ground_item(world, x, y, item_type);
+
+    // Emit event
+    events.push(GameEvent::ItemDropped {
+        entity,
+        item: item_type,
+        position: (x, y),
+    });
+
+    ActionResult::Completed
+}
+
+/// Apply drop equipped weapon action - unequips and drops weapon on ground
+pub fn apply_drop_equipped_weapon(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Get entity position
+    let (x, y) = match queries::get_entity_position(world, entity) {
+        Some(p) => p,
+        None => return ActionResult::Invalid,
+    };
+
+    // Get the currently equipped weapon
+    let weapon_item = {
+        let Ok(equipment) = world.get::<&Equipment>(entity) else {
+            return ActionResult::Invalid;
+        };
+        match &equipment.weapon {
+            Some(EquippedWeapon::Melee(_)) => Some(ItemType::Sword),
+            Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
+            None => return ActionResult::Invalid, // Nothing to drop
+        }
+    };
+
+    let item_type = weapon_item.unwrap();
+
+    // Remove weapon from equipment
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
+        equipment.weapon = None;
+    }
+
+    // Spawn on ground
+    crate::systems::inventory::spawn_ground_item(world, x, y, item_type);
+
+    // Emit event
+    events.push(GameEvent::ItemDropped {
+        entity,
+        item: item_type,
+        position: (x, y),
+    });
+
+    ActionResult::Completed
+}

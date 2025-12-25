@@ -1,7 +1,8 @@
 //! Inventory and container interaction systems.
 
-use crate::components::{BlocksMovement, Container, Inventory, ItemType, Position};
+use crate::components::{BlocksMovement, Container, GroundItemPile, Inventory, ItemType, Position, Sprite, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
+use crate::systems::item_defs;
 use crate::systems::items::item_weight;
 use hecs::{Entity, World};
 
@@ -136,6 +137,63 @@ pub fn find_container_at_player(world: &World, player_entity: Entity) -> Option<
         }
     }
     None
+}
+
+/// Spawn a ground item pile at a position, or add to existing pile
+/// Returns the entity ID of the pile
+pub fn spawn_ground_item(world: &mut World, x: i32, y: i32, item: ItemType) -> Entity {
+    // Check for existing ground item pile at this position
+    let existing_pile = find_ground_items_at_position(world, x, y);
+
+    if let Some(pile_entity) = existing_pile {
+        // Add to existing pile
+        if let Ok(mut container) = world.get::<&mut Container>(pile_entity) {
+            container.items.push(item);
+        }
+        pile_entity
+    } else {
+        // Create new ground item pile
+        let tile_id = item_defs::get_def(item).tile_id;
+        let pos = Position::new(x, y);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(tile_id),
+            Container::new(vec![item]),
+            GroundItemPile,
+        ))
+    }
+}
+
+/// Find a ground item pile at a specific position
+pub fn find_ground_items_at_position(world: &World, x: i32, y: i32) -> Option<Entity> {
+    for (id, (pos, container, _pile)) in world.query::<(&Position, &Container, &GroundItemPile)>().iter() {
+        if pos.x == x && pos.y == y && !container.is_empty() {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Find a ground item pile at the player's position
+#[allow(dead_code)] // Reserved for future ground item interaction features
+pub fn find_ground_items_at_player(world: &World, player_entity: Entity) -> Option<Entity> {
+    let player_pos = world.get::<&Position>(player_entity).ok()?;
+    find_ground_items_at_position(world, player_pos.x, player_pos.y)
+}
+
+/// Remove ground item piles that are empty
+pub fn cleanup_empty_ground_piles(world: &mut World) {
+    let empty_piles: Vec<Entity> = world
+        .query::<(&Container, &GroundItemPile)>()
+        .iter()
+        .filter(|(_, (container, _))| container.is_empty())
+        .map(|(id, _)| id)
+        .collect();
+
+    for id in empty_piles {
+        let _ = world.despawn(id);
+    }
 }
 
 #[cfg(test)]

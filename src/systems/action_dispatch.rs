@@ -38,6 +38,8 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::CastFireball { .. } => ACTION_SHOOT_DURATION, // Same as shooting
         ActionType::EquipWeapon { .. } => 0.0, // Instant (free action)
         ActionType::UnequipWeapon => 0.0, // Instant (free action)
+        ActionType::DropItem { .. } => ACTION_DOOR_DURATION, // Quick action
+        ActionType::DropEquippedWeapon => ACTION_DOOR_DURATION, // Quick action
     };
 
     // Speed modifies duration: higher speed = shorter duration

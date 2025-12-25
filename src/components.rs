@@ -237,11 +237,17 @@ pub enum ActionType {
     /// Casting fireball at a target position
     CastFireball { target_x: i32, target_y: i32 },
     /// Equip a weapon from inventory
-    #[allow(dead_code)] // Planned feature
+    #[allow(dead_code)] // Constructed via action system
     EquipWeapon { item_index: usize },
     /// Unequip current weapon to inventory
-    #[allow(dead_code)] // Planned feature
+    #[allow(dead_code)] // Constructed via action system
     UnequipWeapon,
+    /// Drop an item from inventory onto the ground
+    #[allow(dead_code)] // Constructed via action system
+    DropItem { item_index: usize },
+    /// Drop currently equipped weapon onto the ground
+    #[allow(dead_code)] // Constructed via action system
+    DropEquippedWeapon,
 }
 
 impl ActionType {
@@ -264,6 +270,8 @@ impl ActionType {
             ActionType::CastFireball { .. } => 1,
             ActionType::EquipWeapon { .. } => 0, // Free action
             ActionType::UnequipWeapon => 0,      // Free action
+            ActionType::DropItem { .. } => 1,
+            ActionType::DropEquippedWeapon => 1,
         }
     }
 }
@@ -409,6 +417,10 @@ pub struct BlocksVision;
 /// Marker component for entities that block movement when present
 #[derive(Debug, Clone, Copy)]
 pub struct BlocksMovement;
+
+/// Marker component for ground item piles dropped by entities
+#[derive(Debug, Clone, Copy)]
+pub struct GroundItemPile;
 
 /// Weapon data - pure data, damage calculation in systems
 #[derive(Debug, Clone)]

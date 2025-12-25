@@ -330,17 +330,21 @@ pub fn process_ui_actions(
         systems::dev_tools::give_item_to_player(world, player_entity, item);
     }
 
-    // Chest interactions
+    // Chest interactions (also works for ground item piles)
     if let Some(chest_id) = ui_state.open_chest {
         if actions.chest_take_all || actions.close_chest {
             if actions.chest_take_all {
                 systems::take_all_from_container(world, player_entity, chest_id, Some(events));
+                // Clean up empty ground item piles
+                systems::cleanup_empty_ground_piles(world);
             }
             result.close_chest = true;
         } else if actions.chest_take_gold {
             systems::take_gold_from_container(world, player_entity, chest_id, Some(events));
         } else if let Some(item_index) = actions.chest_item_to_take {
             systems::take_item_from_container(world, player_entity, chest_id, item_index, Some(events));
+            // Clean up empty ground item piles after taking items
+            systems::cleanup_empty_ground_piles(world);
         }
     }
 
@@ -417,6 +421,22 @@ pub fn process_ui_actions(
                 }
             }
         }
+    }
+
+    // Drop item from inventory
+    if let Some(item_index) = actions.item_to_drop {
+        systems::actions::apply_drop_item(world, player_entity, item_index, events);
+        result.close_context_menu = true;
+    }
+
+    // Unequip weapon (put back in inventory)
+    if actions.unequip_weapon {
+        systems::actions::apply_unequip_weapon(world, player_entity);
+    }
+
+    // Drop equipped weapon
+    if actions.drop_equipped_weapon {
+        systems::actions::apply_drop_equipped_weapon(world, player_entity, events);
     }
 
     result

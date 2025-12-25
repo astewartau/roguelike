@@ -392,7 +392,7 @@ impl GameEngine {
             self.ui_state.toggle_grid_lines();
         }
 
-        // Enter key: container interaction
+        // Enter key: container interaction (chests, bones, ground items)
         if frame.enter_pressed {
             match crate::game::handle_enter_key_container(
                 &mut self.state.world,
@@ -402,6 +402,8 @@ impl GameEngine {
             ) {
                 crate::game::ContainerAction::TookAll(_) => {
                     self.ui_state.close_chest();
+                    // Clean up empty ground item piles
+                    systems::cleanup_empty_ground_piles(&mut self.state.world);
                 }
                 crate::game::ContainerAction::Opened(_) => {
                     let _ = process_events(

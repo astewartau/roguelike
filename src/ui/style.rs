@@ -5,7 +5,7 @@
 
 use egui::epaint::Shadow;
 use egui::style::{WidgetVisuals, Widgets};
-use egui::{Color32, FontData, FontDefinitions, FontFamily, Frame, Margin, Rounding, Stroke, Visuals};
+use egui::{Color32, FontData, FontDefinitions, FontFamily, Frame, Margin, Rounding, Stroke, Style, Visuals};
 
 /// Dungeon color palette
 pub mod colors {
@@ -153,4 +153,14 @@ pub fn dungeon_window_frame() -> Frame {
         .fill(colors::PANEL_BG)
         .stroke(Stroke::new(BORDER_WIDTH, colors::PANEL_BORDER))
         .inner_margin(Margin::same(8.0))
+}
+
+/// Create the dungeon-themed style with immediate tooltips
+pub fn dungeon_style() -> Style {
+    let mut style = Style::default();
+    style.visuals = dungeon_visuals();
+    // Show tooltips immediately on hover, even while mouse is moving
+    style.interaction.tooltip_delay = 0.0;
+    style.interaction.show_tooltips_only_when_still = false;
+    style
 }

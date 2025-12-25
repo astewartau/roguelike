@@ -12,6 +12,7 @@ layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
 layout (location = 3) in float aFogMult;
 layout (location = 4) in float aAlpha;      // Transparency (1.0 = opaque)
+layout (location = 5) in vec3 aTint;        // Color tint (for water, etc.)
 
 uniform mat4 uProjection;
 
@@ -19,6 +20,7 @@ out vec2 vTexCoord;
 out vec2 vLocalPos;
 out float vFog;
 out float vAlpha;
+out vec3 vTint;
 
 void main() {
     vec2 worldPos = aInstancePos + aPos;
@@ -29,6 +31,7 @@ void main() {
     vLocalPos = aPos;
     vFog = aFogMult;
     vAlpha = aAlpha;
+    vTint = aTint;
 }
 "#;
 
@@ -36,6 +39,7 @@ const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
 in vec2 vTexCoord;
 in float vFog;
 in float vAlpha;
+in vec3 vTint;
 
 uniform sampler2D uTileset;
 
@@ -45,7 +49,7 @@ void main() {
     vec4 texColor = texture(uTileset, vTexCoord);
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
 
-    vec3 color = texColor.rgb * vFog;
+    vec3 color = texColor.rgb * vFog * vTint;
     FragColor = vec4(color, texColor.a * vAlpha);
 }
 "#;
@@ -361,13 +365,13 @@ impl Renderer {
             gl.vertex_attrib_pointer_f32(0, 2, FLOAT, false, 8, 0);
 
             // Create instance buffer
-            // Layout: pos(2) + uv(4) + fog(1) + border(1) = 8 floats = 32 bytes per instance
+            // Layout: pos(2) + uv(4) + fog(1) + alpha(1) + tint(3) = 11 floats = 44 bytes per instance
             let instance_vbo = gl
                 .create_buffer()
                 .map_err(|e| format!("Failed to create instance VBO: {}", e))?;
             gl.bind_buffer(ARRAY_BUFFER, Some(instance_vbo));
 
-            let stride = 32; // 8 floats * 4 bytes
+            let stride = 44; // 11 floats * 4 bytes
 
             // Position attribute (2 floats)
             gl.enable_vertex_attrib_array(1);
@@ -384,10 +388,15 @@ impl Renderer {
             gl.vertex_attrib_pointer_f32(3, 1, FLOAT, false, stride, 24);
             gl.vertex_attrib_divisor(3, 1);
 
-            // Border attribute (1 float)
+            // Alpha attribute (1 float)
             gl.enable_vertex_attrib_array(4);
             gl.vertex_attrib_pointer_f32(4, 1, FLOAT, false, stride, 28);
             gl.vertex_attrib_divisor(4, 1);
+
+            // Tint color attribute (3 floats: r, g, b)
+            gl.enable_vertex_attrib_array(5);
+            gl.vertex_attrib_pointer_f32(5, 3, FLOAT, false, stride, 32);
+            gl.vertex_attrib_divisor(5, 1);
 
             gl.bind_vertex_array(None);
 
@@ -661,7 +670,7 @@ impl Renderer {
             let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
 
             // Build instance data for visible tiles
-            // Layout: pos(2) + uv(4) + fog(1) + border(1) = 8 floats per instance
+            // Layout: pos(2) + uv(4) + fog(1) + alpha(1) + tint(3) = 11 floats per instance
             let mut instance_data = Vec::new();
 
             for y in min_y..=max_y {
@@ -675,6 +684,12 @@ impl Renderer {
                         let uv = tileset.get_uv(tile.tile_type.tile_id());
                         let fog = if tile.visible { 1.0 } else { 0.5 };
 
+                        // Water tiles get a blue tint
+                        let tint = match tile.tile_type {
+                            crate::tile::TileType::Water => (0.6, 0.8, 1.0),
+                            _ => (1.0, 1.0, 1.0),
+                        };
+
                         instance_data.push(x as f32);
                         instance_data.push(y as f32);
                         instance_data.push(uv.u0);
@@ -682,7 +697,10 @@ impl Renderer {
                         instance_data.push(uv.u1);
                         instance_data.push(uv.v1);
                         instance_data.push(fog);
-                        instance_data.push(0.0);  // no border for tiles
+                        instance_data.push(1.0); // alpha (opaque for tiles)
+                        instance_data.push(tint.0);
+                        instance_data.push(tint.1);
+                        instance_data.push(tint.2);
                     }
                 }
             }
@@ -702,7 +720,7 @@ impl Renderer {
                     projection.as_ref(),
                 );
 
-                let instance_count = instance_data.len() / 8;
+                let instance_count = instance_data.len() / 11;
                 self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
             }
 
@@ -810,7 +828,10 @@ impl Renderer {
                 instance_data.push(uv.u1);
                 instance_data.push(uv.v1);
                 instance_data.push(fog);
-                instance_data.push(0.0); // no effects
+                instance_data.push(1.0); // alpha (opaque)
+                instance_data.push(1.0); // tint R
+                instance_data.push(1.0); // tint G
+                instance_data.push(1.0); // tint B
             }
 
             if !instance_data.is_empty() {
@@ -828,7 +849,7 @@ impl Renderer {
                     projection.as_ref(),
                 );
 
-                let instance_count = instance_data.len() / 8;
+                let instance_count = instance_data.len() / 11;
                 self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
             }
 
@@ -866,6 +887,9 @@ impl Renderer {
                 instance_data.push(uv.v1);
                 instance_data.push(entity.brightness);
                 instance_data.push(entity.alpha);
+                instance_data.push(1.0); // tint R
+                instance_data.push(1.0); // tint G
+                instance_data.push(1.0); // tint B
             }
 
             self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
@@ -891,6 +915,9 @@ impl Renderer {
                     overlay_data.push(uv.v1);
                     overlay_data.push(entity.brightness);
                     overlay_data.push(entity.alpha);
+                    overlay_data.push(1.0); // tint R
+                    overlay_data.push(1.0); // tint G
+                    overlay_data.push(1.0); // tint B
                     overlay_count += 1;
                 }
             }

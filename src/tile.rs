@@ -2,12 +2,13 @@
 /// These can be adjusted to match different tilesets
 pub mod tile_ids {
     pub const EMPTY: u32 = 0;
-    pub const FLOOR: u32 = 2;      // Stone floor tile
-    pub const WALL: u32 = 3;       // Wall tile
-    pub const WATER: u32 = 4;      // Water tile
-    pub const GRASS: u32 = 5;      // Grass tile
-    pub const STONE: u32 = 2;      // Stone floor
-    pub const DOOR: u32 = 27;      // Door tile
+    pub const FLOOR: u32 = 2;       // Stone floor tile
+    pub const WALL: u32 = 3;        // Wall tile
+    pub const WATER: u32 = 2;       // Uses floor tile (tinted blue in shader)
+    pub const GRASS: u32 = 9;       // grass_1 from tileset
+    pub const TALL_GRASS: u32 = 11; // grass_3 (taller variant, blocks vision)
+    pub const STONE: u32 = 2;       // Stone floor
+    pub const DOOR: u32 = 27;       // Door tile
 
     // Entity tiles
     pub const PLAYER: u32 = 85;    // character_1
@@ -58,10 +59,9 @@ pub enum TileType {
     Empty,
     Floor,
     Wall,
-    #[allow(dead_code)] // Reserved for future terrain
     Water,
-    #[allow(dead_code)] // Reserved for future terrain
     Grass,
+    TallGrass, // Blocks vision but is walkable
     #[allow(dead_code)] // Reserved for future terrain
     Stone,
     StairsDown,
@@ -77,6 +77,7 @@ impl TileType {
             TileType::Wall => tile_ids::WALL,
             TileType::Water => tile_ids::WATER,
             TileType::Grass => tile_ids::GRASS,
+            TileType::TallGrass => tile_ids::TALL_GRASS,
             TileType::Stone => tile_ids::STONE,
             TileType::StairsDown => tile_ids::STAIRS_DOWN,
             TileType::StairsUp => tile_ids::STAIRS_UP,
@@ -84,11 +85,19 @@ impl TileType {
     }
 
     pub fn is_walkable(&self) -> bool {
-        matches!(self, TileType::Floor | TileType::Grass | TileType::StairsDown | TileType::StairsUp)
+        matches!(
+            self,
+            TileType::Floor
+                | TileType::Grass
+                | TileType::TallGrass
+                | TileType::Water
+                | TileType::StairsDown
+                | TileType::StairsUp
+        )
     }
 
     pub fn blocks_vision(&self) -> bool {
-        matches!(self, TileType::Wall | TileType::Empty)
+        matches!(self, TileType::Wall | TileType::Empty | TileType::TallGrass)
     }
 }
 

@@ -10,3 +10,5 @@ pub const DUNGEON_ROOM_MARGIN: i32 = 1;
 pub const DUNGEON_DEFAULT_WIDTH: usize = 100;
 /// Default dungeon height
 pub const DUNGEON_DEFAULT_HEIGHT: usize = 100;
+/// Chance for a room to have a special theme (Overgrown, Flooded, etc.)
+pub const THEMED_ROOM_CHANCE: f32 = 0.25;

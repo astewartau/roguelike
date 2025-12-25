@@ -27,6 +27,24 @@ impl Rect {
     }
 }
 
+/// Theme for a room that determines terrain and decal generation
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RoomTheme {
+    /// Standard dungeon room with stone floors
+    Normal,
+    /// Overgrown room with tall grass patches
+    Overgrown,
+    /// Flooded room with water pools
+    Flooded,
+}
+
+/// A room with its theme
+#[derive(Clone, Copy, Debug)]
+pub struct ThemedRoom {
+    pub rect: Rect,
+    pub theme: RoomTheme,
+}
+
 /// A node in the BSP tree. Either a leaf (contains a room) or an internal node (has two children).
 struct BspNode {
     /// The region this node covers
@@ -236,12 +254,39 @@ impl DungeonGenerator {
         // Create rooms in each leaf
         root.create_rooms(&mut rng);
 
-        // Carve all rooms into the tile map
-        let mut rooms = Vec::new();
-        root.collect_rooms(&mut rooms);
-        for room in &rooms {
-            gen.carve_room(room);
+        // Collect room rectangles
+        let mut room_rects = Vec::new();
+        root.collect_rooms(&mut room_rects);
+
+        // Assign themes to rooms
+        let themed_rooms: Vec<ThemedRoom> = room_rects
+            .iter()
+            .enumerate()
+            .map(|(i, rect)| {
+                // First room is always Normal (player spawn)
+                let theme = if i == 0 {
+                    RoomTheme::Normal
+                } else if rng.gen::<f32>() < THEMED_ROOM_CHANCE {
+                    // Randomly pick between Overgrown and Flooded
+                    if rng.gen_bool(0.5) {
+                        RoomTheme::Overgrown
+                    } else {
+                        RoomTheme::Flooded
+                    }
+                } else {
+                    RoomTheme::Normal
+                };
+                ThemedRoom { rect: *rect, theme }
+            })
+            .collect();
+
+        // Carve all rooms into the tile map (with terrain based on theme)
+        for room in &themed_rooms {
+            gen.carve_themed_room(room, &mut rng);
         }
+
+        // Get plain room rects for functions that don't need themes
+        let rooms: Vec<Rect> = themed_rooms.iter().map(|r| r.rect).collect();
 
         // Connect sibling rooms by traversing the BSP tree
         gen.connect_bsp(&root, &mut rng);
@@ -250,7 +295,7 @@ impl DungeonGenerator {
         let door_positions = gen.find_door_positions(&rooms);
 
         // Generate decorative decals in rooms
-        let decals = gen.generate_decals(&rooms, &mut rng);
+        let decals = gen.generate_themed_decals(&themed_rooms, &mut rng);
 
         // Place stairs
         // First room is the starting room (player spawns here)
@@ -321,6 +366,70 @@ impl DungeonGenerator {
         for y in room.y..room.y + room.height {
             for x in room.x..room.x + room.width {
                 self.set_tile(x, y, TileType::Floor);
+            }
+        }
+    }
+
+    /// Carve a room with terrain based on its theme
+    fn carve_themed_room(&mut self, room: &ThemedRoom, rng: &mut impl Rng) {
+        // First, carve the room as floor
+        self.carve_room(&room.rect);
+
+        // Then apply theme-specific terrain
+        match room.theme {
+            RoomTheme::Normal => {}
+            RoomTheme::Overgrown => self.add_grass_patches(room, rng),
+            RoomTheme::Flooded => self.add_water_pools(room, rng),
+        }
+    }
+
+    /// Add grass patches to an overgrown room
+    fn add_grass_patches(&mut self, room: &ThemedRoom, rng: &mut impl Rng) {
+        let area = room.rect.width * room.rect.height;
+        let grass_count = (area as f32 * 0.35) as i32; // ~35% coverage
+
+        for _ in 0..grass_count {
+            let x = rng.gen_range(room.rect.x..room.rect.x + room.rect.width);
+            let y = rng.gen_range(room.rect.y..room.rect.y + room.rect.height);
+
+            // Use TallGrass for most, regular Grass for variety
+            let grass_type = if rng.gen_bool(0.7) {
+                TileType::TallGrass
+            } else {
+                TileType::Grass
+            };
+            self.set_tile(x, y, grass_type);
+        }
+    }
+
+    /// Add water pools to a flooded room
+    fn add_water_pools(&mut self, room: &ThemedRoom, rng: &mut impl Rng) {
+        // Create 1-3 pools per room
+        let pool_count = rng.gen_range(1..=3);
+
+        for _ in 0..pool_count {
+            // Ensure we have enough room for a pool
+            if room.rect.width < 4 || room.rect.height < 4 {
+                continue;
+            }
+
+            // Random center point (with margin from edges)
+            let cx = rng.gen_range(room.rect.x + 1..room.rect.x + room.rect.width - 1);
+            let cy = rng.gen_range(room.rect.y + 1..room.rect.y + room.rect.height - 1);
+            let radius = rng.gen_range(1..=2);
+
+            // Fill rough circle with water
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    // Rough circle shape with some randomness
+                    if dx * dx + dy * dy <= radius * radius + rng.gen_range(0..=1) {
+                        let x = cx + dx;
+                        let y = cy + dy;
+                        if room.rect.contains(x, y) {
+                            self.set_tile(x, y, TileType::Water);
+                        }
+                    }
+                }
             }
         }
     }
@@ -429,12 +538,12 @@ impl DungeonGenerator {
         door_positions
     }
 
-    /// Generate decorative decals in rooms
-    fn generate_decals(&self, rooms: &[Rect], rng: &mut impl Rng) -> Vec<Decal> {
+    /// Generate decorative decals in rooms with theme-appropriate types
+    fn generate_themed_decals(&self, rooms: &[ThemedRoom], rng: &mut impl Rng) -> Vec<Decal> {
         let mut decals = Vec::new();
 
-        // Possible decal types with their weights
-        let decal_types = [
+        // Normal room decals (bones, rocks, etc.)
+        let normal_decals: Vec<(u32, u32)> = vec![
             (tile_ids::BONES_1, 3),
             (tile_ids::BONES_2, 2),
             (tile_ids::BONES_3, 2),
@@ -445,32 +554,65 @@ impl DungeonGenerator {
             (tile_ids::FLOWERS, 2),
             (tile_ids::PLANT, 3),
         ];
-        let total_weight: u32 = decal_types.iter().map(|(_, w)| w).sum();
+
+        // Overgrown room decals (more plants and mushrooms)
+        let overgrown_decals: Vec<(u32, u32)> = vec![
+            (tile_ids::PLANT, 5),
+            (tile_ids::MUSHROOM, 4),
+            (tile_ids::FLOWERS, 4),
+            (tile_ids::BONES_1, 1),
+            (tile_ids::ROCKS, 2),
+        ];
+
+        // Flooded room decals (sparse, mostly rocks)
+        let flooded_decals: Vec<(u32, u32)> = vec![
+            (tile_ids::ROCKS, 4),
+            (tile_ids::BONES_1, 2),
+            (tile_ids::SKULL, 1),
+        ];
 
         for room in rooms {
-            // Calculate room area and decide how many decals
-            let area = room.width * room.height;
-            // Sparse decals: roughly 1 decal per 8-12 tiles, with some randomness
-            let num_decals = rng.gen_range(area / 15..=area / 8).max(1);
+            let decal_types = match room.theme {
+                RoomTheme::Normal => &normal_decals,
+                RoomTheme::Overgrown => &overgrown_decals,
+                RoomTheme::Flooded => &flooded_decals,
+            };
+            let total_weight: u32 = decal_types.iter().map(|(_, w)| w).sum();
+
+            // Flooded rooms get fewer decals
+            let density_divisor = match room.theme {
+                RoomTheme::Flooded => 20,
+                _ => 12,
+            };
+
+            let area = room.rect.width * room.rect.height;
+            let num_decals = rng.gen_range(area / (density_divisor + 5)..=area / density_divisor).max(1);
 
             for _ in 0..num_decals {
-                // Random position within the room (avoid edges for visual appeal)
-                let x = if room.width > 2 {
-                    rng.gen_range(room.x + 1..room.x + room.width - 1)
+                // Random position within the room (avoid edges)
+                let x = if room.rect.width > 2 {
+                    rng.gen_range(room.rect.x + 1..room.rect.x + room.rect.width - 1)
                 } else {
-                    room.x + room.width / 2
+                    room.rect.x + room.rect.width / 2
                 };
-                let y = if room.height > 2 {
-                    rng.gen_range(room.y + 1..room.y + room.height - 1)
+                let y = if room.rect.height > 2 {
+                    rng.gen_range(room.rect.y + 1..room.rect.y + room.rect.height - 1)
                 } else {
-                    room.y + room.height / 2
+                    room.rect.y + room.rect.height / 2
                 };
+
+                // Skip if this tile is water
+                if let Some(idx) = self.get_index(x, y) {
+                    if self.tiles[idx].tile_type == TileType::Water {
+                        continue;
+                    }
+                }
 
                 // Pick a random decal type using weights
                 let roll = rng.gen_range(0..total_weight);
                 let mut cumulative = 0;
-                let mut tile_id = tile_ids::ROCKS; // default
-                for (id, weight) in &decal_types {
+                let mut tile_id = tile_ids::ROCKS;
+                for (id, weight) in decal_types {
                     cumulative += weight;
                     if roll < cumulative {
                         tile_id = *id;

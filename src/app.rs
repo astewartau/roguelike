@@ -101,7 +101,7 @@ pub fn create_window(event_loop: &ActiveEventLoop) -> WindowContext {
     {
         let ctx = &egui_glow.egui_ctx;
         ctx.set_fonts(crate::ui::style::load_fonts());
-        ctx.set_visuals(crate::ui::style::dungeon_visuals());
+        ctx.set_style(crate::ui::style::dungeon_style());
     }
 
     WindowContext {

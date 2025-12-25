@@ -62,9 +62,17 @@ impl Tileset {
 
         // Load the PNG (relative to the .tsj file)
         let png_path = tsj_path.parent().unwrap_or(Path::new(".")).join(&tsj.image);
-        let img = image::open(&png_path)
+        let mut img = image::open(&png_path)
             .map_err(|e| format!("Failed to load {}: {}", png_path.display(), e))?
             .into_rgba8();
+
+        // Convert to premultiplied alpha (required by egui)
+        for pixel in img.pixels_mut() {
+            let a = pixel[3] as f32 / 255.0;
+            pixel[0] = (pixel[0] as f32 * a) as u8;
+            pixel[1] = (pixel[1] as f32 * a) as u8;
+            pixel[2] = (pixel[2] as f32 * a) as u8;
+        }
 
         let (width, height) = img.dimensions();
 

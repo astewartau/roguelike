@@ -114,6 +114,12 @@ pub enum GameEvent {
         y: i32,
         potion_type: crate::components::ItemType,
     },
+    /// An entity dropped an item on the ground
+    ItemDropped {
+        entity: Entity,
+        item: crate::components::ItemType,
+        position: (i32, i32),
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame
