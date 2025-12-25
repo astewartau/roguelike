@@ -26,6 +26,7 @@ pub struct RangedConfig {
 #[derive(Clone)]
 pub struct EnemyDef {
     /// Display name (for future UI/logs)
+    #[allow(dead_code)] // Reserved for combat log/bestiary
     pub name: &'static str,
     /// Tile ID from the tileset
     pub tile_id: u32,
@@ -251,6 +252,7 @@ impl SpawnConfig {
 /// Definition of an NPC type - data needed to spawn a friendly NPC
 pub struct NPCDef {
     /// Display name (shown in dialogue window)
+    #[allow(dead_code)] // Reserved for dialogue header
     pub name: &'static str,
     /// Tile ID from the tileset
     pub tile_id: u32,

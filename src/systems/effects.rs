@@ -32,15 +32,6 @@ pub fn add_effect(effects: &mut StatusEffects, effect_type: EffectType, duration
     }
 }
 
-/// Get remaining duration of an effect (None if not active)
-pub fn get_effect_duration(effects: &StatusEffects, effect_type: EffectType) -> Option<f32> {
-    effects
-        .effects
-        .iter()
-        .find(|e| e.effect_type == effect_type)
-        .map(|e| e.remaining_duration)
-}
-
 // =============================================================================
 // ENTITY-LEVEL HELPERS (operate on World)
 // =============================================================================

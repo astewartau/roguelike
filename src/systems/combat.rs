@@ -1,8 +1,8 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Equipment, EquippedWeapon,
-    Experience, Health, Position, Sprite, Stats, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, Container, Experience, Health, Position, Sprite,
+    Stats, Weapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -15,39 +15,6 @@ use rand::Rng;
 /// Calculate total damage for a weapon
 pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
-}
-
-/// Get the melee damage an entity deals (from equipped melee weapon or unarmed)
-pub fn get_attack_damage(world: &World, attacker: Entity) -> i32 {
-    if let Ok(equipment) = world.get::<&Equipment>(attacker) {
-        match &equipment.weapon {
-            Some(EquippedWeapon::Melee(weapon)) => weapon_damage(weapon),
-            // Ranged weapon or no weapon = unarmed damage
-            _ => UNARMED_DAMAGE,
-        }
-    } else {
-        UNARMED_DAMAGE
-    }
-}
-
-/// Open a door - remove blocking components (sprite stays the same but renders darker)
-pub fn open_door(world: &mut World, door_id: Entity) {
-    // Mark as open
-    if let Ok(mut door) = world.get::<&mut Door>(door_id) {
-        door.is_open = true;
-    }
-
-    // Remove blocking components
-    let _ = world.remove_one::<crate::components::BlocksVision>(door_id);
-    let _ = world.remove_one::<BlocksMovement>(door_id);
-}
-
-/// Open a chest - mark as open (sprite change handled by event system)
-pub fn open_chest(world: &mut World, chest_id: Entity) {
-    // Mark as open
-    if let Ok(mut container) = world.get::<&mut Container>(chest_id) {
-        container.is_open = true;
-    }
 }
 
 /// Handle a ContainerOpened event - update sprite for chests only
@@ -136,33 +103,5 @@ mod tests {
             damage_bonus: 2,
         };
         assert_eq!(weapon_damage(&weapon), 7);
-    }
-
-    #[test]
-    fn test_get_attack_damage_unarmed() {
-        let mut world = World::new();
-        let entity = world.spawn(());
-        assert_eq!(get_attack_damage(&world, entity), UNARMED_DAMAGE);
-    }
-
-    #[test]
-    fn test_get_attack_damage_with_weapon() {
-        let mut world = World::new();
-        let weapon = Weapon {
-            name: "Test Sword".to_string(),
-            tile_id: 0,
-            base_damage: 10,
-            damage_bonus: 3,
-        };
-        let entity = world.spawn((Equipment::with_melee(weapon),));
-        assert_eq!(get_attack_damage(&world, entity), 13);
-    }
-
-    #[test]
-    fn test_get_attack_damage_with_ranged_weapon() {
-        // Ranged weapon should give unarmed damage for melee attacks
-        let mut world = World::new();
-        let entity = world.spawn((Equipment::with_ranged(crate::components::RangedWeapon::bow()),));
-        assert_eq!(get_attack_damage(&world, entity), UNARMED_DAMAGE);
     }
 }

@@ -258,6 +258,7 @@ impl DevMenu {
 }
 
 /// Helper to draw a tile button
+#[allow(dead_code)] // Reserved for dev tool palette expansion
 fn draw_tile_button(
     ui: &mut egui::Ui,
     tileset_texture_id: egui::TextureId,

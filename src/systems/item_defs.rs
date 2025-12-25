@@ -4,6 +4,8 @@
 //! Instead of scattering match statements across the codebase,
 //! all item attributes are defined in a single static table.
 
+#![allow(dead_code)] // Fields reserved for future item system expansion
+
 use crate::components::{EffectType, ItemType};
 use crate::constants::*;
 use crate::tile::tile_ids;

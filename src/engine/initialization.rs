@@ -16,6 +16,36 @@ use hecs::{Entity, World};
 use rand::seq::SliceRandom;
 use rand::Rng;
 
+/// Spawn all chests from grid positions with randomized contents.
+fn spawn_chests(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+    for (x, y) in &grid.chest_positions {
+        let pos = Position::new(*x, *y);
+        let container = generate_chest_contents(rng);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(tile_ids::CHEST_CLOSED),
+            container,
+            BlocksMovement,
+        ));
+    }
+}
+
+/// Spawn all doors from grid positions.
+fn spawn_doors(world: &mut World, grid: &Grid) {
+    for (x, y) in &grid.door_positions {
+        let pos = Position::new(*x, *y);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::new(tile_ids::DOOR),
+            Door::new(),
+            BlocksVision,
+            BlocksMovement,
+        ));
+    }
+}
+
 /// Generate randomized chest contents.
 fn generate_chest_contents(rng: &mut impl Rng) -> Container {
     // Common items (higher weight)
@@ -141,32 +171,10 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         StatusEffects::new(),
     ));
 
-    // Spawn chests
+    // Spawn chests and doors
     let mut rng = rand::thread_rng();
-    for (x, y) in &grid.chest_positions {
-        let pos = Position::new(*x, *y);
-        let container = generate_chest_contents(&mut rng);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::CHEST_CLOSED),
-            container,
-            BlocksMovement,
-        ));
-    }
-
-    // Spawn doors
-    for (x, y) in &grid.door_positions {
-        let pos = Position::new(*x, *y);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::DOOR),
-            Door::new(),
-            BlocksVision,
-            BlocksMovement,
-        ));
-    }
+    spawn_chests(&mut world, grid, &mut rng);
+    spawn_doors(&mut world, grid);
 
     // Spawn wizard NPC
     if let Some(starting_room) = &grid.starting_room {
@@ -268,35 +276,12 @@ pub fn spawn_floor_entities(
         vis_pos.y = player_spawn_pos.1 as f32;
     }
 
-    // Spawn chests
+    // Spawn chests and doors
     let mut rng = rand::thread_rng();
-    for (x, y) in &grid.chest_positions {
-        let pos = Position::new(*x, *y);
-        let container = generate_chest_contents(&mut rng);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::CHEST_CLOSED),
-            container,
-            BlocksMovement,
-        ));
-    }
-
-    // Spawn doors
-    for (x, y) in &grid.door_positions {
-        let pos = Position::new(*x, *y);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::DOOR),
-            Door::new(),
-            BlocksVision,
-            BlocksMovement,
-        ));
-    }
+    spawn_chests(world, grid, &mut rng);
+    spawn_doors(world, grid);
 
     // Spawn enemies
-    let mut rng = rand::thread_rng();
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
         .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| grid.is_walkable(x, y))

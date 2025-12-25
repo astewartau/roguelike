@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, BlocksVision, EffectType, Health, Position,
+    Actor, Attackable, BlocksMovement, BlocksVision, EffectType, Position,
 };
 use crate::systems::effects;
 
@@ -62,13 +62,6 @@ pub fn can_entity_act(world: &World, entity: Entity) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if an entity is dead (health <= 0).
-pub fn is_entity_dead(world: &World, entity: Entity) -> bool {
-    world
-        .get::<&Health>(entity)
-        .map(|h| h.is_dead())
-        .unwrap_or(true)
-}
 
 /// Get an entity's logical position as a tuple.
 pub fn get_entity_position(world: &World, entity: Entity) -> Option<(i32, i32)> {

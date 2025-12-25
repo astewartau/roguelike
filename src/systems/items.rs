@@ -3,7 +3,7 @@
 use crate::components::{Health, Inventory, ItemType};
 use hecs::{Entity, World};
 
-use super::item_defs::{get_def, ItemCategory, UseEffect};
+use super::item_defs::{get_def, UseEffect};
 
 // Re-export TargetingParams from item_defs for external use
 pub use super::item_defs::TargetingParams;
@@ -35,6 +35,7 @@ pub fn item_name(item: ItemType) -> &'static str {
 }
 
 /// Returns true if the item requires a target selection before use
+#[cfg(test)]
 pub fn item_requires_target(item: ItemType) -> bool {
     matches!(get_def(item).use_effect, UseEffect::RequiresTarget)
 }
@@ -47,11 +48,6 @@ pub fn item_targeting_params(item: ItemType) -> TargetingParams {
 /// Returns true if the item is a throwable potion
 pub fn item_is_throwable(item: ItemType) -> bool {
     get_def(item).is_throwable
-}
-
-/// Returns true if the item is a weapon that can be equipped
-pub fn item_is_weapon(item: ItemType) -> bool {
-    get_def(item).category == ItemCategory::Weapon
 }
 
 /// Use an item from an entity's inventory
@@ -143,6 +139,7 @@ pub fn item_weight(item: ItemType) -> f32 {
 }
 
 /// Get the heal amount for healing items (0 for non-healing items)
+#[cfg(test)]
 pub fn item_heal_amount(item: ItemType) -> i32 {
     match get_def(item).use_effect {
         UseEffect::Heal(amount) => amount,

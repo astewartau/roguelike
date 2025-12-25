@@ -15,6 +15,7 @@ use crate::input::TargetingMode;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlayerIntent {
     /// No action this frame
+    #[allow(dead_code)] // Default/fallback case
     None,
     /// Wait in place (skip turn)
     Wait,

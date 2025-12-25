@@ -178,17 +178,6 @@ impl StatusEffects {
     }
 }
 
-/// Item component
-#[derive(Debug, Clone, Copy)]
-pub struct Item {
-    pub item_type: ItemType,
-}
-
-impl Item {
-    pub fn new(item_type: ItemType) -> Self {
-        Self { item_type }
-    }
-}
 
 /// Inventory component - pure data
 #[derive(Debug, Clone)]
@@ -248,8 +237,10 @@ pub enum ActionType {
     /// Casting fireball at a target position
     CastFireball { target_x: i32, target_y: i32 },
     /// Equip a weapon from inventory
+    #[allow(dead_code)] // Planned feature
     EquipWeapon { item_index: usize },
     /// Unequip current weapon to inventory
+    #[allow(dead_code)] // Planned feature
     UnequipWeapon,
 }
 
@@ -281,7 +272,9 @@ impl ActionType {
 #[derive(Debug, Clone, Copy)]
 pub struct ActionInProgress {
     pub action_type: ActionType,
+    #[allow(dead_code)] // Reserved for animation timing
     pub start_time: f32,
+    #[allow(dead_code)] // Reserved for animation timing
     pub completion_time: f32,
 }
 
@@ -318,25 +311,9 @@ impl Actor {
         }
     }
 
-    pub fn with_energy_regen(max_energy: i32, speed: f32, energy_regen_interval: f32) -> Self {
-        Self {
-            energy: max_energy,
-            max_energy,
-            speed,
-            current_action: None,
-            energy_regen_interval,
-            last_energy_regen_time: 0.0,
-        }
-    }
-
     /// Can start a new action (has energy and not mid-action)
     pub fn can_act(&self) -> bool {
         self.energy > 0 && self.current_action.is_none()
-    }
-
-    /// Is currently busy with an action
-    pub fn is_busy(&self) -> bool {
-        self.current_action.is_some()
     }
 }
 
@@ -383,11 +360,6 @@ impl ChaseAI {
             ranged_min,
             ranged_max,
         }
-    }
-
-    /// Returns true if this AI has ranged attack capability
-    pub fn has_ranged(&self) -> bool {
-        self.ranged_max > 0
     }
 }
 
@@ -441,7 +413,9 @@ pub struct BlocksMovement;
 /// Weapon data - pure data, damage calculation in systems
 #[derive(Debug, Clone)]
 pub struct Weapon {
+    #[allow(dead_code)] // Reserved for UI display
     pub name: String,
+    #[allow(dead_code)] // Reserved for inventory icons
     pub tile_id: u32,
     pub base_damage: i32,
     pub damage_bonus: i32,
@@ -486,14 +460,11 @@ pub struct Equipment {
 }
 
 impl Equipment {
-    pub fn new() -> Self {
-        Self { weapon: None, enemy_ranged: None }
-    }
-
     pub fn with_melee(weapon: Weapon) -> Self {
         Self { weapon: Some(EquippedWeapon::Melee(weapon)), enemy_ranged: None }
     }
 
+    #[cfg(test)]
     pub fn with_ranged(ranged: RangedWeapon) -> Self {
         Self { weapon: Some(EquippedWeapon::Ranged(ranged)), enemy_ranged: None }
     }
@@ -514,11 +485,6 @@ impl Equipment {
     /// Check if a bow is equipped (either in main slot or enemy_ranged)
     pub fn has_bow(&self) -> bool {
         matches!(self.weapon, Some(EquippedWeapon::Ranged(_))) || self.enemy_ranged.is_some()
-    }
-
-    /// Check if a melee weapon is equipped
-    pub fn has_melee(&self) -> bool {
-        matches!(self.weapon, Some(EquippedWeapon::Melee(_)))
     }
 
     /// Get the equipped bow, if any (checks both main slot and enemy_ranged)
@@ -562,22 +528,13 @@ impl LungeAnimation {
     }
 }
 
-/// Visual effect: flash when hit
-#[derive(Debug, Clone, Copy)]
-pub struct HitFlash {
-    pub timer: f32,  // Seconds remaining
-}
-
-impl HitFlash {
-    pub fn new() -> Self {
-        Self { timer: HIT_FLASH_DURATION }
-    }
-}
 
 /// Ranged weapon data
 #[derive(Debug, Clone)]
 pub struct RangedWeapon {
+    #[allow(dead_code)] // Reserved for UI display
     pub name: String,
+    #[allow(dead_code)] // Reserved for inventory icons
     pub tile_id: u32,
     pub base_damage: i32,
     pub arrow_speed: f32,  // Tiles per second
@@ -618,6 +575,7 @@ pub struct Projectile {
     /// Index into path - which tile we're heading toward
     pub path_index: usize,
     /// Direction for sprite rotation (normalized)
+    #[allow(dead_code)] // Reserved for arrow rotation rendering
     pub direction: (f32, f32),
     /// Game time when the projectile was spawned
     pub spawn_time: f32,

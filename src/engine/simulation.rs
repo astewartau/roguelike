@@ -118,6 +118,7 @@ pub fn execute_player_intent(
 }
 
 /// Execute a player turn based on movement input.
+#[allow(dead_code)] // Public API for alternative game loop implementations
 pub fn execute_player_turn(
     world: &mut World,
     grid: &Grid,
@@ -172,6 +173,7 @@ pub fn execute_player_turn(
 }
 
 /// Get the action type that would result from movement input.
+#[allow(dead_code)] // Public API for action preview
 pub fn peek_action_type(
     world: &World,
     grid: &Grid,
@@ -262,15 +264,6 @@ pub fn process_events(
         match &event {
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
-            }
-            GameEvent::TakeAllFromContainer { container, taker } => {
-                systems::take_all_from_container(world, *taker, *container, None);
-            }
-            GameEvent::TakeItemFromContainer { container, taker, item_index } => {
-                systems::take_item_from_container(world, *taker, *container, *item_index, None);
-            }
-            GameEvent::TakeGoldFromContainer { container, taker } => {
-                systems::take_gold_from_container(world, *taker, *container, None);
             }
             GameEvent::FloorTransition { direction, .. } => {
                 result.floor_transition = Some(*direction);

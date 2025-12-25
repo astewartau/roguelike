@@ -35,11 +35,6 @@ impl Camera {
         }
     }
 
-    pub fn resize(&mut self, width: f32, height: f32) {
-        self.viewport_width = width;
-        self.viewport_height = height;
-    }
-
     /// Start panning - records the world position under the cursor as anchor
     pub fn start_pan(&mut self, screen_x: f32, screen_y: f32) {
         self.drag_anchor = Some(self.screen_to_world(screen_x, screen_y));
@@ -185,10 +180,6 @@ impl Camera {
         let top = self.position.y + half_height;
 
         Mat4::orthographic_rh(left, right, bottom, top, -1.0, 1.0)
-    }
-
-    pub fn view_matrix(&self) -> Mat4 {
-        Mat4::IDENTITY
     }
 
     pub fn get_visible_bounds(&self) -> (i32, i32, i32, i32) {

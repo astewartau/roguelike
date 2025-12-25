@@ -27,7 +27,6 @@ pub mod tile_ids {
     // Potion tiles
     pub const RED_POTION: u32 = 52;    // Health potion
     pub const BLUE_POTION: u32 = 53;   // Confusion potion (throwable)
-    pub const BLACK_POTION: u32 = 54;  // Reserved
     pub const GREEN_POTION: u32 = 55;  // Regeneration potion
     pub const AMBER_POTION: u32 = 56;  // Strength potion
 
@@ -59,8 +58,11 @@ pub enum TileType {
     Empty,
     Floor,
     Wall,
+    #[allow(dead_code)] // Reserved for future terrain
     Water,
+    #[allow(dead_code)] // Reserved for future terrain
     Grass,
+    #[allow(dead_code)] // Reserved for future terrain
     Stone,
     StairsDown,
     StairsUp,

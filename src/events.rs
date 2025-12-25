@@ -12,8 +12,10 @@ pub enum StairDirection {
     Down,
 }
 
-/// Game events that systems can emit and subscribe to
+/// Game events that systems can emit and subscribe to.
+/// Many event fields exist for future handlers (VFX, audio, logging).
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Event fields reserved for future handlers
 pub enum GameEvent {
     /// An entity moved to a new position
     EntityMoved {
@@ -42,22 +44,6 @@ pub enum GameEvent {
     ContainerOpened {
         container: Entity,
         opener: Entity,
-    },
-    /// Take all items from a container
-    TakeAllFromContainer {
-        container: Entity,
-        taker: Entity,
-    },
-    /// Take a specific item from a container
-    TakeItemFromContainer {
-        container: Entity,
-        taker: Entity,
-        item_index: usize,
-    },
-    /// Take gold from a container
-    TakeGoldFromContainer {
-        container: Entity,
-        taker: Entity,
     },
     /// An entity picked up an item
     ItemPickedUp {
@@ -149,10 +135,5 @@ impl EventQueue {
     /// Drain all events for processing
     pub fn drain(&mut self) -> impl Iterator<Item = GameEvent> + '_ {
         self.events.drain(..)
-    }
-
-    /// Check if there are pending events
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
     }
 }

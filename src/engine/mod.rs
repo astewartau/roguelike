@@ -309,26 +309,31 @@ impl GameEngine {
     }
 
     /// Get the current game time.
+    #[allow(dead_code)] // Public API for external callers
     pub fn game_time(&self) -> f32 {
         self.state.game_clock.time
     }
 
     /// Get the targeting mode if active.
+    #[allow(dead_code)] // Public API for external callers
     pub fn targeting_mode(&self) -> Option<&TargetingMode> {
         self.input.targeting_mode.as_ref()
     }
 
     /// Get mouse position.
+    #[allow(dead_code)] // Public API for external callers
     pub fn mouse_pos(&self) -> (f32, f32) {
         self.input.mouse_pos
     }
 
     /// Get the player entity.
+    #[allow(dead_code)] // Public API for external callers
     pub fn player_entity(&self) -> Entity {
         self.state.player_entity
     }
 
     /// Get a reference to the ECS world.
+    #[allow(dead_code)] // Public API for external callers
     pub fn world(&self) -> &hecs::World {
         &self.state.world
     }

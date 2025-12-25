@@ -40,11 +40,14 @@ pub struct Tileset {
     pub tile_width: u32,
     pub tile_height: u32,
     pub columns: u32,
+    #[allow(dead_code)] // Reserved for future tileset expansion
     pub rows: u32,
+    #[allow(dead_code)] // Reserved for future tileset expansion
     pub tile_count: u32,
     image_width: u32,
     image_height: u32,
     /// Map from tile type name to tile ID
+    #[allow(dead_code)] // Reserved for type-based tile lookup
     type_to_id: HashMap<String, u32>,
 }
 
@@ -136,11 +139,13 @@ impl Tileset {
     }
 
     /// Get UV coordinates for a tile by type name (e.g., "wall", "chest_gold_closed")
+    #[allow(dead_code)] // Reserved for type-based tile lookup
     pub fn get_uv_by_type(&self, tile_type: &str) -> Option<TileUV> {
         self.type_to_id.get(tile_type).map(|&id| self.get_uv(id))
     }
 
     /// Get tile ID by type name
+    #[allow(dead_code)] // Reserved for type-based tile lookup
     pub fn get_id(&self, tile_type: &str) -> Option<u32> {
         self.type_to_id.get(tile_type).copied()
     }
@@ -154,6 +159,7 @@ impl Tileset {
     }
 
     /// Get the egui TextureId for this tileset (requires prior registration)
+    #[allow(dead_code)] // Reserved for egui tile rendering
     pub fn egui_texture_id(&self) -> egui::TextureId {
         egui::TextureId::User(self.texture.0.get() as u64)
     }

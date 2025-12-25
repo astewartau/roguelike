@@ -108,6 +108,7 @@ impl ActionScheduler {
     }
 
     /// Get the next completion (earliest), if any
+    #[allow(dead_code)] // Public API for debugging/inspection
     pub fn peek_next(&self) -> Option<(Entity, f32)> {
         self.pending_completions
             .peek()
@@ -133,6 +134,7 @@ impl ActionScheduler {
     }
 
     /// Check if there are any pending completions
+    #[allow(dead_code)] // Public API for debugging/inspection
     pub fn is_empty(&self) -> bool {
         self.pending_completions.is_empty()
     }

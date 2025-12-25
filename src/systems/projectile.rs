@@ -233,6 +233,7 @@ pub fn despawn_projectiles(world: &mut World, to_despawn: Vec<Entity>) {
 }
 
 /// Check if there are any active projectiles in the world
+#[allow(dead_code)] // Public API for blocking input during projectile flight
 pub fn has_active_projectiles(world: &World) -> bool {
     world.query::<&ProjectileMarker>().iter().next().is_some()
 }

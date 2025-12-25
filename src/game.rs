@@ -23,6 +23,7 @@ pub fn advance_dialogue(world: &mut World, npc_entity: Entity, option_index: usi
 }
 
 /// Result of handling Enter key for containers
+#[allow(dead_code)] // Entity fields reserved for caller to identify container
 pub enum ContainerAction {
     /// No action taken
     None,

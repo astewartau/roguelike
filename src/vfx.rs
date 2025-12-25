@@ -52,6 +52,7 @@ pub enum VfxType {
     /// Floating damage number
     DamageNumber { amount: i32 },
     /// Fire particle effect (looping)
+    #[allow(dead_code)] // Reserved for torch/fire terrain
     Fire { seed: f32 },
     /// Alert indicator "!" when enemy spots player
     Alert,

@@ -18,6 +18,7 @@ use crate::ui::DevTool;
 
 /// Result of a dev spawn attempt
 #[derive(Debug)]
+#[allow(dead_code)] // Entity in Spawned reserved for caller use
 pub enum DevSpawnResult {
     /// Entity was spawned successfully
     Spawned(Entity),

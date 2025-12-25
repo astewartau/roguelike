@@ -23,6 +23,7 @@ pub struct RenderEntity {
     pub sprite: Sprite,
     pub brightness: f32,
     pub alpha: f32, // Transparency (1.0 = opaque, 0.0 = invisible)
+    #[allow(dead_code)] // Reserved for shader effect flags
     pub effects: u32, // Bitfield of active effects
     pub overlay: Option<Sprite>, // Optional overlay sprite (e.g., weapon)
 }

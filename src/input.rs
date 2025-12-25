@@ -31,6 +31,7 @@ pub struct TargetingMode {
 
 /// What the player clicked on - determines interaction behavior
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Entity fields reserved for direct interaction
 pub enum ClickTarget {
     /// Empty ground - just walk there
     Ground { x: i32, y: i32 },
@@ -116,18 +117,6 @@ impl InputState {
         self.player_path_destination = None;
     }
 
-    /// Enter targeting mode for an item
-    pub fn enter_targeting_mode(&mut self, item_type: ItemType, item_index: usize, max_range: i32, radius: i32) {
-        self.targeting_mode = Some(TargetingMode {
-            item_type,
-            item_index,
-            max_range,
-            radius,
-        });
-        // Clear any movement path when entering targeting mode
-        self.clear_path();
-    }
-
     /// Exit targeting mode
     pub fn cancel_targeting(&mut self) {
         self.targeting_mode = None;
@@ -159,10 +148,6 @@ pub struct InputResult {
     pub movement: Option<(i32, i32)>,
     /// Attack direction intent (dx, dy) - Shift+movement
     pub attack_direction: Option<(i32, i32)>,
-    /// Right-click shoot intent (target_x, target_y)
-    pub shoot_target: Option<(i32, i32)>,
-    /// Player pressed Escape (cancel targeting, close menus, etc.)
-    pub escape_pressed: bool,
     /// Player wants to wait (skip turn)
     pub wait: bool,
 }
@@ -176,8 +161,6 @@ impl Default for InputResult {
             enter_pressed: false,
             movement: None,
             attack_direction: None,
-            shoot_target: None,
-            escape_pressed: false,
             wait: false,
         }
     }
