@@ -150,6 +150,8 @@ pub struct InputResult {
     pub attack_direction: Option<(i32, i32)>,
     /// Player wants to wait (skip turn)
     pub wait: bool,
+    /// Player wants to use class ability
+    pub ability_pressed: bool,
 }
 
 impl Default for InputResult {
@@ -162,6 +164,7 @@ impl Default for InputResult {
             movement: None,
             attack_direction: None,
             wait: false,
+            ability_pressed: false,
         }
     }
 }
@@ -194,6 +197,11 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     // Wait (skip turn) - period key
     if input.keys_pressed.remove(&KeyCode::Period) {
         result.wait = true;
+    }
+
+    // Ability hotkey (Q)
+    if input.keys_pressed.remove(&KeyCode::KeyQ) {
+        result.ability_pressed = true;
     }
 
     // Check if shift is held (don't consume - it's a modifier)
@@ -584,6 +592,8 @@ pub struct FrameInput {
     pub from_keyboard: bool,
     /// Item index to remove from inventory (for targeting actions)
     pub item_to_remove: Option<usize>,
+    /// Player wants to use class ability
+    pub ability_pressed: bool,
 }
 
 impl Default for FrameInput {
@@ -597,6 +607,7 @@ impl Default for FrameInput {
             player_intent: None,
             from_keyboard: false,
             item_to_remove: None,
+            ability_pressed: false,
         }
     }
 }
@@ -620,6 +631,7 @@ pub fn process_frame(
     result.toggle_inventory = kb.toggle_inventory;
     result.toggle_grid_lines = kb.toggle_grid_lines;
     result.enter_pressed = kb.enter_pressed;
+    result.ability_pressed = kb.ability_pressed;
 
     // Check if player is dead
     let is_dead = world

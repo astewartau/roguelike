@@ -1,9 +1,9 @@
 //! World initialization - creates the game world and spawns initial entities.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment,
-    Experience, Health, Inventory, ItemType, Player, PlayerClass, Position, Sprite, Stats,
-    StatusEffects, VisualPosition,
+    Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility, Container, Door,
+    Equipment, Experience, Health, Inventory, ItemType, Player, PlayerClass, Position, Sprite,
+    Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
 use crate::events::EventQueue;
@@ -176,6 +176,7 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         Experience::new(),
         Attackable,
         StatusEffects::new(),
+        ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
     ));
 
     // Spawn chests and doors

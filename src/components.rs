@@ -56,6 +56,91 @@ impl PlayerClass {
             PlayerClass::Ranger => vec![ItemType::Dagger],
         }
     }
+
+    /// Class innate ability
+    pub fn ability(&self) -> AbilityType {
+        match self {
+            PlayerClass::Fighter => AbilityType::Cleave,
+            PlayerClass::Ranger => AbilityType::Sprint,
+        }
+    }
+
+    /// Cooldown duration for class ability
+    pub fn ability_cooldown(&self) -> f32 {
+        match self {
+            PlayerClass::Fighter => CLEAVE_COOLDOWN,
+            PlayerClass::Ranger => SPRINT_COOLDOWN,
+        }
+    }
+}
+
+// =============================================================================
+// CLASS ABILITIES
+// =============================================================================
+
+/// Types of class abilities
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbilityType {
+    /// Fighter: Attack all adjacent enemies
+    Cleave,
+    /// Ranger: Temporary speed boost
+    Sprint,
+}
+
+impl AbilityType {
+    /// Display name for the ability
+    pub fn name(&self) -> &'static str {
+        match self {
+            AbilityType::Cleave => "Cleave",
+            AbilityType::Sprint => "Sprint",
+        }
+    }
+
+    /// Description of what the ability does
+    pub fn description(&self) -> &'static str {
+        match self {
+            AbilityType::Cleave => "Attack all adjacent enemies",
+            AbilityType::Sprint => "Double movement speed for 10 seconds",
+        }
+    }
+
+    /// Energy cost to use this ability
+    pub fn energy_cost(&self) -> i32 {
+        match self {
+            AbilityType::Cleave => CLEAVE_ENERGY_COST,
+            AbilityType::Sprint => SPRINT_ENERGY_COST,
+        }
+    }
+}
+
+/// Tracks the player's class ability and its cooldown state
+#[derive(Debug, Clone)]
+pub struct ClassAbility {
+    pub ability_type: AbilityType,
+    /// Seconds remaining on cooldown (0 = ready)
+    pub cooldown_remaining: f32,
+    /// Total cooldown duration
+    pub cooldown_total: f32,
+}
+
+impl ClassAbility {
+    pub fn new(ability_type: AbilityType, cooldown_total: f32) -> Self {
+        Self {
+            ability_type,
+            cooldown_remaining: 0.0,
+            cooldown_total,
+        }
+    }
+
+    /// Start the cooldown timer
+    pub fn start_cooldown(&mut self) {
+        self.cooldown_remaining = self.cooldown_total;
+    }
+
+    /// Check if the ability is ready to use
+    pub fn is_ready(&self) -> bool {
+        self.cooldown_remaining <= 0.0
+    }
 }
 
 // =============================================================================
@@ -328,6 +413,10 @@ pub enum ActionType {
     /// Drop currently equipped weapon onto the ground
     #[allow(dead_code)] // Constructed via action system
     DropEquippedWeapon,
+    /// Fighter ability: attack all adjacent enemies
+    Cleave,
+    /// Ranger ability: activate sprint (speed boost)
+    ActivateSprint,
 }
 
 impl ActionType {
@@ -352,6 +441,8 @@ impl ActionType {
             ActionType::UnequipWeapon => 0,      // Free action
             ActionType::DropItem { .. } => 1,
             ActionType::DropEquippedWeapon => 1,
+            ActionType::Cleave => CLEAVE_ENERGY_COST,
+            ActionType::ActivateSprint => SPRINT_ENERGY_COST,
         }
     }
 }

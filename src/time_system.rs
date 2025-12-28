@@ -309,6 +309,12 @@ fn apply_action_effects(
         ActionType::DropEquippedWeapon => {
             actions::apply_drop_equipped_weapon(world, entity, events)
         }
+        ActionType::Cleave => {
+            actions::apply_cleave(world, entity, events)
+        }
+        ActionType::ActivateSprint => {
+            actions::apply_activate_sprint(world, entity)
+        }
     }
 }
 
@@ -444,6 +450,21 @@ pub fn tick_status_effects(world: &mut World, elapsed: f32) {
             effect.remaining_duration -= elapsed;
             effect.remaining_duration > 0.0
         });
+    }
+}
+
+/// Process ability cooldown ticks
+pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
+    use crate::components::ClassAbility;
+
+    if elapsed <= 0.0 {
+        return;
+    }
+
+    for (_, ability) in world.query_mut::<&mut ClassAbility>() {
+        if ability.cooldown_remaining > 0.0 {
+            ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
+        }
     }
 }
 

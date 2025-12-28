@@ -71,6 +71,8 @@ pub struct UiActions {
     pub dialogue_option_selected: Option<usize>,
     /// Start the game with selected class (from start screen)
     pub start_game: Option<crate::components::PlayerClass>,
+    /// Use class ability
+    pub use_ability: bool,
 }
 
 // =============================================================================
@@ -551,6 +553,112 @@ pub fn draw_status_bar(
                 });
             }
         });
+}
+
+// =============================================================================
+// ABILITY BAR
+// =============================================================================
+
+use crate::components::{AbilityType, ClassAbility};
+
+/// Data needed to render the ability bar
+pub struct AbilityBarData {
+    pub ability_type: AbilityType,
+    pub cooldown_remaining: f32,
+    pub cooldown_total: f32,
+    pub can_use: bool, // has energy and off cooldown
+    pub viewport_height: f32,
+}
+
+/// Render the ability bar at the bottom of the screen.
+/// Returns true if the ability button was clicked.
+pub fn draw_ability_bar(
+    ctx: &egui::Context,
+    data: &AbilityBarData,
+    icons: &UiIcons,
+) -> bool {
+    let mut clicked = false;
+
+    egui::Window::new("Ability")
+        .fixed_pos([10.0, data.viewport_height - 90.0])
+        .fixed_size([80.0, 80.0])
+        .title_bar(false)
+        .frame(style::dungeon_window_frame())
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                // Get the appropriate icon UV based on ability type
+                let (uv, tooltip) = match data.ability_type {
+                    AbilityType::Cleave => (icons.cleave_uv, "Cleave\nAttack all adjacent enemies\n\n[Q]"),
+                    AbilityType::Sprint => (icons.sprint_uv, "Sprint\nDouble movement speed for 10s\n\n[Q]"),
+                };
+
+                // Create the button size
+                let button_size = egui::vec2(48.0, 48.0);
+
+                // Allocate space for the button
+                let (rect, response) = ui.allocate_exact_size(button_size, egui::Sense::click());
+
+                // Draw background
+                let bg_color = if !data.can_use {
+                    egui::Color32::from_rgb(30, 25, 25) // Darker when unavailable
+                } else if response.hovered() {
+                    style::colors::BUTTON_HOVER
+                } else {
+                    style::colors::BUTTON_BG
+                };
+                ui.painter().rect_filled(rect, 0.0, bg_color);
+
+                // Draw border
+                let border_color = if data.can_use && data.cooldown_remaining <= 0.0 {
+                    style::colors::DUNGEON_GOLD // Gold border when ready
+                } else {
+                    style::colors::BUTTON_BORDER
+                };
+                ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(2.0, border_color));
+
+                // Draw the icon
+                let image = egui::Image::new(egui::load::SizedTexture::new(
+                    icons.items_texture_id,
+                    button_size,
+                ))
+                .uv(uv);
+                image.paint_at(ui, rect);
+
+                // Draw cooldown overlay if on cooldown
+                if data.cooldown_remaining > 0.0 {
+                    // Dark overlay
+                    let overlay_color = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180);
+                    ui.painter().rect_filled(rect, 0.0, overlay_color);
+
+                    // Cooldown text
+                    let cd_text = format!("{:.0}s", data.cooldown_remaining);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        cd_text,
+                        egui::FontId::proportional(14.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+
+                // Handle click
+                if response.clicked() && data.can_use {
+                    clicked = true;
+                }
+
+                // Tooltip
+                response.on_hover_text(tooltip);
+
+                // Hotkey hint
+                ui.label(
+                    egui::RichText::new("[Q]")
+                        .color(style::colors::TEXT_MUTED)
+                        .small(),
+                );
+            });
+        });
+
+    clicked
 }
 
 /// Render the loot window (chest/bones contents)
@@ -1086,6 +1194,9 @@ pub struct UiIcons {
     pub coins_uv: egui::Rect,
     pub heart_uv: egui::Rect,
     pub diamond_uv: egui::Rect,
+    // Ability icons
+    pub cleave_uv: egui::Rect,
+    pub sprint_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -1112,6 +1223,9 @@ impl UiIcons {
             coins_uv: tileset.get_egui_uv(tile_ids::COINS.0, tile_ids::COINS.1),
             heart_uv: tileset.get_egui_uv(tile_ids::HEART.0, tile_ids::HEART.1),
             diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND.0, tile_ids::DIAMOND.1),
+            // Ability icons: AXE for Cleave, BLUE_POTION for Sprint
+            cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
+            sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
         }
     }
 
@@ -2024,6 +2138,21 @@ pub fn run_ui(
     // Get status bar data
     let status_data = get_status_bar_data(world, player_entity);
 
+    // Get ability bar data (if player has a class ability)
+    let ability_data = world.get::<&ClassAbility>(player_entity).ok().map(|ability| {
+        // Check if player has enough energy
+        let has_energy = world.get::<&crate::components::Actor>(player_entity)
+            .map(|actor| actor.energy >= ability.ability_type.energy_cost())
+            .unwrap_or(false);
+        AbilityBarData {
+            ability_type: ability.ability_type,
+            cooldown_remaining: ability.cooldown_remaining,
+            cooldown_total: ability.cooldown_total,
+            can_use: has_energy && ability.is_ready(),
+            viewport_height: camera.viewport_height,
+        }
+    });
+
     // Get loot window data if chest is open
     let loot_data = get_loot_window_data(
         world,
@@ -2066,6 +2195,13 @@ pub fn run_ui(
 
         // Status bar (always visible)
         draw_status_bar(ctx, &status_data, icons);
+
+        // Ability bar (if player has a class ability)
+        if let Some(ref data) = ability_data {
+            if draw_ability_bar(ctx, data, icons) {
+                actions.use_ability = true;
+            }
+        }
 
         // Floating damage numbers
         draw_damage_numbers(ctx, vfx_effects, camera);

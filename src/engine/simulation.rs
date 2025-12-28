@@ -185,7 +185,7 @@ pub fn peek_action_type(
 }
 
 /// Advance game time until the player can act again.
-fn advance_until_player_ready(
+pub fn advance_until_player_ready(
     world: &mut World,
     grid: &Grid,
     player_entity: Entity,
@@ -222,6 +222,7 @@ fn advance_until_player_ready(
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
         time_system::tick_status_effects(world, elapsed);
+        time_system::tick_ability_cooldowns(world, elapsed);
 
         time_system::complete_action(world, grid, next_entity, events, clock.time);
 

@@ -40,6 +40,8 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::UnequipWeapon => 0.0, // Instant (free action)
         ActionType::DropItem { .. } => ACTION_DOOR_DURATION, // Quick action
         ActionType::DropEquippedWeapon => ACTION_DOOR_DURATION, // Quick action
+        ActionType::Cleave => CLEAVE_DURATION, // Fighter ability
+        ActionType::ActivateSprint => SPRINT_ACTIVATION_DURATION, // Ranger ability (quick)
     };
 
     // Speed modifies duration: higher speed = shorter duration

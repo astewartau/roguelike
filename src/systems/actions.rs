@@ -822,3 +822,114 @@ pub fn apply_drop_equipped_weapon(
 
     ActionResult::Completed
 }
+
+// =============================================================================
+// CLASS ABILITY ACTIONS
+// =============================================================================
+
+/// Apply cleave attack - attacks all adjacent enemies (8 directions)
+pub fn apply_cleave(
+    world: &mut World,
+    attacker: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use rand::Rng;
+
+    // Get attacker position
+    let attacker_pos = match queries::get_entity_position(world, attacker) {
+        Some(p) => p,
+        None => return ActionResult::Invalid,
+    };
+
+    // Get attacker stats for damage calculation
+    let strength = world
+        .get::<&Stats>(attacker)
+        .map(|s| s.strength)
+        .unwrap_or(10);
+    let weapon_damage = world
+        .get::<&Equipment>(attacker)
+        .ok()
+        .and_then(|e| e.get_melee().map(|w| w.base_damage + w.damage_bonus))
+        .unwrap_or(UNARMED_DAMAGE);
+    let base_damage = weapon_damage + (strength - 10) / 2;
+
+    // Check for status effects on attacker
+    let has_strength_boost = queries::has_status_effect(world, attacker, EffectType::Strengthened);
+
+    // Collect all attackable entities in 8 adjacent tiles
+    let mut targets: Vec<(Entity, i32, i32)> = Vec::new();
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            if dx == 0 && dy == 0 {
+                continue; // Skip self
+            }
+            let tx = attacker_pos.0 + dx;
+            let ty = attacker_pos.1 + dy;
+            if let Some(target) = queries::get_attackable_at(world, tx, ty, Some(attacker)) {
+                targets.push((target, tx, ty));
+            }
+        }
+    }
+
+    // Apply damage to each target
+    let mut rng = rand::thread_rng();
+    for (target, tx, ty) in &targets {
+        // Check for protection on target
+        let has_protection = queries::has_status_effect(world, *target, EffectType::Protected);
+
+        // Apply damage variance and crit
+        let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
+        let is_crit = rng.gen::<f32>() < COMBAT_CRIT_CHANCE;
+        let mut damage = (base_damage as f32 * damage_mult) as i32;
+        if is_crit {
+            damage = (damage as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
+        }
+
+        // Apply Strengthened bonus
+        if has_strength_boost {
+            damage = (damage as f32 * STRENGTH_DAMAGE_MULTIPLIER) as i32;
+        }
+
+        // Apply Protected reduction
+        if has_protection {
+            damage = (damage as f32 * PROTECTION_DAMAGE_REDUCTION) as i32;
+        }
+
+        damage = damage.max(1);
+
+        // Apply damage to target
+        if let Ok(mut health) = world.get::<&mut Health>(*target) {
+            health.current -= damage;
+        }
+
+        // Emit attack event for VFX
+        events.push(GameEvent::AttackHit {
+            attacker,
+            target: *target,
+            target_pos: (*tx as f32 + 0.5, *ty as f32 + 0.5),
+            damage,
+        });
+    }
+
+    // Add a small lunge animation (to center, since we're hitting all around)
+    // Just do a small pulse effect by lunging to self
+    let _ = world.insert_one(
+        attacker,
+        LungeAnimation::new(attacker_pos.0 as f32 + 0.5, attacker_pos.1 as f32 + 0.5),
+    );
+
+    ActionResult::Completed
+}
+
+/// Apply sprint activation - applies speed boost effect to entity
+pub fn apply_activate_sprint(
+    world: &mut World,
+    entity: Entity,
+) -> ActionResult {
+    use crate::constants::SPRINT_DURATION;
+    use crate::systems::effects::add_effect_to_entity;
+
+    add_effect_to_entity(world, entity, EffectType::SpeedBoost, SPRINT_DURATION);
+
+    ActionResult::Completed
+}
