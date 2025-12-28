@@ -35,6 +35,10 @@ pub mod colors {
     // Selection/Highlight
     pub const SELECTED: Color32 = Color32::from_rgb(70, 90, 110);
     pub const HOVERED: Color32 = Color32::from_rgb(45, 40, 35);
+
+    // Accent colors
+    pub const DUNGEON_GOLD: Color32 = Color32::from_rgb(210, 180, 100);
+    pub const DUNGEON_GREEN: Color32 = Color32::from_rgb(80, 140, 80);
 }
 
 /// Border width for panels and buttons

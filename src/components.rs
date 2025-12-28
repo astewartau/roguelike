@@ -1,5 +1,66 @@
 use crate::constants::*;
+use crate::tile::{tile_ids, SpriteSheet};
 use hecs::Entity;
+
+// =============================================================================
+// PLAYER CLASS
+// =============================================================================
+
+/// Player class selection - determines starting stats, equipment, and appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerClass {
+    Fighter,
+    Ranger,
+}
+
+impl PlayerClass {
+    /// All available player classes
+    pub const ALL: [PlayerClass; 2] = [PlayerClass::Fighter, PlayerClass::Ranger];
+
+    /// Display name for the class
+    pub fn name(&self) -> &'static str {
+        match self {
+            PlayerClass::Fighter => "Fighter",
+            PlayerClass::Ranger => "Ranger",
+        }
+    }
+
+    /// Sprite reference for this class
+    pub fn sprite(&self) -> (SpriteSheet, u32) {
+        match self {
+            PlayerClass::Fighter => tile_ids::FIGHTER,
+            PlayerClass::Ranger => tile_ids::RANGER,
+        }
+    }
+
+    /// Starting stats: (strength, intelligence, agility)
+    pub fn stats(&self) -> (i32, i32, i32) {
+        match self {
+            PlayerClass::Fighter => (16, 10, 12),
+            PlayerClass::Ranger => (12, 10, 16),
+        }
+    }
+
+    /// Starting equipped weapon
+    pub fn starting_weapon(&self) -> EquippedWeapon {
+        match self {
+            PlayerClass::Fighter => EquippedWeapon::Melee(Weapon::sword()),
+            PlayerClass::Ranger => EquippedWeapon::Ranged(RangedWeapon::bow()),
+        }
+    }
+
+    /// Starting inventory items
+    pub fn starting_inventory(&self) -> Vec<ItemType> {
+        match self {
+            PlayerClass::Fighter => vec![ItemType::Bow],
+            PlayerClass::Ranger => vec![ItemType::Dagger],
+        }
+    }
+}
+
+// =============================================================================
+// COMPONENTS
+// =============================================================================
 
 /// Position component - world coordinates (grid-based)
 #[derive(Debug, Clone, Copy)]
@@ -17,12 +78,21 @@ impl Position {
 /// Sprite component - visual representation using tileset
 #[derive(Debug, Clone, Copy)]
 pub struct Sprite {
+    pub sheet: SpriteSheet,
     pub tile_id: u32,
 }
 
 impl Sprite {
-    pub fn new(tile_id: u32) -> Self {
-        Self { tile_id }
+    pub fn new(sheet: SpriteSheet, tile_id: u32) -> Self {
+        Self { sheet, tile_id }
+    }
+
+    /// Create from a (SpriteSheet, u32) tuple (common format in tile_ids)
+    pub fn from_ref(sprite_ref: (SpriteSheet, u32)) -> Self {
+        Self {
+            sheet: sprite_ref.0,
+            tile_id: sprite_ref.1,
+        }
     }
 }
 
@@ -30,12 +100,21 @@ impl Sprite {
 /// Used for displaying equipped weapons on enemies
 #[derive(Debug, Clone, Copy)]
 pub struct OverlaySprite {
+    pub sheet: SpriteSheet,
     pub tile_id: u32,
 }
 
 impl OverlaySprite {
-    pub fn new(tile_id: u32) -> Self {
-        Self { tile_id }
+    pub fn new(sheet: SpriteSheet, tile_id: u32) -> Self {
+        Self { sheet, tile_id }
+    }
+
+    /// Create from a (SpriteSheet, u32) tuple
+    pub fn from_ref(sprite_ref: (SpriteSheet, u32)) -> Self {
+        Self {
+            sheet: sprite_ref.0,
+            tile_id: sprite_ref.1,
+        }
     }
 }
 
@@ -116,6 +195,7 @@ pub enum ItemType {
     // Weapons
     Sword,
     Bow,
+    Dagger,
     // Potions
     HealthPotion,
     RegenerationPotion,
@@ -428,7 +508,7 @@ pub struct Weapon {
     #[allow(dead_code)] // Reserved for UI display
     pub name: String,
     #[allow(dead_code)] // Reserved for inventory icons
-    pub tile_id: u32,
+    pub sprite: (SpriteSheet, u32),
     pub base_damage: i32,
     pub damage_bonus: i32,
 }
@@ -437,16 +517,25 @@ impl Weapon {
     pub fn sword() -> Self {
         Self {
             name: "Sword".to_string(),
-            tile_id: crate::tile::tile_ids::SWORD,
+            sprite: crate::tile::tile_ids::SWORD,
             base_damage: SWORD_BASE_DAMAGE,
             damage_bonus: SWORD_DAMAGE_BONUS,
+        }
+    }
+
+    pub fn dagger() -> Self {
+        Self {
+            name: "Dagger".to_string(),
+            sprite: crate::tile::tile_ids::DAGGER,
+            base_damage: DAGGER_BASE_DAMAGE,
+            damage_bonus: DAGGER_DAMAGE_BONUS,
         }
     }
 
     pub fn claws(base_damage: i32) -> Self {
         Self {
             name: "Claws".to_string(),
-            tile_id: crate::tile::tile_ids::BONES, // No specific icon, use bones
+            sprite: crate::tile::tile_ids::BONES, // No specific icon, use bones
             base_damage,
             damage_bonus: 0,
         }
@@ -476,9 +565,13 @@ impl Equipment {
         Self { weapon: Some(EquippedWeapon::Melee(weapon)), enemy_ranged: None }
     }
 
-    #[cfg(test)]
     pub fn with_ranged(ranged: RangedWeapon) -> Self {
         Self { weapon: Some(EquippedWeapon::Ranged(ranged)), enemy_ranged: None }
+    }
+
+    /// Create equipment with an already-constructed EquippedWeapon
+    pub fn with_equipped(weapon: EquippedWeapon) -> Self {
+        Self { weapon: Some(weapon), enemy_ranged: None }
     }
 
     /// Create equipment for enemies that can use both melee (claws) and ranged (bow)
@@ -547,7 +640,7 @@ pub struct RangedWeapon {
     #[allow(dead_code)] // Reserved for UI display
     pub name: String,
     #[allow(dead_code)] // Reserved for inventory icons
-    pub tile_id: u32,
+    pub sprite: (SpriteSheet, u32),
     pub base_damage: i32,
     pub arrow_speed: f32,  // Tiles per second
 }
@@ -556,7 +649,7 @@ impl RangedWeapon {
     pub fn bow() -> Self {
         Self {
             name: "Bow".to_string(),
-            tile_id: crate::tile::tile_ids::BOW,
+            sprite: crate::tile::tile_ids::BOW,
             base_damage: BOW_BASE_DAMAGE,
             arrow_speed: ARROW_SPEED,
         }
@@ -566,7 +659,7 @@ impl RangedWeapon {
     pub fn enemy_bow(damage: i32) -> Self {
         Self {
             name: "Bow".to_string(),
-            tile_id: crate::tile::tile_ids::BOW,
+            sprite: crate::tile::tile_ids::BOW,
             base_damage: damage,
             arrow_speed: ARROW_SPEED,
         }

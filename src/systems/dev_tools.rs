@@ -67,7 +67,7 @@ pub fn execute_dev_spawn(
             let entity = world.spawn((
                 pos,
                 VisualPosition::from_position(&pos),
-                Sprite::new(tile::tile_ids::CHEST_CLOSED),
+                Sprite::from_ref(tile::tile_ids::CHEST_CLOSED),
                 Container::new(vec![ItemType::HealthPotion]),
                 BlocksMovement,
             ));

@@ -1,7 +1,8 @@
 use crate::camera::Camera;
 use crate::grid::Grid;
+use crate::multi_tileset::MultiTileset;
 use crate::systems::RenderEntity;
-use crate::tileset::Tileset;
+use crate::tile::SpriteSheet;
 use glow::*;
 use std::mem;
 use std::sync::Arc;
@@ -655,15 +656,15 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, camera: &Camera, grid: &Grid, tileset: &Tileset, show_grid_lines: bool) -> Result<(), String> {
+    pub fn render(&mut self, camera: &Camera, grid: &Grid, tileset: &MultiTileset, show_grid_lines: bool) -> Result<(), String> {
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
 
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
 
-            // Bind tileset texture
-            tileset.bind(&self.gl, 0);
+            // Bind Tiles sheet texture (all terrain is from Tiles sheet)
+            tileset.bind(&self.gl, SpriteSheet::Tiles, 0);
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
             // Get visible bounds
@@ -681,7 +682,8 @@ impl Renderer {
                             continue;
                         }
 
-                        let uv = tileset.get_uv(tile.tile_type.tile_id());
+                        let (sheet, tile_id) = tile.sprite();
+                        let uv = tileset.get_uv(sheet, tile_id);
                         let fog = if tile.visible { 1.0 } else { 0.5 };
 
                         // Water tiles get a blue tint
@@ -781,7 +783,7 @@ impl Renderer {
     }
 
     /// Render decorative decals (on top of floor, below entities)
-    pub fn render_decals(&mut self, camera: &Camera, grid: &Grid, tileset: &Tileset) -> Result<(), String> {
+    pub fn render_decals(&mut self, camera: &Camera, grid: &Grid, tileset: &MultiTileset) -> Result<(), String> {
         if grid.decals.is_empty() {
             return Ok(());
         }
@@ -790,8 +792,8 @@ impl Renderer {
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
 
-            // Bind tileset texture
-            tileset.bind(&self.gl, 0);
+            // Bind Tiles sheet texture (all decals are from Tiles sheet)
+            tileset.bind(&self.gl, SpriteSheet::Tiles, 0);
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
             // Get visible bounds
@@ -819,7 +821,7 @@ impl Renderer {
                     .map(|t| if t.visible { 1.0 } else { 0.5 })
                     .unwrap_or(0.5);
 
-                let uv = tileset.get_uv(decal.tile_id);
+                let uv = tileset.get_uv(decal.sheet, decal.tile_id);
 
                 instance_data.push(decal.x as f32);
                 instance_data.push(decal.y as f32);
@@ -859,8 +861,8 @@ impl Renderer {
         Ok(())
     }
 
-    /// Render entities
-    pub fn render_entities(&mut self, camera: &Camera, entities: &[RenderEntity], tileset: &Tileset) -> Result<(), String> {
+    /// Render entities - groups by sprite sheet for multi-texture rendering
+    pub fn render_entities(&mut self, camera: &Camera, entities: &[RenderEntity], tileset: &MultiTileset) -> Result<(), String> {
         if entities.is_empty() {
             return Ok(());
         }
@@ -869,62 +871,79 @@ impl Renderer {
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
 
-            // Bind tileset texture
-            tileset.bind(&self.gl, 0);
-            self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
-
-            // Build instance data for entities
-            let mut instance_data = Vec::new();
-
-            for entity in entities {
-                let uv = tileset.get_uv(entity.sprite.tile_id);
-
-                instance_data.push(entity.x);
-                instance_data.push(entity.y);
-                instance_data.push(uv.u0);
-                instance_data.push(uv.v0);
-                instance_data.push(uv.u1);
-                instance_data.push(uv.v1);
-                instance_data.push(entity.brightness);
-                instance_data.push(entity.alpha);
-                instance_data.push(1.0); // tint R
-                instance_data.push(1.0); // tint G
-                instance_data.push(1.0); // tint B
-            }
-
-            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
-
             let projection = camera.projection_matrix();
             self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, projection.as_ref());
+            self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
-            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, entities.len() as i32);
+            // Group entities by sprite sheet
+            let sheets = [SpriteSheet::Tiles, SpriteSheet::Rogues, SpriteSheet::Monsters, SpriteSheet::Items];
 
-            // Second pass: render overlay sprites on top
-            let mut overlay_data = Vec::new();
-            let mut overlay_count = 0;
+            for sheet in sheets {
+                let mut instance_data = Vec::new();
 
-            for entity in entities {
-                if let Some(overlay) = &entity.overlay {
-                    let uv = tileset.get_uv(overlay.tile_id);
-                    overlay_data.push(entity.x);
-                    overlay_data.push(entity.y);
-                    overlay_data.push(uv.u0);
-                    overlay_data.push(uv.v0);
-                    overlay_data.push(uv.u1);
-                    overlay_data.push(uv.v1);
-                    overlay_data.push(entity.brightness);
-                    overlay_data.push(entity.alpha);
-                    overlay_data.push(1.0); // tint R
-                    overlay_data.push(1.0); // tint G
-                    overlay_data.push(1.0); // tint B
-                    overlay_count += 1;
+                for entity in entities {
+                    if entity.sprite.sheet != sheet {
+                        continue;
+                    }
+
+                    let uv = tileset.get_uv(entity.sprite.sheet, entity.sprite.tile_id);
+
+                    instance_data.push(entity.x);
+                    instance_data.push(entity.y);
+                    instance_data.push(uv.u0);
+                    instance_data.push(uv.v0);
+                    instance_data.push(uv.u1);
+                    instance_data.push(uv.v1);
+                    instance_data.push(entity.brightness);
+                    instance_data.push(entity.alpha);
+                    instance_data.push(1.0); // tint R
+                    instance_data.push(1.0); // tint G
+                    instance_data.push(1.0); // tint B
+                }
+
+                if !instance_data.is_empty() {
+                    tileset.bind(&self.gl, sheet, 0);
+                    self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+                    self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
+
+                    let instance_count = instance_data.len() / 11;
+                    self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
                 }
             }
 
-            if overlay_count > 0 {
-                self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&overlay_data), DYNAMIC_DRAW);
-                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, overlay_count);
+            // Second pass: render overlay sprites on top (also grouped by sheet)
+            for sheet in sheets {
+                let mut overlay_data = Vec::new();
+
+                for entity in entities {
+                    if let Some(overlay) = &entity.overlay {
+                        if overlay.sheet != sheet {
+                            continue;
+                        }
+
+                        let uv = tileset.get_uv(overlay.sheet, overlay.tile_id);
+                        overlay_data.push(entity.x);
+                        overlay_data.push(entity.y);
+                        overlay_data.push(uv.u0);
+                        overlay_data.push(uv.v0);
+                        overlay_data.push(uv.u1);
+                        overlay_data.push(uv.v1);
+                        overlay_data.push(entity.brightness);
+                        overlay_data.push(entity.alpha);
+                        overlay_data.push(1.0); // tint R
+                        overlay_data.push(1.0); // tint G
+                        overlay_data.push(1.0); // tint B
+                    }
+                }
+
+                if !overlay_data.is_empty() {
+                    tileset.bind(&self.gl, sheet, 0);
+                    self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+                    self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&overlay_data), DYNAMIC_DRAW);
+
+                    let overlay_count = overlay_data.len() / 11;
+                    self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, overlay_count as i32);
+                }
             }
 
             self.gl.bind_vertex_array(None);

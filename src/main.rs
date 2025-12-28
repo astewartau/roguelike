@@ -9,6 +9,7 @@ mod fov;
 mod game;
 mod grid;
 mod input;
+mod multi_tileset;
 mod pathfinding;
 mod queries;
 mod render;
@@ -88,23 +89,15 @@ impl ApplicationHandler for App {
         let size = window.inner_size();
 
         // Create render context
-        let mut render_ctx = RenderContext::new(
+        let render_ctx = RenderContext::new(
             gl.clone(),
             &mut egui_glow,
             size.width as f32,
             size.height as f32,
         );
 
-        // Create game engine
-        let mut engine = GameEngine::new();
-
-        // Initialize AI actors
-        engine.state.initialize_ai(&mut engine.events);
-
-        // Set up camera to track player
-        if let Some((x, y)) = engine.state.player_start_position() {
-            render_ctx.camera.set_tracking_target(glam::Vec2::new(x, y));
-        }
+        // Create game engine (starts in StartScreen mode)
+        let engine = GameEngine::new();
 
         self.state = Some(AppState {
             window,
@@ -196,15 +189,22 @@ impl AppState {
         // Process UI actions
         self.engine.process_ui_actions(&ui_actions);
 
-        // Render
-        self.render_ctx.render_frame(
-            &self.gl,
-            self.engine.grid(),
-            &tick_result.entities,
-            self.engine.vfx_effects(),
-            self.engine.fires(),
-            self.engine.show_grid_lines(),
-        );
+        // Handle start game action (from class selection screen)
+        if let Some(class) = ui_actions.start_game {
+            self.engine.start_game(class, &mut self.render_ctx.camera);
+        }
+
+        // Render game world (only when playing)
+        if let Some(grid) = self.engine.grid() {
+            self.render_ctx.render_frame(
+                &self.gl,
+                grid,
+                &tick_result.entities,
+                self.engine.vfx_effects(),
+                self.engine.fires(),
+                self.engine.show_grid_lines(),
+            );
+        }
 
         // Render egui
         self.egui_glow.paint(&self.window);

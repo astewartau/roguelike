@@ -2,13 +2,14 @@
 
 use crate::components::{
     Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, Container, Door, Equipment,
-    Experience, Health, Inventory, ItemType, Player, Position, Sprite, Stats,
-    StatusEffects, VisualPosition, Weapon,
+    Experience, Health, Inventory, ItemType, Player, PlayerClass, Position, Sprite, Stats,
+    StatusEffects, VisualPosition,
 };
 use crate::constants::*;
 use crate::events::EventQueue;
 use crate::grid::Grid;
 use crate::spawning;
+use crate::systems::items::item_weight;
 use crate::tile::tile_ids;
 use crate::time_system::{ActionScheduler, GameClock};
 
@@ -24,7 +25,7 @@ fn spawn_chests(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::CHEST_CLOSED),
+            Sprite::from_ref(tile_ids::CHEST_CLOSED),
             container,
             BlocksMovement,
         ));
@@ -38,7 +39,7 @@ fn spawn_doors(world: &mut World, grid: &Grid) {
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
-            Sprite::new(tile_ids::DOOR),
+            Sprite::from_ref(tile_ids::DOOR),
             Door::new(),
             BlocksVision,
             BlocksMovement,
@@ -112,7 +113,7 @@ fn generate_chest_contents(rng: &mut impl Rng) -> Container {
 
 /// Initialize the game world with player, enemies, and objects.
 /// Returns (world, player_entity, player_start_position).
-pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
+pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Position) {
     let mut world = World::new();
 
     // Find player spawn position
@@ -146,15 +147,21 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
         }
     }
 
-    // Spawn player
+    // Build starting inventory from class definition
     let mut starting_inventory = Inventory::new();
-    starting_inventory.items.push(ItemType::Bow);
-    starting_inventory.current_weight_kg += BOW_WEIGHT;
+    for item in player_class.starting_inventory() {
+        starting_inventory.current_weight_kg += item_weight(item);
+        starting_inventory.items.push(item);
+    }
 
+    // Get class stats
+    let (str, int, agi) = player_class.stats();
+
+    // Spawn player with class-specific attributes
     let player_entity = world.spawn((
         player_start,
         VisualPosition::from_position(&player_start),
-        Sprite::new(tile_ids::PLAYER),
+        Sprite::from_ref(player_class.sprite()),
         Player,
         Actor::new(PLAYER_MAX_ENERGY, PLAYER_SPEED),
         Health::with_regen(
@@ -162,9 +169,9 @@ pub fn init_world(grid: &Grid) -> (World, Entity, Position) {
             PLAYER_HP_REGEN_AMOUNT,
             PLAYER_HP_REGEN_INTERVAL,
         ),
-        Stats::new(PLAYER_STRENGTH, PLAYER_INTELLIGENCE, PLAYER_AGILITY),
+        Stats::new(str, int, agi),
         starting_inventory,
-        Equipment::with_melee(Weapon::sword()),
+        Equipment::with_equipped(player_class.starting_weapon()),
         BlocksMovement,
         Experience::new(),
         Attackable,

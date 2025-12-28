@@ -8,7 +8,7 @@ use crate::components::{
     Equipment, FriendlyNPC, Health, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
     StatusEffects, VisualPosition, Weapon,
 };
-use crate::tile::tile_ids;
+use crate::tile::{tile_ids, SpriteSheet};
 use hecs::World;
 
 /// Ranged attack configuration for enemies
@@ -28,10 +28,10 @@ pub struct EnemyDef {
     /// Display name (for future UI/logs)
     #[allow(dead_code)] // Reserved for combat log/bestiary
     pub name: &'static str,
-    /// Tile ID from the tileset
-    pub tile_id: u32,
+    /// Sprite sheet and tile ID
+    pub sprite: (SpriteSheet, u32),
     /// Optional overlay sprite (e.g., bow for archers)
-    pub overlay_tile_id: Option<u32>,
+    pub overlay_sprite: Option<(SpriteSheet, u32)>,
     /// Maximum health
     pub health: i32,
     /// Maximum energy pool
@@ -56,7 +56,7 @@ impl EnemyDef {
         let pos = Position::new(x, y);
 
         // Build base components
-        let sprite = Sprite::new(self.tile_id);
+        let sprite = Sprite::from_ref(self.sprite);
         let actor = Actor::new(self.max_energy, self.speed);
         let health = Health::new(self.health);
         let stats = Stats::new(self.strength, self.intelligence, self.agility);
@@ -79,12 +79,12 @@ impl EnemyDef {
         };
 
         // Spawn with or without overlay sprite
-        if let Some(overlay_id) = self.overlay_tile_id {
+        if let Some(overlay_ref) = self.overlay_sprite {
             world.spawn((
                 pos,
                 VisualPosition::from_position(&pos),
                 sprite,
-                OverlaySprite::new(overlay_id),
+                OverlaySprite::from_ref(overlay_ref),
                 actor,
                 chase_ai,
                 health,
@@ -119,8 +119,8 @@ pub mod enemies {
 
     pub const SKELETON: EnemyDef = EnemyDef {
         name: "Skeleton",
-        tile_id: tile_ids::SKELETON,
-        overlay_tile_id: None,
+        sprite: tile_ids::SKELETON,
+        overlay_sprite: None,
         health: SKELETON_HEALTH,
         max_energy: SKELETON_MAX_ENERGY,
         speed: SKELETON_SPEED,
@@ -134,8 +134,8 @@ pub mod enemies {
 
     pub const RAT: EnemyDef = EnemyDef {
         name: "Rat",
-        tile_id: tile_ids::RAT,
-        overlay_tile_id: None,
+        sprite: tile_ids::RAT,
+        overlay_sprite: None,
         health: RAT_HEALTH,
         max_energy: RAT_MAX_ENERGY,
         speed: RAT_SPEED,
@@ -149,8 +149,8 @@ pub mod enemies {
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
         name: "Skeleton Archer",
-        tile_id: tile_ids::SKELETON,
-        overlay_tile_id: Some(tile_ids::BOW),
+        sprite: tile_ids::SKELETON,
+        overlay_sprite: Some(tile_ids::BOW),
         health: SKELETON_ARCHER_HEALTH,
         max_energy: SKELETON_ARCHER_MAX_ENERGY,
         speed: SKELETON_ARCHER_SPEED,
@@ -254,8 +254,8 @@ pub struct NPCDef {
     /// Display name (shown in dialogue window)
     #[allow(dead_code)] // Reserved for dialogue header
     pub name: &'static str,
-    /// Tile ID from the tileset
-    pub tile_id: u32,
+    /// Sprite sheet and tile ID
+    pub sprite: (SpriteSheet, u32),
     /// Function to create the NPC's dialogue tree
     pub dialogue_fn: fn() -> Dialogue,
 }
@@ -267,7 +267,7 @@ impl NPCDef {
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
-            Sprite::new(self.tile_id),
+            Sprite::from_ref(self.sprite),
             FriendlyNPC,
             (self.dialogue_fn)(),
             BlocksMovement,
@@ -332,7 +332,7 @@ pub mod npcs {
 
     pub const WIZARD: NPCDef = NPCDef {
         name: "Old Wizard",
-        tile_id: tile_ids::WIZARD,
+        sprite: tile_ids::WIZARD,
         dialogue_fn: wizard_dialogue,
     };
 }

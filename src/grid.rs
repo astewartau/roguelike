@@ -1,11 +1,12 @@
 use crate::dungeon_gen::{DungeonGenerator, Rect};
-use crate::tile::Tile;
+use crate::tile::{SpriteSheet, Tile};
 
 /// A decorative decal placed on a tile
 #[derive(Debug, Clone, Copy)]
 pub struct Decal {
     pub x: i32,
     pub y: i32,
+    pub sheet: SpriteSheet,
     pub tile_id: u32,
 }
 

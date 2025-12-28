@@ -338,6 +338,9 @@ impl DungeonGenerator {
         // Starting room is the first room (where player spawns)
         let starting_room = rooms.first().copied();
 
+        // Set wall orientations based on neighbors
+        gen.set_wall_orientations();
+
         DungeonResult {
             tiles: gen.tiles,
             chest_positions,
@@ -359,6 +362,71 @@ impl DungeonGenerator {
     fn set_tile(&mut self, x: i32, y: i32, tile_type: TileType) {
         if let Some(idx) = self.get_index(x, y) {
             self.tiles[idx] = Tile::new(tile_type);
+        }
+    }
+
+    /// Set wall sprite overrides based on orientation.
+    /// Walls adjacent to floor tiles on north/south get the "top" sprite (horizontal edge).
+    /// Walls adjacent to floor tiles on east/west get the "side" sprite (vertical edge).
+    fn set_wall_orientations(&mut self) {
+        let width = self.width as i32;
+        let height = self.height as i32;
+
+        // First pass: collect wall orientation data
+        let mut overrides: Vec<(usize, (crate::tile::SpriteSheet, u32))> = Vec::new();
+
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y as usize * self.width + x as usize;
+                if self.tiles[idx].tile_type != TileType::Wall {
+                    continue;
+                }
+
+                // Check neighbors for walkable tiles
+                let north_walkable = if y > 0 {
+                    self.tiles[(y - 1) as usize * self.width + x as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+                let south_walkable = if y < height - 1 {
+                    self.tiles[(y + 1) as usize * self.width + x as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+                let east_walkable = if x < width - 1 {
+                    self.tiles[y as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+                let west_walkable = if x > 0 {
+                    self.tiles[y as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+
+                // Determine sprite based on adjacent walkable tiles
+                // Vertical walls (floor to east/west) use "top" sprite
+                // Horizontal walls (floor to north/south) use "side" sprite (default)
+                // Top corners (floor to south + east/west, but not north) use "top" sprite
+                // Bottom corners (floor to north + east/west) use "side" sprite (default)
+                let has_horizontal_neighbor = east_walkable || west_walkable;
+
+                // Use WALL_TOP for:
+                // 1. Pure vertical walls (floor only to east/west)
+                // 2. Top corners (floor to south and east/west, but not north)
+                let is_vertical_wall = has_horizontal_neighbor && !north_walkable && !south_walkable;
+                let is_top_corner = south_walkable && has_horizontal_neighbor && !north_walkable;
+
+                if is_vertical_wall || is_top_corner {
+                    overrides.push((idx, tile_ids::WALL_TOP));
+                }
+                // Default WALL sprite (side) is used for horizontal edges and bottom corners
+            }
+        }
+
+        // Apply overrides
+        for (idx, sprite) in overrides {
+            self.tiles[idx].sprite_override = Some(sprite);
         }
     }
 
@@ -540,10 +608,14 @@ impl DungeonGenerator {
 
     /// Generate decorative decals in rooms with theme-appropriate types
     fn generate_themed_decals(&self, rooms: &[ThemedRoom], rng: &mut impl Rng) -> Vec<Decal> {
+        use crate::tile::SpriteSheet;
         let mut decals = Vec::new();
 
+        // Decal type: ((SpriteSheet, tile_id), weight)
+        type DecalType = ((SpriteSheet, u32), u32);
+
         // Normal room decals (bones, rocks, etc.)
-        let normal_decals: Vec<(u32, u32)> = vec![
+        let normal_decals: Vec<DecalType> = vec![
             (tile_ids::BONES_1, 3),
             (tile_ids::BONES_2, 2),
             (tile_ids::BONES_3, 2),
@@ -556,7 +628,7 @@ impl DungeonGenerator {
         ];
 
         // Overgrown room decals (more plants and mushrooms)
-        let overgrown_decals: Vec<(u32, u32)> = vec![
+        let overgrown_decals: Vec<DecalType> = vec![
             (tile_ids::PLANT, 5),
             (tile_ids::MUSHROOM, 4),
             (tile_ids::FLOWERS, 4),
@@ -565,7 +637,7 @@ impl DungeonGenerator {
         ];
 
         // Flooded room decals (sparse, mostly rocks)
-        let flooded_decals: Vec<(u32, u32)> = vec![
+        let flooded_decals: Vec<DecalType> = vec![
             (tile_ids::ROCKS, 4),
             (tile_ids::BONES_1, 2),
             (tile_ids::SKULL, 1),
@@ -611,16 +683,21 @@ impl DungeonGenerator {
                 // Pick a random decal type using weights
                 let roll = rng.gen_range(0..total_weight);
                 let mut cumulative = 0;
-                let mut tile_id = tile_ids::ROCKS;
-                for (id, weight) in decal_types {
+                let mut sprite_ref = tile_ids::ROCKS;
+                for (sprite, weight) in decal_types {
                     cumulative += weight;
                     if roll < cumulative {
-                        tile_id = *id;
+                        sprite_ref = *sprite;
                         break;
                     }
                 }
 
-                decals.push(Decal { x, y, tile_id });
+                decals.push(Decal {
+                    x,
+                    y,
+                    sheet: sprite_ref.0,
+                    tile_id: sprite_ref.1,
+                });
             }
         }
 

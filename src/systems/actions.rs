@@ -346,7 +346,7 @@ pub fn apply_shoot_bow(
     let arrow = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        Sprite::new(tile_ids::ARROW),
+        Sprite::from_ref(tile_ids::ARROW),
         Projectile {
             source: shooter,
             damage,
@@ -443,8 +443,8 @@ pub fn apply_throw_potion(
     events: &mut EventQueue,
     current_time: f32,
 ) -> ActionResult {
-    // Get tile ID for the potion type
-    let tile_id = match potion_type {
+    // Get sprite for the potion type
+    let sprite_ref = match potion_type {
         ItemType::HealthPotion => tile_ids::RED_POTION,
         ItemType::RegenerationPotion => tile_ids::GREEN_POTION,
         ItemType::StrengthPotion => tile_ids::AMBER_POTION,
@@ -477,7 +477,7 @@ pub fn apply_throw_potion(
     let potion_projectile = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        Sprite::new(tile_id),
+        Sprite::from_ref(sprite_ref),
         Projectile {
             source: thrower,
             damage: 0,

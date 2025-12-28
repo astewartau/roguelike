@@ -147,9 +147,9 @@ pub fn item_heal_amount(item: ItemType) -> i32 {
     }
 }
 
-/// Get the tile ID for an item's icon
-pub fn item_tile_id(item: ItemType) -> u32 {
-    get_def(item).tile_id
+/// Get the sprite reference for an item's icon
+pub fn item_sprite(item: ItemType) -> (crate::tile::SpriteSheet, u32) {
+    get_def(item).sprite
 }
 
 #[cfg(test)]

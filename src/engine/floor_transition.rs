@@ -88,7 +88,7 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
             continue;
         }
         let sprite = world.get::<&Sprite>(id).ok();
-        let is_bones = sprite.map(|s| s.tile_id == tile_ids::BONES).unwrap_or(false);
+        let is_bones = sprite.map(|s| (s.sheet, s.tile_id) == tile_ids::BONES_4).unwrap_or(false);
 
         if is_bones {
             entities.push(SavedEntity {
@@ -180,7 +180,7 @@ pub fn load_floor(
                 );
             }
             SavedEntityType::Chest { is_open, gold, items } => {
-                let sprite_id = if *is_open { tile_ids::CHEST_OPEN } else { tile_ids::CHEST_CLOSED };
+                let sprite_ref = if *is_open { tile_ids::CHEST_OPEN } else { tile_ids::CHEST_CLOSED };
                 let mut container = Container::new(items.clone());
                 container.is_open = *is_open;
                 container.gold = *gold;
@@ -189,14 +189,14 @@ pub fn load_floor(
                     world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
-                        Sprite::new(sprite_id),
+                        Sprite::from_ref(sprite_ref),
                         container,
                     ));
                 } else {
                     world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
-                        Sprite::new(sprite_id),
+                        Sprite::from_ref(sprite_ref),
                         container,
                         BlocksMovement,
                     ));
@@ -209,14 +209,14 @@ pub fn load_floor(
                     world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
-                        Sprite::new(tile_ids::DOOR),
+                        Sprite::from_ref(tile_ids::DOOR),
                         door,
                     ));
                 } else {
                     world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
-                        Sprite::new(tile_ids::DOOR),
+                        Sprite::from_ref(tile_ids::DOOR),
                         Door::new(),
                         BlocksVision,
                         BlocksMovement,
@@ -230,7 +230,7 @@ pub fn load_floor(
                 world.spawn((
                     pos,
                     VisualPosition::from_position(&pos),
-                    Sprite::new(tile_ids::BONES),
+                    Sprite::from_ref(tile_ids::BONES_4),
                     container,
                 ));
             }

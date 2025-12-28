@@ -8,7 +8,7 @@
 
 use crate::components::{EffectType, ItemType};
 use crate::constants::*;
-use crate::tile::tile_ids;
+use crate::tile::{tile_ids, SpriteSheet};
 
 /// Categories of items for behavior grouping
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub struct ItemDef {
     pub name: &'static str,
     pub category: ItemCategory,
     pub weight: f32,
-    pub tile_id: u32,
+    pub sprite: (SpriteSheet, u32),
     pub use_effect: UseEffect,
     pub targeting: Option<TargetingParams>,
     pub is_throwable: bool,
@@ -80,7 +80,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Sword",
         category: ItemCategory::Weapon,
         weight: SWORD_WEIGHT,
-        tile_id: tile_ids::SWORD,
+        sprite: tile_ids::SWORD,
         use_effect: UseEffect::Equip,
         targeting: None,
         is_throwable: false,
@@ -90,7 +90,17 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Bow",
         category: ItemCategory::Weapon,
         weight: BOW_WEIGHT,
-        tile_id: tile_ids::BOW,
+        sprite: tile_ids::BOW,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+    },
+    ItemDef {
+        item_type: ItemType::Dagger,
+        name: "Dagger",
+        category: ItemCategory::Weapon,
+        weight: DAGGER_WEIGHT,
+        sprite: tile_ids::DAGGER,
         use_effect: UseEffect::Equip,
         targeting: None,
         is_throwable: false,
@@ -103,7 +113,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Health Potion",
         category: ItemCategory::Potion,
         weight: HEALTH_POTION_WEIGHT,
-        tile_id: tile_ids::RED_POTION,
+        sprite: tile_ids::RED_POTION,
         use_effect: UseEffect::Heal(HEALTH_POTION_HEAL),
         targeting: Some(TargetingParams {
             max_range: POTION_THROW_RANGE,
@@ -116,7 +126,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Regeneration Potion",
         category: ItemCategory::Potion,
         weight: HEALTH_POTION_WEIGHT,
-        tile_id: tile_ids::GREEN_POTION,
+        sprite: tile_ids::GREEN_POTION,
         use_effect: UseEffect::ApplyEffect(EffectType::Regenerating, REGENERATION_DURATION),
         targeting: Some(TargetingParams {
             max_range: POTION_THROW_RANGE,
@@ -129,7 +139,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Strength Potion",
         category: ItemCategory::Potion,
         weight: HEALTH_POTION_WEIGHT,
-        tile_id: tile_ids::AMBER_POTION,
+        sprite: tile_ids::AMBER_POTION,
         use_effect: UseEffect::ApplyEffect(EffectType::Strengthened, STRENGTH_DURATION),
         targeting: Some(TargetingParams {
             max_range: POTION_THROW_RANGE,
@@ -142,7 +152,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Confusion Potion",
         category: ItemCategory::Potion,
         weight: HEALTH_POTION_WEIGHT,
-        tile_id: tile_ids::BLUE_POTION,
+        sprite: tile_ids::BLUE_POTION,
         use_effect: UseEffect::ApplyEffect(EffectType::Confused, CONFUSION_DURATION),
         targeting: Some(TargetingParams {
             max_range: POTION_THROW_RANGE,
@@ -158,7 +168,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Invisibility",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::ApplyEffect(EffectType::Invisible, INVISIBILITY_DURATION),
         targeting: None,
         is_throwable: false,
@@ -168,7 +178,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Speed",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::ApplyEffect(EffectType::SpeedBoost, SPEED_BOOST_DURATION),
         targeting: None,
         is_throwable: false,
@@ -178,7 +188,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Protection",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::ApplyEffect(EffectType::Protected, PROTECTION_DURATION),
         targeting: None,
         is_throwable: false,
@@ -188,7 +198,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Blink",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::RequiresTarget,
         targeting: Some(TargetingParams {
             max_range: BLINK_RANGE,
@@ -201,7 +211,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Fear",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::ApplyEffectToVisible(EffectType::Feared, FEAR_DURATION),
         targeting: None,
         is_throwable: false,
@@ -211,7 +221,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Fireball",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::RequiresTarget,
         targeting: Some(TargetingParams {
             max_range: FIREBALL_RANGE,
@@ -224,7 +234,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Reveal",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::RevealEnemies,
         targeting: None,
         is_throwable: false,
@@ -234,7 +244,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Mapping",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::RevealMap,
         targeting: None,
         is_throwable: false,
@@ -244,7 +254,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         name: "Scroll of Slow",
         category: ItemCategory::Scroll,
         weight: SCROLL_WEIGHT,
-        tile_id: tile_ids::SCROLL,
+        sprite: tile_ids::SCROLL,
         use_effect: UseEffect::ApplyEffectToVisible(EffectType::Slowed, SLOW_DURATION),
         targeting: None,
         is_throwable: false,
@@ -261,6 +271,7 @@ mod tests {
         let all_items = [
             ItemType::Sword,
             ItemType::Bow,
+            ItemType::Dagger,
             ItemType::HealthPotion,
             ItemType::RegenerationPotion,
             ItemType::StrengthPotion,
@@ -286,6 +297,7 @@ mod tests {
     fn test_weapons_have_equip_effect() {
         assert!(matches!(get_def(ItemType::Sword).use_effect, UseEffect::Equip));
         assert!(matches!(get_def(ItemType::Bow).use_effect, UseEffect::Equip));
+        assert!(matches!(get_def(ItemType::Dagger).use_effect, UseEffect::Equip));
     }
 
     #[test]

@@ -1,57 +1,116 @@
-/// Tile IDs matching the tileset (minirogue-all.png)
-/// These can be adjusted to match different tilesets
+/// Sprite sheet identifiers for the 32rogues tileset
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpriteSheet {
+    Tiles,    // tiles.png - terrain, doors, stairs, decals
+    Rogues,   // rogues.png - player characters, NPCs
+    Monsters, // monsters.png - enemies
+    Items,    // items.png - weapons, armor, potions, etc.
+}
+
+/// Helper to convert row.letter notation to tile ID
+/// Row is 1-indexed, letter is 0-indexed (a=0, b=1, etc.)
+const fn rc(row: u32, col: u32, columns: u32) -> u32 {
+    (row - 1) * columns + col
+}
+
+/// Tile IDs for the 32rogues tileset
+/// Format: (SpriteSheet, tile_id)
+///
+/// Sheet dimensions (32x32 tiles):
+/// - Tiles: 17 columns (tiles.png 544x832)
+/// - Rogues: 7 columns (rogues.png 224x224)
+/// - Monsters: 12 columns (monsters.png 384x416)
+/// - Items: 11 columns (items.png 352x832)
 pub mod tile_ids {
-    pub const EMPTY: u32 = 0;
-    pub const FLOOR: u32 = 2;       // Stone floor tile
-    pub const WALL: u32 = 3;        // Wall tile
-    pub const WATER: u32 = 2;       // Uses floor tile (tinted blue in shader)
-    pub const GRASS: u32 = 9;       // grass_1 from tileset
-    pub const TALL_GRASS: u32 = 11; // grass_3 (taller variant, blocks vision)
-    pub const STONE: u32 = 2;       // Stone floor
-    pub const DOOR: u32 = 27;       // Door tile
+    use super::{rc, SpriteSheet};
 
-    // Entity tiles
-    pub const PLAYER: u32 = 85;    // character_1
-    pub const SKELETON: u32 = 105; // Skeleton enemy
-    pub const RAT: u32 = 111;      // Rat enemy
-    pub const CHEST_CLOSED: u32 = 32;  // Closed chest
-    pub const CHEST_OPEN: u32 = 33;    // Open chest (if available)
-    pub const BONES: u32 = 22;     // bones_1 - remains of defeated enemies
+    // Column counts for each sheet
+    pub const TILES_COLS: u32 = 17;
+    pub const ROGUES_COLS: u32 = 7;
+    pub const MONSTERS_COLS: u32 = 12;
+    pub const ITEMS_COLS: u32 = 11;
 
-    // Item tiles
-    pub const SWORD: u32 = 65;
-    pub const BOW: u32 = 69;
-    pub const ARROW: u32 = 70;
-    pub const COINS: u32 = 36;
-    pub const SCROLL: u32 = 58;  // Book tile for scrolls
+    // ===== TILES SHEET (terrain, structures, decals) =====
 
-    // Potion tiles
-    pub const RED_POTION: u32 = 52;    // Health potion
-    pub const BLUE_POTION: u32 = 53;   // Confusion potion (throwable)
-    pub const GREEN_POTION: u32 = 55;  // Regeneration potion
-    pub const AMBER_POTION: u32 = 56;  // Strength potion
+    // Terrain
+    pub const EMPTY: (SpriteSheet, u32) = (SpriteSheet::Tiles, 0);
+    pub const FLOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // 7.b floor stone 1
+    pub const FLOOR_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 2, TILES_COLS)); // 7.c floor stone 2
+    pub const FLOOR_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 3, TILES_COLS)); // 7.d floor stone 3
+    pub const WALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 1, TILES_COLS)); // 3.b stone brick wall (side)
+    pub const WALL_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 0, TILES_COLS)); // 3.a stone brick wall (top)
+    pub const WATER: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // Use floor, tinted blue
+    pub const GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 1, TILES_COLS)); // 8.b grass 1
+    pub const GRASS_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 2, TILES_COLS)); // 8.c grass 2
+    pub const TALL_GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 3, TILES_COLS)); // 8.d grass 3
+    pub const STONE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(10, 1, TILES_COLS)); // 10.b stone floor
 
-    // NPC tiles
-    pub const WIZARD: u32 = 90;    // Friendly wizard NPC
-
-    // UI icons
-    pub const HEART: u32 = 151;
-    pub const DIAMOND: u32 = 38;
+    // Structures
+    pub const STAIRS_DOWN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 7, TILES_COLS)); // 17.h staircase down
+    pub const STAIRS_UP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 8, TILES_COLS)); // 17.i staircase up
+    pub const DOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 2, TILES_COLS)); // 17.c framed door (shut)
+    pub const DOOR_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 3, TILES_COLS)); // 17.d framed door (open)
+    pub const CHEST_CLOSED: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 0, TILES_COLS)); // 18.a chest (closed)
+    pub const CHEST_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 1, TILES_COLS)); // 18.b chest (open)
 
     // Decorative decals
-    pub const BONES_1: u32 = 22;
-    pub const BONES_2: u32 = 23;
-    pub const BONES_3: u32 = 24;
-    pub const BONES_4: u32 = 25;
-    pub const ROCKS: u32 = 26;
-    pub const PLANT: u32 = 13;
-    pub const MUSHROOM: u32 = 48;
-    pub const FLOWERS: u32 = 51;
-    pub const SKULL: u32 = 148;
+    pub const BONES: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 1, TILES_COLS)); // 11.b bone 1
+    pub const BONES_1: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 1, TILES_COLS)); // 11.b bone 1
+    pub const BONES_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 2, TILES_COLS)); // 11.c bone 2
+    pub const BONES_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 3, TILES_COLS)); // 11.d bone 3
+    pub const BONES_4: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(22, 0, TILES_COLS)); // 22.a corpse bones 1
+    pub const ROCKS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(19, 0, TILES_COLS)); // 19.a large rock 1
+    pub const SKULL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(22, 1, TILES_COLS)); // 22.b corpse bones 2
+    pub const PLANT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 0, TILES_COLS)); // 20.a buckwheat
+    pub const MUSHROOM: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(21, 0, TILES_COLS)); // 21.a small mushrooms
+    pub const FLOWERS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat (flowers-like)
 
-    // Stairs
-    pub const STAIRS_DOWN: u32 = 4;  // Stairs going down
-    pub const STAIRS_UP: u32 = 5;    // Stairs going up
+    // ===== ROGUES SHEET (player characters, NPCs) =====
+
+    pub const PLAYER: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 3, ROGUES_COLS)); // 1.d rogue
+    pub const FIGHTER: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(2, 1, ROGUES_COLS)); // 2.b male fighter
+    pub const RANGER: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 2, ROGUES_COLS)); // 1.c ranger
+    pub const WIZARD: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(5, 1, ROGUES_COLS)); // 5.b male wizard
+    pub const KNIGHT: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(2, 0, ROGUES_COLS)); // 2.a knight
+    pub const ELF: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 1, ROGUES_COLS)); // 1.b elf
+    pub const DWARF: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 0, ROGUES_COLS)); // 1.a dwarf
+
+    // ===== MONSTERS SHEET (enemies) =====
+
+    pub const SKELETON: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(5, 0, MONSTERS_COLS)); // 5.a skeleton
+    pub const SKELETON_ARCHER: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(5, 1, MONSTERS_COLS)); // 5.b skeleton archer
+    pub const RAT: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(7, 11, MONSTERS_COLS)); // 7.l giant rat
+    pub const GOBLIN: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(1, 2, MONSTERS_COLS)); // 1.c goblin
+    pub const ORC: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(1, 0, MONSTERS_COLS)); // 1.a orc
+    pub const ZOMBIE: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(5, 4, MONSTERS_COLS)); // 5.e zombie
+    pub const SLIME: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(3, 0, MONSTERS_COLS)); // 3.a small slime
+    pub const SPIDER: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(7, 8, MONSTERS_COLS)); // 7.i giant spider
+    pub const BAT: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(7, 6, MONSTERS_COLS)); // 7.g giant bat
+
+    // ===== ITEMS SHEET (weapons, armor, potions, etc.) =====
+
+    // Weapons
+    pub const SWORD: (SpriteSheet, u32) = (SpriteSheet::Items, rc(1, 3, ITEMS_COLS)); // 1.d long sword
+    pub const DAGGER: (SpriteSheet, u32) = (SpriteSheet::Items, rc(1, 0, ITEMS_COLS)); // 1.a dagger
+    pub const BOW: (SpriteSheet, u32) = (SpriteSheet::Items, rc(10, 2, ITEMS_COLS)); // 10.c long bow
+    pub const ARROW: (SpriteSheet, u32) = (SpriteSheet::Items, rc(24, 0, ITEMS_COLS)); // 24.a arrow
+    pub const AXE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(4, 1, ITEMS_COLS)); // 4.b battle axe
+    pub const STAFF: (SpriteSheet, u32) = (SpriteSheet::Items, rc(11, 0, ITEMS_COLS)); // 11.a crystal staff
+
+    // Potions
+    pub const RED_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(20, 1, ITEMS_COLS)); // 20.b red potion
+    pub const BLUE_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(21, 3, ITEMS_COLS)); // 21.d blue potion
+    pub const GREEN_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(20, 4, ITEMS_COLS)); // 20.e green potion
+    pub const AMBER_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(21, 4, ITEMS_COLS)); // 21.e orange potion
+
+    // Other items
+    pub const COINS: (SpriteSheet, u32) = (SpriteSheet::Items, rc(25, 1, ITEMS_COLS)); // 25.b small stacks
+    pub const SCROLL: (SpriteSheet, u32) = (SpriteSheet::Items, rc(22, 0, ITEMS_COLS)); // 22.a scroll
+    pub const KEY: (SpriteSheet, u32) = (SpriteSheet::Items, rc(23, 0, ITEMS_COLS)); // 23.a gold key
+
+    // UI Icons (using items that work as icons)
+    pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
+    pub const DIAMOND: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,8 +128,8 @@ pub enum TileType {
 }
 
 impl TileType {
-    /// Get the tile ID for this tile type (maps to tileset)
-    pub fn tile_id(&self) -> u32 {
+    /// Get the sprite sheet and tile ID for this tile type
+    pub fn sprite_ref(&self) -> (SpriteSheet, u32) {
         match self {
             TileType::Empty => tile_ids::EMPTY,
             TileType::Floor => tile_ids::FLOOR,
@@ -82,6 +141,11 @@ impl TileType {
             TileType::StairsDown => tile_ids::STAIRS_DOWN,
             TileType::StairsUp => tile_ids::STAIRS_UP,
         }
+    }
+
+    /// Get just the tile ID (for backwards compatibility during migration)
+    pub fn tile_id(&self) -> u32 {
+        self.sprite_ref().1
     }
 
     pub fn is_walkable(&self) -> bool {
@@ -108,6 +172,8 @@ pub struct Tile {
     pub visible: bool,
     /// Game time until which this tile is magically revealed (Scroll of Reveal)
     pub revealed_until: Option<f32>,
+    /// Optional sprite override (for oriented walls, etc.)
+    pub sprite_override: Option<(SpriteSheet, u32)>,
 }
 
 impl Tile {
@@ -117,7 +183,13 @@ impl Tile {
             explored: false,
             visible: false,
             revealed_until: None,
+            sprite_override: None,
         }
+    }
+
+    /// Get the sprite to render for this tile
+    pub fn sprite(&self) -> (SpriteSheet, u32) {
+        self.sprite_override.unwrap_or_else(|| self.tile_type.sprite_ref())
     }
 }
 

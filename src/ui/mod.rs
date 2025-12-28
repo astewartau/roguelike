@@ -5,13 +5,13 @@
 pub mod style;
 
 use crate::camera::Camera;
-use crate::components::{Container, Dialogue, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, Stats, StatusEffects};
+use crate::components::{Container, Dialogue, EffectType as StatusEffectType, Equipment, Health, Inventory, ItemType, PlayerClass, Stats, StatusEffects};
 use crate::constants::DAMAGE_NUMBER_RISE;
 use crate::grid::Grid;
 use crate::input::TargetingMode;
+use crate::multi_tileset::MultiTileset;
 use crate::systems;
 use crate::tile::tile_ids;
-use crate::tileset::Tileset;
 use crate::vfx::{VfxType, VisualEffect};
 use egui_glow::EguiGlow;
 use hecs::{Entity, World};
@@ -69,6 +69,8 @@ pub struct UiActions {
     pub close_chest: bool,
     /// Index of dialogue option selected by player
     pub dialogue_option_selected: Option<usize>,
+    /// Start the game with selected class (from start screen)
+    pub start_game: Option<crate::components::PlayerClass>,
 }
 
 // =============================================================================
@@ -168,7 +170,8 @@ impl GameUiState {
 // DEVELOPER MENU
 // =============================================================================
 
-use crate::systems::items::{item_name, item_tile_id};
+use crate::systems::items::{item_name, item_sprite};
+use crate::tile::SpriteSheet;
 
 /// Placement tools - click on map to spawn
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -191,7 +194,7 @@ impl DevTool {
         }
     }
 
-    pub fn tile_id(&self) -> u32 {
+    pub fn sprite(&self) -> (SpriteSheet, u32) {
         match self {
             DevTool::SpawnChest => tile_ids::CHEST_CLOSED,
             DevTool::SpawnEnemy => tile_ids::SKELETON,
@@ -360,8 +363,8 @@ fn draw_list_item(
 pub fn draw_dev_menu(
     ctx: &egui::Context,
     dev_menu: &mut DevMenu,
-    tileset_texture_id: egui::TextureId,
-    tileset: &Tileset,
+    icons: &UiIcons,
+    tileset: &MultiTileset,
 ) {
     if !dev_menu.visible {
         return;
@@ -380,11 +383,13 @@ pub fn draw_dev_menu(
             ui.heading("Placement (click map)");
             for tool in DevTool::ALL {
                 let is_selected = dev_menu.selected_tool == Some(tool);
-                let uv_rect = tileset.get_egui_uv(tool.tile_id());
+                let sprite = tool.sprite();
+                let texture_id = icons.texture_for_sheet(sprite.0);
+                let uv_rect = tileset.get_egui_uv(sprite.0, sprite.1);
 
                 let response = draw_list_item(
                     ui,
-                    tileset_texture_id,
+                    texture_id,
                     uv_rect,
                     is_selected,
                     tool.name(),
@@ -413,10 +418,12 @@ pub fn draw_dev_menu(
             // Potions
             ui.label("Potions:");
             for item in ALL_ITEMS.iter().take(4) {
-                let uv_rect = tileset.get_egui_uv(item_tile_id(*item));
+                let sprite = item_sprite(*item);
+                let texture_id = icons.texture_for_sheet(sprite.0);
+                let uv_rect = tileset.get_egui_uv(sprite.0, sprite.1);
                 let response = draw_list_item(
                     ui,
-                    tileset_texture_id,
+                    texture_id,
                     uv_rect,
                     false,
                     item_name(*item),
@@ -432,10 +439,12 @@ pub fn draw_dev_menu(
             // Scrolls
             ui.label("Scrolls:");
             for item in ALL_ITEMS.iter().skip(4) {
-                let uv_rect = tileset.get_egui_uv(item_tile_id(*item));
+                let sprite = item_sprite(*item);
+                let texture_id = icons.texture_for_sheet(sprite.0);
+                let uv_rect = tileset.get_egui_uv(sprite.0, sprite.1);
                 let response = draw_list_item(
                     ui,
-                    tileset_texture_id,
+                    texture_id,
                     uv_rect,
                     false,
                     item_name(*item),
@@ -474,7 +483,7 @@ pub fn draw_status_bar(
             // HP bar with heart icon
             ui.horizontal(|ui| {
                 let heart_img = egui::Image::new(egui::load::SizedTexture::new(
-                    icons.tileset_texture_id,
+                    icons.items_texture_id,
                     egui::vec2(16.0, 16.0),
                 ))
                 .uv(icons.heart_uv);
@@ -490,7 +499,7 @@ pub fn draw_status_bar(
             // XP bar with diamond icon
             ui.horizontal(|ui| {
                 let diamond_img = egui::Image::new(egui::load::SizedTexture::new(
-                    icons.tileset_texture_id,
+                    icons.items_texture_id,
                     egui::vec2(16.0, 16.0),
                 ))
                 .uv(icons.diamond_uv);
@@ -510,7 +519,7 @@ pub fn draw_status_bar(
             // Gold with coins icon
             ui.horizontal(|ui| {
                 let coin_img = egui::Image::new(egui::load::SizedTexture::new(
-                    icons.tileset_texture_id,
+                    icons.items_texture_id,
                     egui::vec2(16.0, 16.0),
                 ))
                 .uv(icons.coins_uv);
@@ -578,7 +587,7 @@ pub fn draw_loot_window(
                 if data.gold > 0 {
                     ui.horizontal(|ui| {
                         let coin_img = egui::Image::new(egui::load::SizedTexture::new(
-                            icons.tileset_texture_id,
+                            icons.items_texture_id,
                             egui::vec2(32.0, 32.0),
                         ))
                         .uv(icons.coins_uv)
@@ -602,7 +611,7 @@ pub fn draw_loot_window(
                         let uv = icons.get_item_uv(*item_type);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            icons.tileset_texture_id,
+                            icons.items_texture_id,
                             egui::vec2(48.0, 48.0),
                         ))
                         .uv(uv)
@@ -887,7 +896,7 @@ fn draw_stats_column(
                 ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
 
                 let coin_img = egui::Image::new(egui::load::SizedTexture::new(
-                    icons.tileset_texture_id,
+                    icons.items_texture_id,
                     size,
                 ))
                 .uv(icons.coins_uv);
@@ -914,7 +923,7 @@ fn draw_stats_column(
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            icons.tileset_texture_id,
+                            icons.items_texture_id,
                             size,
                         ))
                         .uv(icons.sword_uv);
@@ -945,7 +954,7 @@ fn draw_stats_column(
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            icons.tileset_texture_id,
+                            icons.items_texture_id,
                             size,
                         ))
                         .uv(icons.bow_uv);
@@ -1016,7 +1025,7 @@ fn draw_inventory_column(
 
                         // Then paint the image on top
                         let image = egui::Image::new(egui::load::SizedTexture::new(
-                            icons.tileset_texture_id,
+                            icons.items_texture_id,
                             size,
                         ))
                         .uv(uv);
@@ -1057,9 +1066,18 @@ fn draw_inventory_column(
 
 /// Helper struct containing pre-computed UV coordinates for UI icons
 pub struct UiIcons {
-    pub tileset_texture_id: egui::TextureId,
+    /// Texture ID for Tiles sheet (terrain, UI elements)
+    pub tiles_texture_id: egui::TextureId,
+    /// Texture ID for Rogues sheet (player, NPCs)
+    pub rogues_texture_id: egui::TextureId,
+    /// Texture ID for Monsters sheet (enemies)
+    pub monsters_texture_id: egui::TextureId,
+    /// Texture ID for Items sheet (weapons, potions, scrolls)
+    pub items_texture_id: egui::TextureId,
+    // Items sheet UVs
     pub sword_uv: egui::Rect,
     pub bow_uv: egui::Rect,
+    pub dagger_uv: egui::Rect,
     pub red_potion_uv: egui::Rect,
     pub green_potion_uv: egui::Rect,
     pub amber_potion_uv: egui::Rect,
@@ -1071,19 +1089,39 @@ pub struct UiIcons {
 }
 
 impl UiIcons {
-    pub fn new(tileset: &Tileset, tileset_egui_id: egui::TextureId) -> Self {
+    pub fn new(
+        tileset: &MultiTileset,
+        tiles_egui_id: egui::TextureId,
+        rogues_egui_id: egui::TextureId,
+        monsters_egui_id: egui::TextureId,
+        items_egui_id: egui::TextureId,
+    ) -> Self {
         Self {
-            tileset_texture_id: tileset_egui_id,
-            sword_uv: tileset.get_egui_uv(tile_ids::SWORD),
-            bow_uv: tileset.get_egui_uv(tile_ids::BOW),
-            red_potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION),
-            green_potion_uv: tileset.get_egui_uv(tile_ids::GREEN_POTION),
-            amber_potion_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION),
-            blue_potion_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION),
-            scroll_uv: tileset.get_egui_uv(tile_ids::SCROLL),
-            coins_uv: tileset.get_egui_uv(tile_ids::COINS),
-            heart_uv: tileset.get_egui_uv(tile_ids::HEART),
-            diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND),
+            tiles_texture_id: tiles_egui_id,
+            rogues_texture_id: rogues_egui_id,
+            monsters_texture_id: monsters_egui_id,
+            items_texture_id: items_egui_id,
+            sword_uv: tileset.get_egui_uv(tile_ids::SWORD.0, tile_ids::SWORD.1),
+            bow_uv: tileset.get_egui_uv(tile_ids::BOW.0, tile_ids::BOW.1),
+            dagger_uv: tileset.get_egui_uv(tile_ids::DAGGER.0, tile_ids::DAGGER.1),
+            red_potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION.0, tile_ids::RED_POTION.1),
+            green_potion_uv: tileset.get_egui_uv(tile_ids::GREEN_POTION.0, tile_ids::GREEN_POTION.1),
+            amber_potion_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION.0, tile_ids::AMBER_POTION.1),
+            blue_potion_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
+            scroll_uv: tileset.get_egui_uv(tile_ids::SCROLL.0, tile_ids::SCROLL.1),
+            coins_uv: tileset.get_egui_uv(tile_ids::COINS.0, tile_ids::COINS.1),
+            heart_uv: tileset.get_egui_uv(tile_ids::HEART.0, tile_ids::HEART.1),
+            diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND.0, tile_ids::DIAMOND.1),
+        }
+    }
+
+    /// Get the texture ID for a specific sprite sheet
+    pub fn texture_for_sheet(&self, sheet: SpriteSheet) -> egui::TextureId {
+        match sheet {
+            SpriteSheet::Tiles => self.tiles_texture_id,
+            SpriteSheet::Rogues => self.rogues_texture_id,
+            SpriteSheet::Monsters => self.monsters_texture_id,
+            SpriteSheet::Items => self.items_texture_id,
         }
     }
 
@@ -1092,6 +1130,7 @@ impl UiIcons {
         match item_type {
             ItemType::Sword => self.sword_uv,
             ItemType::Bow => self.bow_uv,
+            ItemType::Dagger => self.dagger_uv,
             ItemType::HealthPotion => self.red_potion_uv,
             ItemType::RegenerationPotion => self.green_potion_uv,
             ItemType::StrengthPotion => self.amber_potion_uv,
@@ -1106,6 +1145,11 @@ impl UiIcons {
             | ItemType::ScrollOfMapping
             | ItemType::ScrollOfSlow => self.scroll_uv,
         }
+    }
+
+    /// Get the texture ID for items (weapons, potions, scrolls)
+    pub fn items_texture(&self) -> egui::TextureId {
+        self.items_texture_id
     }
 }
 
@@ -1789,6 +1833,172 @@ pub fn draw_targeting_overlay(
     );
 }
 
+/// Run the start screen UI for class selection.
+/// Returns Some(PlayerClass) if the player clicked Start, None otherwise.
+pub fn run_start_screen(
+    egui_glow: &mut EguiGlow,
+    window: &Window,
+    tileset: &MultiTileset,
+    icons: &UiIcons,
+    selected_class: &mut Option<PlayerClass>,
+) -> Option<PlayerClass> {
+    let mut start_clicked = None;
+
+    egui_glow.run(window, |ctx| {
+        // Center the window
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(20, 20, 30)))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(100.0);
+
+                    // Title
+                    ui.heading(
+                        egui::RichText::new("Grid Roguelike")
+                            .size(48.0)
+                            .color(style::colors::DUNGEON_GOLD),
+                    );
+
+                    ui.add_space(40.0);
+
+                    ui.label(
+                        egui::RichText::new("Choose Your Class")
+                            .size(24.0)
+                            .color(egui::Color32::WHITE),
+                    );
+
+                    ui.add_space(30.0);
+
+                    // Class selection buttons
+                    ui.horizontal(|ui| {
+                        ui.add_space((ui.available_width() - 300.0) / 2.0);
+
+                        for class in PlayerClass::ALL {
+                            let is_selected = *selected_class == Some(class);
+                            let sprite = class.sprite();
+                            let texture_id = icons.texture_for_sheet(sprite.0);
+                            let uv_rect = tileset.get_egui_uv(sprite.0, sprite.1);
+
+                            let (response, painter) = ui.allocate_painter(
+                                egui::vec2(120.0, 150.0),
+                                egui::Sense::click(),
+                            );
+
+                            // Background
+                            let bg_color = if is_selected {
+                                style::colors::DUNGEON_GOLD.gamma_multiply(0.3)
+                            } else if response.hovered() {
+                                egui::Color32::from_rgb(50, 50, 60)
+                            } else {
+                                egui::Color32::from_rgb(35, 35, 45)
+                            };
+                            painter.rect_filled(response.rect, 8.0, bg_color);
+
+                            // Border
+                            let border_color = if is_selected {
+                                style::colors::DUNGEON_GOLD
+                            } else {
+                                egui::Color32::from_rgb(80, 80, 90)
+                            };
+                            painter.rect_stroke(
+                                response.rect,
+                                8.0,
+                                egui::Stroke::new(2.0, border_color),
+                            );
+
+                            // Sprite (centered, larger)
+                            let sprite_size = 64.0;
+                            let sprite_rect = egui::Rect::from_center_size(
+                                response.rect.center() - egui::vec2(0.0, 20.0),
+                                egui::vec2(sprite_size, sprite_size),
+                            );
+                            painter.image(
+                                texture_id,
+                                sprite_rect,
+                                uv_rect,
+                                egui::Color32::WHITE,
+                            );
+
+                            // Class name
+                            let text_pos = response.rect.center() + egui::vec2(0.0, 40.0);
+                            painter.text(
+                                text_pos,
+                                egui::Align2::CENTER_CENTER,
+                                class.name(),
+                                egui::FontId::proportional(18.0),
+                                egui::Color32::WHITE,
+                            );
+
+                            if response.clicked() {
+                                *selected_class = Some(class);
+                            }
+
+                            ui.add_space(20.0);
+                        }
+                    });
+
+                    ui.add_space(40.0);
+
+                    // Start button
+                    let start_enabled = selected_class.is_some();
+                    let button = egui::Button::new(
+                        egui::RichText::new("Start Game")
+                            .size(24.0)
+                            .color(if start_enabled {
+                                egui::Color32::WHITE
+                            } else {
+                                egui::Color32::GRAY
+                            }),
+                    )
+                    .min_size(egui::vec2(200.0, 50.0))
+                    .fill(if start_enabled {
+                        style::colors::DUNGEON_GREEN
+                    } else {
+                        egui::Color32::from_rgb(50, 50, 50)
+                    });
+
+                    if ui.add_enabled(start_enabled, button).clicked() {
+                        start_clicked = *selected_class;
+                    }
+
+                    ui.add_space(20.0);
+
+                    // Class description
+                    if let Some(class) = selected_class {
+                        let (str, int, agi) = class.stats();
+                        let weapon = match class {
+                            PlayerClass::Fighter => "Sword",
+                            PlayerClass::Ranger => "Bow",
+                        };
+                        let inventory = match class {
+                            PlayerClass::Fighter => "Bow",
+                            PlayerClass::Ranger => "Dagger",
+                        };
+
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "STR: {}  INT: {}  AGI: {}",
+                                str, int, agi
+                            ))
+                            .size(16.0)
+                            .color(egui::Color32::LIGHT_GRAY),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Equipped: {}  |  Inventory: {}",
+                                weapon, inventory
+                            ))
+                            .size(14.0)
+                            .color(egui::Color32::GRAY),
+                        );
+                    }
+                });
+            });
+    });
+
+    start_clicked
+}
+
 /// Run all UI rendering for a single frame.
 ///
 /// This function orchestrates drawing all UI elements and collects
@@ -1802,7 +2012,7 @@ pub fn run_ui(
     ui_state: &mut GameUiState,
     dev_menu: &mut DevMenu,
     camera: &Camera,
-    tileset: &Tileset,
+    tileset: &MultiTileset,
     icons: &UiIcons,
     vfx_effects: &[VisualEffect],
     targeting_mode: Option<&TargetingMode>,
@@ -1873,7 +2083,7 @@ pub fn run_ui(
         draw_potion_splashes(ctx, vfx_effects, camera);
 
         // Developer menu
-        draw_dev_menu(ctx, dev_menu, icons.tileset_texture_id, tileset);
+        draw_dev_menu(ctx, dev_menu, icons, tileset);
 
         // Loot window (if chest is open)
         if let Some(ref data) = loot_data {

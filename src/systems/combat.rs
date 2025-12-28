@@ -21,8 +21,10 @@ pub fn weapon_damage(weapon: &Weapon) -> i32 {
 pub fn handle_container_opened(world: &mut World, container_id: Entity) {
     if let Ok(mut sprite) = world.get::<&mut Sprite>(container_id) {
         // Only change sprite for actual chests, not bones
-        if sprite.tile_id == tile_ids::CHEST_CLOSED {
-            sprite.tile_id = tile_ids::CHEST_OPEN;
+        if (sprite.sheet, sprite.tile_id) == tile_ids::CHEST_CLOSED {
+            let open_ref = tile_ids::CHEST_OPEN;
+            sprite.sheet = open_ref.0;
+            sprite.tile_id = open_ref.1;
         }
     }
 }
@@ -79,9 +81,11 @@ pub fn remove_dead_entities(
         let _ = world.remove_one::<BlocksMovement>(id); // Bones are walkable
         let _ = world.remove_one::<Stats>(id);
 
-        // Change sprite to bones
+        // Change sprite to bones (corpse)
         if let Ok(mut sprite) = world.get::<&mut Sprite>(id) {
-            sprite.tile_id = tile_ids::BONES;
+            let bones_ref = tile_ids::BONES_4;
+            sprite.sheet = bones_ref.0;
+            sprite.tile_id = bones_ref.1;
         }
 
         // Add loot container with random gold

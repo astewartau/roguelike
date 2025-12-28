@@ -1,6 +1,6 @@
 //! Core game state - owns the simulation data.
 
-use crate::components::Position;
+use crate::components::{PlayerClass, Position};
 use crate::constants::*;
 use crate::events::EventQueue;
 use crate::grid::Grid;
@@ -37,10 +37,10 @@ pub struct GameState {
 }
 
 impl GameState {
-    /// Create a new game state with initialized world.
-    pub fn new() -> Self {
+    /// Create a new game state with initialized world for the given player class.
+    pub fn new(player_class: PlayerClass) -> Self {
         let grid = Grid::new(DUNGEON_DEFAULT_WIDTH, DUNGEON_DEFAULT_HEIGHT);
-        let (world, player_entity, _player_start) = initialization::init_world(&grid);
+        let (world, player_entity, _player_start) = initialization::init_world(&grid, player_class);
 
         let game_clock = GameClock::new();
         let action_scheduler = ActionScheduler::new();

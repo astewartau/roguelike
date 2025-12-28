@@ -22,6 +22,8 @@ pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
 
+use crate::components::PlayerClass;
+
 use crate::camera::Camera;
 use crate::events::EventQueue;
 use crate::input::{self, InputState, TargetingMode};
@@ -40,6 +42,15 @@ pub enum WindowAction {
     ToggleFullscreen,
 }
 
+/// Game mode - whether we're on the start screen or playing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameMode {
+    /// Class selection screen
+    StartScreen,
+    /// Playing the game
+    Playing,
+}
+
 /// Result of a game tick - contains everything needed for rendering
 pub struct TickResult {
     /// Entities to render
@@ -50,8 +61,14 @@ pub struct TickResult {
 
 /// The game engine - owns all game state and simulation logic.
 pub struct GameEngine {
-    /// Core game state (world, grid, floors, time)
-    pub state: GameState,
+    /// Current game mode (start screen or playing)
+    pub game_mode: GameMode,
+
+    /// Selected player class (for start screen)
+    pub selected_class: Option<PlayerClass>,
+
+    /// Core game state (world, grid, floors, time) - None on start screen
+    pub state: Option<GameState>,
 
     /// Visual effects manager
     pub vfx: VfxManager,
@@ -62,27 +79,59 @@ pub struct GameEngine {
     /// Input state tracking
     pub input: InputState,
 
-    /// UI state (inventory open, chest open, etc.)
-    pub ui_state: GameUiState,
+    /// UI state (inventory open, chest open, etc.) - needs player entity, created with state
+    ui_state: Option<GameUiState>,
 
     /// Developer menu state
     pub dev_menu: DevMenu,
 }
 
 impl GameEngine {
-    /// Create a new game engine with an initialized world.
+    /// Create a new game engine on the start screen.
     pub fn new() -> Self {
-        let state = GameState::new();
-        let ui_state = GameUiState::new(state.player_entity);
-
         Self {
-            state,
+            game_mode: GameMode::StartScreen,
+            selected_class: Some(PlayerClass::Fighter), // Default selection
+            state: None,
             vfx: VfxManager::new(),
             events: EventQueue::new(),
             input: InputState::new(),
-            ui_state,
+            ui_state: None,
             dev_menu: DevMenu::new(),
         }
+    }
+
+    /// Start the game with the selected class.
+    pub fn start_game(&mut self, class: PlayerClass, camera: &mut Camera) {
+        let mut state = GameState::new(class);
+
+        // Initialize AI actors
+        state.initialize_ai(&mut self.events);
+
+        // Set up camera to track player
+        if let Some((x, y)) = state.player_start_position() {
+            camera.set_tracking_target(glam::Vec2::new(x, y));
+        }
+
+        let ui_state = GameUiState::new(state.player_entity);
+        self.state = Some(state);
+        self.ui_state = Some(ui_state);
+        self.game_mode = GameMode::Playing;
+    }
+
+    /// Check if we're currently playing (not on start screen).
+    pub fn is_playing(&self) -> bool {
+        self.game_mode == GameMode::Playing
+    }
+
+    /// Get a reference to the UI state (panics if not playing).
+    pub fn ui_state(&self) -> &GameUiState {
+        self.ui_state.as_ref().expect("UI state not initialized - game not started")
+    }
+
+    /// Get a mutable reference to the UI state (panics if not playing).
+    pub fn ui_state_mut(&mut self) -> &mut GameUiState {
+        self.ui_state.as_mut().expect("UI state not initialized - game not started")
     }
 
     /// Handle a window event.
@@ -139,18 +188,18 @@ impl GameEngine {
                             && (dx.abs() > crate::constants::CLICK_DRAG_THRESHOLD
                                 || dy.abs() > crate::constants::CLICK_DRAG_THRESHOLD);
 
-                        if !was_drag {
+                        if !was_drag && self.is_playing() {
                             if self.input.is_targeting() {
                                 self.input.pending_left_click = true;
                             } else if self.dev_menu.has_active_tool() {
                                 self.handle_dev_spawn(camera);
-                            } else {
+                            } else if let Some(ref state) = self.state {
                                 input::handle_click_to_move(
                                     &mut self.input,
                                     camera,
-                                    &self.state.world,
-                                    &self.state.grid,
-                                    self.state.player_entity,
+                                    &state.world,
+                                    &state.grid,
+                                    state.player_entity,
                                 );
                             }
                         }
@@ -181,37 +230,50 @@ impl GameEngine {
     }
 
     /// Process a frame tick - advances simulation, returns render data.
+    /// Returns empty results if not in playing mode.
     pub fn tick(&mut self, dt: f32, camera: &mut Camera) -> TickResult {
-        let mut window_action = None;
+        // Only run game simulation when playing
+        if self.state.is_none() {
+            camera.update(dt, self.input.mouse_down);
+            return TickResult {
+                entities: vec![],
+                window_action: None,
+            };
+        }
 
-        // Handle input
+        // Handle input first (needs full &mut self access)
         let input_result = self.process_input(camera);
+        let mut window_action = None;
         if input_result.toggle_fullscreen {
             window_action = Some(WindowAction::ToggleFullscreen);
         }
 
+        // Now extract state references for the rest
+        let state = self.state.as_mut().expect("State checked above");
+        let ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
+
         // Update animations
-        systems::update_lunge_animations(&mut self.state.world, dt);
+        systems::update_lunge_animations(&mut state.world, dt);
         self.vfx.update(dt);
 
         // Remove dead entities
         let mut rng = rand::thread_rng();
         systems::remove_dead_entities(
-            &mut self.state.world,
-            self.state.player_entity,
+            &mut state.world,
+            state.player_entity,
             &mut rng,
             &mut self.events,
-            Some(&mut self.state.action_scheduler),
+            Some(&mut state.action_scheduler),
         );
 
         // Process events from remove_dead_entities
         let event_result = process_events(
             &mut self.events,
-            &mut self.state.world,
-            &self.state.grid,
+            &mut state.world,
+            &state.grid,
             &mut self.vfx,
-            &mut self.ui_state,
-            self.state.player_entity,
+            ui_state,
+            state.player_entity,
         );
         if let Some(direction) = event_result.floor_transition {
             self.handle_floor_transition(direction, camera);
@@ -220,20 +282,23 @@ impl GameEngine {
             self.input.clear_path();
         }
 
+        // Re-borrow state after floor transition (which may have modified it)
+        let state = self.state.as_mut().expect("State should still exist after floor transition");
+
         // Visual lerping
-        systems::visual_lerp(&mut self.state.world, dt);
+        systems::visual_lerp(&mut state.world, dt);
         systems::lerp_projectiles_realtime(
-            &mut self.state.world,
+            &mut state.world,
             dt,
             crate::constants::ARROW_SPEED,
         );
 
         // Projectile cleanup
-        let finished = systems::cleanup_finished_projectiles(&self.state.world);
-        systems::despawn_projectiles(&mut self.state.world, finished);
+        let finished = systems::cleanup_finished_projectiles(&state.world);
+        systems::despawn_projectiles(&mut state.world, finished);
 
         // Update camera tracking
-        if let Ok(vis_pos) = self.state.world.get::<&crate::components::VisualPosition>(self.state.player_entity) {
+        if let Ok(vis_pos) = state.world.get::<&crate::components::VisualPosition>(state.player_entity) {
             camera.set_tracking_target(glam::Vec2::new(vis_pos.x, vis_pos.y));
         }
 
@@ -242,18 +307,18 @@ impl GameEngine {
 
         // Update FOV
         systems::update_fov(
-            &self.state.world,
-            &mut self.state.grid,
-            self.state.player_entity,
+            &state.world,
+            &mut state.grid,
+            state.player_entity,
             crate::constants::FOV_RADIUS,
-            self.state.game_clock.time,
+            state.game_clock.time,
         );
 
         // Collect renderables
         let entities = systems::collect_renderables(
-            &self.state.world,
-            &self.state.grid,
-            self.state.player_entity,
+            &state.world,
+            &state.grid,
+            state.player_entity,
         );
 
         TickResult {
@@ -263,39 +328,44 @@ impl GameEngine {
     }
 
     /// Process UI actions from the UI layer.
+    /// Does nothing if not playing.
     pub fn process_ui_actions(&mut self, actions: &UiActions) {
+        let Some(ref mut state) = self.state else { return };
+        let ui_state = self.ui_state.as_ref().expect("UI state should exist when state exists");
+
         let ui_result = process_ui_actions(
-            &mut self.state.world,
-            &mut self.state.grid,
-            self.state.player_entity,
+            &mut state.world,
+            &mut state.grid,
+            state.player_entity,
             actions,
             &mut self.dev_menu,
-            &self.ui_state,
+            ui_state,
             &mut self.events,
-            self.state.game_clock.time,
+            state.game_clock.time,
         );
 
+        let ui_state = self.ui_state.as_mut().expect("UI state should exist");
         // Apply UI state changes
         if let Some(targeting) = ui_result.enter_targeting {
             self.input.targeting_mode = Some(targeting);
         }
         if ui_result.close_inventory {
-            self.ui_state.show_inventory = false;
+            ui_state.show_inventory = false;
         }
         if ui_result.close_context_menu {
-            self.ui_state.close_context_menu();
+            ui_state.close_context_menu();
         }
         if ui_result.close_chest {
-            self.ui_state.close_chest();
+            ui_state.close_chest();
         }
         if ui_result.close_dialogue {
-            self.ui_state.close_dialogue();
+            ui_state.close_dialogue();
         }
     }
 
-    /// Get the grid for rendering.
-    pub fn grid(&self) -> &crate::grid::Grid {
-        &self.state.grid
+    /// Get the grid for rendering (returns None if not playing).
+    pub fn grid(&self) -> Option<&crate::grid::Grid> {
+        self.state.as_ref().map(|s| &s.grid)
     }
 
     /// Get VFX effects for rendering.
@@ -308,10 +378,10 @@ impl GameEngine {
         &self.vfx.fires
     }
 
-    /// Get the current game time.
+    /// Get the current game time (0.0 if not playing).
     #[allow(dead_code)] // Public API for external callers
     pub fn game_time(&self) -> f32 {
-        self.state.game_clock.time
+        self.state.as_ref().map(|s| s.game_clock.time).unwrap_or(0.0)
     }
 
     /// Get the targeting mode if active.
@@ -326,59 +396,86 @@ impl GameEngine {
         self.input.mouse_pos
     }
 
-    /// Get the player entity.
+    /// Get the player entity (returns None if not playing).
     #[allow(dead_code)] // Public API for external callers
-    pub fn player_entity(&self) -> Entity {
-        self.state.player_entity
+    pub fn player_entity(&self) -> Option<Entity> {
+        self.state.as_ref().map(|s| s.player_entity)
     }
 
-    /// Get a reference to the ECS world.
+    /// Get a reference to the ECS world (returns None if not playing).
     #[allow(dead_code)] // Public API for external callers
-    pub fn world(&self) -> &hecs::World {
-        &self.state.world
+    pub fn world(&self) -> Option<&hecs::World> {
+        self.state.as_ref().map(|s| &s.world)
     }
 
     /// Should show grid lines?
     pub fn show_grid_lines(&self) -> bool {
-        self.ui_state.show_grid_lines
+        self.ui_state.as_ref().map(|u| u.show_grid_lines).unwrap_or(false)
     }
 
     /// Run the UI and return actions. This handles the borrowing internally.
+    /// When on start screen, shows class selection. Returns start_game action if player clicks Start.
     pub fn run_ui(
         &mut self,
         egui_glow: &mut egui_glow::EguiGlow,
         window: &winit::window::Window,
         camera: &crate::camera::Camera,
-        tileset: &crate::tileset::Tileset,
+        tileset: &crate::multi_tileset::MultiTileset,
         ui_icons: &crate::ui::UiIcons,
     ) -> crate::ui::UiActions {
-        crate::ui::run_ui(
-            egui_glow,
-            window,
-            &self.state.world,
-            self.state.player_entity,
-            &self.state.grid,
-            &mut self.ui_state,
-            &mut self.dev_menu,
-            camera,
-            tileset,
-            ui_icons,
-            &self.vfx.effects,
-            self.input.targeting_mode.as_ref(),
-            self.input.mouse_pos,
-            self.state.game_clock.time,
-        )
+        match self.game_mode {
+            GameMode::StartScreen => {
+                // Show class selection screen
+                let start_result = crate::ui::run_start_screen(
+                    egui_glow,
+                    window,
+                    tileset,
+                    ui_icons,
+                    &mut self.selected_class,
+                );
+
+                // Return start_game action if player clicked Start
+                let mut actions = crate::ui::UiActions::default();
+                actions.start_game = start_result;
+                actions
+            }
+            GameMode::Playing => {
+                let state = self.state.as_ref().expect("State should exist when playing");
+                let ui_state = self.ui_state.as_mut().expect("UI state should exist when playing");
+
+                crate::ui::run_ui(
+                    egui_glow,
+                    window,
+                    &state.world,
+                    state.player_entity,
+                    &state.grid,
+                    ui_state,
+                    &mut self.dev_menu,
+                    camera,
+                    tileset,
+                    ui_icons,
+                    &self.vfx.effects,
+                    self.input.targeting_mode.as_ref(),
+                    self.input.mouse_pos,
+                    state.game_clock.time,
+                )
+            }
+        }
     }
 
     // --- Private methods ---
 
+    /// Process input. Only called when playing (state must exist).
     fn process_input(&mut self, camera: &mut Camera) -> InputResult {
+        let state = self.state.as_mut().expect("process_input called without state");
+        let ui_state = self.ui_state.as_mut().expect("process_input called without ui_state");
+
         let frame = input::process_frame(
             &mut self.input,
-            &self.state.world,
-            &self.state.grid,
+            &state.world,
+            &state.grid,
             camera,
-            self.state.player_entity,
+            state.player_entity,
         );
 
         let mut result = InputResult::default();
@@ -386,33 +483,33 @@ impl GameEngine {
         // UI toggles
         result.toggle_fullscreen = frame.toggle_fullscreen;
         if frame.toggle_inventory {
-            self.ui_state.toggle_inventory();
+            ui_state.toggle_inventory();
         }
         if frame.toggle_grid_lines {
-            self.ui_state.toggle_grid_lines();
+            ui_state.toggle_grid_lines();
         }
 
         // Enter key: container interaction (chests, bones, ground items)
         if frame.enter_pressed {
             match crate::game::handle_enter_key_container(
-                &mut self.state.world,
-                self.state.player_entity,
-                self.ui_state.open_chest,
+                &mut state.world,
+                state.player_entity,
+                ui_state.open_chest,
                 &mut self.events,
             ) {
                 crate::game::ContainerAction::TookAll(_) => {
-                    self.ui_state.close_chest();
+                    ui_state.close_chest();
                     // Clean up empty ground item piles
-                    systems::cleanup_empty_ground_piles(&mut self.state.world);
+                    systems::cleanup_empty_ground_piles(&mut state.world);
                 }
                 crate::game::ContainerAction::Opened(_) => {
                     let _ = process_events(
                         &mut self.events,
-                        &mut self.state.world,
-                        &self.state.grid,
+                        &mut state.world,
+                        &state.grid,
                         &mut self.vfx,
-                        &mut self.ui_state,
-                        self.state.player_entity,
+                        ui_state,
+                        state.player_entity,
                     );
                 }
                 crate::game::ContainerAction::None => {}
@@ -421,7 +518,7 @@ impl GameEngine {
 
         // Player dead - just handle drag
         if frame.player_dead {
-            input::process_mouse_drag(&mut self.input, camera, self.ui_state.show_inventory);
+            input::process_mouse_drag(&mut self.input, camera, ui_state.show_inventory);
             return result;
         }
 
@@ -429,22 +526,22 @@ impl GameEngine {
         if let Some(intent) = frame.player_intent {
             if let Some(item_index) = frame.item_to_remove {
                 systems::remove_item_from_inventory(
-                    &mut self.state.world,
-                    self.state.player_entity,
+                    &mut state.world,
+                    state.player_entity,
                     item_index,
                 );
             }
 
             let turn_result = execute_player_intent(
-                &mut self.state.world,
-                &self.state.grid,
-                self.state.player_entity,
+                &mut state.world,
+                &state.grid,
+                state.player_entity,
                 intent,
-                &mut self.state.game_clock,
-                &mut self.state.action_scheduler,
+                &mut state.game_clock,
+                &mut state.action_scheduler,
                 &mut self.events,
                 &mut self.vfx,
-                &mut self.ui_state,
+                ui_state,
             );
 
             match turn_result.turn_result {
@@ -454,12 +551,12 @@ impl GameEngine {
                         if self.input.has_arrived() {
                             self.input.clear_destination();
                             if let Some(container_id) = systems::find_container_at_player(
-                                &self.state.world,
-                                self.state.player_entity,
+                                &state.world,
+                                state.player_entity,
                             ) {
                                 self.events.push(crate::events::GameEvent::ContainerOpened {
                                     container: container_id,
-                                    opener: self.state.player_entity,
+                                    opener: state.player_entity,
                                 });
                             }
                         }
@@ -479,7 +576,8 @@ impl GameEngine {
         }
 
         // Mouse drag for camera
-        input::process_mouse_drag(&mut self.input, camera, self.ui_state.show_inventory);
+        let show_inv = self.ui_state.as_ref().map(|u| u.show_inventory).unwrap_or(false);
+        input::process_mouse_drag(&mut self.input, camera, show_inv);
 
         result
     }
@@ -488,16 +586,19 @@ impl GameEngine {
         let Some(tool) = self.dev_menu.selected_tool else {
             return;
         };
+        let Some(ref mut state) = self.state else {
+            return;
+        };
 
         let needs_vfx = dev_spawning::spawn_at_cursor(
             tool,
             self.input.mouse_pos,
             camera,
-            &mut self.state.world,
-            &mut self.state.grid,
-            self.state.player_entity,
-            &self.state.game_clock,
-            &mut self.state.action_scheduler,
+            &mut state.world,
+            &mut state.grid,
+            state.player_entity,
+            &state.game_clock,
+            &mut state.action_scheduler,
             &mut self.events,
         );
 
@@ -514,30 +615,34 @@ impl GameEngine {
         direction: crate::events::StairDirection,
         camera: &mut Camera,
     ) {
-        if !can_transition_floor(self.state.current_floor, direction) {
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+
+        if !can_transition_floor(state.current_floor, direction) {
             return;
         }
 
         // Take ownership of grid for transition
         let current_grid = std::mem::replace(
-            &mut self.state.grid,
+            &mut state.grid,
             crate::grid::Grid::new(1, 1),
         );
 
         let result = handle_floor_transition(
-            &mut self.state.world,
+            &mut state.world,
             current_grid,
-            &mut self.state.floors,
-            self.state.current_floor,
+            &mut state.floors,
+            state.current_floor,
             direction,
-            self.state.player_entity,
-            &self.state.game_clock,
-            &mut self.state.action_scheduler,
+            state.player_entity,
+            &state.game_clock,
+            &mut state.action_scheduler,
             &mut self.events,
         );
 
-        self.state.grid = result.new_grid;
-        self.state.current_floor = result.new_floor;
+        state.grid = result.new_grid;
+        state.current_floor = result.new_floor;
 
         self.input.clear_path();
 

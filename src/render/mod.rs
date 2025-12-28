@@ -2,9 +2,10 @@
 
 use crate::camera::Camera;
 use crate::grid::Grid;
+use crate::multi_tileset::MultiTileset;
 use crate::renderer::Renderer;
 use crate::systems::RenderEntity;
-use crate::tileset::Tileset;
+use crate::tile::SpriteSheet;
 use crate::ui::UiIcons;
 use crate::vfx::{FireEffect, VisualEffect};
 
@@ -15,7 +16,7 @@ use std::sync::Arc;
 pub struct RenderContext {
     pub camera: Camera,
     pub renderer: Renderer,
-    pub tileset: Tileset,
+    pub tileset: MultiTileset,
     pub ui_icons: UiIcons,
 }
 
@@ -29,11 +30,24 @@ impl RenderContext {
     ) -> Self {
         let camera = Camera::new(viewport_width, viewport_height);
         let renderer = Renderer::new(gl.clone()).expect("Failed to create renderer");
-        let tileset = Tileset::load(gl, std::path::Path::new("assets/minirogue-all.tsj"))
+        let tileset = MultiTileset::load(gl, std::path::Path::new("assets/32rogues"))
             .expect("Failed to load tileset");
 
-        let tileset_egui_id = egui_glow.painter.register_native_texture(tileset.texture);
-        let ui_icons = UiIcons::new(&tileset, tileset_egui_id);
+        // Register tileset textures with egui_glow so they can be used in UI
+        let tiles_egui_id = egui_glow
+            .painter
+            .register_native_texture(tileset.get_native_texture(SpriteSheet::Tiles));
+        let rogues_egui_id = egui_glow
+            .painter
+            .register_native_texture(tileset.get_native_texture(SpriteSheet::Rogues));
+        let monsters_egui_id = egui_glow
+            .painter
+            .register_native_texture(tileset.get_native_texture(SpriteSheet::Monsters));
+        let items_egui_id = egui_glow
+            .painter
+            .register_native_texture(tileset.get_native_texture(SpriteSheet::Items));
+
+        let ui_icons = UiIcons::new(&tileset, tiles_egui_id, rogues_egui_id, monsters_egui_id, items_egui_id);
 
         Self {
             camera,

@@ -153,12 +153,12 @@ pub fn spawn_ground_item(world: &mut World, x: i32, y: i32, item: ItemType) -> E
         pile_entity
     } else {
         // Create new ground item pile
-        let tile_id = item_defs::get_def(item).tile_id;
+        let sprite_ref = item_defs::get_def(item).sprite;
         let pos = Position::new(x, y);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
-            Sprite::new(tile_id),
+            Sprite::from_ref(sprite_ref),
             Container::new(vec![item]),
             GroundItemPile,
         ))

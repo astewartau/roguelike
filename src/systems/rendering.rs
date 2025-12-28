@@ -95,7 +95,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity) ->
         let is_open_door = world.get::<&Door>(id).map(|door| door.is_open).unwrap_or(false);
 
         // Check for overlay sprite (e.g., weapon)
-        let overlay = world.get::<&OverlaySprite>(id).ok().map(|o| Sprite::new(o.tile_id));
+        let overlay = world.get::<&OverlaySprite>(id).ok().map(|o| Sprite::new(o.sheet, o.tile_id));
 
         let entity_effects = effects::NONE;
 
