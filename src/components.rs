@@ -430,7 +430,7 @@ impl ActionType {
             ActionType::AttackDirection { .. } => 1,
             ActionType::OpenDoor { .. } => 1,
             ActionType::OpenChest { .. } => 1,
-            ActionType::Wait => 1,
+            ActionType::Wait => 0, // Standing still is free
             ActionType::ShootBow { .. } => 1,
             ActionType::UseStairs { .. } => 1,
             ActionType::TalkTo { .. } => 1,

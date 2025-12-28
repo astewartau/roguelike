@@ -232,6 +232,92 @@ pub fn advance_until_player_ready(
     }
 }
 
+/// Advance game time until the player has at least the required energy.
+/// This allows enemies to act while the player "waits" for energy.
+/// Returns true if player now has enough energy, false if player died or error.
+pub fn wait_for_energy(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    required_energy: i32,
+    clock: &mut GameClock,
+    scheduler: &mut ActionScheduler,
+    events: &mut EventQueue,
+    rng: &mut impl Rng,
+) -> bool {
+    loop {
+        // Check if player has enough energy
+        let (current_energy, max_energy, regen_interval, last_regen_time) = {
+            let Ok(actor) = world.get::<&Actor>(player_entity) else {
+                return false; // Player doesn't exist
+            };
+            (actor.energy, actor.max_energy, actor.energy_regen_interval, actor.last_energy_regen_time)
+        };
+
+        // Can never afford this action
+        if max_energy < required_energy {
+            return false;
+        }
+
+        // Already have enough
+        if current_energy >= required_energy {
+            return true;
+        }
+
+        // Calculate when we'll have enough energy
+        let energy_needed = required_energy - current_energy;
+        let time_to_wait = energy_needed as f32 * regen_interval;
+        let target_time = (last_regen_time + regen_interval).max(clock.time) + (energy_needed - 1) as f32 * regen_interval;
+
+        // Schedule player to "wake up" at that time so the scheduler has something to process
+        scheduler.schedule(player_entity, target_time);
+
+        // Process any pending actions until we reach target time or player has energy
+        while clock.time < target_time {
+            let Some((next_entity, completion_time)) = scheduler.pop_next() else {
+                // Nothing scheduled, just advance time
+                clock.advance_to(target_time);
+                break;
+            };
+
+            // If this is the player's wakeup, we might be done
+            if next_entity == player_entity && completion_time >= target_time {
+                clock.advance_to(completion_time);
+                let elapsed = completion_time - clock.time + time_to_wait;
+                time_system::tick_energy_regen(world, clock.time, Some(events));
+                time_system::tick_ability_cooldowns(world, elapsed);
+                break;
+            }
+
+            let previous_time = clock.time;
+            clock.advance_to(completion_time);
+            let elapsed = clock.time - previous_time;
+
+            update_projectiles_at_time(world, grid, clock.time, events);
+            time_system::tick_health_regen(world, clock.time, Some(events));
+            time_system::tick_energy_regen(world, clock.time, Some(events));
+            time_system::tick_status_effects(world, elapsed);
+            time_system::tick_ability_cooldowns(world, elapsed);
+
+            // Complete the action
+            time_system::complete_action(world, grid, next_entity, events, clock.time);
+
+            // Let AI decide next action
+            if next_entity != player_entity {
+                systems::ai::decide_action(world, grid, next_entity, player_entity, clock, scheduler, events, rng);
+            }
+
+            // Check if player died
+            if world.get::<&Actor>(player_entity).is_err() {
+                return false;
+            }
+        }
+
+        // Final regen tick to ensure energy is updated
+        time_system::tick_energy_regen(world, clock.time, Some(events));
+    }
+}
+
 /// Update projectiles at current time.
 fn update_projectiles_at_time(
     world: &mut World,

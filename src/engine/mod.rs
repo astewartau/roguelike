@@ -530,13 +530,13 @@ impl GameEngine {
 
         // Class ability activation (Q key)
         if frame.ability_pressed {
-            // Check if player can act
-            let can_act = state.world
+            // Check if player is not busy with another action
+            let is_idle = state.world
                 .get::<&Actor>(state.player_entity)
-                .map(|a| a.can_act())
+                .map(|a| a.current_action.is_none())
                 .unwrap_or(false);
 
-            if can_act {
+            if is_idle {
                 // Get ability info
                 let ability_info = state.world
                     .get::<&ClassAbility>(state.player_entity)
@@ -545,53 +545,68 @@ impl GameEngine {
 
                 if let Some((ability_type, is_ready, energy_cost)) = ability_info {
                     if is_ready {
-                        // Check energy
-                        let has_energy = state.world
+                        // Check if player can ever afford this (max_energy >= cost)
+                        let can_afford = state.world
                             .get::<&Actor>(state.player_entity)
-                            .map(|a| a.energy >= energy_cost)
+                            .map(|a| a.max_energy >= energy_cost)
                             .unwrap_or(false);
 
-                        if has_energy {
-                            let action_type = match ability_type {
-                                AbilityType::Cleave => ActionType::Cleave,
-                                AbilityType::Sprint => ActionType::ActivateSprint,
-                            };
-
-                            let start_result = time_system::start_action(
+                        if can_afford {
+                            // Wait for enough energy (this advances time, enemies may act)
+                            let mut rng = rand::thread_rng();
+                            let got_energy = simulation::wait_for_energy(
                                 &mut state.world,
+                                &state.grid,
                                 state.player_entity,
-                                action_type,
-                                &state.game_clock,
+                                energy_cost,
+                                &mut state.game_clock,
                                 &mut state.action_scheduler,
+                                &mut self.events,
+                                &mut rng,
                             );
 
-                            if start_result.is_ok() {
-                                // Start cooldown
-                                if let Ok(mut ability) = state.world.get::<&mut ClassAbility>(state.player_entity) {
-                                    ability.start_cooldown();
-                                }
+                            if got_energy {
+                                let action_type = match ability_type {
+                                    AbilityType::Cleave => ActionType::Cleave,
+                                    AbilityType::Sprint => ActionType::ActivateSprint,
+                                };
 
-                                // Advance time and process events
-                                let mut rng = rand::thread_rng();
-                                simulation::advance_until_player_ready(
+                                let start_result = time_system::start_action(
                                     &mut state.world,
-                                    &state.grid,
                                     state.player_entity,
-                                    &mut state.game_clock,
+                                    action_type,
+                                    &state.game_clock,
                                     &mut state.action_scheduler,
-                                    &mut self.events,
-                                    &mut rng,
                                 );
 
-                                let _ = process_events(
-                                    &mut self.events,
-                                    &mut state.world,
-                                    &state.grid,
-                                    &mut self.vfx,
-                                    ui_state,
-                                    state.player_entity,
-                                );
+                                if start_result.is_ok() {
+                                    // Start cooldown
+                                    if let Ok(mut ability) = state.world.get::<&mut ClassAbility>(state.player_entity) {
+                                        ability.start_cooldown();
+                                    }
+
+                                    // Advance time and process events
+                                    simulation::advance_until_player_ready(
+                                        &mut state.world,
+                                        &state.grid,
+                                        state.player_entity,
+                                        &mut state.game_clock,
+                                        &mut state.action_scheduler,
+                                        &mut self.events,
+                                        &mut rng,
+                                    );
+                                }
                             }
+
+                            // Process any events from waiting or action
+                            let _ = process_events(
+                                &mut self.events,
+                                &mut state.world,
+                                &state.grid,
+                                &mut self.vfx,
+                                ui_state,
+                                state.player_entity,
+                            );
                         }
                     }
                 }
@@ -686,7 +701,7 @@ impl GameEngine {
         }
     }
 
-    /// Try to use the player's class ability (called from Q key or UI button)
+    /// Try to use the player's class ability (called from UI button)
     fn try_use_class_ability(&mut self) {
         let Some(ref mut state) = self.state else {
             return;
@@ -697,13 +712,13 @@ impl GameEngine {
 
         let player = state.player_entity;
 
-        // Check if player can act
-        let can_act = state.world
+        // Check if player is not busy with another action
+        let is_idle = state.world
             .get::<&Actor>(player)
-            .map(|a| a.can_act())
+            .map(|a| a.current_action.is_none())
             .unwrap_or(false);
 
-        if !can_act {
+        if !is_idle {
             return;
         }
 
@@ -721,13 +736,39 @@ impl GameEngine {
             return;
         }
 
-        // Check if player has enough energy
-        let has_energy = state.world
+        // Check if player can ever afford this (max_energy >= cost)
+        let can_afford = state.world
             .get::<&Actor>(player)
-            .map(|a| a.energy >= energy_cost)
+            .map(|a| a.max_energy >= energy_cost)
             .unwrap_or(false);
 
-        if !has_energy {
+        if !can_afford {
+            return;
+        }
+
+        // Wait for enough energy (this advances time, enemies may act)
+        let mut rng = rand::thread_rng();
+        let got_energy = simulation::wait_for_energy(
+            &mut state.world,
+            &state.grid,
+            player,
+            energy_cost,
+            &mut state.game_clock,
+            &mut state.action_scheduler,
+            &mut self.events,
+            &mut rng,
+        );
+
+        if !got_energy {
+            // Player died or something went wrong during wait
+            let _ = process_events(
+                &mut self.events,
+                &mut state.world,
+                &state.grid,
+                &mut self.vfx,
+                ui_state,
+                player,
+            );
             return;
         }
 
@@ -753,7 +794,6 @@ impl GameEngine {
             }
 
             // Advance time and process events
-            let mut rng = rand::thread_rng();
             simulation::advance_until_player_ready(
                 &mut state.world,
                 &state.grid,
@@ -763,16 +803,16 @@ impl GameEngine {
                 &mut self.events,
                 &mut rng,
             );
-
-            let _ = process_events(
-                &mut self.events,
-                &mut state.world,
-                &state.grid,
-                &mut self.vfx,
-                ui_state,
-                player,
-            );
         }
+
+        let _ = process_events(
+            &mut self.events,
+            &mut state.world,
+            &state.grid,
+            &mut self.vfx,
+            ui_state,
+            player,
+        );
     }
 
     fn handle_floor_transition(

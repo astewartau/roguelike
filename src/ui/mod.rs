@@ -2140,15 +2140,16 @@ pub fn run_ui(
 
     // Get ability bar data (if player has a class ability)
     let ability_data = world.get::<&ClassAbility>(player_entity).ok().map(|ability| {
-        // Check if player has enough energy
-        let has_energy = world.get::<&crate::components::Actor>(player_entity)
-            .map(|actor| actor.energy >= ability.ability_type.energy_cost())
+        // Check if player CAN have enough energy (max_energy >= cost)
+        // The actual waiting for energy happens when the action is executed
+        let can_afford = world.get::<&crate::components::Actor>(player_entity)
+            .map(|actor| actor.max_energy >= ability.ability_type.energy_cost())
             .unwrap_or(false);
         AbilityBarData {
             ability_type: ability.ability_type,
             cooldown_remaining: ability.cooldown_remaining,
             cooldown_total: ability.cooldown_total,
-            can_use: has_energy && ability.is_ready(),
+            can_use: can_afford && ability.is_ready(),
             viewport_height: camera.viewport_height,
         }
     });
