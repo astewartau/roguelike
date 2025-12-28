@@ -120,6 +120,10 @@ pub enum GameEvent {
         item: crate::components::ItemType,
         position: (i32, i32),
     },
+    /// A cleave attack was performed (fighter ability)
+    CleavePerformed {
+        center: (i32, i32),
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

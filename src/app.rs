@@ -35,7 +35,7 @@ pub struct WindowContext {
 pub fn create_window(event_loop: &ActiveEventLoop) -> WindowContext {
     // Create window
     let window_attrs = WindowAttributes::default()
-        .with_title("Grid Roguelike")
+        .with_title("Roguelike")
         .with_inner_size(PhysicalSize::new(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT))
         .with_resizable(true);
 

@@ -530,87 +530,16 @@ impl GameEngine {
 
         // Class ability activation (Q key)
         if frame.ability_pressed {
-            // Check if player is not busy with another action
-            let is_idle = state.world
-                .get::<&Actor>(state.player_entity)
-                .map(|a| a.current_action.is_none())
-                .unwrap_or(false);
-
-            if is_idle {
-                // Get ability info
-                let ability_info = state.world
-                    .get::<&ClassAbility>(state.player_entity)
-                    .ok()
-                    .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
-
-                if let Some((ability_type, is_ready, energy_cost)) = ability_info {
-                    if is_ready {
-                        // Check if player can ever afford this (max_energy >= cost)
-                        let can_afford = state.world
-                            .get::<&Actor>(state.player_entity)
-                            .map(|a| a.max_energy >= energy_cost)
-                            .unwrap_or(false);
-
-                        if can_afford {
-                            // Wait for enough energy (this advances time, enemies may act)
-                            let mut rng = rand::thread_rng();
-                            let got_energy = simulation::wait_for_energy(
-                                &mut state.world,
-                                &state.grid,
-                                state.player_entity,
-                                energy_cost,
-                                &mut state.game_clock,
-                                &mut state.action_scheduler,
-                                &mut self.events,
-                                &mut rng,
-                            );
-
-                            if got_energy {
-                                let action_type = match ability_type {
-                                    AbilityType::Cleave => ActionType::Cleave,
-                                    AbilityType::Sprint => ActionType::ActivateSprint,
-                                };
-
-                                let start_result = time_system::start_action(
-                                    &mut state.world,
-                                    state.player_entity,
-                                    action_type,
-                                    &state.game_clock,
-                                    &mut state.action_scheduler,
-                                );
-
-                                if start_result.is_ok() {
-                                    // Start cooldown
-                                    if let Ok(mut ability) = state.world.get::<&mut ClassAbility>(state.player_entity) {
-                                        ability.start_cooldown();
-                                    }
-
-                                    // Advance time and process events
-                                    simulation::advance_until_player_ready(
-                                        &mut state.world,
-                                        &state.grid,
-                                        state.player_entity,
-                                        &mut state.game_clock,
-                                        &mut state.action_scheduler,
-                                        &mut self.events,
-                                        &mut rng,
-                                    );
-                                }
-                            }
-
-                            // Process any events from waiting or action
-                            let _ = process_events(
-                                &mut self.events,
-                                &mut state.world,
-                                &state.grid,
-                                &mut self.vfx,
-                                ui_state,
-                                state.player_entity,
-                            );
-                        }
-                    }
-                }
-            }
+            activate_class_ability(
+                &mut state.world,
+                &state.grid,
+                state.player_entity,
+                &mut state.game_clock,
+                &mut state.action_scheduler,
+                &mut self.events,
+                &mut self.vfx,
+                ui_state,
+            );
         }
 
         // Execute player intent
@@ -710,108 +639,15 @@ impl GameEngine {
             return;
         };
 
-        let player = state.player_entity;
-
-        // Check if player is not busy with another action
-        let is_idle = state.world
-            .get::<&Actor>(player)
-            .map(|a| a.current_action.is_none())
-            .unwrap_or(false);
-
-        if !is_idle {
-            return;
-        }
-
-        // Get ability info
-        let ability_info = state.world
-            .get::<&ClassAbility>(player)
-            .ok()
-            .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
-
-        let Some((ability_type, is_ready, energy_cost)) = ability_info else {
-            return;
-        };
-
-        if !is_ready {
-            return;
-        }
-
-        // Check if player can ever afford this (max_energy >= cost)
-        let can_afford = state.world
-            .get::<&Actor>(player)
-            .map(|a| a.max_energy >= energy_cost)
-            .unwrap_or(false);
-
-        if !can_afford {
-            return;
-        }
-
-        // Wait for enough energy (this advances time, enemies may act)
-        let mut rng = rand::thread_rng();
-        let got_energy = simulation::wait_for_energy(
+        activate_class_ability(
             &mut state.world,
             &state.grid,
-            player,
-            energy_cost,
+            state.player_entity,
             &mut state.game_clock,
             &mut state.action_scheduler,
             &mut self.events,
-            &mut rng,
-        );
-
-        if !got_energy {
-            // Player died or something went wrong during wait
-            let _ = process_events(
-                &mut self.events,
-                &mut state.world,
-                &state.grid,
-                &mut self.vfx,
-                ui_state,
-                player,
-            );
-            return;
-        }
-
-        // Determine action type based on ability
-        let action_type = match ability_type {
-            AbilityType::Cleave => ActionType::Cleave,
-            AbilityType::Sprint => ActionType::ActivateSprint,
-        };
-
-        // Start the action
-        let start_result = time_system::start_action(
-            &mut state.world,
-            player,
-            action_type,
-            &state.game_clock,
-            &mut state.action_scheduler,
-        );
-
-        if start_result.is_ok() {
-            // Start cooldown
-            if let Ok(mut ability) = state.world.get::<&mut ClassAbility>(player) {
-                ability.start_cooldown();
-            }
-
-            // Advance time and process events
-            simulation::advance_until_player_ready(
-                &mut state.world,
-                &state.grid,
-                player,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut self.events,
-                &mut rng,
-            );
-        }
-
-        let _ = process_events(
-            &mut self.events,
-            &mut state.world,
-            &state.grid,
             &mut self.vfx,
             ui_state,
-            player,
         );
     }
 
@@ -856,6 +692,109 @@ impl GameEngine {
             result.player_visual_pos.1,
         ));
     }
+}
+
+/// Try to activate the player's class ability.
+/// Returns true if the ability was successfully activated.
+fn activate_class_ability(
+    world: &mut hecs::World,
+    grid: &crate::grid::Grid,
+    player: Entity,
+    game_clock: &mut crate::time_system::GameClock,
+    action_scheduler: &mut crate::time_system::ActionScheduler,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+) -> bool {
+    // Check if player is idle
+    let is_idle = world
+        .get::<&Actor>(player)
+        .map(|a| a.current_action.is_none())
+        .unwrap_or(false);
+
+    if !is_idle {
+        return false;
+    }
+
+    // Get ability info
+    let ability_info = world
+        .get::<&ClassAbility>(player)
+        .ok()
+        .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
+
+    let Some((ability_type, is_ready, energy_cost)) = ability_info else {
+        return false;
+    };
+
+    if !is_ready {
+        return false;
+    }
+
+    // Check if player can ever afford this (max_energy >= cost)
+    let can_afford = world
+        .get::<&Actor>(player)
+        .map(|a| a.max_energy >= energy_cost)
+        .unwrap_or(false);
+
+    if !can_afford {
+        return false;
+    }
+
+    // Wait for enough energy (this advances time, enemies may act)
+    let mut rng = rand::thread_rng();
+    let got_energy = simulation::wait_for_energy(
+        world,
+        grid,
+        player,
+        energy_cost,
+        game_clock,
+        action_scheduler,
+        events,
+        &mut rng,
+    );
+
+    if !got_energy {
+        // Player died or something went wrong during wait
+        let _ = process_events(events, world, grid, vfx, ui_state, player);
+        return false;
+    }
+
+    // Determine action type based on ability
+    let action_type = match ability_type {
+        AbilityType::Cleave => ActionType::Cleave,
+        AbilityType::Sprint => ActionType::ActivateSprint,
+    };
+
+    // Start the action
+    let start_result = time_system::start_action(
+        world,
+        player,
+        action_type,
+        game_clock,
+        action_scheduler,
+    );
+
+    if start_result.is_ok() {
+        // Start cooldown
+        if let Ok(mut ability) = world.get::<&mut ClassAbility>(player) {
+            ability.start_cooldown();
+        }
+
+        // Advance time and process events
+        simulation::advance_until_player_ready(
+            world,
+            grid,
+            player,
+            game_clock,
+            action_scheduler,
+            events,
+            &mut rng,
+        );
+    }
+
+    let _ = process_events(events, world, grid, vfx, ui_state, player);
+
+    start_result.is_ok()
 }
 
 /// Result of input processing (internal)

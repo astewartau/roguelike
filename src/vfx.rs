@@ -193,6 +193,21 @@ impl VfxManager {
                     self.spawn_potion_splash(*x as f32 + 0.5, *y as f32 + 0.5, *potion_type);
                 }
             }
+            GameEvent::CleavePerformed { center } => {
+                // Spawn slashes on all 8 adjacent tiles
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue; // Skip center
+                        }
+                        let tx = center.0 + dx;
+                        let ty = center.1 + dy;
+                        if grid.get(tx, ty).map(|t| t.visible).unwrap_or(false) {
+                            self.spawn_slash(tx as f32 + 0.5, ty as f32 + 0.5);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }

@@ -1522,6 +1522,113 @@ pub struct EnemyStatusData {
     pub is_confused: bool,
 }
 
+/// Data for an enemy's health bar
+pub struct EnemyHealthData {
+    pub x: f32,
+    pub y: f32,
+    pub current_health: i32,
+    pub max_health: i32,
+}
+
+/// Extract health data for visible damaged enemies
+pub fn get_enemy_health_data(world: &World, grid: &crate::grid::Grid, player_entity: Entity) -> Vec<EnemyHealthData> {
+    use crate::components::{ChaseAI, VisualPosition};
+
+    world
+        .query::<(&VisualPosition, &Health, &ChaseAI)>()
+        .iter()
+        .filter(|(id, _)| *id != player_entity) // Exclude player
+        .filter(|(_, (pos, health, _))| {
+            // Only show for visible tiles and damaged enemies
+            let is_visible = grid.get(pos.x as i32, pos.y as i32)
+                .map(|t| t.visible)
+                .unwrap_or(false);
+            let is_damaged = health.current < health.max;
+            is_visible && is_damaged
+        })
+        .map(|(_, (pos, health, _))| EnemyHealthData {
+            x: pos.x,
+            y: pos.y,
+            current_health: health.current,
+            max_health: health.max,
+        })
+        .collect()
+}
+
+/// Render health bars above damaged enemies
+pub fn draw_enemy_health_bars(
+    ctx: &egui::Context,
+    camera: &Camera,
+    enemies: &[EnemyHealthData],
+) {
+    if enemies.is_empty() {
+        return;
+    }
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("enemy_health_bars"),
+    ));
+
+    let ppp = ctx.pixels_per_point();
+
+    // Health bar dimensions
+    let bar_width = 24.0;
+    let bar_height = 4.0;
+    let bar_y_offset = 0.9; // Position above the sprite (higher Y = higher on screen)
+
+    for enemy in enemies {
+        // Convert world position to screen position
+        let world_x = enemy.x + 0.5; // Center on tile
+        let world_y = enemy.y + bar_y_offset;
+
+        let screen_pos = camera.world_to_screen(world_x, world_y);
+        let egui_x = screen_pos.0 / ppp;
+        let egui_y = screen_pos.1 / ppp;
+
+        // Calculate health percentage
+        let health_pct = (enemy.current_health as f32 / enemy.max_health as f32).clamp(0.0, 1.0);
+
+        // Background (dark)
+        let bg_rect = egui::Rect::from_center_size(
+            egui::pos2(egui_x, egui_y),
+            egui::vec2(bar_width, bar_height),
+        );
+        painter.rect_filled(bg_rect, 1.0, egui::Color32::from_rgb(20, 15, 15));
+
+        // Health fill (red to yellow to green based on health)
+        let fill_color = if health_pct > 0.5 {
+            // Green to yellow
+            let t = (health_pct - 0.5) * 2.0;
+            egui::Color32::from_rgb(
+                (255.0 * (1.0 - t)) as u8,
+                200,
+                50,
+            )
+        } else {
+            // Yellow to red
+            let t = health_pct * 2.0;
+            egui::Color32::from_rgb(
+                220,
+                (180.0 * t) as u8,
+                50,
+            )
+        };
+
+        let fill_width = bar_width * health_pct;
+        if fill_width > 0.0 {
+            let fill_rect = egui::Rect::from_min_size(
+                egui::pos2(egui_x - bar_width / 2.0, egui_y - bar_height / 2.0),
+                egui::vec2(fill_width, bar_height),
+            );
+            painter.rect_filled(fill_rect, 1.0, fill_color);
+        }
+
+        // Border
+        painter.rect_stroke(bg_rect, 1.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 35, 35)));
+    }
+}
+
 /// Render persistent status effect indicators above enemies
 pub fn draw_enemy_status_indicators(
     ctx: &egui::Context,
@@ -1968,7 +2075,7 @@ pub fn run_start_screen(
 
                     // Title
                     ui.heading(
-                        egui::RichText::new("Grid Roguelike")
+                        egui::RichText::new("Roguelike")
                             .size(48.0)
                             .color(style::colors::DUNGEON_GOLD),
                     );
@@ -2184,8 +2291,12 @@ pub fn run_ui(
         camera,
     );
     let enemy_status_data = get_enemy_status_data(world, grid);
+    let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
 
     egui_glow.run(window, |ctx| {
+        // Enemy health bars (draw early so they're behind other indicators)
+        draw_enemy_health_bars(ctx, camera, &enemy_health_data);
+
         // Player buff auras (draw first so they're behind everything)
         draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());
 

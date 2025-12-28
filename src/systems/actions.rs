@@ -841,6 +841,11 @@ pub fn apply_cleave(
         None => return ActionResult::Invalid,
     };
 
+    // Emit cleave event for VFX (shows slashes on all 8 adjacent tiles)
+    events.push(GameEvent::CleavePerformed {
+        center: attacker_pos,
+    });
+
     // Get attacker stats for damage calculation
     let strength = world
         .get::<&Stats>(attacker)
