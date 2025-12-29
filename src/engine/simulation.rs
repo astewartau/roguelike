@@ -31,6 +31,7 @@ pub struct TurnExecutionResult {
     pub player_attacked: bool,
     pub player_took_damage: bool,
     pub enemy_spotted_player: bool,
+    pub skeleton_spawns: Vec<(i32, i32)>,
 }
 
 impl TurnExecutionResult {
@@ -45,6 +46,7 @@ pub struct EventProcessingResult {
     pub player_attacked: bool,
     pub player_took_damage: bool,
     pub enemy_spotted_player: bool,
+    pub skeleton_spawns: Vec<(i32, i32)>,
 }
 
 impl EventProcessingResult {
@@ -77,6 +79,7 @@ pub fn execute_player_intent(
             player_attacked: false,
             player_took_damage: false,
             enemy_spotted_player: false,
+            skeleton_spawns: Vec::new(),
         };
     }
 
@@ -89,6 +92,7 @@ pub fn execute_player_intent(
                 player_attacked: false,
                 player_took_damage: false,
                 enemy_spotted_player: false,
+                skeleton_spawns: Vec::new(),
             };
         }
     };
@@ -100,6 +104,7 @@ pub fn execute_player_intent(
             player_attacked: false,
             player_took_damage: false,
             enemy_spotted_player: false,
+            skeleton_spawns: Vec::new(),
         };
     }
 
@@ -114,6 +119,7 @@ pub fn execute_player_intent(
         player_attacked: event_result.player_attacked,
         player_took_damage: event_result.player_took_damage,
         enemy_spotted_player: event_result.enemy_spotted_player,
+        skeleton_spawns: event_result.skeleton_spawns,
     }
 }
 
@@ -143,6 +149,7 @@ pub fn execute_player_turn(
             player_attacked: false,
             player_took_damage: false,
             enemy_spotted_player: false,
+            skeleton_spawns: Vec::new(),
         };
     }
 
@@ -155,6 +162,7 @@ pub fn execute_player_turn(
             player_attacked: false,
             player_took_damage: false,
             enemy_spotted_player: false,
+            skeleton_spawns: Vec::new(),
         };
     }
 
@@ -169,6 +177,7 @@ pub fn execute_player_turn(
         player_attacked: event_result.player_attacked,
         player_took_damage: event_result.player_took_damage,
         enemy_spotted_player: event_result.enemy_spotted_player,
+        skeleton_spawns: event_result.skeleton_spawns,
     }
 }
 
@@ -342,6 +351,7 @@ pub fn process_events(
         player_attacked: false,
         player_took_damage: false,
         enemy_spotted_player: false,
+        skeleton_spawns: Vec::new(),
     };
 
     for event in events.drain() {
@@ -349,6 +359,9 @@ pub fn process_events(
         ui_state.handle_event(&event);
 
         match &event {
+            GameEvent::DoorOpened { door, .. } => {
+                systems::handle_door_opened(world, *door);
+            }
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
             }
@@ -370,6 +383,9 @@ pub fn process_events(
                     }
                     result.enemy_spotted_player = true;
                 }
+            }
+            GameEvent::CoffinSkeletonSpawn { position } => {
+                result.skeleton_spawns.push(*position);
             }
             _ => {}
         }

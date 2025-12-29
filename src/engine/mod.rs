@@ -304,6 +304,10 @@ impl GameEngine {
             ui_state,
             state.player_entity,
         );
+
+        // Collect skeleton spawn positions before floor transition might invalidate state
+        let skeleton_spawns = event_result.skeleton_spawns.clone();
+
         if let Some(direction) = event_result.floor_transition {
             self.handle_floor_transition(direction, camera);
         }
@@ -313,6 +317,28 @@ impl GameEngine {
 
         // Re-borrow state after floor transition (which may have modified it)
         let state = self.state.as_mut().expect("State should still exist after floor transition");
+
+        // Spawn skeletons from opened coffins
+        if !skeleton_spawns.is_empty() {
+            for (x, y) in &skeleton_spawns {
+                let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
+                let mut rng = rand::thread_rng();
+                initialization::initialize_single_ai_actor(
+                    &mut state.world,
+                    &state.grid,
+                    skeleton,
+                    state.player_entity,
+                    &state.game_clock,
+                    &mut state.action_scheduler,
+                    &mut self.events,
+                    &mut rng,
+                );
+            }
+            // Close loot UI - player must deal with skeleton first
+            if let Some(ui_state) = self.ui_state.as_mut() {
+                ui_state.close_chest();
+            }
+        }
 
         // Visual lerping
         systems::visual_lerp(&mut state.world, dt);
@@ -602,6 +628,9 @@ impl GameEngine {
                 ui_state,
             );
 
+            // Collect skeleton spawn positions before floor transition might invalidate state
+            let skeleton_spawns = turn_result.skeleton_spawns.clone();
+
             match turn_result.turn_result {
                 TurnResult::Started => {
                     if !frame.from_keyboard {
@@ -630,6 +659,29 @@ impl GameEngine {
 
             if turn_result.should_interrupt_path() {
                 self.input.clear_path();
+            }
+
+            // Spawn skeletons from opened coffins
+            if !skeleton_spawns.is_empty() {
+                let state = self.state.as_mut().expect("State should exist");
+                for (x, y) in &skeleton_spawns {
+                    let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
+                    let mut rng = rand::thread_rng();
+                    initialization::initialize_single_ai_actor(
+                        &mut state.world,
+                        &state.grid,
+                        skeleton,
+                        state.player_entity,
+                        &state.game_clock,
+                        &mut state.action_scheduler,
+                        &mut self.events,
+                        &mut rng,
+                    );
+                }
+                // Close loot UI - player must deal with skeleton first
+                if let Some(ui_state) = self.ui_state.as_mut() {
+                    ui_state.close_chest();
+                }
             }
         }
 

@@ -349,3 +349,16 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         LightSource::campfire(),
     ))
 }
+
+/// Spawn a brazier entity with light source and animated fire sprite
+pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::AnimatedSprite;
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        AnimatedSprite::brazier(),
+        LightSource::brazier(),
+    ))
+}

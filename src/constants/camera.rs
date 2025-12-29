@@ -5,8 +5,8 @@
 pub const CAMERA_DEFAULT_ZOOM: f32 = 48.0;
 /// Minimum zoom level (16px still readable for 32x32 source tiles)
 pub const CAMERA_MIN_ZOOM: f32 = 16.0;
-/// Maximum zoom level (96px = 3x native for close-up view)
-pub const CAMERA_MAX_ZOOM: f32 = 96.0;
+/// Maximum zoom level (192px = 6x native for very close-up view)
+pub const CAMERA_MAX_ZOOM: f32 = 192.0;
 /// Zoom speed multiplier per scroll unit
 pub const CAMERA_ZOOM_FACTOR: f32 = 1.1;
 /// Smoothing factor for camera tracking (lower = smoother)

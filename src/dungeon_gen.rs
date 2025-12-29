@@ -32,10 +32,14 @@ impl Rect {
 pub enum RoomTheme {
     /// Standard dungeon room with stone floors
     Normal,
-    /// Overgrown room with tall grass patches
+    /// Overgrown room with tall grass patches and rough stone walls
     Overgrown,
     /// Flooded room with water pools
     Flooded,
+    /// Crypt room with coffins, bones, and skull walls
+    Crypt,
+    /// Storage room with barrels of food
+    Storage,
 }
 
 /// A room with its theme
@@ -216,18 +220,30 @@ impl BspNode {
 pub struct DungeonResult {
     pub tiles: Vec<Tile>,
     pub chest_positions: Vec<(i32, i32)>,
-    pub door_positions: Vec<(i32, i32)>,
+    /// Door positions with their theme (for selecting appropriate sprite)
+    pub door_positions: Vec<((i32, i32), RoomTheme)>,
+    pub brazier_positions: Vec<(i32, i32)>,
     pub decals: Vec<Decal>,
     pub stairs_up_pos: Option<(i32, i32)>,
     pub stairs_down_pos: Option<(i32, i32)>,
     /// The starting room where the player spawns (for NPC placement and enemy exclusion)
     pub starting_room: Option<Rect>,
+    /// All themed rooms for wall theming
+    pub themed_rooms: Vec<ThemedRoom>,
+    /// Water positions for animated water tiles
+    pub water_positions: Vec<(i32, i32)>,
+    /// Coffin positions in Crypt rooms
+    pub coffin_positions: Vec<(i32, i32)>,
+    /// Barrel positions in Storage rooms
+    pub barrel_positions: Vec<(i32, i32)>,
 }
 
 pub struct DungeonGenerator {
     width: usize,
     height: usize,
     tiles: Vec<Tile>,
+    /// Water positions collected during generation
+    water_positions: Vec<(i32, i32)>,
 }
 
 impl DungeonGenerator {
@@ -236,6 +252,7 @@ impl DungeonGenerator {
             width,
             height,
             tiles: vec![Tile::new(TileType::Wall); width * height],
+            water_positions: Vec::new(),
         }
     }
 
@@ -266,15 +283,21 @@ impl DungeonGenerator {
                 // First room is always Normal (player spawn)
                 let theme = if i == 0 {
                     RoomTheme::Normal
-                } else if rng.gen::<f32>() < THEMED_ROOM_CHANCE {
-                    // Randomly pick between Overgrown and Flooded
-                    if rng.gen_bool(0.5) {
-                        RoomTheme::Overgrown
-                    } else {
-                        RoomTheme::Flooded
-                    }
                 } else {
-                    RoomTheme::Normal
+                    // Weighted theme selection:
+                    // Normal: 40%, Overgrown: 15%, Flooded: 15%, Crypt: 15%, Storage: 15%
+                    let roll: f32 = rng.gen();
+                    if roll < 0.40 {
+                        RoomTheme::Normal
+                    } else if roll < 0.55 {
+                        RoomTheme::Overgrown
+                    } else if roll < 0.70 {
+                        RoomTheme::Flooded
+                    } else if roll < 0.85 {
+                        RoomTheme::Crypt
+                    } else {
+                        RoomTheme::Storage
+                    }
                 };
                 ThemedRoom { rect: *rect, theme }
             })
@@ -292,7 +315,7 @@ impl DungeonGenerator {
         gen.connect_bsp(&root, &mut rng);
 
         // Find door positions (but keep floor tiles - doors are entities)
-        let door_positions = gen.find_door_positions(&rooms);
+        let door_positions = gen.find_door_positions(&themed_rooms);
 
         // Generate decorative decals in rooms
         let decals = gen.generate_themed_decals(&themed_rooms, &mut rng);
@@ -335,23 +358,40 @@ impl DungeonGenerator {
             .map(|(_, room)| room.center())
             .collect();
 
+        // Generate brazier positions in room corners (skip starting room)
+        let brazier_positions = gen.generate_brazier_positions(&rooms, &mut rng);
+
+        // Generate coffin positions in Crypt rooms
+        let coffin_positions = gen.generate_coffin_positions(&themed_rooms, &mut rng);
+
+        // Generate barrel positions in Storage rooms
+        let barrel_positions = gen.generate_barrel_positions(&themed_rooms, &mut rng);
+
         // Starting room is the first room (where player spawns)
         let starting_room = rooms.first().copied();
 
         // Convert void areas (walls not adjacent to walkable tiles) to empty
         gen.convert_void_to_empty();
 
-        // Set wall orientations based on neighbors
-        gen.set_wall_orientations();
+        // Set wall orientations based on neighbors and room themes
+        gen.set_wall_orientations(&themed_rooms);
+
+        // Extract water positions before moving tiles
+        let water_positions = gen.water_positions;
 
         DungeonResult {
             tiles: gen.tiles,
             chest_positions,
             door_positions,
+            brazier_positions,
             decals,
             stairs_up_pos,
             stairs_down_pos,
             starting_room,
+            themed_rooms,
+            water_positions,
+            coffin_positions,
+            barrel_positions,
         }
     }
 
@@ -415,10 +455,11 @@ impl DungeonGenerator {
         }
     }
 
-    /// Set wall sprite overrides based on orientation.
+    /// Set wall sprite overrides based on orientation and room theme.
     /// Walls adjacent to floor tiles on north/south get the "top" sprite (horizontal edge).
     /// Walls adjacent to floor tiles on east/west get the "side" sprite (vertical edge).
-    fn set_wall_orientations(&mut self) {
+    /// Walls are themed based on the room they're adjacent to (Overgrown -> rough stone, Crypt -> skull walls).
+    fn set_wall_orientations(&mut self, themed_rooms: &[ThemedRoom]) {
         let width = self.width as i32;
         let height = self.height as i32;
 
@@ -432,45 +473,90 @@ impl DungeonGenerator {
                     continue;
                 }
 
-                // Check neighbors for walkable tiles
-                let north_walkable = if y > 0 {
-                    self.tiles[(y - 1) as usize * self.width + x as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
-                let south_walkable = if y < height - 1 {
-                    self.tiles[(y + 1) as usize * self.width + x as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
-                let east_walkable = if x < width - 1 {
-                    self.tiles[y as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
-                let west_walkable = if x > 0 {
-                    self.tiles[y as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
+                // Check neighbors for walkable tiles and their positions
+                let neighbors = [
+                    (0, -1, y > 0),              // north
+                    (0, 1, y < height - 1),      // south
+                    (1, 0, x < width - 1),       // east
+                    (-1, 0, x > 0),              // west
+                ];
+
+                let mut north_walkable = false;
+                let mut south_walkable = false;
+                let mut east_walkable = false;
+                let mut west_walkable = false;
+                let mut adjacent_theme: Option<RoomTheme> = None;
+
+                for (dx, dy, in_bounds) in neighbors {
+                    if !in_bounds {
+                        continue;
+                    }
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    let nidx = ny as usize * self.width + nx as usize;
+                    let is_walkable = self.tiles[nidx].tile_type.is_walkable();
+
+                    if is_walkable {
+                        // Track which direction is walkable
+                        match (dx, dy) {
+                            (0, -1) => north_walkable = true,
+                            (0, 1) => south_walkable = true,
+                            (1, 0) => east_walkable = true,
+                            (-1, 0) => west_walkable = true,
+                            _ => {}
+                        }
+
+                        // Find theme of adjacent room (if any)
+                        if adjacent_theme.is_none() {
+                            for room in themed_rooms {
+                                if room.rect.contains(nx, ny) {
+                                    adjacent_theme = Some(room.theme);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Determine sprite based on adjacent walkable tiles
                 // Vertical walls (floor to east/west) use "top" sprite
                 // Horizontal walls (floor to north/south) use "side" sprite (default)
-                // Top corners (floor to south + east/west, but not north) use "top" sprite
-                // Bottom corners (floor to north + east/west) use "side" sprite (default)
                 let has_horizontal_neighbor = east_walkable || west_walkable;
 
-                // Use WALL_TOP for:
+                // Use WALL_TOP variant for:
                 // 1. Pure vertical walls (floor only to east/west)
                 // 2. Top corners (floor to south and east/west, but not north)
                 let is_vertical_wall = has_horizontal_neighbor && !north_walkable && !south_walkable;
                 let is_top_corner = south_walkable && has_horizontal_neighbor && !north_walkable;
+                let use_top_sprite = is_vertical_wall || is_top_corner;
 
-                if is_vertical_wall || is_top_corner {
-                    overrides.push((idx, tile_ids::WALL_TOP));
-                }
-                // Default WALL sprite (side) is used for horizontal edges and bottom corners
+                // Select themed wall sprites
+                let sprite = match adjacent_theme {
+                    Some(RoomTheme::Overgrown) => {
+                        if use_top_sprite {
+                            tile_ids::WALL_ROUGH_TOP
+                        } else {
+                            tile_ids::WALL_ROUGH
+                        }
+                    }
+                    Some(RoomTheme::Crypt) => {
+                        if use_top_sprite {
+                            tile_ids::WALL_CRYPT_TOP
+                        } else {
+                            tile_ids::WALL_CRYPT
+                        }
+                    }
+                    _ => {
+                        // Normal, Flooded, Storage, or no adjacent room - use default walls
+                        if use_top_sprite {
+                            tile_ids::WALL_TOP
+                        } else {
+                            continue; // No override needed for default wall (side)
+                        }
+                    }
+                };
+
+                overrides.push((idx, sprite));
             }
         }
 
@@ -498,6 +584,8 @@ impl DungeonGenerator {
             RoomTheme::Normal => {}
             RoomTheme::Overgrown => self.add_grass_patches(room, rng),
             RoomTheme::Flooded => self.add_water_pools(room, rng),
+            RoomTheme::Crypt => {} // Crypt uses standard floor, coffins added separately
+            RoomTheme::Storage => {} // Storage uses standard floor, barrels added separately
         }
     }
 
@@ -548,7 +636,7 @@ impl DungeonGenerator {
             let cy = rng.gen_range(room.rect.y + 1..room.rect.y + room.rect.height - 1);
             let radius = rng.gen_range(1..=2);
 
-            // Fill rough circle with water
+            // Fill rough circle with water (keep floor tile, track position for animated water entity)
             for dy in -radius..=radius {
                 for dx in -radius..=radius {
                     // Rough circle shape with some randomness
@@ -556,7 +644,8 @@ impl DungeonGenerator {
                         let x = cx + dx;
                         let y = cy + dy;
                         if room.rect.contains(x, y) {
-                            self.set_tile(x, y, TileType::Water);
+                            // Keep floor tile but track water position
+                            self.water_positions.push((x, y));
                         }
                     }
                 }
@@ -579,11 +668,53 @@ impl DungeonGenerator {
         }
 
         // Connect a room from the left subtree to a room from the right subtree
+        // But only if they're not already connected (avoids duplicate hallways)
         if let (Some(ref left), Some(ref right)) = (&node.left, &node.right) {
             if let (Some(left_room), Some(right_room)) = (left.get_room(), right.get_room()) {
-                self.connect_rooms(&left_room, &right_room, rng);
+                if !self.rooms_are_connected(&left_room, &right_room) {
+                    self.connect_rooms(&left_room, &right_room, rng);
+                }
             }
         }
+    }
+
+    /// Check if two rooms are already connected via walkable tiles (flood fill).
+    fn rooms_are_connected(&self, room1: &Rect, room2: &Rect) -> bool {
+        use std::collections::{HashSet, VecDeque};
+
+        let start = room1.center();
+
+        // BFS from room1's center to see if we can reach room2's center
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        visited.insert(start);
+
+        while let Some((x, y)) = queue.pop_front() {
+            // Check if we reached room2
+            if room2.contains(x, y) {
+                return true;
+            }
+
+            // Explore neighbors
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let nx = x + dx;
+                let ny = y + dy;
+
+                if visited.contains(&(nx, ny)) {
+                    continue;
+                }
+
+                if let Some(tile_type) = self.get_tile(nx, ny) {
+                    if tile_type.is_walkable() {
+                        visited.insert((nx, ny));
+                        queue.push_back((nx, ny));
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Connect two rooms with an L-shaped corridor.
@@ -626,17 +757,20 @@ impl DungeonGenerator {
     /// Find positions where doors should be placed.
     /// A door candidate is a floor tile adjacent to walls on two opposite sides
     /// (indicating a doorway/chokepoint).
-    fn find_door_positions(&self, rooms: &[Rect]) -> Vec<(i32, i32)> {
-        let mut door_positions = Vec::new();
+    fn find_door_positions(&self, themed_rooms: &[ThemedRoom]) -> Vec<((i32, i32), RoomTheme)> {
+        let mut door_candidates: Vec<((i32, i32), RoomTheme)> = Vec::new();
 
-        for room in rooms {
+        for themed_room in themed_rooms {
+            let room = &themed_room.rect;
+            let theme = themed_room.theme;
+
             // Check just outside each edge of the room for corridor entrances
 
             // Top edge (y = room.y - 1)
             let y = room.y - 1;
             for x in room.x..room.x + room.width {
                 if self.is_door_candidate(x, y) {
-                    door_positions.push((x, y));
+                    door_candidates.push(((x, y), theme));
                 }
             }
 
@@ -644,7 +778,7 @@ impl DungeonGenerator {
             let y = room.y + room.height;
             for x in room.x..room.x + room.width {
                 if self.is_door_candidate(x, y) {
-                    door_positions.push((x, y));
+                    door_candidates.push(((x, y), theme));
                 }
             }
 
@@ -652,7 +786,7 @@ impl DungeonGenerator {
             let x = room.x - 1;
             for y in room.y..room.y + room.height {
                 if self.is_door_candidate(x, y) {
-                    door_positions.push((x, y));
+                    door_candidates.push(((x, y), theme));
                 }
             }
 
@@ -660,12 +794,70 @@ impl DungeonGenerator {
             let x = room.x + room.width;
             for y in room.y..room.y + room.height {
                 if self.is_door_candidate(x, y) {
-                    door_positions.push((x, y));
+                    door_candidates.push(((x, y), theme));
                 }
             }
         }
 
-        door_positions
+        // Filter out adjacent doors (keep only one from each cluster)
+        self.filter_adjacent_doors_themed(door_candidates)
+    }
+
+    /// Filter out doors that are adjacent to other doors.
+    /// When multiple doors are next to each other, keep only one.
+    #[allow(dead_code)]
+    fn filter_adjacent_doors(&self, candidates: Vec<(i32, i32)>) -> Vec<(i32, i32)> {
+        use std::collections::HashSet;
+
+        let candidate_set: HashSet<(i32, i32)> = candidates.iter().copied().collect();
+        let mut removed: HashSet<(i32, i32)> = HashSet::new();
+        let mut result = Vec::new();
+
+        for &(x, y) in &candidates {
+            if removed.contains(&(x, y)) {
+                continue;
+            }
+
+            // Check adjacent tiles and mark any door candidates as removed
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let neighbor = (x + dx, y + dy);
+                if candidate_set.contains(&neighbor) && !removed.contains(&neighbor) && neighbor != (x, y) {
+                    // Mark the neighbor as removed (we keep the current one)
+                    removed.insert(neighbor);
+                }
+            }
+
+            result.push((x, y));
+        }
+
+        result
+    }
+
+    /// Filter out doors that are adjacent to other doors (themed version).
+    fn filter_adjacent_doors_themed(&self, candidates: Vec<((i32, i32), RoomTheme)>) -> Vec<((i32, i32), RoomTheme)> {
+        use std::collections::HashSet;
+
+        let candidate_positions: HashSet<(i32, i32)> = candidates.iter().map(|(pos, _)| *pos).collect();
+        let mut removed: HashSet<(i32, i32)> = HashSet::new();
+        let mut result = Vec::new();
+
+        for &((x, y), theme) in &candidates {
+            if removed.contains(&(x, y)) {
+                continue;
+            }
+
+            // Check adjacent tiles and mark any door candidates as removed
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let neighbor = (x + dx, y + dy);
+                if candidate_positions.contains(&neighbor) && !removed.contains(&neighbor) && neighbor != (x, y) {
+                    removed.insert(neighbor);
+                }
+            }
+
+            result.push(((x, y), theme));
+        }
+
+        result
     }
 
     /// Generate decorative decals in rooms with theme-appropriate types
@@ -683,6 +875,7 @@ impl DungeonGenerator {
             (tile_ids::BONES_3, 2),
             (tile_ids::BONES_4, 1),
             (tile_ids::ROCKS, 4),
+            (tile_ids::ROCKS_2, 3),
             (tile_ids::SKULL, 1),
             (tile_ids::MUSHROOM, 2),
             (tile_ids::FLOWERS, 2),
@@ -692,17 +885,41 @@ impl DungeonGenerator {
         // Overgrown room decals (more plants and mushrooms)
         let overgrown_decals: Vec<DecalType> = vec![
             (tile_ids::PLANT, 5),
+            (tile_ids::PLANT_FLAX, 2),
+            (tile_ids::PLANT_PAPYRUS, 2),
+            (tile_ids::PLANT_RICE, 2),
+            (tile_ids::PLANT_CORN, 2),
             (tile_ids::MUSHROOM, 4),
+            (tile_ids::MUSHROOM_LARGE, 2),
             (tile_ids::FLOWERS, 4),
             (tile_ids::BONES_1, 1),
             (tile_ids::ROCKS, 2),
         ];
 
-        // Flooded room decals (sparse, mostly rocks)
+        // Flooded room decals (sparse, rocks and slime)
         let flooded_decals: Vec<DecalType> = vec![
             (tile_ids::ROCKS, 4),
             (tile_ids::BONES_1, 2),
             (tile_ids::SKULL, 1),
+            (tile_ids::SLIME_SMALL, 2),
+            (tile_ids::SLIME_LARGE, 1),
+        ];
+
+        // Crypt room decals (bones, skulls, blood)
+        let crypt_decals: Vec<DecalType> = vec![
+            (tile_ids::BONES_1, 3),
+            (tile_ids::BONES_2, 3),
+            (tile_ids::BONES_3, 2),
+            (tile_ids::BONES_4, 2),
+            (tile_ids::SKULL, 3),
+            (tile_ids::BLOOD_1, 2),
+            (tile_ids::BLOOD_2, 2),
+        ];
+
+        // Storage room decals (minimal - contents are the barrels)
+        let storage_decals: Vec<DecalType> = vec![
+            (tile_ids::ROCKS, 2),
+            (tile_ids::BONES_1, 1),
         ];
 
         for room in rooms {
@@ -710,12 +927,15 @@ impl DungeonGenerator {
                 RoomTheme::Normal => &normal_decals,
                 RoomTheme::Overgrown => &overgrown_decals,
                 RoomTheme::Flooded => &flooded_decals,
+                RoomTheme::Crypt => &crypt_decals,
+                RoomTheme::Storage => &storage_decals,
             };
             let total_weight: u32 = decal_types.iter().map(|(_, w)| w).sum();
 
-            // Flooded rooms get fewer decals
+            // Flooded and Storage rooms get fewer decals
             let density_divisor = match room.theme {
                 RoomTheme::Flooded => 20,
+                RoomTheme::Storage => 25,
                 _ => 12,
             };
 
@@ -764,6 +984,143 @@ impl DungeonGenerator {
         }
 
         decals
+    }
+
+    /// Generate brazier positions in rooms.
+    /// Places braziers in corners of larger rooms (not the starting room).
+    fn generate_brazier_positions(&self, rooms: &[Rect], rng: &mut impl Rng) -> Vec<(i32, i32)> {
+        let mut positions = Vec::new();
+
+        for (i, room) in rooms.iter().enumerate() {
+            // Skip the starting room (index 0) - it has the campfire
+            if i == 0 {
+                continue;
+            }
+
+            // Only place braziers in rooms large enough (at least 5x5)
+            if room.width < 5 || room.height < 5 {
+                continue;
+            }
+
+            // ~40% chance to have braziers in a room
+            if !rng.gen_bool(0.4) {
+                continue;
+            }
+
+            // Try to place 1-2 braziers in corners
+            let corners = [
+                (room.x + 1, room.y + 1),                           // top-left
+                (room.x + room.width - 2, room.y + 1),              // top-right
+                (room.x + 1, room.y + room.height - 2),             // bottom-left
+                (room.x + room.width - 2, room.y + room.height - 2), // bottom-right
+            ];
+
+            // Pick 1-2 random corners
+            let num_braziers = rng.gen_range(1..=2);
+            let mut used_corners: Vec<(i32, i32)> = Vec::new();
+
+            for _ in 0..num_braziers {
+                // Find an unused corner that's a valid floor tile
+                let available: Vec<_> = corners.iter()
+                    .filter(|c| !used_corners.contains(c))
+                    .filter(|&&(x, y)| {
+                        self.get_tile(x, y) == Some(TileType::Floor)
+                    })
+                    .copied()
+                    .collect();
+
+                if !available.is_empty() {
+                    let corner = available[rng.gen_range(0..available.len())];
+                    positions.push(corner);
+                    used_corners.push(corner);
+                }
+            }
+        }
+
+        positions
+    }
+
+    /// Generate coffin positions in Crypt rooms
+    fn generate_coffin_positions(&self, themed_rooms: &[ThemedRoom], rng: &mut impl Rng) -> Vec<(i32, i32)> {
+        let mut positions = Vec::new();
+
+        for room in themed_rooms {
+            if room.theme != RoomTheme::Crypt {
+                continue;
+            }
+
+            // Only place coffins in rooms large enough (at least 5x5)
+            if room.rect.width < 5 || room.rect.height < 5 {
+                continue;
+            }
+
+            // Place 2-4 coffins per crypt room
+            let num_coffins = rng.gen_range(2..=4);
+
+            // Try corners and edges for placement
+            let potential_spots = [
+                (room.rect.x + 1, room.rect.y + 1),
+                (room.rect.x + room.rect.width - 2, room.rect.y + 1),
+                (room.rect.x + 1, room.rect.y + room.rect.height - 2),
+                (room.rect.x + room.rect.width - 2, room.rect.y + room.rect.height - 2),
+                // Mid-edges
+                (room.rect.x + room.rect.width / 2, room.rect.y + 1),
+                (room.rect.x + room.rect.width / 2, room.rect.y + room.rect.height - 2),
+            ];
+
+            let mut used: Vec<(i32, i32)> = Vec::new();
+            for _ in 0..num_coffins {
+                let available: Vec<_> = potential_spots.iter()
+                    .filter(|c| !used.contains(c))
+                    .filter(|&&(x, y)| self.get_tile(x, y) == Some(TileType::Floor))
+                    .copied()
+                    .collect();
+
+                if !available.is_empty() {
+                    let spot = available[rng.gen_range(0..available.len())];
+                    positions.push(spot);
+                    used.push(spot);
+                }
+            }
+        }
+
+        positions
+    }
+
+    /// Generate barrel positions in Storage rooms
+    fn generate_barrel_positions(&self, themed_rooms: &[ThemedRoom], rng: &mut impl Rng) -> Vec<(i32, i32)> {
+        let mut positions = Vec::new();
+
+        for room in themed_rooms {
+            if room.theme != RoomTheme::Storage {
+                continue;
+            }
+
+            // Only place barrels in rooms large enough
+            if room.rect.width < 4 || room.rect.height < 4 {
+                continue;
+            }
+
+            // Place 3-6 barrels per storage room
+            let num_barrels = rng.gen_range(3..=6);
+            let mut used: Vec<(i32, i32)> = Vec::new();
+
+            for _ in 0..num_barrels {
+                // Try random positions within the room
+                for _ in 0..10 {
+                    let x = rng.gen_range(room.rect.x + 1..room.rect.x + room.rect.width - 1);
+                    let y = rng.gen_range(room.rect.y + 1..room.rect.y + room.rect.height - 1);
+
+                    if !used.contains(&(x, y)) && self.get_tile(x, y) == Some(TileType::Floor) {
+                        positions.push((x, y));
+                        used.push((x, y));
+                        break;
+                    }
+                }
+            }
+        }
+
+        positions
     }
 
     /// Check if a tile is a good door candidate:

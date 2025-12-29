@@ -16,6 +16,7 @@ pub enum ItemCategory {
     Weapon,
     Potion,
     Scroll,
+    Food,
 }
 
 /// How an item is used when consumed
@@ -259,6 +260,39 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         targeting: None,
         is_throwable: false,
     },
+    // =========================================================================
+    // FOOD
+    // =========================================================================
+    ItemDef {
+        item_type: ItemType::Cheese,
+        name: "Cheese",
+        category: ItemCategory::Food,
+        weight: FOOD_WEIGHT,
+        sprite: tile_ids::CHEESE,
+        use_effect: UseEffect::Heal(CHEESE_HEAL),
+        targeting: None,
+        is_throwable: false,
+    },
+    ItemDef {
+        item_type: ItemType::Bread,
+        name: "Bread",
+        category: ItemCategory::Food,
+        weight: FOOD_WEIGHT,
+        sprite: tile_ids::BREAD,
+        use_effect: UseEffect::Heal(BREAD_HEAL),
+        targeting: None,
+        is_throwable: false,
+    },
+    ItemDef {
+        item_type: ItemType::Apple,
+        name: "Apple",
+        category: ItemCategory::Food,
+        weight: FOOD_WEIGHT,
+        sprite: tile_ids::APPLE,
+        use_effect: UseEffect::Heal(APPLE_HEAL),
+        targeting: None,
+        is_throwable: false,
+    },
 ];
 
 #[cfg(test)]
@@ -285,6 +319,9 @@ mod tests {
             ItemType::ScrollOfReveal,
             ItemType::ScrollOfMapping,
             ItemType::ScrollOfSlow,
+            ItemType::Cheese,
+            ItemType::Bread,
+            ItemType::Apple,
         ];
 
         for item in all_items {

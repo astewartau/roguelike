@@ -1,8 +1,8 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Container, Experience, Health, Position, Sprite,
-    Stats, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Experience, Health, Position,
+    Sprite, Stats, Weapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -17,14 +17,39 @@ pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
 }
 
-/// Handle a ContainerOpened event - update sprite for chests only
+/// Handle a ContainerOpened event - update sprite for containers
 pub fn handle_container_opened(world: &mut World, container_id: Entity) {
     if let Ok(mut sprite) = world.get::<&mut Sprite>(container_id) {
-        // Only change sprite for actual chests, not bones
-        if (sprite.sheet, sprite.tile_id) == tile_ids::CHEST_CLOSED {
-            let open_ref = tile_ids::CHEST_OPEN;
-            sprite.sheet = open_ref.0;
-            sprite.tile_id = open_ref.1;
+        let current = (sprite.sheet, sprite.tile_id);
+
+        // Handle chest opening
+        if current == tile_ids::CHEST_CLOSED {
+            sprite.sheet = tile_ids::CHEST_OPEN.0;
+            sprite.tile_id = tile_ids::CHEST_OPEN.1;
+        }
+        // Handle coffin opening
+        else if current == tile_ids::COFFIN_CLOSED {
+            sprite.sheet = tile_ids::COFFIN_OPEN.0;
+            sprite.tile_id = tile_ids::COFFIN_OPEN.1;
+        }
+        // Barrels don't change sprite when opened (they stay as barrel sprite)
+    }
+}
+
+/// Handle a DoorOpened event - update sprite to the door's open sprite
+pub fn handle_door_opened(world: &mut World, door_id: Entity) {
+    // Get the door's open_sprite first
+    let open_sprite = if let Ok(door) = world.get::<&Door>(door_id) {
+        Some(door.open_sprite)
+    } else {
+        None
+    };
+
+    // Then update the sprite
+    if let Some((sheet, tile_id)) = open_sprite {
+        if let Ok(mut sprite) = world.get::<&mut Sprite>(door_id) {
+            sprite.sheet = sheet;
+            sprite.tile_id = tile_id;
         }
     }
 }

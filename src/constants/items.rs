@@ -36,3 +36,13 @@ pub const POTION_THROW_SPEED: f32 = 12.0;
 pub const POTION_THROW_RANGE: i32 = 6;
 /// Splash radius for all thrown potions
 pub const POTION_SPLASH_RADIUS: i32 = 1;
+
+// Food
+/// Food weight in kg
+pub const FOOD_WEIGHT: f32 = 0.2;
+/// Cheese heal amount (less than health potion)
+pub const CHEESE_HEAL: i32 = 8;
+/// Bread heal amount
+pub const BREAD_HEAL: i32 = 10;
+/// Apple heal amount
+pub const APPLE_HEAL: i32 = 5;

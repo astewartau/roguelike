@@ -31,7 +31,7 @@ pub mod rendering;
 
 // Re-export commonly used items
 pub use animation::{update_lunge_animations, visual_lerp};
-pub use combat::{handle_container_opened, remove_dead_entities, weapon_damage};
+pub use combat::{handle_container_opened, handle_door_opened, remove_dead_entities, weapon_damage};
 pub use experience::xp_progress;
 pub use inventory::{
     cleanup_empty_ground_piles, find_container_at_player, take_all_from_container,

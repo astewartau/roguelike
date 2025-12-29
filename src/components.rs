@@ -213,6 +213,10 @@ pub struct AnimatedSprite {
     pub frame_count: u32,
     /// Duration of each frame in seconds (real-time)
     pub frame_duration: f32,
+    /// Random phase offset (0.0 to 1.0) to desync animations
+    pub phase_offset: f32,
+    /// Render order (lower = rendered first/below, higher = rendered last/above)
+    pub z_order: u8,
 }
 
 impl AnimatedSprite {
@@ -222,18 +226,28 @@ impl AnimatedSprite {
             base_tile_id,
             frame_count,
             frame_duration,
+            phase_offset: 0.0,
+            z_order: 1,
         }
+    }
+
+    /// Create with a random phase offset
+    pub fn with_random_phase(mut self) -> Self {
+        self.phase_offset = rand::random();
+        self
     }
 
     /// Get the current tile ID based on real time
     pub fn current_tile_id(&self, real_time: f32) -> u32 {
         let total_duration = self.frame_duration * self.frame_count as f32;
-        let time_in_cycle = real_time % total_duration;
+        // Add phase offset to desync animations
+        let offset_time = real_time + self.phase_offset * total_duration;
+        let time_in_cycle = offset_time % total_duration;
         let frame = (time_in_cycle / self.frame_duration) as u32;
         self.base_tile_id + frame.min(self.frame_count - 1)
     }
 
-    /// Create a fire pit animation
+    /// Create a fire pit animation with random phase
     pub fn fire_pit() -> Self {
         use crate::tile::tile_ids;
         Self {
@@ -241,6 +255,34 @@ impl AnimatedSprite {
             base_tile_id: tile_ids::FIRE_PIT.1,
             frame_count: 6,
             frame_duration: 0.15, // ~6.7 FPS, full cycle in 0.9 seconds
+            phase_offset: rand::random(),
+            z_order: 1,
+        }
+    }
+
+    /// Create a brazier animation with random phase
+    pub fn brazier() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            sheet: SpriteSheet::AnimatedTiles,
+            base_tile_id: tile_ids::BRAZIER.1,
+            frame_count: 6,
+            frame_duration: 0.12, // Slightly faster than fire pit
+            phase_offset: rand::random(),
+            z_order: 1,
+        }
+    }
+
+    /// Create an animated water tile with random phase
+    pub fn water() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            sheet: SpriteSheet::AnimatedTiles,
+            base_tile_id: tile_ids::WATER_ANIMATED.1,
+            frame_count: 11,
+            frame_duration: 0.2, // Gentle wave animation
+            phase_offset: rand::random(),
+            z_order: 0, // Water renders below other animated sprites
         }
     }
 }
@@ -338,6 +380,10 @@ pub enum ItemType {
     ScrollOfReveal,
     ScrollOfMapping,
     ScrollOfSlow,
+    // Food
+    Cheese,
+    Bread,
+    Apple,
 }
 
 // =============================================================================
@@ -404,12 +450,23 @@ impl Inventory {
     }
 }
 
-/// Container component (for chests and bones)
+/// Type of container (affects sprite and behavior)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerType {
+    Chest,
+    Coffin,
+    Barrel,
+}
+
+/// Container component (for chests, coffins, barrels)
 #[derive(Debug, Clone)]
 pub struct Container {
+    pub container_type: ContainerType,
     pub items: Vec<ItemType>,
     pub gold: u32,
     pub is_open: bool,
+    /// Chance to spawn enemy when opened (for coffins, 0.0-1.0)
+    pub spawn_chance: f32,
 }
 
 // =============================================================================
@@ -598,12 +655,48 @@ impl VisualPosition {
 }
 
 impl Container {
+    /// Create a chest container (default)
     pub fn new(items: Vec<ItemType>) -> Self {
-        Self { items, gold: 0, is_open: false }
+        Self {
+            container_type: ContainerType::Chest,
+            items,
+            gold: 0,
+            is_open: false,
+            spawn_chance: 0.0,
+        }
     }
 
+    /// Create a chest with gold
     pub fn with_gold(items: Vec<ItemType>, gold: u32) -> Self {
-        Self { items, gold, is_open: false }
+        Self {
+            container_type: ContainerType::Chest,
+            items,
+            gold,
+            is_open: false,
+            spawn_chance: 0.0,
+        }
+    }
+
+    /// Create a coffin (may spawn enemy when opened)
+    pub fn coffin(items: Vec<ItemType>, gold: u32, spawn_chance: f32) -> Self {
+        Self {
+            container_type: ContainerType::Coffin,
+            items,
+            gold,
+            is_open: false,
+            spawn_chance,
+        }
+    }
+
+    /// Create a barrel (contains food)
+    pub fn barrel(items: Vec<ItemType>) -> Self {
+        Self {
+            container_type: ContainerType::Barrel,
+            items,
+            gold: 0,
+            is_open: false,
+            spawn_chance: 0.0,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -615,11 +708,36 @@ impl Container {
 #[derive(Debug, Clone, Copy)]
 pub struct Door {
     pub is_open: bool,
+    /// Sprite to use when door is open
+    pub open_sprite: (crate::tile::SpriteSheet, u32),
 }
 
 impl Door {
+    /// Standard dungeon door
     pub fn new() -> Self {
-        Self { is_open: false }
+        use crate::tile::tile_ids;
+        Self {
+            is_open: false,
+            open_sprite: tile_ids::DOOR_OPEN,
+        }
+    }
+
+    /// Green door for overgrown rooms
+    pub fn green() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            is_open: false,
+            open_sprite: tile_ids::DOOR_GREEN_OPEN,
+        }
+    }
+
+    /// Grated door for crypt rooms
+    pub fn grated() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            is_open: false,
+            open_sprite: tile_ids::DOOR_GRATED, // Same sprite open/closed
+        }
     }
 }
 
@@ -894,6 +1012,14 @@ impl LightSource {
         Self {
             radius: 6.0,
             intensity: 1.0,
+        }
+    }
+
+    /// Create a brazier light (smaller than campfire)
+    pub fn brazier() -> Self {
+        Self {
+            radius: 4.5,
+            intensity: 0.9,
         }
     }
 }

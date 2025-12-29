@@ -6,9 +6,9 @@
 use hecs::{Entity, World};
 
 use crate::components::{
-    Attackable, BlocksMovement, ChaseAI, Container, Door, EffectType, Equipment, EquippedWeapon,
-    Health, Inventory, ItemType, LungeAnimation, Position, Projectile, ProjectileMarker,
-    Sprite, Stats, StatusEffects, VisualPosition, Weapon, RangedWeapon,
+    Attackable, BlocksMovement, ChaseAI, Container, ContainerType, Door, EffectType, Equipment,
+    EquippedWeapon, Health, Inventory, ItemType, LungeAnimation, Position, Projectile,
+    ProjectileMarker, Sprite, Stats, StatusEffects, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -243,11 +243,44 @@ pub fn apply_open_chest(
     chest: Entity,
     events: &mut EventQueue,
 ) -> ActionResult {
+    // Check if this is a coffin that might spawn a skeleton
+    let spawn_skeleton = {
+        if let Ok(container) = world.get::<&Container>(chest) {
+            if container.container_type == ContainerType::Coffin && !container.is_open {
+                // Roll for skeleton spawn
+                let roll: f32 = rand::random();
+                roll < container.spawn_chance
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+
+    // Get position for skeleton spawn if needed
+    let spawn_pos = if spawn_skeleton {
+        world.get::<&Position>(chest).ok().map(|p| (p.x, p.y))
+    } else {
+        None
+    };
+
+    // Mark container as open
     if let Ok(mut container) = world.get::<&mut Container>(chest) {
         container.is_open = true;
     }
 
-    events.push(GameEvent::ContainerOpened { container: chest, opener });
+    // If skeleton spawns, only emit the spawn event (player must deal with skeleton first)
+    // Otherwise, emit ContainerOpened to show loot UI
+    if let Some(position) = spawn_pos {
+        // Skeleton spawning - emit spawn event but skip loot UI
+        // Still emit ContainerOpened for sprite change, but skeleton takes priority
+        events.push(GameEvent::ContainerOpened { container: chest, opener });
+        events.push(GameEvent::CoffinSkeletonSpawn { position });
+    } else {
+        // No skeleton - normal loot behavior
+        events.push(GameEvent::ContainerOpened { container: chest, opener });
+    }
 
     ActionResult::Completed
 }

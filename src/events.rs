@@ -124,6 +124,10 @@ pub enum GameEvent {
     CleavePerformed {
         center: (i32, i32),
     },
+    /// A skeleton should spawn from a coffin at this position
+    CoffinSkeletonSpawn {
+        position: (i32, i32),
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

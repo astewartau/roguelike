@@ -43,6 +43,14 @@ pub mod tile_ids {
     pub const FLOOR_VARIANTS: [(SpriteSheet, u32); 3] = [FLOOR, FLOOR_2, FLOOR_3];
     pub const WALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 1, TILES_COLS)); // 3.b stone brick wall (side)
     pub const WALL_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 0, TILES_COLS)); // 3.a stone brick wall (top)
+
+    // Rough stone walls for Overgrown rooms
+    pub const WALL_ROUGH: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(2, 1, TILES_COLS)); // 2.b rough stone wall (side)
+    pub const WALL_ROUGH_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(2, 0, TILES_COLS)); // 2.a rough stone wall (top)
+
+    // Catacombs/skull walls for Crypt rooms
+    pub const WALL_CRYPT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(6, 1, TILES_COLS)); // 6.b skull wall (side)
+    pub const WALL_CRYPT_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(6, 0, TILES_COLS)); // 6.a skull wall (top)
     pub const WATER: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // Use floor, tinted blue
     // Grass floor variants (row 8)
     pub const GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 1, TILES_COLS)); // 8.b grass 1
@@ -57,6 +65,13 @@ pub mod tile_ids {
     pub const STAIRS_UP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 8, TILES_COLS)); // 17.i staircase up
     pub const DOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 2, TILES_COLS)); // 17.c framed door (shut)
     pub const DOOR_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 3, TILES_COLS)); // 17.d framed door (open)
+
+    // Green door for Overgrown rooms
+    pub const DOOR_GREEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 1, TILES_COLS)); // 17.b door 2 (green)
+    pub const DOOR_GREEN_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 3, TILES_COLS)); // 17.d uses same open sprite
+
+    // Grated door for Crypt rooms
+    pub const DOOR_GRATED: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 6, TILES_COLS)); // 17.g grated door
     pub const CHEST_CLOSED: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 0, TILES_COLS)); // 18.a chest (closed)
     pub const CHEST_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 1, TILES_COLS)); // 18.b chest (open)
 
@@ -67,10 +82,31 @@ pub mod tile_ids {
     pub const BONES_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 3, TILES_COLS)); // 11.d bone 3
     pub const BONES_4: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(22, 0, TILES_COLS)); // 22.a corpse bones 1
     pub const ROCKS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(19, 0, TILES_COLS)); // 19.a large rock 1
+    pub const ROCKS_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(19, 1, TILES_COLS)); // 19.b large rock 2
     pub const SKULL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(22, 1, TILES_COLS)); // 22.b corpse bones 2
     pub const PLANT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 0, TILES_COLS)); // 20.a buckwheat
     pub const MUSHROOM: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(21, 0, TILES_COLS)); // 21.a small mushrooms
+    pub const MUSHROOM_LARGE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(21, 1, TILES_COLS)); // 21.b large mushroom
     pub const FLOWERS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 3, TILES_COLS)); // 8.d grass 3
+
+    // Additional plants (row 20)
+    pub const PLANT_FLAX: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 1, TILES_COLS)); // 20.b flax
+    pub const PLANT_PAPYRUS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 2, TILES_COLS)); // 20.c papyrus
+    pub const PLANT_RICE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 6, TILES_COLS)); // 20.g rice
+    pub const PLANT_CORN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 8, TILES_COLS)); // 20.i maize/corn
+
+    // Blood and slime decals (row 23)
+    pub const BLOOD_1: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 0, TILES_COLS)); // 23.a blood spatter 1
+    pub const BLOOD_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 1, TILES_COLS)); // 23.b blood spatter 2
+    pub const SLIME_SMALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 2, TILES_COLS)); // 23.c slime small
+    pub const SLIME_LARGE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 3, TILES_COLS)); // 23.d slime large
+
+    // Coffins (row 24)
+    pub const COFFIN_CLOSED: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(24, 0, TILES_COLS)); // 24.a coffin closed
+    pub const COFFIN_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(24, 2, TILES_COLS)); // 24.c coffin open
+
+    // Barrel (row 18)
+    pub const BARREL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 4, TILES_COLS)); // 18.e barrel
 
     // ===== ROGUES SHEET (player characters, NPCs) =====
 
@@ -115,14 +151,23 @@ pub mod tile_ids {
     pub const SCROLL: (SpriteSheet, u32) = (SpriteSheet::Items, rc(22, 0, ITEMS_COLS)); // 22.a scroll
     pub const KEY: (SpriteSheet, u32) = (SpriteSheet::Items, rc(23, 0, ITEMS_COLS)); // 23.a gold key
 
+    // Food (row 26)
+    pub const CHEESE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 0, ITEMS_COLS)); // 26.a cheese
+    pub const BREAD: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 1, ITEMS_COLS)); // 26.b bread
+    pub const APPLE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 2, ITEMS_COLS)); // 26.c apple
+
     // UI Icons (using items that work as icons)
     pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
     pub const DIAMOND: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant
 
     // ===== ANIMATED TILES SHEET (light sources, environmental effects) =====
 
+    /// Brazier (lit) - first frame, row 2 in animated-tiles.png
+    pub const BRAZIER: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(2, 0, ANIMATED_TILES_COLS));
     /// Fire pit (lit) - first frame, row 4 in animated-tiles.png
     pub const FIRE_PIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(4, 0, ANIMATED_TILES_COLS));
+    /// Animated water - first frame, row 11 in animated-tiles.png (11 frames)
+    pub const WATER_ANIMATED: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(11, 0, ANIMATED_TILES_COLS));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

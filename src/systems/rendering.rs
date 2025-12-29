@@ -354,13 +354,12 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
             }
         } else if is_explored && !is_actor {
             // In fog but explored - only show non-actors (chests, items)
-            // Open doors in fog render even darker
-            let brightness = if is_open_door { 0.25 } else { 0.5 };
+            // Use consistent fog brightness for all fog entities
             ground_layer.push(RenderEntity {
                 x: vis_pos.x,
                 y: vis_pos.y,
                 sprite: *sprite,
-                brightness,
+                brightness: FOG_BRIGHTNESS,
                 alpha: 1.0,
                 effects: effects::NONE,
                 overlay: None, // Don't show overlays in fog
@@ -368,12 +367,18 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         }
     }
 
-    // Process entities with AnimatedSprite component (e.g., campfires)
-    for (_, (pos, vis_pos, anim)) in
-        world.query::<(&Position, &VisualPosition, &AnimatedSprite)>().iter()
-    {
+    // Process entities with AnimatedSprite component (e.g., campfires, water)
+    // Collect and sort by z_order so water renders below braziers/fire
+    let mut animated_entities: Vec<_> = world
+        .query::<(&Position, &VisualPosition, &AnimatedSprite)>()
+        .iter()
+        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, anim.clone()))
+        .collect();
+    animated_entities.sort_by_key(|(_, _, _, _, anim)| anim.z_order);
+
+    for (pos_x, pos_y, vis_x, vis_y, anim) in animated_entities {
         let (is_explored, is_visible) = grid
-            .get(pos.x, pos.y)
+            .get(pos_x, pos_y)
             .map(|tile| (tile.explored, tile.visible))
             .unwrap_or((false, false));
 
@@ -383,13 +388,13 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
 
         if is_visible {
             let tile_brightness = grid.illumination
-                .get(pos.y as usize * grid.width + pos.x as usize)
+                .get(pos_y as usize * grid.width + pos_x as usize)
                 .copied()
                 .unwrap_or(0.5);
             // Animated sprites (like fire) render at full tile brightness
             ground_layer.push(RenderEntity {
-                x: vis_pos.x,
-                y: vis_pos.y,
+                x: vis_x,
+                y: vis_y,
                 sprite,
                 brightness: tile_brightness,
                 alpha: 1.0,
@@ -397,12 +402,12 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 overlay: None,
             });
         } else if is_explored {
-            // Show in fog at reduced brightness
+            // Show in fog at same brightness as other fog tiles
             ground_layer.push(RenderEntity {
-                x: vis_pos.x,
-                y: vis_pos.y,
+                x: vis_x,
+                y: vis_y,
                 sprite,
-                brightness: 0.5,
+                brightness: FOG_BRIGHTNESS,
                 alpha: 1.0,
                 effects: effects::NONE,
                 overlay: None,

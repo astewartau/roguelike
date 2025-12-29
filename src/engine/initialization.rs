@@ -1,11 +1,12 @@
 //! World initialization - creates the game world and spawns initial entities.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility, Container, Door,
-    Equipment, Experience, Health, Inventory, ItemType, Player, PlayerClass, Position, Sprite,
-    Stats, StatusEffects, VisualPosition,
+    Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility,
+    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, PlayerClass,
+    Position, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
+use crate::dungeon_gen::RoomTheme;
 use crate::events::EventQueue;
 use crate::grid::Grid;
 use crate::spawning;
@@ -32,17 +33,99 @@ fn spawn_chests(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
     }
 }
 
-/// Spawn all doors from grid positions.
+/// Spawn all doors from grid positions with theme-appropriate sprites.
 fn spawn_doors(world: &mut World, grid: &Grid) {
-    for (x, y) in &grid.door_positions {
+    for ((x, y), theme) in &grid.door_positions {
+        let pos = Position::new(*x, *y);
+        let (sprite, door) = match theme {
+            RoomTheme::Overgrown => (tile_ids::DOOR_GREEN, Door::green()),
+            RoomTheme::Crypt => (tile_ids::DOOR_GRATED, Door::grated()),
+            _ => (tile_ids::DOOR, Door::new()),
+        };
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::from_ref(sprite),
+            door,
+            BlocksVision,
+            BlocksMovement,
+        ));
+    }
+}
+
+/// Spawn all braziers from grid positions.
+fn spawn_braziers(world: &mut World, grid: &Grid) {
+    for (x, y) in &grid.brazier_positions {
+        spawning::spawn_brazier(world, *x, *y);
+    }
+}
+
+/// Spawn all coffins from grid positions with randomized contents.
+fn spawn_coffins(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+    for (x, y) in &grid.coffin_positions {
+        let pos = Position::new(*x, *y);
+
+        // Generate coffin contents - gold and possibly a scroll/potion
+        let gold = rng.gen_range(15..30);
+        let items: Vec<ItemType> = if rng.gen_bool(0.4) {
+            // 40% chance for an item
+            let rare_items = [
+                ItemType::ScrollOfBlink,
+                ItemType::ScrollOfFear,
+                ItemType::ScrollOfFireball,
+                ItemType::StrengthPotion,
+                ItemType::ScrollOfProtection,
+            ];
+            vec![*rare_items.choose(rng).unwrap()]
+        } else {
+            vec![]
+        };
+
+        // 40% chance to spawn a skeleton when opened
+        let spawn_chance = 0.4;
+
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::from_ref(tile_ids::COFFIN_CLOSED),
+            Container::coffin(items, gold, spawn_chance),
+            BlocksMovement,
+        ));
+    }
+}
+
+/// Spawn all barrels from grid positions with food items.
+fn spawn_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+    for (x, y) in &grid.barrel_positions {
+        let pos = Position::new(*x, *y);
+
+        // Barrels contain food items
+        let food_items = [ItemType::Cheese, ItemType::Bread, ItemType::Apple];
+        let items: Vec<ItemType> = if rng.gen_bool(0.7) {
+            // 70% chance for food
+            vec![*food_items.choose(rng).unwrap()]
+        } else {
+            vec![]
+        };
+
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::from_ref(tile_ids::BARREL),
+            Container::barrel(items),
+            BlocksMovement,
+        ));
+    }
+}
+
+/// Spawn animated water entities at water positions.
+fn spawn_water_entities(world: &mut World, grid: &Grid) {
+    for (x, y) in &grid.water_positions {
         let pos = Position::new(*x, *y);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
-            Sprite::from_ref(tile_ids::DOOR),
-            Door::new(),
-            BlocksVision,
-            BlocksMovement,
+            AnimatedSprite::water(),
         ));
     }
 }
@@ -179,10 +262,14 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
     ));
 
-    // Spawn chests and doors
+    // Spawn chests, doors, braziers, coffins, barrels, and water
     let mut rng = rand::thread_rng();
     spawn_chests(&mut world, grid, &mut rng);
     spawn_doors(&mut world, grid);
+    spawn_braziers(&mut world, grid);
+    spawn_coffins(&mut world, grid, &mut rng);
+    spawn_barrels(&mut world, grid, &mut rng);
+    spawn_water_entities(&mut world, grid);
 
     // Spawn wizard NPC
     if let Some(starting_room) = &grid.starting_room {
@@ -284,10 +371,11 @@ pub fn spawn_floor_entities(
         vis_pos.y = player_spawn_pos.1 as f32;
     }
 
-    // Spawn chests and doors
+    // Spawn chests, doors, and braziers
     let mut rng = rand::thread_rng();
     spawn_chests(world, grid, &mut rng);
     spawn_doors(world, grid);
+    spawn_braziers(world, grid);
 
     // Spawn enemies
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)

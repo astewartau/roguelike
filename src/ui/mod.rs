@@ -1196,6 +1196,9 @@ pub struct UiIcons {
     pub coins_uv: egui::Rect,
     pub heart_uv: egui::Rect,
     pub diamond_uv: egui::Rect,
+    pub cheese_uv: egui::Rect,
+    pub bread_uv: egui::Rect,
+    pub apple_uv: egui::Rect,
     // Ability icons
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
@@ -1227,6 +1230,9 @@ impl UiIcons {
             coins_uv: tileset.get_egui_uv(tile_ids::COINS.0, tile_ids::COINS.1),
             heart_uv: tileset.get_egui_uv(tile_ids::HEART.0, tile_ids::HEART.1),
             diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND.0, tile_ids::DIAMOND.1),
+            cheese_uv: tileset.get_egui_uv(tile_ids::CHEESE.0, tile_ids::CHEESE.1),
+            bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
+            apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
             // Ability icons: AXE for Cleave, BLUE_POTION for Sprint
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
             sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
@@ -1263,6 +1269,9 @@ impl UiIcons {
             | ItemType::ScrollOfReveal
             | ItemType::ScrollOfMapping
             | ItemType::ScrollOfSlow => self.scroll_uv,
+            ItemType::Cheese => self.cheese_uv,
+            ItemType::Bread => self.bread_uv,
+            ItemType::Apple => self.apple_uv,
         }
     }
 
