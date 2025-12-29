@@ -53,6 +53,11 @@ const SHEET_SPECS: &[SheetSpec] = &[
         filename: "items.png",
         columns: 11,
     },
+    SheetSpec {
+        sheet: SpriteSheet::AnimatedTiles,
+        filename: "animated-tiles.png",
+        columns: 11,
+    },
 ];
 
 impl MultiTileset {

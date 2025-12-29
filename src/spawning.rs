@@ -5,7 +5,7 @@
 
 use crate::components::{
     Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueNode, DialogueOption,
-    Equipment, FriendlyNPC, Health, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
+    Equipment, FriendlyNPC, Health, LightSource, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
     StatusEffects, VisualPosition, Weapon,
 };
 use crate::tile::{tile_ids, SpriteSheet};
@@ -335,4 +335,17 @@ pub mod npcs {
         sprite: tile_ids::WIZARD,
         dialogue_fn: wizard_dialogue,
     };
+}
+
+/// Spawn a campfire entity with light source and animated fire sprite
+pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::AnimatedSprite;
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        AnimatedSprite::fire_pit(),
+        LightSource::campfire(),
+    ))
 }

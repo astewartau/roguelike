@@ -27,6 +27,7 @@ use crate::components::{AbilityType, ActionType, Actor, ClassAbility, PlayerClas
 use crate::camera::Camera;
 use crate::events::EventQueue;
 use crate::input::{self, InputState, TargetingMode};
+use crate::spawning;
 use crate::systems;
 use crate::time_system;
 use crate::ui::{DevMenu, GameUiState, UiActions};
@@ -85,6 +86,9 @@ pub struct GameEngine {
 
     /// Developer menu state
     pub dev_menu: DevMenu,
+
+    /// Accumulated real time (for animations)
+    pub real_time: f32,
 }
 
 impl GameEngine {
@@ -99,6 +103,7 @@ impl GameEngine {
             input: InputState::new(),
             ui_state: None,
             dev_menu: DevMenu::new(),
+            real_time: 0.0,
         }
     }
 
@@ -108,6 +113,26 @@ impl GameEngine {
 
         // Initialize AI actors
         state.initialize_ai(&mut self.events);
+
+        // Spawn campfire in starting room near wizard
+        if let Some(starting_room) = &state.grid.starting_room {
+            // Find a position for the campfire (offset from center)
+            let (cx, cy) = starting_room.center();
+            // Try to place it to the right of center, or find first available spot
+            let campfire_positions = [
+                (cx + 2, cy),
+                (cx - 2, cy),
+                (cx, cy + 2),
+                (cx, cy - 2),
+                (cx + 1, cy + 1),
+            ];
+            for (x, y) in campfire_positions {
+                if state.grid.is_walkable(x, y) {
+                    spawning::spawn_campfire(&mut state.world, x, y);
+                    break;
+                }
+            }
+        }
 
         // Set up camera to track player
         if let Some((x, y)) = state.player_start_position() {
@@ -233,6 +258,9 @@ impl GameEngine {
     /// Process a frame tick - advances simulation, returns render data.
     /// Returns empty results if not in playing mode.
     pub fn tick(&mut self, dt: f32, camera: &mut Camera) -> TickResult {
+        // Accumulate real time for animations
+        self.real_time += dt;
+
         // Only run game simulation when playing
         if self.state.is_none() {
             camera.update(dt, self.input.mouse_down);
@@ -306,7 +334,8 @@ impl GameEngine {
         // Update camera
         camera.update(dt, self.input.mouse_down);
 
-        // Update FOV
+        // Update visibility based on LOS and illumination
+        // Player's light + any visible light sources (campfires) determine what you can see
         systems::update_fov(
             &state.world,
             &mut state.grid,
@@ -315,11 +344,20 @@ impl GameEngine {
             state.game_clock.time,
         );
 
+        // Calculate per-tile illumination (must be after FOV update)
+        systems::calculate_illumination(
+            &state.world,
+            &mut state.grid,
+            state.player_entity,
+            crate::constants::FOV_RADIUS,
+        );
+
         // Collect renderables
         let entities = systems::collect_renderables(
             &state.world,
             &state.grid,
             state.player_entity,
+            self.real_time,
         );
 
         TickResult {

@@ -46,8 +46,11 @@ impl RenderContext {
         let items_egui_id = egui_glow
             .painter
             .register_native_texture(tileset.get_native_texture(SpriteSheet::Items));
+        let animated_tiles_egui_id = egui_glow
+            .painter
+            .register_native_texture(tileset.get_native_texture(SpriteSheet::AnimatedTiles));
 
-        let ui_icons = UiIcons::new(&tileset, tiles_egui_id, rogues_egui_id, monsters_egui_id, items_egui_id);
+        let ui_icons = UiIcons::new(&tileset, tiles_egui_id, rogues_egui_id, monsters_egui_id, items_egui_id, animated_tiles_egui_id);
 
         Self {
             camera,

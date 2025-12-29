@@ -39,4 +39,4 @@ pub use inventory::{
 };
 pub use items::{item_name, use_item, remove_item_from_inventory, item_targeting_params, ItemUseResult};
 pub use projectile::{cleanup_finished_projectiles, despawn_projectiles, lerp_projectiles_realtime, update_projectiles};
-pub use rendering::{collect_renderables, update_fov, reveal_entire_map, reveal_enemies, RenderEntity};
+pub use rendering::{calculate_illumination, collect_renderables, update_fov, reveal_entire_map, reveal_enemies, RenderEntity};

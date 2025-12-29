@@ -684,7 +684,9 @@ impl Renderer {
 
                         let (sheet, tile_id) = tile.sprite();
                         let uv = tileset.get_uv(sheet, tile_id);
-                        let fog = if tile.visible { 1.0 } else { 0.5 };
+                        // Use pre-computed illumination values for smooth lighting
+                        let idx = y as usize * grid.width + x as usize;
+                        let fog = grid.illumination.get(idx).copied().unwrap_or(0.5);
 
                         // Water tiles get a blue tint
                         let tint = match tile.tile_type {
@@ -817,9 +819,9 @@ impl Renderer {
                     continue;
                 }
 
-                let fog = grid.get(decal.x, decal.y)
-                    .map(|t| if t.visible { 1.0 } else { 0.5 })
-                    .unwrap_or(0.5);
+                // Use pre-computed illumination values for smooth lighting
+                let idx = decal.y as usize * grid.width + decal.x as usize;
+                let fog = grid.illumination.get(idx).copied().unwrap_or(0.5);
 
                 let uv = tileset.get_uv(decal.sheet, decal.tile_id);
 
@@ -875,8 +877,9 @@ impl Renderer {
             self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, projection.as_ref());
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
-            // Group entities by sprite sheet
-            let sheets = [SpriteSheet::Tiles, SpriteSheet::Rogues, SpriteSheet::Monsters, SpriteSheet::Items];
+            // Group entities by sprite sheet (order matters for layering)
+            // AnimatedTiles first (ground effects like fire), then terrain, characters, monsters, items on top
+            let sheets = [SpriteSheet::AnimatedTiles, SpriteSheet::Tiles, SpriteSheet::Rogues, SpriteSheet::Monsters, SpriteSheet::Items];
 
             for sheet in sheets {
                 let mut instance_data = Vec::new();

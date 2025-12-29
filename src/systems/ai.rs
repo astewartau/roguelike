@@ -11,7 +11,6 @@ use rand::Rng;
 use crate::components::{ActionType, Actor, AIState, ChaseAI, EffectType, Equipment, Position};
 use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
-use crate::fov::FOV;
 use crate::grid::Grid;
 use crate::pathfinding::{self, BresenhamLineIter};
 use crate::queries;
@@ -227,6 +226,7 @@ fn has_clear_shot(world: &World, from: (i32, i32), to: (i32, i32)) -> bool {
 }
 
 /// Check if an entity can see a target position.
+/// Uses proximity-based detection: target must be within sight_radius AND have clear line of sight.
 /// If target_entity is provided, also checks if the target is invisible.
 fn can_see_target(
     world: &World,
@@ -243,19 +243,70 @@ fn can_see_target(
         }
     }
 
+    // Check distance (Chebyshev distance for more natural "sight" radius)
+    let dx = (from.0 - target.0).abs();
+    let dy = (from.1 - target.1).abs();
+    let distance = dx.max(dy);
+    if distance > sight_radius {
+        return false;
+    }
+
     // Collect vision-blocking positions
     let vision_blocking = queries::get_vision_blocking_positions(world);
 
-    // Calculate FOV from entity position
-    let visible_tiles = FOV::calculate(
-        grid,
-        from.0,
-        from.1,
-        sight_radius,
-        Some(|x, y| vision_blocking.contains(&(x, y))),
-    );
+    // Check line of sight using Bresenham's algorithm
+    has_line_of_sight(grid, &vision_blocking, from.0, from.1, target.0, target.1)
+}
 
-    visible_tiles.contains(&target)
+/// Check if there's a clear line of sight between two points.
+/// Uses Bresenham's line algorithm to check for blocking tiles.
+fn has_line_of_sight(
+    grid: &Grid,
+    blocking_entities: &std::collections::HashSet<(i32, i32)>,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+) -> bool {
+    let dx = (x1 - x0).abs();
+    let dy = (y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx - dy;
+
+    let mut x = x0;
+    let mut y = y0;
+
+    while x != x1 || y != y1 {
+        let e2 = 2 * err;
+        if e2 > -dy {
+            err -= dy;
+            x += sx;
+        }
+        if e2 < dx {
+            err += dx;
+            y += sy;
+        }
+
+        // Don't check the destination tile itself
+        if x == x1 && y == y1 {
+            break;
+        }
+
+        // Check if this tile blocks vision
+        if let Some(tile) = grid.get(x, y) {
+            if tile.tile_type.blocks_vision() {
+                return false;
+            }
+        }
+
+        // Check if an entity blocks vision here
+        if blocking_entities.contains(&(x, y)) {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Update the AI state machine based on perception.

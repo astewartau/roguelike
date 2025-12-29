@@ -1182,6 +1182,8 @@ pub struct UiIcons {
     pub monsters_texture_id: egui::TextureId,
     /// Texture ID for Items sheet (weapons, potions, scrolls)
     pub items_texture_id: egui::TextureId,
+    /// Texture ID for AnimatedTiles sheet (fire pits, torches, etc.)
+    pub animated_tiles_texture_id: egui::TextureId,
     // Items sheet UVs
     pub sword_uv: egui::Rect,
     pub bow_uv: egui::Rect,
@@ -1206,12 +1208,14 @@ impl UiIcons {
         rogues_egui_id: egui::TextureId,
         monsters_egui_id: egui::TextureId,
         items_egui_id: egui::TextureId,
+        animated_tiles_egui_id: egui::TextureId,
     ) -> Self {
         Self {
             tiles_texture_id: tiles_egui_id,
             rogues_texture_id: rogues_egui_id,
             monsters_texture_id: monsters_egui_id,
             items_texture_id: items_egui_id,
+            animated_tiles_texture_id: animated_tiles_egui_id,
             sword_uv: tileset.get_egui_uv(tile_ids::SWORD.0, tile_ids::SWORD.1),
             bow_uv: tileset.get_egui_uv(tile_ids::BOW.0, tile_ids::BOW.1),
             dagger_uv: tileset.get_egui_uv(tile_ids::DAGGER.0, tile_ids::DAGGER.1),
@@ -1236,6 +1240,7 @@ impl UiIcons {
             SpriteSheet::Rogues => self.rogues_texture_id,
             SpriteSheet::Monsters => self.monsters_texture_id,
             SpriteSheet::Items => self.items_texture_id,
+            SpriteSheet::AnimatedTiles => self.animated_tiles_texture_id,
         }
     }
 

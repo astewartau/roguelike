@@ -21,6 +21,8 @@ pub struct Grid {
     pub stairs_down_pos: Option<(i32, i32)>,
     /// The starting room where the player spawns (for NPC placement and enemy exclusion)
     pub starting_room: Option<Rect>,
+    /// Per-tile illumination values (computed each frame for visible tiles)
+    pub illumination: Vec<f32>,
 }
 
 impl Grid {
@@ -43,6 +45,7 @@ impl Grid {
             stairs_up_pos: result.stairs_up_pos,
             stairs_down_pos: result.stairs_down_pos,
             starting_room: result.starting_room,
+            illumination: vec![0.0; width * height],
         }
     }
 

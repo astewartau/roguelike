@@ -203,6 +203,48 @@ impl OverlaySprite {
     }
 }
 
+/// Animated sprite component - cycles through frames in real-time
+#[derive(Debug, Clone, Copy)]
+pub struct AnimatedSprite {
+    pub sheet: SpriteSheet,
+    /// First frame's tile ID
+    pub base_tile_id: u32,
+    /// Number of frames in the animation
+    pub frame_count: u32,
+    /// Duration of each frame in seconds (real-time)
+    pub frame_duration: f32,
+}
+
+impl AnimatedSprite {
+    pub fn new(sheet: SpriteSheet, base_tile_id: u32, frame_count: u32, frame_duration: f32) -> Self {
+        Self {
+            sheet,
+            base_tile_id,
+            frame_count,
+            frame_duration,
+        }
+    }
+
+    /// Get the current tile ID based on real time
+    pub fn current_tile_id(&self, real_time: f32) -> u32 {
+        let total_duration = self.frame_duration * self.frame_count as f32;
+        let time_in_cycle = real_time % total_duration;
+        let frame = (time_in_cycle / self.frame_duration) as u32;
+        self.base_tile_id + frame.min(self.frame_count - 1)
+    }
+
+    /// Create a fire pit animation
+    pub fn fire_pit() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            sheet: SpriteSheet::AnimatedTiles,
+            base_tile_id: tile_ids::FIRE_PIT.1,
+            frame_count: 6,
+            frame_duration: 0.15, // ~6.7 FPS, full cycle in 0.9 seconds
+        }
+    }
+}
+
 /// Player marker component
 #[derive(Debug, Clone, Copy)]
 pub struct Player;
@@ -829,6 +871,29 @@ impl Dialogue {
             name: name.into(),
             nodes,
             current_node: 0,
+        }
+    }
+}
+
+// =============================================================================
+// LIGHT SOURCE
+// =============================================================================
+
+/// Light source component - emits light in a radius
+#[derive(Debug, Clone, Copy)]
+pub struct LightSource {
+    /// Radius of light emission (in tiles)
+    pub radius: f32,
+    /// Light intensity (0.0 to 1.0, multiplied with falloff)
+    pub intensity: f32,
+}
+
+impl LightSource {
+    /// Create a standard campfire light
+    pub fn campfire() -> Self {
+        Self {
+            radius: 6.0,
+            intensity: 1.0,
         }
     }
 }

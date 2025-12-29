@@ -1,10 +1,11 @@
 /// Sprite sheet identifiers for the 32rogues tileset
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpriteSheet {
-    Tiles,    // tiles.png - terrain, doors, stairs, decals
-    Rogues,   // rogues.png - player characters, NPCs
-    Monsters, // monsters.png - enemies
-    Items,    // items.png - weapons, armor, potions, etc.
+    Tiles,         // tiles.png - terrain, doors, stairs, decals
+    Rogues,        // rogues.png - player characters, NPCs
+    Monsters,      // monsters.png - enemies
+    Items,         // items.png - weapons, armor, potions, etc.
+    AnimatedTiles, // animated-tiles.png - fire pits, torches, etc.
 }
 
 /// Helper to convert row.letter notation to tile ID
@@ -29,6 +30,7 @@ pub mod tile_ids {
     pub const ROGUES_COLS: u32 = 7;
     pub const MONSTERS_COLS: u32 = 12;
     pub const ITEMS_COLS: u32 = 11;
+    pub const ANIMATED_TILES_COLS: u32 = 11;
 
     // ===== TILES SHEET (terrain, structures, decals) =====
 
@@ -116,6 +118,11 @@ pub mod tile_ids {
     // UI Icons (using items that work as icons)
     pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
     pub const DIAMOND: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant
+
+    // ===== ANIMATED TILES SHEET (light sources, environmental effects) =====
+
+    /// Fire pit (lit) - first frame, row 4 in animated-tiles.png
+    pub const FIRE_PIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(4, 0, ANIMATED_TILES_COLS));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
