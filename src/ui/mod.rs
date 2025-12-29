@@ -1328,7 +1328,6 @@ pub fn get_loot_window_data(
 pub fn get_buff_aura_data(
     world: &World,
     player_entity: hecs::Entity,
-    game_time: f32,
 ) -> Option<PlayerBuffAuraData> {
     use crate::components::VisualPosition;
 
@@ -1340,7 +1339,6 @@ pub fn get_buff_aura_data(
         player_y: player_vis_pos.y,
         has_regen: systems::effects::has_effect(&effects, StatusEffectType::Regenerating),
         has_protected: systems::effects::has_effect(&effects, StatusEffectType::Protected),
-        time: game_time,
     })
 }
 
@@ -1852,7 +1850,6 @@ pub struct PlayerBuffAuraData {
     pub player_y: f32,
     pub has_regen: bool,
     pub has_protected: bool,
-    pub time: f32, // For pulsing animation
 }
 
 /// Render glowing aura around player for active buffs (Regenerating, Protected)
@@ -1878,8 +1875,11 @@ pub fn draw_player_buff_auras(ctx: &egui::Context, camera: &Camera, data: Option
     // Center of the player tile
     let center = egui::pos2(egui_x + tile_size / 2.0, egui_y - tile_size / 2.0);
 
+    // Use real time for smooth animation (not game time)
+    let real_time = ctx.input(|i| i.time) as f32;
+
     // Pulsing effect
-    let pulse = 0.7 + 0.3 * (data.time * 3.0).sin();
+    let pulse = 0.7 + 0.3 * (real_time * 3.0).sin();
 
     // Draw regeneration aura (green glow)
     if data.has_regen {
@@ -1905,7 +1905,7 @@ pub fn draw_player_buff_auras(ctx: &egui::Context, camera: &Camera, data: Option
         let shield_color = egui::Color32::from_rgba_unmultiplied(150, 180, 255, shield_alpha);
         let shield_radius = tile_size * 0.45;
         for i in 0..4 {
-            let angle = (i as f32 * std::f32::consts::PI / 2.0) + data.time * 0.5;
+            let angle = (i as f32 * std::f32::consts::PI / 2.0) + real_time * 0.5;
             let px = center.x + angle.cos() * shield_radius;
             let py = center.y + angle.sin() * shield_radius;
             painter.circle_filled(egui::pos2(px, py), 2.0 * pulse, shield_color);
@@ -2282,7 +2282,7 @@ pub fn run_ui(
     let viewport_height = camera.viewport_height;
 
     // Extract UI data using helper functions
-    let buff_aura_data = get_buff_aura_data(world, player_entity, game_time);
+    let buff_aura_data = get_buff_aura_data(world, player_entity);
     let targeting_data = get_targeting_overlay_data(
         world,
         player_entity,
