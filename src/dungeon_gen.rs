@@ -338,6 +338,9 @@ impl DungeonGenerator {
         // Starting room is the first room (where player spawns)
         let starting_room = rooms.first().copied();
 
+        // Convert void areas (walls not adjacent to walkable tiles) to empty
+        gen.convert_void_to_empty();
+
         // Set wall orientations based on neighbors
         gen.set_wall_orientations();
 
@@ -368,6 +371,47 @@ impl DungeonGenerator {
                 tile.sprite_override = Some(tile_ids::FLOOR_VARIANTS[variant]);
             }
             self.tiles[idx] = tile;
+        }
+    }
+
+    /// Convert walls that aren't adjacent to any walkable tile into empty space.
+    /// This turns the "void" areas outside the dungeon into blank tiles.
+    fn convert_void_to_empty(&mut self) {
+        let width = self.width as i32;
+        let height = self.height as i32;
+
+        // Collect indices to change (can't mutate while iterating)
+        let mut to_empty = Vec::new();
+
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y as usize * self.width + x as usize;
+                if self.tiles[idx].tile_type != TileType::Wall {
+                    continue;
+                }
+
+                // Check if this wall is adjacent to any walkable tile
+                let mut adjacent_to_walkable = false;
+                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if let Some(nidx) = self.get_index(nx, ny) {
+                        if self.tiles[nidx].tile_type.is_walkable() {
+                            adjacent_to_walkable = true;
+                            break;
+                        }
+                    }
+                }
+
+                if !adjacent_to_walkable {
+                    to_empty.push(idx);
+                }
+            }
+        }
+
+        // Convert void walls to empty
+        for idx in to_empty {
+            self.tiles[idx] = Tile::new(TileType::Empty);
         }
     }
 
@@ -473,6 +517,18 @@ impl DungeonGenerator {
                 TileType::Grass
             };
             self.set_tile(x, y, grass_type);
+        }
+
+        // Change remaining floor tiles to use grass variants instead of stone
+        for y in room.rect.y..room.rect.y + room.rect.height {
+            for x in room.rect.x..room.rect.x + room.rect.width {
+                if let Some(idx) = self.get_index(x, y) {
+                    if self.tiles[idx].tile_type == TileType::Floor {
+                        let variant = rng.gen_range(0..tile_ids::GRASS_VARIANTS.len());
+                        self.tiles[idx].sprite_override = Some(tile_ids::GRASS_VARIANTS[variant]);
+                    }
+                }
+            }
         }
     }
 

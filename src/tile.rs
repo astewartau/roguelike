@@ -42,8 +42,11 @@ pub mod tile_ids {
     pub const WALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 1, TILES_COLS)); // 3.b stone brick wall (side)
     pub const WALL_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 0, TILES_COLS)); // 3.a stone brick wall (top)
     pub const WATER: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // Use floor, tinted blue
+    // Grass floor variants (row 8)
     pub const GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 1, TILES_COLS)); // 8.b grass 1
     pub const GRASS_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 2, TILES_COLS)); // 8.c grass 2
+    pub const GRASS_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 3, TILES_COLS)); // 8.d grass 3
+    pub const GRASS_VARIANTS: [(SpriteSheet, u32); 3] = [GRASS, GRASS_2, GRASS_3];
     pub const TALL_GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat
     pub const STONE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(10, 1, TILES_COLS)); // 10.b stone floor
 
