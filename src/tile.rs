@@ -34,9 +34,11 @@ pub mod tile_ids {
 
     // Terrain
     pub const EMPTY: (SpriteSheet, u32) = (SpriteSheet::Tiles, 0);
-    pub const FLOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // 7.b floor stone 1
-    pub const FLOOR_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 2, TILES_COLS)); // 7.c floor stone 2
-    pub const FLOOR_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 3, TILES_COLS)); // 7.d floor stone 3
+    // Stone floor variants (row 10)
+    pub const FLOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(10, 1, TILES_COLS)); // 10.b stone floor 1
+    pub const FLOOR_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(10, 2, TILES_COLS)); // 10.c stone floor 2
+    pub const FLOOR_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(10, 3, TILES_COLS)); // 10.d stone floor 3
+    pub const FLOOR_VARIANTS: [(SpriteSheet, u32); 3] = [FLOOR, FLOOR_2, FLOOR_3];
     pub const WALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 1, TILES_COLS)); // 3.b stone brick wall (side)
     pub const WALL_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(3, 0, TILES_COLS)); // 3.a stone brick wall (top)
     pub const WATER: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // Use floor, tinted blue

@@ -361,7 +361,13 @@ impl DungeonGenerator {
 
     fn set_tile(&mut self, x: i32, y: i32, tile_type: TileType) {
         if let Some(idx) = self.get_index(x, y) {
-            self.tiles[idx] = Tile::new(tile_type);
+            let mut tile = Tile::new(tile_type);
+            // Randomly vary floor tiles for visual interest
+            if tile_type == TileType::Floor {
+                let variant = rand::thread_rng().gen_range(0..tile_ids::FLOOR_VARIANTS.len());
+                tile.sprite_override = Some(tile_ids::FLOOR_VARIANTS[variant]);
+            }
+            self.tiles[idx] = tile;
         }
     }
 
