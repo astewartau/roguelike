@@ -28,6 +28,8 @@ pub fn decide_action(
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
+    puffin::profile_function!();
+
     // Check if entity has Actor component
     let (can_act, energy_regen_interval, last_regen_time) = match world.get::<&Actor>(entity) {
         Ok(a) => (a.can_act(), a.energy_regen_interval, a.last_energy_regen_time),

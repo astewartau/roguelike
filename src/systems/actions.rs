@@ -709,6 +709,7 @@ pub fn apply_equip_weapon(
     // Create the equipped weapon
     let new_weapon = match item_type {
         ItemType::Sword => EquippedWeapon::Melee(Weapon::sword()),
+        ItemType::Dagger => EquippedWeapon::Melee(Weapon::dagger()),
         ItemType::Bow => EquippedWeapon::Ranged(RangedWeapon::bow()),
         _ => return ActionResult::Invalid, // Not a weapon
     };
@@ -717,7 +718,10 @@ pub fn apply_equip_weapon(
     let old_weapon_item = {
         if let Ok(equipment) = world.get::<&Equipment>(entity) {
             match &equipment.weapon {
-                Some(EquippedWeapon::Melee(_)) => Some(ItemType::Sword),
+                Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
+                    "Dagger" => Some(ItemType::Dagger),
+                    _ => Some(ItemType::Sword),
+                },
                 Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
                 None => None,
             }
@@ -753,7 +757,10 @@ pub fn apply_unequip_weapon(
             return ActionResult::Invalid;
         };
         match &equipment.weapon {
-            Some(EquippedWeapon::Melee(_)) => Some(ItemType::Sword),
+            Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
+                "Dagger" => Some(ItemType::Dagger),
+                _ => Some(ItemType::Sword),
+            },
             Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
             None => return ActionResult::Invalid, // Nothing to unequip
         }
@@ -830,7 +837,10 @@ pub fn apply_drop_equipped_weapon(
             return ActionResult::Invalid;
         };
         match &equipment.weapon {
-            Some(EquippedWeapon::Melee(_)) => Some(ItemType::Sword),
+            Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
+                "Dagger" => Some(ItemType::Dagger),
+                _ => Some(ItemType::Sword),
+            },
             Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
             None => return ActionResult::Invalid, // Nothing to drop
         }

@@ -255,10 +255,16 @@ mod tests {
             tiles: vec![Tile::new(TileType::Floor); width * height],
             chest_positions: vec![],
             door_positions: vec![],
+            brazier_positions: vec![],
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
             starting_room: None,
+            illumination: vec![0.0; width * height],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
         }
     }
 
@@ -276,10 +282,16 @@ mod tests {
             tiles,
             chest_positions: vec![],
             door_positions: vec![],
+            brazier_positions: vec![],
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
             starting_room: None,
+            illumination: vec![0.0; 25],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
         }
     }
 
@@ -371,10 +383,16 @@ mod tests {
             tiles,
             chest_positions: vec![],
             door_positions: vec![],
+            brazier_positions: vec![],
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
             starting_room: None,
+            illumination: vec![0.0; 25],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
@@ -391,10 +409,16 @@ mod tests {
             tiles,
             chest_positions: vec![],
             door_positions: vec![],
+            brazier_positions: vec![],
             decals: vec![],
             stairs_up_pos: None,
             stairs_down_pos: None,
             starting_room: None,
+            illumination: vec![0.0; 25],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());

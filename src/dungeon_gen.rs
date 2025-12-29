@@ -1218,7 +1218,7 @@ mod tests {
     #[test]
     fn test_door_positions_are_on_floor() {
         let result = DungeonGenerator::generate(50, 50, 0);
-        for (x, y) in result.door_positions {
+        for ((x, y), _theme) in result.door_positions {
             let idx = y as usize * 50 + x as usize;
             assert_eq!(result.tiles[idx].tile_type, TileType::Floor);
         }

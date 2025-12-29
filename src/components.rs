@@ -52,7 +52,7 @@ impl PlayerClass {
     /// Starting inventory items
     pub fn starting_inventory(&self) -> Vec<ItemType> {
         match self {
-            PlayerClass::Fighter => vec![ItemType::Bow],
+            PlayerClass::Fighter => vec![],
             PlayerClass::Ranger => vec![ItemType::Dagger],
         }
     }

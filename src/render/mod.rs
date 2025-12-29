@@ -70,22 +70,36 @@ impl RenderContext {
         fires: &[FireEffect],
         show_grid_lines: bool,
     ) {
+        puffin::profile_function!();
+
         unsafe {
             use glow::HasContext;
             gl.clear_color(0.1, 0.1, 0.1, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
 
-        self.renderer
-            .render(&self.camera, grid, &self.tileset, show_grid_lines)
-            .unwrap();
-        self.renderer
-            .render_decals(&self.camera, grid, &self.tileset)
-            .unwrap();
-        self.renderer
-            .render_entities(&self.camera, entities, &self.tileset)
-            .unwrap();
-        self.renderer.render_vfx(&self.camera, vfx_effects);
-        self.renderer.render_fire(&self.camera, fires);
+        {
+            puffin::profile_scope!("render_tiles");
+            self.renderer
+                .render(&self.camera, grid, &self.tileset, show_grid_lines)
+                .unwrap();
+        }
+        {
+            puffin::profile_scope!("render_decals");
+            self.renderer
+                .render_decals(&self.camera, grid, &self.tileset)
+                .unwrap();
+        }
+        {
+            puffin::profile_scope!("render_entities");
+            self.renderer
+                .render_entities(&self.camera, entities, &self.tileset)
+                .unwrap();
+        }
+        {
+            puffin::profile_scope!("render_vfx");
+            self.renderer.render_vfx(&self.camera, vfx_effects);
+            self.renderer.render_fire(&self.camera, fires);
+        }
     }
 }

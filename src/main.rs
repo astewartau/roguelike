@@ -37,6 +37,16 @@ use winit::window::{Fullscreen, Window, WindowId};
 use egui_glow::EguiGlow;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize puffin profiler
+    puffin::set_scopes_on(true);
+
+    // Start puffin HTTP server for viewing profiler in browser
+    // Open http://localhost:8585 in your browser to view the profiler
+    let server_addr = format!("127.0.0.1:{}", puffin_http::DEFAULT_PORT);
+    let _puffin_server = puffin_http::Server::new(&server_addr).ok();
+    eprintln!("Profiler server running at http://{}", server_addr);
+    eprintln!("Run `puffin_viewer` or open in browser to view profiler");
+
     let event_loop = EventLoop::new()?;
     let mut app = App::new();
     event_loop.run_app(&mut app)?;
@@ -158,6 +168,9 @@ impl ApplicationHandler for App {
 
 impl AppState {
     fn update_and_render(&mut self) {
+        puffin::GlobalProfiler::lock().new_frame();
+        puffin::profile_function!();
+
         let current_time = Instant::now();
         let raw_dt = (current_time - self.last_frame_time).as_secs_f32();
         self.last_frame_time = current_time;
@@ -165,7 +178,10 @@ impl AppState {
         let dt = raw_dt.min(constants::MAX_ANIMATION_DT);
 
         // Tick game engine
-        let tick_result = self.engine.tick(dt, &mut self.render_ctx.camera);
+        let tick_result = {
+            puffin::profile_scope!("engine_tick");
+            self.engine.tick(dt, &mut self.render_ctx.camera)
+        };
 
         // Handle window actions from tick
         if let Some(action) = tick_result.window_action {
@@ -178,13 +194,16 @@ impl AppState {
         }
 
         // Run UI
-        let ui_actions = self.engine.run_ui(
-            &mut self.egui_glow,
-            &self.window,
-            &self.render_ctx.camera,
-            &self.render_ctx.tileset,
-            &self.render_ctx.ui_icons,
-        );
+        let ui_actions = {
+            puffin::profile_scope!("run_ui");
+            self.engine.run_ui(
+                &mut self.egui_glow,
+                &self.window,
+                &self.render_ctx.camera,
+                &self.render_ctx.tileset,
+                &self.render_ctx.ui_icons,
+            )
+        };
 
         // Process UI actions
         self.engine.process_ui_actions(&ui_actions);
@@ -196,6 +215,7 @@ impl AppState {
 
         // Render game world (only when playing)
         if let Some(grid) = self.engine.grid() {
+            puffin::profile_scope!("render_frame");
             self.render_ctx.render_frame(
                 &self.gl,
                 grid,
@@ -207,7 +227,10 @@ impl AppState {
         }
 
         // Render egui
-        self.egui_glow.paint(&self.window);
+        {
+            puffin::profile_scope!("egui_paint");
+            self.egui_glow.paint(&self.window);
+        }
 
         // Swap buffers
         self.gl_surface.swap_buffers(&self.gl_context).unwrap();

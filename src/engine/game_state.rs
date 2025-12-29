@@ -34,6 +34,9 @@ pub struct GameState {
 
     /// Action scheduler for turn-based time
     pub action_scheduler: ActionScheduler,
+
+    /// Whether FOV needs recalculation (dirty flag for performance)
+    pub fov_dirty: bool,
 }
 
 impl GameState {
@@ -53,6 +56,7 @@ impl GameState {
             floors: HashMap::new(),
             game_clock,
             action_scheduler,
+            fov_dirty: true, // Always calculate FOV on first frame
         }
     }
 

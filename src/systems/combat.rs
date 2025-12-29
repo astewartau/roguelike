@@ -125,9 +125,10 @@ mod tests {
 
     #[test]
     fn test_weapon_damage() {
+        use crate::tile::SpriteSheet;
         let weapon = Weapon {
             name: "Test Sword".to_string(),
-            tile_id: 0,
+            sprite: (SpriteSheet::Items, 0),
             base_damage: 5,
             damage_bonus: 2,
         };

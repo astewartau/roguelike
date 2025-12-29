@@ -134,9 +134,9 @@ impl GameEngine {
             }
         }
 
-        // Set up camera to track player
+        // Set up camera to track player (center of tile, not corner)
         if let Some((x, y)) = state.player_start_position() {
-            camera.set_tracking_target(glam::Vec2::new(x, y));
+            camera.set_tracking_target(glam::Vec2::new(x + 0.5, y + 0.5));
         }
 
         let ui_state = GameUiState::new(state.player_entity);
@@ -258,6 +258,8 @@ impl GameEngine {
     /// Process a frame tick - advances simulation, returns render data.
     /// Returns empty results if not in playing mode.
     pub fn tick(&mut self, dt: f32, camera: &mut Camera) -> TickResult {
+        puffin::profile_function!();
+
         // Accumulate real time for animations
         self.real_time += dt;
 
@@ -271,7 +273,10 @@ impl GameEngine {
         }
 
         // Handle input first (needs full &mut self access)
-        let input_result = self.process_input(camera);
+        let input_result = {
+            puffin::profile_scope!("process_input");
+            self.process_input(camera)
+        };
         let mut window_action = None;
         if input_result.toggle_fullscreen {
             window_action = Some(WindowAction::ToggleFullscreen);
@@ -282,28 +287,37 @@ impl GameEngine {
         let ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
 
         // Update animations
-        systems::update_lunge_animations(&mut state.world, dt);
-        self.vfx.update(dt);
+        {
+            puffin::profile_scope!("animations");
+            systems::update_lunge_animations(&mut state.world, dt);
+            self.vfx.update(dt);
+        }
 
         // Remove dead entities
-        let mut rng = rand::thread_rng();
-        systems::remove_dead_entities(
-            &mut state.world,
-            state.player_entity,
-            &mut rng,
-            &mut self.events,
-            Some(&mut state.action_scheduler),
-        );
+        {
+            puffin::profile_scope!("remove_dead");
+            let mut rng = rand::thread_rng();
+            systems::remove_dead_entities(
+                &mut state.world,
+                state.player_entity,
+                &mut rng,
+                &mut self.events,
+                Some(&mut state.action_scheduler),
+            );
+        }
 
         // Process events from remove_dead_entities
-        let event_result = process_events(
-            &mut self.events,
-            &mut state.world,
-            &state.grid,
-            &mut self.vfx,
-            ui_state,
-            state.player_entity,
-        );
+        let event_result = {
+            puffin::profile_scope!("process_events");
+            process_events(
+                &mut self.events,
+                &mut state.world,
+                &state.grid,
+                &mut self.vfx,
+                ui_state,
+                state.player_entity,
+            )
+        };
 
         // Collect skeleton spawn positions before floor transition might invalidate state
         let skeleton_spawns = event_result.skeleton_spawns.clone();
@@ -341,50 +355,65 @@ impl GameEngine {
         }
 
         // Visual lerping
-        systems::visual_lerp(&mut state.world, dt);
-        systems::lerp_projectiles_realtime(
-            &mut state.world,
-            dt,
-            crate::constants::ARROW_SPEED,
-        );
+        {
+            puffin::profile_scope!("visual_lerp");
+            systems::visual_lerp(&mut state.world, dt);
+            systems::lerp_projectiles_realtime(
+                &mut state.world,
+                dt,
+                crate::constants::ARROW_SPEED,
+            );
+        }
 
         // Projectile cleanup
         let finished = systems::cleanup_finished_projectiles(&state.world);
         systems::despawn_projectiles(&mut state.world, finished);
 
-        // Update camera tracking
+        // Update camera tracking (center of tile, not corner)
         if let Ok(vis_pos) = state.world.get::<&crate::components::VisualPosition>(state.player_entity) {
-            camera.set_tracking_target(glam::Vec2::new(vis_pos.x, vis_pos.y));
+            camera.set_tracking_target(glam::Vec2::new(vis_pos.x + 0.5, vis_pos.y + 0.5));
         }
 
         // Update camera
         camera.update(dt, self.input.mouse_down);
 
-        // Update visibility based on LOS and illumination
-        // Player's light + any visible light sources (campfires) determine what you can see
-        systems::update_fov(
-            &state.world,
-            &mut state.grid,
-            state.player_entity,
-            crate::constants::FOV_RADIUS,
-            state.game_clock.time,
-        );
+        // Update visibility based on LOS and illumination (only when game state changed)
+        if state.fov_dirty {
+            {
+                puffin::profile_scope!("fov_update");
+                systems::update_fov(
+                    &state.world,
+                    &mut state.grid,
+                    state.player_entity,
+                    crate::constants::FOV_RADIUS,
+                    state.game_clock.time,
+                );
+            }
 
-        // Calculate per-tile illumination (must be after FOV update)
-        systems::calculate_illumination(
-            &state.world,
-            &mut state.grid,
-            state.player_entity,
-            crate::constants::FOV_RADIUS,
-        );
+            // Calculate per-tile illumination (must be after FOV update)
+            {
+                puffin::profile_scope!("illumination");
+                systems::calculate_illumination(
+                    &state.world,
+                    &mut state.grid,
+                    state.player_entity,
+                    crate::constants::FOV_RADIUS,
+                );
+            }
+
+            state.fov_dirty = false;
+        }
 
         // Collect renderables
-        let entities = systems::collect_renderables(
-            &state.world,
-            &state.grid,
-            state.player_entity,
-            self.real_time,
-        );
+        let entities = {
+            puffin::profile_scope!("collect_renderables");
+            systems::collect_renderables(
+                &state.world,
+                &state.grid,
+                state.player_entity,
+                self.real_time,
+            )
+        };
 
         TickResult {
             entities,
@@ -633,6 +662,9 @@ impl GameEngine {
 
             match turn_result.turn_result {
                 TurnResult::Started => {
+                    // Mark FOV for recalculation since game state changed
+                    state.fov_dirty = true;
+
                     if !frame.from_keyboard {
                         self.input.consume_step();
                         if self.input.has_arrived() {
@@ -774,12 +806,13 @@ impl GameEngine {
 
         state.grid = result.new_grid;
         state.current_floor = result.new_floor;
+        state.fov_dirty = true; // New floor needs FOV calculation
 
         self.input.clear_path();
 
         camera.set_tracking_target(glam::Vec2::new(
-            result.player_visual_pos.0,
-            result.player_visual_pos.1,
+            result.player_visual_pos.0 + 0.5,
+            result.player_visual_pos.1 + 0.5,
         ));
     }
 }
