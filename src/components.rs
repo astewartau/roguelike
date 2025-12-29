@@ -11,17 +11,19 @@ use hecs::Entity;
 pub enum PlayerClass {
     Fighter,
     Ranger,
+    Druid,
 }
 
 impl PlayerClass {
     /// All available player classes
-    pub const ALL: [PlayerClass; 2] = [PlayerClass::Fighter, PlayerClass::Ranger];
+    pub const ALL: [PlayerClass; 3] = [PlayerClass::Fighter, PlayerClass::Ranger, PlayerClass::Druid];
 
     /// Display name for the class
     pub fn name(&self) -> &'static str {
         match self {
             PlayerClass::Fighter => "Fighter",
             PlayerClass::Ranger => "Ranger",
+            PlayerClass::Druid => "Druid",
         }
     }
 
@@ -30,6 +32,7 @@ impl PlayerClass {
         match self {
             PlayerClass::Fighter => tile_ids::FIGHTER,
             PlayerClass::Ranger => tile_ids::RANGER,
+            PlayerClass::Druid => tile_ids::ELF,
         }
     }
 
@@ -38,6 +41,7 @@ impl PlayerClass {
         match self {
             PlayerClass::Fighter => (16, 10, 12),
             PlayerClass::Ranger => (12, 10, 16),
+            PlayerClass::Druid => (10, 16, 14),
         }
     }
 
@@ -46,6 +50,7 @@ impl PlayerClass {
         match self {
             PlayerClass::Fighter => EquippedWeapon::Melee(Weapon::sword()),
             PlayerClass::Ranger => EquippedWeapon::Ranged(RangedWeapon::bow()),
+            PlayerClass::Druid => EquippedWeapon::Melee(Weapon::staff()),
         }
     }
 
@@ -54,6 +59,7 @@ impl PlayerClass {
         match self {
             PlayerClass::Fighter => vec![],
             PlayerClass::Ranger => vec![ItemType::Dagger],
+            PlayerClass::Druid => vec![ItemType::RegenerationPotion],
         }
     }
 
@@ -62,6 +68,7 @@ impl PlayerClass {
         match self {
             PlayerClass::Fighter => AbilityType::Cleave,
             PlayerClass::Ranger => AbilityType::Sprint,
+            PlayerClass::Druid => AbilityType::Tame,
         }
     }
 
@@ -70,6 +77,7 @@ impl PlayerClass {
         match self {
             PlayerClass::Fighter => CLEAVE_COOLDOWN,
             PlayerClass::Ranger => SPRINT_COOLDOWN,
+            PlayerClass::Druid => TAME_COOLDOWN,
         }
     }
 }
@@ -85,6 +93,10 @@ pub enum AbilityType {
     Cleave,
     /// Ranger: Temporary speed boost
     Sprint,
+    /// Druid: Tame a nearby animal
+    Tame,
+    /// Druid: Protective bark armor (50% damage reduction)
+    Barkskin,
 }
 
 impl AbilityType {
@@ -93,6 +105,8 @@ impl AbilityType {
         match self {
             AbilityType::Cleave => "Cleave",
             AbilityType::Sprint => "Sprint",
+            AbilityType::Tame => "Tame Animal",
+            AbilityType::Barkskin => "Barkskin",
         }
     }
 
@@ -101,6 +115,8 @@ impl AbilityType {
         match self {
             AbilityType::Cleave => "Attack all adjacent enemies",
             AbilityType::Sprint => "Double movement speed for 10 seconds",
+            AbilityType::Tame => "Channel to tame a nearby animal",
+            AbilityType::Barkskin => "Reduce damage by 50% for 15 seconds",
         }
     }
 
@@ -109,6 +125,8 @@ impl AbilityType {
         match self {
             AbilityType::Cleave => CLEAVE_ENERGY_COST,
             AbilityType::Sprint => SPRINT_ENERGY_COST,
+            AbilityType::Tame => TAME_ENERGY_COST,
+            AbilityType::Barkskin => BARKSKIN_ENERGY_COST,
         }
     }
 }
@@ -124,6 +142,36 @@ pub struct ClassAbility {
 }
 
 impl ClassAbility {
+    pub fn new(ability_type: AbilityType, cooldown_total: f32) -> Self {
+        Self {
+            ability_type,
+            cooldown_remaining: 0.0,
+            cooldown_total,
+        }
+    }
+
+    /// Start the cooldown timer
+    pub fn start_cooldown(&mut self) {
+        self.cooldown_remaining = self.cooldown_total;
+    }
+
+    /// Check if the ability is ready to use
+    pub fn is_ready(&self) -> bool {
+        self.cooldown_remaining <= 0.0
+    }
+}
+
+/// Optional secondary class ability (currently only Druid has this)
+#[derive(Debug, Clone)]
+pub struct SecondaryAbility {
+    pub ability_type: AbilityType,
+    /// Seconds remaining on cooldown (0 = ready)
+    pub cooldown_remaining: f32,
+    /// Total cooldown duration
+    pub cooldown_total: f32,
+}
+
+impl SecondaryAbility {
     pub fn new(ability_type: AbilityType, cooldown_total: f32) -> Self {
         Self {
             ability_type,
@@ -365,6 +413,7 @@ pub enum ItemType {
     Sword,
     Bow,
     Dagger,
+    Staff,
     // Potions
     HealthPotion,
     RegenerationPotion,
@@ -401,8 +450,10 @@ pub enum EffectType {
     Regenerating,
     /// Increased damage output
     Strengthened,
-    /// Reduced incoming damage
+    /// Reduced incoming damage (from Protection scroll)
     Protected,
+    /// Reduced incoming damage (from Barkskin ability - nature themed VFX)
+    Barkskin,
     /// Random movement, ignores player (enemies only)
     Confused,
     /// Flees from player (enemies only)
@@ -516,6 +567,10 @@ pub enum ActionType {
     Cleave,
     /// Ranger ability: activate sprint (speed boost)
     ActivateSprint,
+    /// Druid ability: start taming an animal
+    StartTaming { target: Entity },
+    /// Druid ability: activate barkskin (damage reduction)
+    ActivateBarkskin,
 }
 
 impl ActionType {
@@ -542,6 +597,8 @@ impl ActionType {
             ActionType::DropEquippedWeapon => 1,
             ActionType::Cleave => CLEAVE_ENERGY_COST,
             ActionType::ActivateSprint => SPRINT_ENERGY_COST,
+            ActionType::StartTaming { .. } => TAME_ENERGY_COST,
+            ActionType::ActivateBarkskin => BARKSKIN_ENERGY_COST,
         }
     }
 }
@@ -791,6 +848,15 @@ impl Weapon {
             damage_bonus: 0,
         }
     }
+
+    pub fn staff() -> Self {
+        Self {
+            name: "Staff".to_string(),
+            sprite: crate::tile::tile_ids::STAFF,
+            base_damage: STAFF_BASE_DAMAGE,
+            damage_bonus: STAFF_DAMAGE_BONUS,
+        }
+    }
 }
 
 /// What type of weapon is equipped
@@ -1022,4 +1088,58 @@ impl LightSource {
             intensity: 0.9,
         }
     }
+}
+
+// =============================================================================
+// TAMING SYSTEM
+// =============================================================================
+
+/// Marker for animals that can be tamed by the Druid
+#[derive(Debug, Clone, Copy)]
+pub struct Tameable;
+
+/// Tracks active taming progress for a player
+#[derive(Debug, Clone, Copy)]
+pub struct TamingInProgress {
+    /// The entity being tamed
+    pub target: Entity,
+    /// Current taming progress in seconds
+    pub progress: f32,
+    /// Required time to complete taming
+    pub required: f32,
+}
+
+/// Marks an animal as tamed
+#[derive(Debug, Clone, Copy)]
+pub struct TamedBy {
+    /// The player who tamed this animal
+    pub owner: Entity,
+}
+
+/// AI for tamed companions - follows owner and attacks enemies
+#[derive(Debug, Clone, Copy)]
+pub struct CompanionAI {
+    /// The player this companion follows
+    pub owner: Entity,
+    /// Maximum distance before following (Manhattan distance)
+    pub follow_distance: i32,
+    /// Entity that last attacked this companion (for retaliation)
+    pub last_attacker: Option<Entity>,
+}
+
+/// Tracks the player's last attack target (for companion assistance)
+#[derive(Debug, Clone, Copy)]
+pub struct PlayerAttackTarget {
+    pub target: Option<Entity>,
+}
+
+// =============================================================================
+// RANGED COOLDOWN
+// =============================================================================
+
+/// Cooldown tracker for ranged attacks (used by skeleton archers)
+#[derive(Debug, Clone, Copy)]
+pub struct RangedCooldown {
+    /// Remaining cooldown time in seconds
+    pub remaining: f32,
 }

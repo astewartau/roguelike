@@ -16,7 +16,7 @@ mod targeting;
 mod vfx;
 
 // Re-export public items from submodules
-pub use ability_bar::{draw_ability_bar, AbilityBarData};
+pub use ability_bar::{draw_ability_bar, draw_secondary_ability_bar, AbilityBarData};
 pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data, DialogueWindowData};
 pub use icons::UiIcons;
@@ -24,7 +24,7 @@ pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data, LootWindowData};
 pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarData};
-pub use targeting::{draw_targeting_overlay, get_targeting_overlay_data, TargetingOverlayData};
+pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data, TargetingOverlayData};
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
     draw_enemy_status_indicators, draw_explosions, draw_player_buff_auras, draw_potion_splashes,
@@ -35,7 +35,7 @@ pub use vfx::{
 use crate::camera::Camera;
 use crate::events::GameEvent;
 use crate::grid::Grid;
-use crate::input::TargetingMode;
+use crate::input::{AbilityTargetingMode, TargetingMode};
 use crate::multi_tileset::MultiTileset;
 use crate::vfx::VisualEffect;
 use egui_glow::EguiGlow;
@@ -62,8 +62,10 @@ pub struct UiActions {
     pub dialogue_option_selected: Option<usize>,
     /// Start the game with selected class (from start screen)
     pub start_game: Option<crate::components::PlayerClass>,
-    /// Use class ability
+    /// Use class ability (Q)
     pub use_ability: bool,
+    /// Use secondary ability (E) - Druid only
+    pub use_secondary_ability: bool,
 }
 
 // =============================================================================
@@ -178,6 +180,7 @@ pub fn run_ui(
     icons: &UiIcons,
     vfx_effects: &[VisualEffect],
     targeting_mode: Option<&TargetingMode>,
+    ability_targeting_mode: Option<&AbilityTargetingMode>,
     mouse_pos: (f32, f32),
     game_time: f32,
 ) -> UiActions {
@@ -193,6 +196,24 @@ pub fn run_ui(
         .map(|ability| {
             // Check if player CAN have enough energy (max_energy >= cost)
             // The actual waiting for energy happens when the action is executed
+            let can_afford = world
+                .get::<&crate::components::Actor>(player_entity)
+                .map(|actor| actor.max_energy >= ability.ability_type.energy_cost())
+                .unwrap_or(false);
+            AbilityBarData {
+                ability_type: ability.ability_type,
+                cooldown_remaining: ability.cooldown_remaining,
+                cooldown_total: ability.cooldown_total,
+                can_use: can_afford && ability.is_ready(),
+                viewport_height: camera.viewport_height,
+            }
+        });
+
+    // Get secondary ability bar data (Druid's Barkskin)
+    let secondary_ability_data = world
+        .get::<&crate::components::SecondaryAbility>(player_entity)
+        .ok()
+        .map(|ability| {
             let can_afford = world
                 .get::<&crate::components::Actor>(player_entity)
                 .map(|actor| actor.max_energy >= ability.ability_type.energy_cost())
@@ -228,7 +249,9 @@ pub fn run_ui(
 
     // Extract UI data using helper functions
     let buff_aura_data = get_buff_aura_data(world, player_entity);
-    let targeting_data = get_targeting_overlay_data(world, player_entity, targeting_mode, mouse_pos, camera);
+    // Try ability targeting first, then item targeting
+    let targeting_data = get_ability_targeting_overlay_data(world, player_entity, ability_targeting_mode, mouse_pos, camera)
+        .or_else(|| get_targeting_overlay_data(world, player_entity, targeting_mode, mouse_pos, camera));
     let enemy_status_data = get_enemy_status_data(world, grid);
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
 
@@ -251,6 +274,13 @@ pub fn run_ui(
         if let Some(ref data) = ability_data {
             if draw_ability_bar(ctx, data, icons) {
                 actions.use_ability = true;
+            }
+        }
+
+        // Secondary ability bar (Druid only - Barkskin)
+        if let Some(ref data) = secondary_ability_data {
+            if draw_secondary_ability_bar(ctx, data, icons) {
+                actions.use_secondary_ability = true;
             }
         }
 

@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 use rand::Rng;
 
-use crate::components::{ActionType, Actor, AIState, ChaseAI, EffectType, Equipment, Position};
+use crate::components::{ActionType, Actor, AIState, ChaseAI, CompanionAI, EffectType, Equipment, Health, Position, RangedCooldown, TamedBy};
 use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -49,9 +49,11 @@ pub fn decide_action(
         return;
     }
 
-    // Check if entity has AI
-    let has_ai = world.get::<&ChaseAI>(entity).is_ok();
-    if !has_ai {
+    // Check if entity has AI (ChaseAI for enemies, CompanionAI for tamed animals)
+    let has_chase_ai = world.get::<&ChaseAI>(entity).is_ok();
+    let companion_ai = world.get::<&CompanionAI>(entity).ok().map(|ai| (ai.owner, ai.follow_distance));
+
+    if !has_chase_ai && companion_ai.is_none() {
         return;
     }
 
@@ -70,8 +72,14 @@ pub fn decide_action(
         }
     }
 
-    // Determine AI action (and emit state change events)
-    let action_type = determine_action(world, grid, entity, player_entity, events, rng);
+    // Determine AI action based on AI type
+    let action_type = if let Some((owner, follow_distance)) = companion_ai {
+        // Companion AI: follow owner and attack enemies
+        determine_companion_action(world, grid, entity, owner, follow_distance, rng)
+    } else {
+        // Regular enemy AI: chase and attack player
+        determine_action(world, grid, entity, player_entity, events, rng)
+    };
 
     // Start the action (with energy events)
     let _ = time_system::start_action_with_events(world, entity, action_type, clock, scheduler, Some(events));
@@ -124,6 +132,20 @@ fn determine_action(
         return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
 
+    // Check for adjacent companions (tamed animals) and attack them if alive
+    for (companion_id, (companion_pos, _, health)) in world.query::<(&Position, &CompanionAI, &Health)>().iter() {
+        // Skip dead companions
+        if health.current <= 0 {
+            continue;
+        }
+        let dx = companion_pos.x - entity_pos.0;
+        let dy = companion_pos.y - entity_pos.1;
+        // Adjacent? Attack the companion!
+        if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
+            return ActionType::Attack { target: companion_id };
+        }
+    }
+
     // Get AI state, sight radius, and ranged parameters
     let (sight_radius, current_state, last_known, ranged_min, ranged_max) =
         match world.get::<&ChaseAI>(entity) {
@@ -163,8 +185,14 @@ fn determine_action(
 
     // Check for ranged attack opportunity
     if can_see_player && has_ranged_weapon && ranged_max > 0 {
+        // Check if ranged attack is on cooldown
+        let ranged_ready = world
+            .get::<&RangedCooldown>(entity)
+            .map(|cd| cd.remaining <= 0.0)
+            .unwrap_or(true);
+
         // In range for ranged attack?
-        if distance >= ranged_min && distance <= ranged_max {
+        if ranged_ready && distance >= ranged_min && distance <= ranged_max {
             // Check line of sight for projectile (no blocking entities in the way)
             if has_clear_shot(world, entity_pos, player_pos) {
                 return ActionType::ShootBow {
@@ -430,4 +458,140 @@ fn flee_from_target(
 
     // Fallback to random movement if can't flee directly
     random_wander(grid, pos, blocked, rng)
+}
+
+/// Determine what action a companion (tamed animal) should take.
+/// Priority: retaliate against attacker > assist player's target > follow owner
+fn determine_companion_action(
+    world: &World,
+    grid: &Grid,
+    entity: Entity,
+    owner: Entity,
+    follow_distance: i32,
+    rng: &mut impl Rng,
+) -> ActionType {
+    use crate::components::PlayerAttackTarget;
+
+    // Get companion position
+    let companion_pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionType::Wait,
+    };
+
+    // Get owner position
+    let owner_pos = match world.get::<&Position>(owner) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionType::Wait,
+    };
+
+    // Get last attacker from CompanionAI
+    let last_attacker = world
+        .get::<&CompanionAI>(entity)
+        .ok()
+        .and_then(|ai| ai.last_attacker);
+
+    // Priority 1: Retaliate against last attacker if alive and has position
+    if let Some(attacker) = last_attacker {
+        // Skip if attacker is another companion owned by the same player
+        let is_sibling_companion = world
+            .get::<&TamedBy>(attacker)
+            .map(|t| t.owner == owner)
+            .unwrap_or(false);
+
+        // Check if attacker is still alive
+        let attacker_alive = world
+            .get::<&Health>(attacker)
+            .map(|h| h.current > 0)
+            .unwrap_or(false);
+
+        if attacker_alive && !is_sibling_companion {
+            if let Ok(attacker_pos) = world.get::<&Position>(attacker) {
+                let dx = attacker_pos.x - companion_pos.0;
+                let dy = attacker_pos.y - companion_pos.1;
+
+                // Adjacent? Attack!
+                if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
+                    return ActionType::Attack { target: attacker };
+                }
+
+                // Move toward attacker
+                let movement_blocking = queries::get_blocking_positions(world, Some(entity));
+                if let Some((nx, ny)) = pathfinding::next_step_toward(
+                    grid,
+                    companion_pos,
+                    (attacker_pos.x, attacker_pos.y),
+                    &movement_blocking,
+                ) {
+                    let move_dx = nx - companion_pos.0;
+                    let move_dy = ny - companion_pos.1;
+                    if move_dx != 0 || move_dy != 0 {
+                        return action_dispatch::determine_action_type(world, grid, entity, move_dx, move_dy);
+                    }
+                }
+            }
+        }
+    }
+
+    // Priority 2: Assist player's attack target if set and alive
+    if let Ok(player_target) = world.get::<&PlayerAttackTarget>(owner) {
+        if let Some(target) = player_target.target {
+            // Skip if target is another companion owned by the same player
+            let is_sibling_companion = world
+                .get::<&TamedBy>(target)
+                .map(|t| t.owner == owner)
+                .unwrap_or(false);
+
+            // Check if target is still alive
+            let target_alive = world
+                .get::<&Health>(target)
+                .map(|h| h.current > 0)
+                .unwrap_or(false);
+
+            if target_alive && !is_sibling_companion {
+                if let Ok(target_pos) = world.get::<&Position>(target) {
+                    let dx = target_pos.x - companion_pos.0;
+                    let dy = target_pos.y - companion_pos.1;
+
+                    // Adjacent? Attack!
+                    if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
+                        return ActionType::Attack { target };
+                    }
+
+                    // Move toward target
+                    let movement_blocking = queries::get_blocking_positions(world, Some(entity));
+                    if let Some((nx, ny)) = pathfinding::next_step_toward(
+                        grid,
+                        companion_pos,
+                        (target_pos.x, target_pos.y),
+                        &movement_blocking,
+                    ) {
+                        let move_dx = nx - companion_pos.0;
+                        let move_dy = ny - companion_pos.1;
+                        if move_dx != 0 || move_dy != 0 {
+                            return action_dispatch::determine_action_type(world, grid, entity, move_dx, move_dy);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Priority 3: Follow owner if too far
+    let dist_to_owner = (companion_pos.0 - owner_pos.0)
+        .abs()
+        .max((companion_pos.1 - owner_pos.1).abs());
+
+    if dist_to_owner > follow_distance {
+        let movement_blocking = queries::get_blocking_positions(world, Some(entity));
+        if let Some((nx, ny)) = pathfinding::next_step_toward(grid, companion_pos, owner_pos, &movement_blocking) {
+            let dx = nx - companion_pos.0;
+            let dy = ny - companion_pos.1;
+            if dx != 0 || dy != 0 {
+                return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
+            }
+        }
+    }
+
+    // Otherwise, idle nearby (just wait, don't wander)
+    ActionType::Wait
 }

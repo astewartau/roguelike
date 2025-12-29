@@ -8,7 +8,7 @@ pub const AI_ACTIVE_RADIUS: i32 = 25;
 /// Number of skeletons to spawn
 pub const SKELETON_SPAWN_COUNT: usize = 25;
 /// Skeleton health
-pub const SKELETON_HEALTH: i32 = 50;
+pub const SKELETON_HEALTH: i32 = 40;
 /// Skeleton maximum energy pool
 pub const SKELETON_MAX_ENERGY: i32 = 3;
 /// Skeleton action speed multiplier (1.5 = 50% faster than player)
@@ -32,7 +32,7 @@ pub const RAT_HEALTH: i32 = 30;
 /// Rat maximum energy pool
 pub const RAT_MAX_ENERGY: i32 = 4;
 /// Rat action speed multiplier (fast and nimble)
-pub const RAT_SPEED: f32 = 2.0;
+pub const RAT_SPEED: f32 = 1.5;
 /// Rat sight radius (poor eyesight)
 pub const RAT_SIGHT_RADIUS: i32 = 5;
 /// Rat strength (weak)
@@ -69,6 +69,8 @@ pub const SKELETON_ARCHER_BOW_DAMAGE: i32 = 8;
 pub const SKELETON_ARCHER_MIN_RANGE: i32 = 2;
 /// Maximum range for skeleton archer bow
 pub const SKELETON_ARCHER_MAX_RANGE: i32 = 8;
+/// Cooldown between ranged attacks (seconds) - total time between shots ~3s
+pub const RANGED_ATTACK_COOLDOWN: f32 = 1.5;
 
 /// Gold dropped by enemies (min)
 pub const ENEMY_GOLD_DROP_MIN: u32 = 1;

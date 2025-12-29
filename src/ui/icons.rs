@@ -23,6 +23,7 @@ pub struct UiIcons {
     pub sword_uv: egui::Rect,
     pub bow_uv: egui::Rect,
     pub dagger_uv: egui::Rect,
+    pub staff_uv: egui::Rect,
     pub red_potion_uv: egui::Rect,
     pub green_potion_uv: egui::Rect,
     pub amber_potion_uv: egui::Rect,
@@ -37,6 +38,7 @@ pub struct UiIcons {
     // Ability icons
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
+    pub barkskin_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -57,6 +59,7 @@ impl UiIcons {
             sword_uv: tileset.get_egui_uv(tile_ids::SWORD.0, tile_ids::SWORD.1),
             bow_uv: tileset.get_egui_uv(tile_ids::BOW.0, tile_ids::BOW.1),
             dagger_uv: tileset.get_egui_uv(tile_ids::DAGGER.0, tile_ids::DAGGER.1),
+            staff_uv: tileset.get_egui_uv(tile_ids::STAFF.0, tile_ids::STAFF.1),
             red_potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION.0, tile_ids::RED_POTION.1),
             green_potion_uv: tileset.get_egui_uv(tile_ids::GREEN_POTION.0, tile_ids::GREEN_POTION.1),
             amber_potion_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION.0, tile_ids::AMBER_POTION.1),
@@ -68,9 +71,10 @@ impl UiIcons {
             cheese_uv: tileset.get_egui_uv(tile_ids::CHEESE.0, tile_ids::CHEESE.1),
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
-            // Ability icons: AXE for Cleave, BLUE_POTION for Sprint
+            // Ability icons: AXE for Cleave, BLUE_POTION for Sprint, AMBER_POTION for Barkskin (brown)
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
             sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
+            barkskin_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION.0, tile_ids::AMBER_POTION.1),
         }
     }
 
@@ -91,6 +95,7 @@ impl UiIcons {
             ItemType::Sword => self.sword_uv,
             ItemType::Bow => self.bow_uv,
             ItemType::Dagger => self.dagger_uv,
+            ItemType::Staff => self.staff_uv,
             ItemType::HealthPotion => self.red_potion_uv,
             ItemType::RegenerationPotion => self.green_potion_uv,
             ItemType::StrengthPotion => self.amber_potion_uv,

@@ -1,9 +1,9 @@
 //! World initialization - creates the game world and spawns initial entities.
 
 use crate::components::{
-    Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility,
-    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, PlayerClass,
-    Position, Sprite, Stats, StatusEffects, VisualPosition,
+    AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility,
+    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, PlayerAttackTarget,
+    PlayerClass, Position, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
 use crate::dungeon_gen::RoomTheme;
@@ -260,7 +260,13 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         Attackable,
         StatusEffects::new(),
         ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
+        PlayerAttackTarget { target: None },
     ));
+
+    // Druid gets a secondary ability (Barkskin)
+    if player_class == PlayerClass::Druid {
+        let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Barkskin, BARKSKIN_COOLDOWN));
+    }
 
     // Spawn chests, doors, braziers, coffins, barrels, and water
     let mut rng = rand::thread_rng();

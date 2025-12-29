@@ -128,6 +128,32 @@ pub enum GameEvent {
     CoffinSkeletonSpawn {
         position: (i32, i32),
     },
+    /// Taming has started
+    TamingStarted {
+        tamer: Entity,
+        target: Entity,
+    },
+    /// Taming progress updated
+    TamingProgress {
+        tamer: Entity,
+        target: Entity,
+        progress: f32,
+        required: f32,
+    },
+    /// Taming completed successfully
+    TamingCompleted {
+        tamer: Entity,
+        target: Entity,
+    },
+    /// Taming failed (too far away)
+    TamingFailed {
+        tamer: Entity,
+        target: Entity,
+    },
+    /// Barkskin ability activated (druid)
+    BarkskinActivated {
+        entity: Entity,
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

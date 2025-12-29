@@ -6,9 +6,9 @@
 use hecs::{Entity, World};
 
 use crate::components::{
-    Attackable, BlocksMovement, ChaseAI, Container, ContainerType, Door, EffectType, Equipment,
-    EquippedWeapon, Health, Inventory, ItemType, LungeAnimation, Position, Projectile,
-    ProjectileMarker, Sprite, Stats, StatusEffects, VisualPosition, Weapon, RangedWeapon,
+    Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
+    EquippedWeapon, Health, Inventory, ItemType, LungeAnimation, PlayerAttackTarget, Position, Projectile,
+    ProjectileMarker, RangedCooldown, Sprite, Stats, StatusEffects, TamingInProgress, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -59,9 +59,16 @@ pub fn apply_move(
         return ActionResult::Blocked;
     }
 
-    // Check for attackable entity at target - block movement instead of auto-attacking.
-    if queries::get_attackable_at(world, target_x, target_y, Some(entity)).is_some() {
-        return ActionResult::Blocked;
+    // Check for attackable entity at target - block movement unless it's our own companion
+    if let Some(target_entity) = queries::get_attackable_at(world, target_x, target_y, Some(entity)) {
+        // Allow walking through our own tamed companions
+        let is_our_companion = world
+            .get::<&crate::components::TamedBy>(target_entity)
+            .map(|t| t.owner == entity)
+            .unwrap_or(false);
+        if !is_our_companion {
+            return ActionResult::Blocked;
+        }
     }
 
     // Check for closed door at target
@@ -129,7 +136,8 @@ pub fn apply_attack(
 
     // Check for status effects
     let has_strength_boost = queries::has_status_effect(world, attacker, EffectType::Strengthened);
-    let has_protection = queries::has_status_effect(world, target, EffectType::Protected);
+    let has_protection = queries::has_status_effect(world, target, EffectType::Protected)
+        || queries::has_status_effect(world, target, EffectType::Barkskin);
 
     // Calculate damage
     let base_damage = {
@@ -170,6 +178,18 @@ pub fn apply_attack(
     // Apply damage to target
     if let Ok(mut health) = world.get::<&mut Health>(target) {
         health.current -= damage;
+    }
+
+    // Track attacker for companion retaliation (but not if attacked by owner)
+    if let Ok(mut companion_ai) = world.get::<&mut CompanionAI>(target) {
+        if companion_ai.owner != attacker {
+            companion_ai.last_attacker = Some(attacker);
+        }
+    }
+
+    // Track player's attack target for companion assistance
+    if let Ok(mut player_target) = world.get::<&mut PlayerAttackTarget>(attacker) {
+        player_target.target = Some(target);
     }
 
     // Add lunge animation to attacker
@@ -396,6 +416,11 @@ pub fn apply_shoot_bow(
     events.push(GameEvent::ProjectileSpawned {
         projectile: arrow,
         source: shooter,
+    });
+
+    // Start ranged attack cooldown for the shooter (used by enemies, not player)
+    let _ = world.insert_one(shooter, RangedCooldown {
+        remaining: crate::constants::RANGED_ATTACK_COOLDOWN,
     });
 
     ActionResult::Completed
@@ -710,6 +735,7 @@ pub fn apply_equip_weapon(
     let new_weapon = match item_type {
         ItemType::Sword => EquippedWeapon::Melee(Weapon::sword()),
         ItemType::Dagger => EquippedWeapon::Melee(Weapon::dagger()),
+        ItemType::Staff => EquippedWeapon::Melee(Weapon::staff()),
         ItemType::Bow => EquippedWeapon::Ranged(RangedWeapon::bow()),
         _ => return ActionResult::Invalid, // Not a weapon
     };
@@ -720,6 +746,7 @@ pub fn apply_equip_weapon(
             match &equipment.weapon {
                 Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
                     "Dagger" => Some(ItemType::Dagger),
+                    "Staff" => Some(ItemType::Staff),
                     _ => Some(ItemType::Sword),
                 },
                 Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
@@ -759,6 +786,7 @@ pub fn apply_unequip_weapon(
         match &equipment.weapon {
             Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
                 "Dagger" => Some(ItemType::Dagger),
+                "Staff" => Some(ItemType::Staff),
                 _ => Some(ItemType::Sword),
             },
             Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
@@ -839,6 +867,7 @@ pub fn apply_drop_equipped_weapon(
         match &equipment.weapon {
             Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
                 "Dagger" => Some(ItemType::Dagger),
+                "Staff" => Some(ItemType::Staff),
                 _ => Some(ItemType::Sword),
             },
             Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
@@ -870,7 +899,7 @@ pub fn apply_drop_equipped_weapon(
 // CLASS ABILITY ACTIONS
 // =============================================================================
 
-/// Apply cleave attack - attacks all adjacent enemies (8 directions)
+/// Apply cleave attack - attacks all enemies within radius 2 (24 tiles)
 pub fn apply_cleave(
     world: &mut World,
     attacker: Entity,
@@ -884,7 +913,7 @@ pub fn apply_cleave(
         None => return ActionResult::Invalid,
     };
 
-    // Emit cleave event for VFX (shows slashes on all 8 adjacent tiles)
+    // Emit cleave event for VFX
     events.push(GameEvent::CleavePerformed {
         center: attacker_pos,
     });
@@ -904,10 +933,10 @@ pub fn apply_cleave(
     // Check for status effects on attacker
     let has_strength_boost = queries::has_status_effect(world, attacker, EffectType::Strengthened);
 
-    // Collect all attackable entities in 8 adjacent tiles
+    // Collect all attackable entities within radius 2 (5x5 area minus center = 24 tiles)
     let mut targets: Vec<(Entity, i32, i32)> = Vec::new();
-    for dx in -1..=1 {
-        for dy in -1..=1 {
+    for dx in -2..=2 {
+        for dy in -2..=2 {
             if dx == 0 && dy == 0 {
                 continue; // Skip self
             }
@@ -923,7 +952,8 @@ pub fn apply_cleave(
     let mut rng = rand::thread_rng();
     for (target, tx, ty) in &targets {
         // Check for protection on target
-        let has_protection = queries::has_status_effect(world, *target, EffectType::Protected);
+        let has_protection = queries::has_status_effect(world, *target, EffectType::Protected)
+            || queries::has_status_effect(world, *target, EffectType::Barkskin);
 
         // Apply damage variance and crit
         let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
@@ -978,6 +1008,143 @@ pub fn apply_activate_sprint(
     use crate::systems::effects::add_effect_to_entity;
 
     add_effect_to_entity(world, entity, EffectType::SpeedBoost, SPRINT_DURATION);
+
+    ActionResult::Completed
+}
+
+/// Apply barkskin activation - applies damage reduction effect to entity
+pub fn apply_activate_barkskin(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::constants::BARKSKIN_DURATION;
+    use crate::systems::effects::add_effect_to_entity;
+    use crate::components::SecondaryAbility;
+
+    add_effect_to_entity(world, entity, EffectType::Barkskin, BARKSKIN_DURATION);
+
+    // Start the ability cooldown
+    if let Ok(mut ability) = world.get::<&mut SecondaryAbility>(entity) {
+        ability.start_cooldown();
+    }
+
+    // Emit event for VFX
+    events.push(GameEvent::BarkskinActivated { entity });
+
+    ActionResult::Completed
+}
+
+/// Apply wait action - handles taming progress if applicable
+pub fn apply_wait(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Check if entity is taming something
+    let taming_info = world.get::<&TamingInProgress>(entity)
+        .ok()
+        .map(|t| (t.target, t.progress, t.required));
+
+    if let Some((target, progress, required)) = taming_info {
+        // Check if target still exists and is in range
+        let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
+        let target_pos = world.get::<&Position>(target).ok().map(|p| (p.x, p.y));
+
+        match (entity_pos, target_pos) {
+            (Some((ex, ey)), Some((tx, ty))) => {
+                let dist = (ex - tx).abs().max((ey - ty).abs());
+                if dist <= TAME_RANGE {
+                    // Add progress (wait duration is 0.5s)
+                    let new_progress = progress + ACTION_WAIT_DURATION;
+
+                    if new_progress >= required {
+                        // Taming complete!
+                        complete_taming(world, entity, target, events);
+                    } else {
+                        // Update progress
+                        if let Ok(mut taming) = world.get::<&mut TamingInProgress>(entity) {
+                            taming.progress = new_progress;
+                        }
+                        events.push(GameEvent::TamingProgress {
+                            tamer: entity,
+                            target,
+                            progress: new_progress,
+                            required,
+                        });
+                    }
+                } else {
+                    // Too far away - taming failed
+                    let _ = world.remove_one::<TamingInProgress>(entity);
+                    events.push(GameEvent::TamingFailed { tamer: entity, target });
+                }
+            }
+            _ => {
+                // Target no longer exists - remove taming state
+                let _ = world.remove_one::<TamingInProgress>(entity);
+            }
+        }
+    }
+
+    ActionResult::Completed
+}
+
+/// Complete taming - convert enemy to companion
+fn complete_taming(
+    world: &mut World,
+    tamer: Entity,
+    target: Entity,
+    events: &mut EventQueue,
+) {
+    use crate::components::{CompanionAI, TamedBy};
+
+    // Remove hostile AI (but keep Attackable so enemies can still attack the companion)
+    let _ = world.remove_one::<ChaseAI>(target);
+
+    // Remove BlocksMovement so player can walk through their companion
+    let _ = world.remove_one::<BlocksMovement>(target);
+
+    // Add companion components
+    let _ = world.insert_one(target, TamedBy { owner: tamer });
+    let _ = world.insert_one(target, CompanionAI {
+        owner: tamer,
+        follow_distance: 2,
+        last_attacker: None,
+    });
+
+    // Remove taming state from player
+    let _ = world.remove_one::<TamingInProgress>(tamer);
+
+    // Emit event
+    events.push(GameEvent::TamingCompleted { tamer, target });
+}
+
+/// Start taming an animal (Druid ability)
+pub fn apply_start_taming(
+    world: &mut World,
+    tamer: Entity,
+    target: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Verify target still exists and is tameable
+    if world.get::<&crate::components::Tameable>(target).is_err() {
+        return ActionResult::Invalid;
+    }
+
+    // Add TamingInProgress component to the tamer
+    let _ = world.insert_one(tamer, TamingInProgress {
+        target,
+        progress: 0.0,
+        required: TAME_DURATION,
+    });
+
+    // Start the ability cooldown
+    if let Ok(mut ability) = world.get::<&mut ClassAbility>(tamer) {
+        ability.start_cooldown();
+    }
+
+    // Emit event to show message and VFX
+    events.push(GameEvent::TamingStarted { tamer, target });
 
     ActionResult::Completed
 }

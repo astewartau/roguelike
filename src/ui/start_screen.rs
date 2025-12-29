@@ -47,7 +47,10 @@ pub fn run_start_screen(
 
                     // Class selection buttons
                     ui.horizontal(|ui| {
-                        ui.add_space((ui.available_width() - 300.0) / 2.0);
+                        // Calculate total width: 120px per class + 20px spacing between
+                        let class_count = PlayerClass::ALL.len() as f32;
+                        let total_width = class_count * 120.0 + (class_count - 1.0) * 20.0;
+                        ui.add_space((ui.available_width() - total_width) / 2.0);
 
                         for class in PlayerClass::ALL {
                             let is_selected = *selected_class == Some(class);
@@ -140,10 +143,12 @@ pub fn run_start_screen(
                         let weapon = match class {
                             PlayerClass::Fighter => "Sword",
                             PlayerClass::Ranger => "Bow",
+                            PlayerClass::Druid => "Staff",
                         };
                         let inventory = match class {
                             PlayerClass::Fighter => "(empty)",
                             PlayerClass::Ranger => "Dagger",
+                            PlayerClass::Druid => "(empty)",
                         };
 
                         ui.label(

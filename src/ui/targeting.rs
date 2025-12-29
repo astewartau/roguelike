@@ -3,8 +3,8 @@
 //! Displays targeting indicators for abilities like Blink and Fireball.
 
 use crate::camera::Camera;
-use crate::components::{ItemType, Position};
-use crate::input::TargetingMode;
+use crate::components::{AbilityType, ItemType, Position, Tameable};
+use crate::input::{AbilityTargetingMode, TargetingMode};
 use hecs::World;
 
 /// Data needed for the targeting overlay
@@ -17,6 +17,9 @@ pub struct TargetingOverlayData {
     pub radius: i32,
     pub is_blink: bool,
     pub item_type: Option<ItemType>,
+    pub ability_type: Option<AbilityType>,
+    /// Positions of valid tame targets (entities with Tameable component)
+    pub tameable_positions: Vec<(i32, i32)>,
 }
 
 /// Extract targeting overlay data from targeting mode and world state
@@ -45,6 +48,48 @@ pub fn get_targeting_overlay_data(
         radius: targeting.radius,
         is_blink: matches!(targeting.item_type, ItemType::ScrollOfBlink),
         item_type: Some(targeting.item_type),
+        ability_type: None,
+        tameable_positions: Vec::new(),
+    })
+}
+
+/// Extract targeting overlay data from ability targeting mode and world state
+pub fn get_ability_targeting_overlay_data(
+    world: &World,
+    player_entity: hecs::Entity,
+    ability_targeting_mode: Option<&AbilityTargetingMode>,
+    cursor_screen_pos: (f32, f32),
+    camera: &Camera,
+) -> Option<TargetingOverlayData> {
+    let targeting = ability_targeting_mode?;
+
+    let player_pos = world.get::<&Position>(player_entity).ok()?;
+
+    // Convert screen cursor to world coordinates
+    let world_pos = camera.screen_to_world(cursor_screen_pos.0, cursor_screen_pos.1);
+    let cursor_x = world_pos.x.floor() as i32;
+    let cursor_y = world_pos.y.floor() as i32;
+
+    // Collect positions of tameable entities within range
+    let mut tameable_positions = Vec::new();
+    for (_, (pos, _)) in world.query::<(&Position, &Tameable)>().iter() {
+        let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
+        if dist <= targeting.max_range {
+            tameable_positions.push((pos.x, pos.y));
+        }
+    }
+
+    Some(TargetingOverlayData {
+        player_x: player_pos.x,
+        player_y: player_pos.y,
+        cursor_x,
+        cursor_y,
+        max_range: targeting.max_range,
+        radius: 0,
+        is_blink: false,
+        item_type: None,
+        ability_type: Some(targeting.ability_type),
+        tameable_positions,
     })
 }
 
@@ -73,8 +118,15 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         )
     };
 
+    // Check if this is ability targeting (Tame)
+    let is_tame = matches!(data.ability_type, Some(AbilityType::Tame));
+
     // Draw tiles in range with a subtle highlight
-    let range_color = egui::Color32::from_rgba_unmultiplied(100, 150, 255, 40);
+    let range_color = if is_tame {
+        egui::Color32::from_rgba_unmultiplied(150, 255, 150, 40) // Green tint for tame
+    } else {
+        egui::Color32::from_rgba_unmultiplied(100, 150, 255, 40)
+    };
 
     for dx in -data.max_range..=data.max_range {
         for dy in -data.max_range..=data.max_range {
@@ -92,13 +144,38 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         }
     }
 
+    // For Tame ability, highlight tameable targets with a bright color
+    if is_tame {
+        let tameable_color = egui::Color32::from_rgba_unmultiplied(255, 100, 200, 120); // Pink/magenta
+        for &(tx, ty) in &data.tameable_positions {
+            let rect = tile_rect(tx, ty);
+            painter.rect_filled(rect, 0.0, tameable_color);
+            painter.rect_stroke(
+                rect,
+                0.0,
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 150, 220)),
+            );
+        }
+    }
+
     // Calculate distance from player to cursor
     let cursor_dist =
         (data.cursor_x - data.player_x).abs().max((data.cursor_y - data.player_y).abs());
     let in_range = cursor_dist <= data.max_range;
 
+    // Check if cursor is over a valid tameable target
+    let cursor_on_tameable = data.tameable_positions.contains(&(data.cursor_x, data.cursor_y));
+
     // Draw cursor tile highlight
-    let cursor_color = if in_range {
+    let cursor_color = if is_tame {
+        if in_range && cursor_on_tameable {
+            egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150) // Green for valid tame target
+        } else if in_range {
+            egui::Color32::from_rgba_unmultiplied(255, 200, 100, 80) // Yellow/dim for no target
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 120) // Red for out of range
+        }
+    } else if in_range {
         if data.is_blink {
             egui::Color32::from_rgba_unmultiplied(100, 255, 100, 120) // Green for blink
         } else {
@@ -143,7 +220,17 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
     }
 
     // Draw info text near the cursor
-    let info_text = if in_range {
+    let info_text = if is_tame {
+        if !in_range {
+            "Out of range"
+        } else if cursor_on_tameable {
+            "Click to tame"
+        } else if data.tameable_positions.is_empty() {
+            "No animals in range"
+        } else {
+            "Select an animal"
+        }
+    } else if in_range {
         match data.item_type {
             Some(ItemType::ScrollOfBlink) => "Click to teleport",
             Some(ItemType::ScrollOfFireball) => "Click to cast fireball",
@@ -163,7 +250,15 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         "Out of range"
     };
 
-    let text_color = if in_range {
+    let text_color = if is_tame {
+        if in_range && cursor_on_tameable {
+            egui::Color32::from_rgb(100, 255, 100) // Green for valid
+        } else if in_range {
+            egui::Color32::from_rgb(255, 255, 150) // Yellow
+        } else {
+            egui::Color32::from_rgb(255, 100, 100) // Red
+        }
+    } else if in_range {
         egui::Color32::WHITE
     } else {
         egui::Color32::from_rgb(255, 100, 100)

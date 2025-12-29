@@ -134,6 +134,7 @@ fn draw_stats_column(
                         // Use correct icon based on weapon type
                         let weapon_uv = match weapon.name.as_str() {
                             "Dagger" => icons.dagger_uv,
+                            "Staff" => icons.staff_uv,
                             _ => icons.sword_uv,
                         };
                         let image = egui::Image::new(egui::load::SizedTexture::new(

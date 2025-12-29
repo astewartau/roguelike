@@ -149,6 +149,9 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                             StatusEffectType::Protected => {
                                 ("Protected", egui::Color32::from_rgb(150, 150, 255))
                             }
+                            StatusEffectType::Barkskin => {
+                                ("Barkskin", egui::Color32::from_rgb(139, 90, 43)) // Brown/bark color
+                            }
                             StatusEffectType::Confused => {
                                 ("Confused", egui::Color32::from_rgb(200, 100, 200))
                             }

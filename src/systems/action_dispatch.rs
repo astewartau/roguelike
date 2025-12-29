@@ -3,7 +3,7 @@
 //! Converts input into action types and calculates action durations.
 //! Extracted from time_system.rs to separate action semantics from time management.
 
-use crate::components::{ActionType, BlocksMovement, Container, Door, FriendlyNPC, Position, Attackable};
+use crate::components::{ActionType, Attackable, BlocksMovement, Container, Door, FriendlyNPC, Position, TamedBy};
 use crate::constants::*;
 use crate::events::StairDirection;
 use crate::grid::Grid;
@@ -42,6 +42,8 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::DropEquippedWeapon => ACTION_DOOR_DURATION, // Quick action
         ActionType::Cleave => CLEAVE_DURATION, // Fighter ability
         ActionType::ActivateSprint => SPRINT_ACTIVATION_DURATION, // Ranger ability (quick)
+        ActionType::StartTaming { .. } => ACTION_WAIT_DURATION, // Starting to tame (quick)
+        ActionType::ActivateBarkskin => BARKSKIN_ACTIVATION_DURATION, // Druid ability (quick)
     };
 
     // Speed modifies duration: higher speed = shorter duration
@@ -79,9 +81,21 @@ pub fn determine_action_type(
         }
     }
 
-    // Check for attackable entity at target
+    // Check for attackable entity at target (but not your own tamed companions or sibling companions)
     for (id, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
         if id != entity && enemy_pos.x == target_x && enemy_pos.y == target_y {
+            // Skip if this is our own tamed companion (player walking into their pet)
+            if let Ok(tamed_by) = world.get::<&TamedBy>(id) {
+                if tamed_by.owner == entity {
+                    continue;
+                }
+                // Skip if we're a companion and target is a sibling companion (same owner)
+                if let Ok(my_tamed_by) = world.get::<&TamedBy>(entity) {
+                    if tamed_by.owner == my_tamed_by.owner {
+                        continue;
+                    }
+                }
+            }
             return ActionType::Attack { target: id };
         }
     }

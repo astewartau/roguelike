@@ -14,6 +14,8 @@ pub const SWORD_WEIGHT: f32 = 2.0;
 pub const BOW_WEIGHT: f32 = 1.5;
 /// Dagger weight in kg
 pub const DAGGER_WEIGHT: f32 = 0.5;
+/// Staff weight in kg
+pub const STAFF_WEIGHT: f32 = 1.0;
 
 /// Sword base damage
 pub const SWORD_BASE_DAMAGE: i32 = 10;
@@ -24,6 +26,11 @@ pub const SWORD_DAMAGE_BONUS: i32 = 4;
 pub const DAGGER_BASE_DAMAGE: i32 = 6;
 /// Dagger damage bonus
 pub const DAGGER_DAMAGE_BONUS: i32 = 2;
+
+/// Staff base damage (druid weapon)
+pub const STAFF_BASE_DAMAGE: i32 = 6;
+/// Staff damage bonus
+pub const STAFF_DAMAGE_BONUS: i32 = 2;
 
 /// Bow base damage
 pub const BOW_BASE_DAMAGE: i32 = 8;

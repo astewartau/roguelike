@@ -234,6 +234,7 @@ pub fn advance_until_player_ready(
         time_system::tick_energy_regen(world, clock.time, Some(events));
         time_system::tick_status_effects(world, elapsed);
         time_system::tick_ability_cooldowns(world, elapsed);
+        time_system::tick_ranged_cooldowns(world, elapsed);
 
         time_system::complete_action(world, grid, next_entity, events, clock.time);
 
@@ -297,6 +298,7 @@ pub fn wait_for_energy(
                 let elapsed = completion_time - clock.time + time_to_wait;
                 time_system::tick_energy_regen(world, clock.time, Some(events));
                 time_system::tick_ability_cooldowns(world, elapsed);
+                time_system::tick_ranged_cooldowns(world, elapsed);
                 break;
             }
 
@@ -309,6 +311,7 @@ pub fn wait_for_energy(
             time_system::tick_energy_regen(world, clock.time, Some(events));
             time_system::tick_status_effects(world, elapsed);
             time_system::tick_ability_cooldowns(world, elapsed);
+            time_system::tick_ranged_cooldowns(world, elapsed);
 
             // Complete the action
             time_system::complete_action(world, grid, next_entity, events, clock.time);

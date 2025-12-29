@@ -32,6 +32,8 @@ pub enum PlayerIntent {
         target_x: i32,
         target_y: i32,
     },
+    /// Start taming an animal (Druid ability)
+    StartTaming { target: Entity },
 }
 
 /// Result of validating a targeting action
@@ -172,6 +174,10 @@ pub fn intent_to_action(
                 }),
                 _ => None,
             }
+        }
+
+        PlayerIntent::StartTaming { target } => {
+            Some(ActionType::StartTaming { target: *target })
         }
     }
 }

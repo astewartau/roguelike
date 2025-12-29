@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{Attackable, BlocksMovement, Container, Door, Health, ItemType, Position};
+use crate::components::{Attackable, BlocksMovement, Container, Door, Health, ItemType, Position, Tameable};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -27,6 +27,15 @@ pub struct TargetingMode {
     pub max_range: i32,
     /// Radius of effect (0 for single-tile effects like Blink)
     pub radius: i32,
+}
+
+/// Targeting mode for abilities that require click-to-target
+#[derive(Clone, Debug)]
+pub struct AbilityTargetingMode {
+    /// The ability type being used
+    pub ability_type: crate::components::AbilityType,
+    /// Maximum range for targeting
+    pub max_range: i32,
 }
 
 /// What the player clicked on - determines interaction behavior
@@ -65,6 +74,8 @@ pub struct InputState {
     pub pursuit_origin: Option<(i32, i32)>,
     /// Targeting mode for items that require click-to-target (Blink, Fireball)
     pub targeting_mode: Option<TargetingMode>,
+    /// Targeting mode for abilities that require click-to-target (Tame)
+    pub ability_targeting_mode: Option<AbilityTargetingMode>,
     /// Pending right-click to process (for ranged shooting)
     pub pending_right_click: bool,
     /// Pending left-click to process (for targeting confirmation)
@@ -84,6 +95,7 @@ impl InputState {
             pursuit_target: None,
             pursuit_origin: None,
             targeting_mode: None,
+            ability_targeting_mode: None,
             pending_right_click: false,
             pending_left_click: false,
         }
@@ -117,14 +129,20 @@ impl InputState {
         self.player_path_destination = None;
     }
 
-    /// Exit targeting mode
+    /// Exit targeting mode (both item and ability)
     pub fn cancel_targeting(&mut self) {
         self.targeting_mode = None;
+        self.ability_targeting_mode = None;
     }
 
-    /// Check if in targeting mode
+    /// Check if in targeting mode (item or ability)
     pub fn is_targeting(&self) -> bool {
-        self.targeting_mode.is_some()
+        self.targeting_mode.is_some() || self.ability_targeting_mode.is_some()
+    }
+
+    /// Check if in ability targeting mode
+    pub fn is_ability_targeting(&self) -> bool {
+        self.ability_targeting_mode.is_some()
     }
 }
 
@@ -150,8 +168,10 @@ pub struct InputResult {
     pub attack_direction: Option<(i32, i32)>,
     /// Player wants to wait (skip turn)
     pub wait: bool,
-    /// Player wants to use class ability
+    /// Player wants to use class ability (Q)
     pub ability_pressed: bool,
+    /// Player wants to use secondary ability (E) - Druid only
+    pub secondary_ability_pressed: bool,
 }
 
 impl Default for InputResult {
@@ -165,6 +185,7 @@ impl Default for InputResult {
             attack_direction: None,
             wait: false,
             ability_pressed: false,
+            secondary_ability_pressed: false,
         }
     }
 }
@@ -202,6 +223,11 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     // Ability hotkey (Q)
     if input.keys_pressed.remove(&KeyCode::KeyQ) {
         result.ability_pressed = true;
+    }
+
+    // Secondary ability hotkey (E) - Druid only
+    if input.keys_pressed.remove(&KeyCode::KeyE) {
+        result.secondary_ability_pressed = true;
     }
 
     // Check if shift is held (don't consume - it's a modifier)
@@ -592,8 +618,10 @@ pub struct FrameInput {
     pub from_keyboard: bool,
     /// Item index to remove from inventory (for targeting actions)
     pub item_to_remove: Option<usize>,
-    /// Player wants to use class ability
+    /// Player wants to use class ability (Q)
     pub ability_pressed: bool,
+    /// Player wants to use secondary ability (E) - Druid only
+    pub secondary_ability_pressed: bool,
 }
 
 impl Default for FrameInput {
@@ -608,6 +636,7 @@ impl Default for FrameInput {
             from_keyboard: false,
             item_to_remove: None,
             ability_pressed: false,
+            secondary_ability_pressed: false,
         }
     }
 }
@@ -632,6 +661,7 @@ pub fn process_frame(
     result.toggle_grid_lines = kb.toggle_grid_lines;
     result.enter_pressed = kb.enter_pressed;
     result.ability_pressed = kb.ability_pressed;
+    result.secondary_ability_pressed = kb.secondary_ability_pressed;
 
     // Check if player is dead
     let is_dead = world
@@ -693,6 +723,43 @@ pub fn process_frame(
                     return result;
                 }
                 // Invalid target - don't consume the click, let player try again
+            } else {
+                // No player position - cancel targeting
+                input.cancel_targeting();
+            }
+        }
+    } else if input.pending_left_click && input.ability_targeting_mode.is_some() {
+        // Handle ability targeting click (e.g., Tame)
+        input.pending_left_click = false;
+
+        if let Some(targeting) = input.ability_targeting_mode.clone() {
+            // Get target tile from mouse position
+            let world_pos = camera.screen_to_world(input.mouse_pos.0, input.mouse_pos.1);
+            let target_x = world_pos.x.floor() as i32;
+            let target_y = world_pos.y.floor() as i32;
+
+            // Get player position for validation
+            if let Ok(pos) = world.get::<&Position>(player_entity) {
+                // Check range
+                let dist = (target_x - pos.x).abs().max((target_y - pos.y).abs());
+                if dist <= targeting.max_range {
+                    // Check if there's a tameable entity at this position
+                    let mut tameable_target = None;
+                    for (entity, (tpos, _)) in world.query::<(&Position, &Tameable)>().iter() {
+                        if tpos.x == target_x && tpos.y == target_y {
+                            tameable_target = Some(entity);
+                            break;
+                        }
+                    }
+
+                    if let Some(target_entity) = tameable_target {
+                        // Cancel targeting mode and create intent
+                        input.cancel_targeting();
+                        result.player_intent = Some(PlayerIntent::StartTaming { target: target_entity });
+                        result.from_keyboard = false;
+                        return result;
+                    }
+                }
             } else {
                 // No player position - cancel targeting
                 input.cancel_targeting();

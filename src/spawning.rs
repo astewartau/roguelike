@@ -6,7 +6,7 @@
 use crate::components::{
     Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueNode, DialogueOption,
     Equipment, FriendlyNPC, Health, LightSource, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
-    StatusEffects, VisualPosition, Weapon,
+    StatusEffects, Tameable, VisualPosition, Weapon,
 };
 use crate::tile::{tile_ids, SpriteSheet};
 use hecs::World;
@@ -48,6 +48,8 @@ pub struct EnemyDef {
     pub agility: i32,
     /// Optional ranged attack configuration
     pub ranged: Option<RangedConfig>,
+    /// Whether this enemy can be tamed (for Druid ability)
+    pub tameable: bool,
 }
 
 impl EnemyDef {
@@ -79,7 +81,7 @@ impl EnemyDef {
         };
 
         // Spawn with or without overlay sprite
-        if let Some(overlay_ref) = self.overlay_sprite {
+        let entity = if let Some(overlay_ref) = self.overlay_sprite {
             world.spawn((
                 pos,
                 VisualPosition::from_position(&pos),
@@ -108,7 +110,14 @@ impl EnemyDef {
                 Attackable,
                 BlocksMovement,
             ))
+        };
+
+        // Add Tameable component for animals that can be tamed
+        if self.tameable {
+            let _ = world.insert_one(entity, Tameable);
         }
+
+        entity
     }
 }
 
@@ -130,6 +139,7 @@ pub mod enemies {
         intelligence: SKELETON_INTELLIGENCE,
         agility: SKELETON_AGILITY,
         ranged: None,
+        tameable: false,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -145,6 +155,7 @@ pub mod enemies {
         intelligence: RAT_INTELLIGENCE,
         agility: RAT_AGILITY,
         ranged: None,
+        tameable: true, // Rats are animals and can be tamed by Druids
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -164,6 +175,7 @@ pub mod enemies {
             max_range: SKELETON_ARCHER_MAX_RANGE,
             damage: SKELETON_ARCHER_BOW_DAMAGE,
         }),
+        tameable: false,
     };
 }
 

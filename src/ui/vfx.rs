@@ -34,6 +34,7 @@ pub struct PlayerBuffAuraData {
     pub player_y: f32,
     pub has_regen: bool,
     pub has_protected: bool,
+    pub has_barkskin: bool,
 }
 
 /// Extract player buff aura data from the world
@@ -46,6 +47,7 @@ pub fn get_buff_aura_data(world: &World, player_entity: Entity) -> Option<Player
         player_y: player_vis_pos.y,
         has_regen: effects::has_effect(&status_effects, EffectType::Regenerating),
         has_protected: effects::has_effect(&status_effects, EffectType::Protected),
+        has_barkskin: effects::has_effect(&status_effects, EffectType::Barkskin),
     })
 }
 
@@ -492,7 +494,7 @@ pub fn draw_potion_splashes(ctx: &egui::Context, effects: &[VisualEffect], camer
     }
 }
 
-/// Render glowing aura around player for active buffs (Regenerating, Protected)
+/// Render glowing aura around player for active buffs (Regenerating, Protected, Barkskin)
 pub fn draw_player_buff_auras(
     ctx: &egui::Context,
     camera: &Camera,
@@ -501,7 +503,7 @@ pub fn draw_player_buff_auras(
     let Some(data) = data else {
         return;
     };
-    if !data.has_regen && !data.has_protected {
+    if !data.has_regen && !data.has_protected && !data.has_barkskin {
         return;
     }
 
@@ -556,5 +558,30 @@ pub fn draw_player_buff_auras(
             let py = center.y + angle.sin() * shield_radius;
             painter.circle_filled(egui::pos2(px, py), 2.0 * pulse, shield_color);
         }
+    }
+
+    // Draw barkskin aura (brown/green nature-themed glow)
+    if data.has_barkskin {
+        // Bark brown outer ring with pulsing
+        let bark_alpha = (80.0 * pulse) as u8;
+        let bark_color = egui::Color32::from_rgba_unmultiplied(139, 90, 43, bark_alpha);
+        let bark_radius = tile_size * 0.58 * (0.92 + 0.08 * pulse);
+        painter.circle_stroke(center, bark_radius, egui::Stroke::new(4.0 * pulse, bark_color));
+
+        // Green leaf-like particles orbiting
+        let leaf_alpha = (120.0 * pulse) as u8;
+        let leaf_color = egui::Color32::from_rgba_unmultiplied(60, 140, 60, leaf_alpha);
+        let leaf_radius = tile_size * 0.48;
+        for i in 0..6 {
+            let angle = (i as f32 * std::f32::consts::PI / 3.0) + real_time * 0.8;
+            let px = center.x + angle.cos() * leaf_radius;
+            let py = center.y + angle.sin() * leaf_radius;
+            painter.circle_filled(egui::pos2(px, py), 2.5 * pulse, leaf_color);
+        }
+
+        // Inner brown bark texture ring
+        let inner_bark_alpha = (50.0 * pulse) as u8;
+        let inner_bark_color = egui::Color32::from_rgba_unmultiplied(101, 67, 33, inner_bark_alpha);
+        painter.circle_stroke(center, bark_radius * 0.7, egui::Stroke::new(2.0, inner_bark_color));
     }
 }

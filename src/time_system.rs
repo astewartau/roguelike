@@ -4,7 +4,7 @@
 //! jumps forward to the next action completion rather than ticking.
 
 use crate::components::{
-    ActionInProgress, ActionType, Actor, EffectType, Health, StatusEffects,
+    ActionInProgress, ActionType, Actor, EffectType, Health, RangedCooldown, StatusEffects,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -280,7 +280,9 @@ fn apply_action_effects(
         }
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
-        ActionType::Wait => ActionResult::Completed,
+        ActionType::Wait => {
+            actions::apply_wait(world, entity, events)
+        }
         ActionType::ShootBow { target_x, target_y } => {
             actions::apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
         }
@@ -314,6 +316,12 @@ fn apply_action_effects(
         }
         ActionType::ActivateSprint => {
             actions::apply_activate_sprint(world, entity)
+        }
+        ActionType::StartTaming { target } => {
+            actions::apply_start_taming(world, entity, *target, events)
+        }
+        ActionType::ActivateBarkskin => {
+            actions::apply_activate_barkskin(world, entity, events)
         }
     }
 }
@@ -455,7 +463,7 @@ pub fn tick_status_effects(world: &mut World, elapsed: f32) {
 
 /// Process ability cooldown ticks
 pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
-    use crate::components::ClassAbility;
+    use crate::components::{ClassAbility, SecondaryAbility};
 
     if elapsed <= 0.0 {
         return;
@@ -464,6 +472,26 @@ pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
     for (_, ability) in world.query_mut::<&mut ClassAbility>() {
         if ability.cooldown_remaining > 0.0 {
             ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
+        }
+    }
+
+    // Also tick secondary abilities (Druid's Barkskin)
+    for (_, ability) in world.query_mut::<&mut SecondaryAbility>() {
+        if ability.cooldown_remaining > 0.0 {
+            ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
+        }
+    }
+}
+
+/// Process ranged attack cooldown ticks (for enemies with bows)
+pub fn tick_ranged_cooldowns(world: &mut World, elapsed: f32) {
+    if elapsed <= 0.0 {
+        return;
+    }
+
+    for (_, cooldown) in world.query_mut::<&mut RangedCooldown>() {
+        if cooldown.remaining > 0.0 {
+            cooldown.remaining = (cooldown.remaining - elapsed).max(0.0);
         }
     }
 }

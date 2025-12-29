@@ -106,6 +106,16 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         targeting: None,
         is_throwable: false,
     },
+    ItemDef {
+        item_type: ItemType::Staff,
+        name: "Staff",
+        category: ItemCategory::Weapon,
+        weight: STAFF_WEIGHT,
+        sprite: tile_ids::STAFF,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+    },
     // =========================================================================
     // POTIONS
     // =========================================================================
@@ -306,6 +316,7 @@ mod tests {
             ItemType::Sword,
             ItemType::Bow,
             ItemType::Dagger,
+            ItemType::Staff,
             ItemType::HealthPotion,
             ItemType::RegenerationPotion,
             ItemType::StrengthPotion,
@@ -335,6 +346,7 @@ mod tests {
         assert!(matches!(get_def(ItemType::Sword).use_effect, UseEffect::Equip));
         assert!(matches!(get_def(ItemType::Bow).use_effect, UseEffect::Equip));
         assert!(matches!(get_def(ItemType::Dagger).use_effect, UseEffect::Equip));
+        assert!(matches!(get_def(ItemType::Staff).use_effect, UseEffect::Equip));
     }
 
     #[test]
