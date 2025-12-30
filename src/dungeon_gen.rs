@@ -40,6 +40,8 @@ pub enum RoomTheme {
     Crypt,
     /// Storage room with barrels of food
     Storage,
+    /// Shop room with vendor - red stone floors
+    Shop,
 }
 
 /// A room with its theme
@@ -236,6 +238,10 @@ pub struct DungeonResult {
     pub coffin_positions: Vec<(i32, i32)>,
     /// Barrel positions in Storage rooms
     pub barrel_positions: Vec<(i32, i32)>,
+    /// Shop vendor spawn position
+    pub shop_position: Option<(i32, i32)>,
+    /// Shop decoration positions (jars, sacks, etc.)
+    pub shop_decor_positions: Vec<(i32, i32)>,
 }
 
 pub struct DungeonGenerator {
@@ -276,7 +282,7 @@ impl DungeonGenerator {
         root.collect_rooms(&mut room_rects);
 
         // Assign themes to rooms
-        let themed_rooms: Vec<ThemedRoom> = room_rects
+        let mut themed_rooms: Vec<ThemedRoom> = room_rects
             .iter()
             .enumerate()
             .map(|(i, rect)| {
@@ -302,6 +308,18 @@ impl DungeonGenerator {
                 ThemedRoom { rect: *rect, theme }
             })
             .collect();
+
+        // Force exactly one Shop room per floor (not first or last room)
+        // Pick a random middle room to become the shop
+        if themed_rooms.len() > 2 {
+            let last_idx = themed_rooms.len() - 1;
+            // Eligible rooms: indices 1 through second-to-last
+            let eligible_indices: Vec<usize> = (1..last_idx).collect();
+            if !eligible_indices.is_empty() {
+                let shop_idx = eligible_indices[rng.gen_range(0..eligible_indices.len())];
+                themed_rooms[shop_idx].theme = RoomTheme::Shop;
+            }
+        }
 
         // Carve all rooms into the tile map (with terrain based on theme)
         for room in &themed_rooms {
@@ -367,6 +385,10 @@ impl DungeonGenerator {
         // Generate barrel positions in Storage rooms
         let barrel_positions = gen.generate_barrel_positions(&themed_rooms, &mut rng);
 
+        // Generate shop positions
+        let shop_position = gen.generate_shop_position(&themed_rooms);
+        let shop_decor_positions = gen.generate_shop_decor_positions(&themed_rooms, &mut rng);
+
         // Starting room is the first room (where player spawns)
         let starting_room = rooms.first().copied();
 
@@ -392,6 +414,8 @@ impl DungeonGenerator {
             water_positions,
             coffin_positions,
             barrel_positions,
+            shop_position,
+            shop_decor_positions,
         }
     }
 
@@ -586,6 +610,21 @@ impl DungeonGenerator {
             RoomTheme::Flooded => self.add_water_pools(room, rng),
             RoomTheme::Crypt => {} // Crypt uses standard floor, coffins added separately
             RoomTheme::Storage => {} // Storage uses standard floor, barrels added separately
+            RoomTheme::Shop => self.add_shop_floor(room, rng),
+        }
+    }
+
+    /// Add red stone floor to shop room
+    fn add_shop_floor(&mut self, room: &ThemedRoom, rng: &mut impl Rng) {
+        for y in room.rect.y..room.rect.y + room.rect.height {
+            for x in room.rect.x..room.rect.x + room.rect.width {
+                if let Some(idx) = self.get_index(x, y) {
+                    if self.tiles[idx].tile_type == TileType::Floor {
+                        let variant = rng.gen_range(0..tile_ids::FLOOR_SHOP_VARIANTS.len());
+                        self.tiles[idx].sprite_override = Some(tile_ids::FLOOR_SHOP_VARIANTS[variant]);
+                    }
+                }
+            }
         }
     }
 
@@ -922,6 +961,11 @@ impl DungeonGenerator {
             (tile_ids::BONES_1, 1),
         ];
 
+        // Shop room decals (minimal - vendor and containers are the focus)
+        let shop_decals: Vec<DecalType> = vec![
+            (tile_ids::ROCKS, 1),
+        ];
+
         for room in rooms {
             let decal_types = match room.theme {
                 RoomTheme::Normal => &normal_decals,
@@ -929,13 +973,15 @@ impl DungeonGenerator {
                 RoomTheme::Flooded => &flooded_decals,
                 RoomTheme::Crypt => &crypt_decals,
                 RoomTheme::Storage => &storage_decals,
+                RoomTheme::Shop => &shop_decals,
             };
             let total_weight: u32 = decal_types.iter().map(|(_, w)| w).sum();
 
-            // Flooded and Storage rooms get fewer decals
+            // Flooded, Storage, and Shop rooms get fewer decals
             let density_divisor = match room.theme {
                 RoomTheme::Flooded => 20,
                 RoomTheme::Storage => 25,
+                RoomTheme::Shop => 30, // Minimal decals for shop
                 _ => 12,
             };
 
@@ -1116,6 +1162,64 @@ impl DungeonGenerator {
                         used.push((x, y));
                         break;
                     }
+                }
+            }
+        }
+
+        positions
+    }
+
+    /// Generate shop vendor spawn position (center of shop room)
+    fn generate_shop_position(&self, themed_rooms: &[ThemedRoom]) -> Option<(i32, i32)> {
+        for room in themed_rooms {
+            if room.theme == RoomTheme::Shop {
+                return Some(room.rect.center());
+            }
+        }
+        None
+    }
+
+    /// Generate shop decoration positions (jars, sacks around edges)
+    fn generate_shop_decor_positions(&self, themed_rooms: &[ThemedRoom], rng: &mut impl Rng) -> Vec<(i32, i32)> {
+        let mut positions = Vec::new();
+
+        for room in themed_rooms {
+            if room.theme != RoomTheme::Shop {
+                continue;
+            }
+
+            // Only place decorations in rooms large enough
+            if room.rect.width < 4 || room.rect.height < 4 {
+                continue;
+            }
+
+            // Place 3-5 decorations around edges (avoiding center where vendor is)
+            let num_decor = rng.gen_range(3..=5);
+            let (center_x, center_y) = room.rect.center();
+            let mut used: Vec<(i32, i32)> = Vec::new();
+
+            // Potential spots: corners and edge midpoints
+            let potential_spots = [
+                (room.rect.x + 1, room.rect.y + 1),
+                (room.rect.x + room.rect.width - 2, room.rect.y + 1),
+                (room.rect.x + 1, room.rect.y + room.rect.height - 2),
+                (room.rect.x + room.rect.width - 2, room.rect.y + room.rect.height - 2),
+                (room.rect.x + 1, center_y),
+                (room.rect.x + room.rect.width - 2, center_y),
+            ];
+
+            for _ in 0..num_decor {
+                let available: Vec<_> = potential_spots.iter()
+                    .filter(|c| !used.contains(c))
+                    .filter(|&&(x, y)| self.get_tile(x, y) == Some(TileType::Floor))
+                    .filter(|&&(x, y)| x != center_x || y != center_y) // Avoid center
+                    .copied()
+                    .collect();
+
+                if !available.is_empty() {
+                    let spot = available[rng.gen_range(0..available.len())];
+                    positions.push(spot);
+                    used.push(spot);
                 }
             }
         }

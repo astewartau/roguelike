@@ -465,6 +465,9 @@ impl GameEngine {
         if ui_result.close_dialogue {
             ui_state.close_dialogue();
         }
+        if ui_result.close_shop {
+            ui_state.close_shop();
+        }
     }
 
     /// Get the grid for rendering (returns None if not playing).

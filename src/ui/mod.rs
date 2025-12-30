@@ -10,6 +10,7 @@ mod dialogue;
 mod icons;
 mod inventory;
 mod loot_window;
+mod shop_window;
 mod start_screen;
 mod status_bar;
 mod targeting;
@@ -22,6 +23,7 @@ pub use dialogue::{draw_dialogue_window, get_dialogue_window_data, DialogueWindo
 pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data, LootWindowData};
+pub use shop_window::{draw_shop_window, get_shop_window_data, ShopWindowData};
 pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarData};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data, TargetingOverlayData};
@@ -66,6 +68,12 @@ pub struct UiActions {
     pub use_ability: bool,
     /// Use secondary ability (E) - Druid only
     pub use_secondary_ability: bool,
+    /// Buy item from vendor (index in vendor inventory)
+    pub buy_item: Option<usize>,
+    /// Sell item to vendor (index in player inventory)
+    pub sell_item: Option<usize>,
+    /// Close the shop window
+    pub close_shop: bool,
 }
 
 // =============================================================================
@@ -81,6 +89,8 @@ pub struct GameUiState {
     pub open_chest: Option<Entity>,
     /// Currently talking to NPC (for dialogue window)
     pub talking_to: Option<Entity>,
+    /// Currently shopping at vendor (for shop window)
+    pub shopping_at: Option<Entity>,
     /// Show inventory window
     pub show_inventory: bool,
     /// Show grid overlay
@@ -98,6 +108,7 @@ impl GameUiState {
         Self {
             open_chest: None,
             talking_to: None,
+            shopping_at: None,
             show_inventory: false,
             show_grid_lines: false,
             item_context_menu: None,
@@ -121,11 +132,19 @@ impl GameUiState {
                     self.talking_to = Some(*npc);
                 }
             }
+            GameEvent::ShopOpened { vendor, player } => {
+                // Open shop window if player started shopping
+                if *player == self.player_entity {
+                    self.shopping_at = Some(*vendor);
+                    self.talking_to = None; // Close dialogue when shop opens
+                }
+            }
             GameEvent::EntityMoved { entity, .. } => {
                 // Close windows when player moves away
                 if *entity == self.player_entity {
                     self.open_chest = None;
                     self.talking_to = None;
+                    self.shopping_at = None;
                 }
             }
             _ => {}
@@ -150,6 +169,11 @@ impl GameUiState {
     /// Close the currently open chest
     pub fn close_chest(&mut self) {
         self.open_chest = None;
+    }
+
+    /// Close the shop window
+    pub fn close_shop(&mut self) {
+        self.shopping_at = None;
     }
 
     /// Close the item context menu
@@ -243,6 +267,15 @@ pub fn run_ui(
         camera.viewport_height,
     );
 
+    // Get shop window data if shopping at a vendor
+    let shop_data = get_shop_window_data(
+        world,
+        ui_state.shopping_at,
+        player_entity,
+        camera.viewport_width,
+        camera.viewport_height,
+    );
+
     let show_inventory = ui_state.show_inventory;
     let viewport_width = camera.viewport_width;
     let viewport_height = camera.viewport_height;
@@ -310,6 +343,11 @@ pub fn run_ui(
         // Dialogue window (if talking to NPC)
         if let Some(ref data) = dialogue_data {
             draw_dialogue_window(ctx, data, &mut actions);
+        }
+
+        // Shop window (if shopping at vendor)
+        if let Some(ref data) = shop_data {
+            draw_shop_window(ctx, data, icons, &mut actions);
         }
 
         // Inventory window (if toggled)

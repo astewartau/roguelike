@@ -796,6 +796,15 @@ impl Door {
             open_sprite: tile_ids::DOOR_GRATED, // Same sprite open/closed
         }
     }
+
+    /// Shop door
+    pub fn shop() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            is_open: false,
+            open_sprite: tile_ids::DOOR_SHOP_OPEN,
+        }
+    }
 }
 
 /// Marker component for entities that block vision when present
@@ -1020,6 +1029,16 @@ pub struct ProjectileMarker;
 #[derive(Debug, Clone, Copy)]
 pub struct FriendlyNPC;
 
+/// Actions that can be triggered by dialogue options
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DialogueAction {
+    /// No special action
+    #[default]
+    None,
+    /// Open the shop UI (for vendor NPCs)
+    OpenShop,
+}
+
 /// A dialogue option the player can choose
 #[derive(Debug, Clone)]
 pub struct DialogueOption {
@@ -1027,6 +1046,8 @@ pub struct DialogueOption {
     pub label: String,
     /// Index of next dialogue node (None = end dialogue)
     pub next_node: Option<usize>,
+    /// Special action to trigger when this option is selected
+    pub action: DialogueAction,
 }
 
 /// A single node in a dialogue tree
@@ -1056,6 +1077,25 @@ impl Dialogue {
             nodes,
             current_node: 0,
         }
+    }
+}
+
+// =============================================================================
+// VENDOR SYSTEM
+// =============================================================================
+
+/// Vendor component - NPCs that can buy/sell items
+#[derive(Debug, Clone)]
+pub struct Vendor {
+    /// Items for sale: (item type, stock count)
+    pub inventory: Vec<(ItemType, u32)>,
+    /// Vendor's gold (used for buying from player)
+    pub gold: u32,
+}
+
+impl Vendor {
+    pub fn new(inventory: Vec<(ItemType, u32)>, gold: u32) -> Self {
+        Self { inventory, gold }
     }
 }
 

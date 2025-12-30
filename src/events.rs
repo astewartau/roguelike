@@ -154,6 +154,23 @@ pub enum GameEvent {
     BarkskinActivated {
         entity: Entity,
     },
+    /// Player opened a shop with a vendor
+    ShopOpened {
+        vendor: Entity,
+        player: Entity,
+    },
+    /// Player purchased an item from a vendor
+    ItemPurchased {
+        vendor: Entity,
+        item: crate::components::ItemType,
+        price: u32,
+    },
+    /// Player sold an item to a vendor
+    ItemSold {
+        vendor: Entity,
+        item: crate::components::ItemType,
+        value: u32,
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

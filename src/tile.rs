@@ -108,6 +108,20 @@ pub mod tile_ids {
     // Barrel (row 18)
     pub const BARREL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 4, TILES_COLS)); // 18.e barrel
 
+    // Shop room tiles
+    // Red stone floor variants (row 12)
+    pub const FLOOR_SHOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(12, 1, TILES_COLS)); // 12.b red stone 1
+    pub const FLOOR_SHOP_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(12, 2, TILES_COLS)); // 12.c red stone 2
+    pub const FLOOR_SHOP_3: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(12, 3, TILES_COLS)); // 12.d red stone 3
+    pub const FLOOR_SHOP_VARIANTS: [(SpriteSheet, u32); 3] = [FLOOR_SHOP, FLOOR_SHOP_2, FLOOR_SHOP_3];
+    // Shop doors (row 17)
+    pub const DOOR_SHOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 4, TILES_COLS)); // 17.e framed door 2 (shut)
+    pub const DOOR_SHOP_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 5, TILES_COLS)); // 17.f framed door 2 (open)
+    // Shop decorations (row 18)
+    pub const JAR_CLOSED: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 2, TILES_COLS)); // 18.c jar closed
+    pub const JAR_OPEN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 3, TILES_COLS)); // 18.d jar open
+    pub const ORE_SACK: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 5, TILES_COLS)); // 18.f ore sack
+
     // ===== ROGUES SHEET (player characters, NPCs) =====
 
     pub const PLAYER: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 3, ROGUES_COLS)); // 1.d rogue

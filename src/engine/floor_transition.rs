@@ -299,6 +299,7 @@ pub fn handle_floor_transition(
             &grid,
             player_entity,
             spawn_pos,
+            target_floor,
             clock,
             scheduler,
             events,

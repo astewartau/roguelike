@@ -406,6 +406,7 @@ pub struct UiActionResult {
     pub close_context_menu: bool,
     pub close_chest: bool,
     pub close_dialogue: bool,
+    pub close_shop: bool,
 }
 
 impl Default for UiActionResult {
@@ -416,6 +417,7 @@ impl Default for UiActionResult {
             close_context_menu: false,
             close_chest: false,
             close_dialogue: false,
+            close_shop: false,
         }
     }
 }
@@ -459,9 +461,38 @@ pub fn process_ui_actions(
     // Dialogue interactions
     if let Some(npc_id) = ui_state.talking_to {
         if let Some(option_index) = actions.dialogue_option_selected {
+            // Check if the selected option has a special action before advancing
+            let action = get_dialogue_action(world, npc_id, option_index);
+
+            // Advance the dialogue
             if crate::game::advance_dialogue(world, npc_id, option_index) {
                 result.close_dialogue = true;
             }
+
+            // Handle special actions after dialogue closes/advances
+            if let Some(crate::components::DialogueAction::OpenShop) = action {
+                // Open shop if NPC is a vendor
+                if world.get::<&crate::components::Vendor>(npc_id).is_ok() {
+                    events.push(crate::events::GameEvent::ShopOpened {
+                        vendor: npc_id,
+                        player: player_entity,
+                    });
+                    result.close_dialogue = true;
+                }
+            }
+        }
+    }
+
+    // Shop interactions
+    if let Some(vendor_id) = ui_state.shopping_at {
+        if let Some(item_idx) = actions.buy_item {
+            buy_item_from_vendor(world, player_entity, vendor_id, item_idx, events);
+        }
+        if let Some(item_idx) = actions.sell_item {
+            sell_item_to_vendor(world, player_entity, vendor_id, item_idx, events);
+        }
+        if actions.close_shop {
+            result.close_shop = true;
         }
     }
 
@@ -548,4 +579,114 @@ pub fn process_ui_actions(
     }
 
     result
+}
+
+// =============================================================================
+// SHOP HELPER FUNCTIONS
+// =============================================================================
+
+/// Get the dialogue action for the selected option at the current dialogue node.
+fn get_dialogue_action(
+    world: &World,
+    npc_id: hecs::Entity,
+    option_index: usize,
+) -> Option<crate::components::DialogueAction> {
+    let dialogue = world.get::<&crate::components::Dialogue>(npc_id).ok()?;
+    let node = dialogue.nodes.get(dialogue.current_node)?;
+    let option = node.options.get(option_index)?;
+    Some(option.action)
+}
+
+/// Buy an item from a vendor.
+fn buy_item_from_vendor(
+    world: &mut World,
+    player_entity: hecs::Entity,
+    vendor_id: hecs::Entity,
+    item_idx: usize,
+    events: &mut crate::events::EventQueue,
+) {
+    use crate::components::{Inventory, Vendor};
+    use crate::events::GameEvent;
+    use crate::systems::item_defs::get_price;
+    use crate::systems::items::item_weight;
+
+    // Get item info from vendor
+    let (item_type, price) = {
+        let Ok(vendor) = world.get::<&Vendor>(vendor_id) else { return };
+        let Some((item, stock)) = vendor.inventory.get(item_idx) else { return };
+        if *stock == 0 { return; }
+        (*item, get_price(*item))
+    };
+
+    // Check player can afford it
+    {
+        let Ok(player_inv) = world.get::<&Inventory>(player_entity) else { return };
+        if player_inv.gold < price { return; }
+    }
+
+    // Transfer gold from player to vendor
+    if let Ok(mut player_inv) = world.get::<&mut Inventory>(player_entity) {
+        player_inv.gold -= price;
+        player_inv.items.push(item_type);
+        player_inv.current_weight_kg += item_weight(item_type);
+    }
+
+    if let Ok(mut vendor) = world.get::<&mut Vendor>(vendor_id) {
+        vendor.gold += price;
+        // Decrease stock
+        if let Some((_, stock)) = vendor.inventory.get_mut(item_idx) {
+            *stock = stock.saturating_sub(1);
+        }
+    }
+
+    events.push(GameEvent::ItemPurchased {
+        vendor: vendor_id,
+        item: item_type,
+        price,
+    });
+}
+
+/// Sell an item to a vendor.
+fn sell_item_to_vendor(
+    world: &mut World,
+    player_entity: hecs::Entity,
+    vendor_id: hecs::Entity,
+    item_idx: usize,
+    events: &mut crate::events::EventQueue,
+) {
+    use crate::components::{Inventory, Vendor};
+    use crate::events::GameEvent;
+    use crate::systems::item_defs::get_sell_price;
+    use crate::systems::items::item_weight;
+
+    // Get item info from player
+    let (item_type, sell_price) = {
+        let Ok(player_inv) = world.get::<&Inventory>(player_entity) else { return };
+        let Some(&item) = player_inv.items.get(item_idx) else { return };
+        (item, get_sell_price(item))
+    };
+
+    // Check vendor can afford it
+    {
+        let Ok(vendor) = world.get::<&Vendor>(vendor_id) else { return };
+        if vendor.gold < sell_price { return; }
+    }
+
+    // Remove item from player, add gold
+    if let Ok(mut player_inv) = world.get::<&mut Inventory>(player_entity) {
+        player_inv.items.remove(item_idx);
+        player_inv.current_weight_kg -= item_weight(item_type);
+        player_inv.gold += sell_price;
+    }
+
+    // Transfer gold from vendor
+    if let Ok(mut vendor) = world.get::<&mut Vendor>(vendor_id) {
+        vendor.gold -= sell_price;
+    }
+
+    events.push(GameEvent::ItemSold {
+        vendor: vendor_id,
+        item: item_type,
+        value: sell_price,
+    });
 }

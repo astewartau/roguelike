@@ -4,9 +4,9 @@
 //! without modifying spawning code. Also defines NPC types with dialogue.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueNode, DialogueOption,
+    Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueAction, DialogueNode, DialogueOption,
     Equipment, FriendlyNPC, Health, LightSource, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
-    StatusEffects, Tameable, VisualPosition, Weapon,
+    StatusEffects, Tameable, VisualPosition, Vendor, Weapon,
 };
 use crate::tile::{tile_ids, SpriteSheet};
 use hecs::World;
@@ -305,10 +305,12 @@ pub mod npcs {
                         DialogueOption {
                             label: "Any advice for survival?".to_string(),
                             next_node: Some(1),
+                            action: DialogueAction::None,
                         },
                         DialogueOption {
                             label: "Farewell".to_string(),
                             next_node: None,
+                            action: DialogueAction::None,
                         },
                     ],
                 },
@@ -321,10 +323,12 @@ pub mod npcs {
                         DialogueOption {
                             label: "Thank you".to_string(),
                             next_node: None,
+                            action: DialogueAction::None,
                         },
                         DialogueOption {
                             label: "Tell me more".to_string(),
                             next_node: Some(2),
+                            action: DialogueAction::None,
                         },
                     ],
                 },
@@ -336,6 +340,7 @@ pub mod npcs {
                     options: vec![DialogueOption {
                         label: "Farewell".to_string(),
                         next_node: None,
+                        action: DialogueAction::None,
                     }],
                 },
             ],
@@ -346,6 +351,101 @@ pub mod npcs {
         name: "Old Wizard",
         sprite: tile_ids::WIZARD,
         dialogue_fn: wizard_dialogue,
+    };
+}
+
+// =============================================================================
+// VENDOR DEFINITIONS
+// =============================================================================
+
+/// Definition of a vendor NPC - sells/buys items
+pub struct VendorDef {
+    #[allow(dead_code)] // Reserved for future vendor-specific UI
+    pub name: &'static str,
+    pub sprite: (SpriteSheet, u32),
+    pub dialogue_fn: fn() -> crate::components::Dialogue,
+    pub inventory_fn: fn(u32) -> Vec<(crate::components::ItemType, u32)>,
+    pub starting_gold: u32,
+}
+
+impl VendorDef {
+    /// Spawn this vendor at the given position
+    pub fn spawn(&self, world: &mut World, x: i32, y: i32, floor_num: u32) -> hecs::Entity {
+        let pos = Position::new(x, y);
+        let inventory = (self.inventory_fn)(floor_num);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::from_ref(self.sprite),
+            FriendlyNPC,
+            (self.dialogue_fn)(),
+            Vendor::new(inventory, self.starting_gold),
+            BlocksMovement,
+        ))
+    }
+}
+
+pub mod vendors {
+    use super::*;
+    use crate::components::ItemType;
+
+    fn merchant_dialogue() -> crate::components::Dialogue {
+        use crate::components::{Dialogue, DialogueNode, DialogueOption};
+
+        Dialogue::new(
+            "Wandering Merchant",
+            vec![DialogueNode {
+                text: "Welcome, traveler! I've got rare goods from the surface. \
+                       Care to browse my wares?"
+                    .to_string(),
+                options: vec![
+                    DialogueOption {
+                        label: "Show me what you have".to_string(),
+                        next_node: None,
+                        action: DialogueAction::OpenShop,
+                    },
+                    DialogueOption {
+                        label: "Not right now".to_string(),
+                        next_node: None,
+                        action: DialogueAction::None,
+                    },
+                ],
+            }],
+        )
+    }
+
+    fn merchant_inventory(floor_num: u32) -> Vec<(ItemType, u32)> {
+        match floor_num {
+            0..=1 => vec![
+                (ItemType::HealthPotion, 3),
+                (ItemType::RegenerationPotion, 1),
+                (ItemType::Bread, 2),
+                (ItemType::ScrollOfSpeed, 1),
+                (ItemType::ScrollOfProtection, 1),
+            ],
+            2..=3 => vec![
+                (ItemType::HealthPotion, 2),
+                (ItemType::StrengthPotion, 2),
+                (ItemType::ScrollOfInvisibility, 1),
+                (ItemType::ScrollOfBlink, 1),
+                (ItemType::Dagger, 1),
+            ],
+            _ => vec![
+                (ItemType::HealthPotion, 3),
+                (ItemType::StrengthPotion, 2),
+                (ItemType::ScrollOfFireball, 1),
+                (ItemType::ScrollOfFear, 1),
+                (ItemType::Sword, 1),
+            ],
+        }
+    }
+
+    pub const MERCHANT: VendorDef = VendorDef {
+        name: "Wandering Merchant",
+        sprite: tile_ids::DWARF,
+        dialogue_fn: merchant_dialogue,
+        inventory_fn: merchant_inventory,
+        starting_gold: 500,
     };
 }
 

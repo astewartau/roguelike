@@ -32,6 +32,10 @@ pub struct Grid {
     pub coffin_positions: Vec<(i32, i32)>,
     /// Barrel positions in Storage rooms
     pub barrel_positions: Vec<(i32, i32)>,
+    /// Shop vendor spawn position
+    pub shop_position: Option<(i32, i32)>,
+    /// Shop decoration positions (jars, sacks, etc.)
+    pub shop_decor_positions: Vec<(i32, i32)>,
 }
 
 impl Grid {
@@ -60,6 +64,8 @@ impl Grid {
             water_positions: result.water_positions,
             coffin_positions: result.coffin_positions,
             barrel_positions: result.barrel_positions,
+            shop_position: result.shop_position,
+            shop_decor_positions: result.shop_decor_positions,
         }
     }
 

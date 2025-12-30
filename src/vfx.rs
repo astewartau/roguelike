@@ -194,9 +194,9 @@ impl VfxManager {
                 }
             }
             GameEvent::CleavePerformed { center } => {
-                // Spawn slashes on all 8 adjacent tiles
-                for dx in -1..=1 {
-                    for dy in -1..=1 {
+                // Spawn slashes on all tiles within radius 2 (5x5 area)
+                for dx in -2..=2 {
+                    for dy in -2..=2 {
                         if dx == 0 && dy == 0 {
                             continue; // Skip center
                         }

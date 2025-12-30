@@ -61,6 +61,8 @@ pub struct ItemDef {
     pub use_effect: UseEffect,
     pub targeting: Option<TargetingParams>,
     pub is_throwable: bool,
+    /// Base price in gold (for vendor system)
+    pub base_price: u32,
 }
 
 /// Get the definition for an item type
@@ -69,6 +71,16 @@ pub fn get_def(item: ItemType) -> &'static ItemDef {
         .iter()
         .find(|def| def.item_type == item)
         .expect("All ItemType variants must have a definition")
+}
+
+/// Get the base price for an item type
+pub fn get_price(item: ItemType) -> u32 {
+    get_def(item).base_price
+}
+
+/// Get the sell price for an item (50% of base price)
+pub fn get_sell_price(item: ItemType) -> u32 {
+    get_def(item).base_price / 2
 }
 
 /// Static table of all item definitions
@@ -85,6 +97,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Equip,
         targeting: None,
         is_throwable: false,
+        base_price: 80,
     },
     ItemDef {
         item_type: ItemType::Bow,
@@ -95,6 +108,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Equip,
         targeting: None,
         is_throwable: false,
+        base_price: 100,
     },
     ItemDef {
         item_type: ItemType::Dagger,
@@ -105,6 +119,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Equip,
         targeting: None,
         is_throwable: false,
+        base_price: 40,
     },
     ItemDef {
         item_type: ItemType::Staff,
@@ -115,6 +130,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Equip,
         targeting: None,
         is_throwable: false,
+        base_price: 70,
     },
     // =========================================================================
     // POTIONS
@@ -131,6 +147,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
             radius: POTION_SPLASH_RADIUS,
         }),
         is_throwable: true,
+        base_price: 25,
     },
     ItemDef {
         item_type: ItemType::RegenerationPotion,
@@ -144,6 +161,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
             radius: POTION_SPLASH_RADIUS,
         }),
         is_throwable: true,
+        base_price: 40,
     },
     ItemDef {
         item_type: ItemType::StrengthPotion,
@@ -157,6 +175,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
             radius: POTION_SPLASH_RADIUS,
         }),
         is_throwable: true,
+        base_price: 50,
     },
     ItemDef {
         item_type: ItemType::ConfusionPotion,
@@ -170,6 +189,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
             radius: POTION_SPLASH_RADIUS,
         }),
         is_throwable: true,
+        base_price: 35,
     },
     // =========================================================================
     // SCROLLS
@@ -183,6 +203,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::ApplyEffect(EffectType::Invisible, INVISIBILITY_DURATION),
         targeting: None,
         is_throwable: false,
+        base_price: 60,
     },
     ItemDef {
         item_type: ItemType::ScrollOfSpeed,
@@ -193,6 +214,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::ApplyEffect(EffectType::SpeedBoost, SPEED_BOOST_DURATION),
         targeting: None,
         is_throwable: false,
+        base_price: 30,
     },
     ItemDef {
         item_type: ItemType::ScrollOfProtection,
@@ -203,6 +225,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::ApplyEffect(EffectType::Protected, PROTECTION_DURATION),
         targeting: None,
         is_throwable: false,
+        base_price: 35,
     },
     ItemDef {
         item_type: ItemType::ScrollOfBlink,
@@ -216,6 +239,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
             radius: 0,
         }),
         is_throwable: false,
+        base_price: 75,
     },
     ItemDef {
         item_type: ItemType::ScrollOfFear,
@@ -226,6 +250,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::ApplyEffectToVisible(EffectType::Feared, FEAR_DURATION),
         targeting: None,
         is_throwable: false,
+        base_price: 80,
     },
     ItemDef {
         item_type: ItemType::ScrollOfFireball,
@@ -239,6 +264,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
             radius: FIREBALL_RADIUS,
         }),
         is_throwable: false,
+        base_price: 100,
     },
     ItemDef {
         item_type: ItemType::ScrollOfReveal,
@@ -249,6 +275,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::RevealEnemies,
         targeting: None,
         is_throwable: false,
+        base_price: 45,
     },
     ItemDef {
         item_type: ItemType::ScrollOfMapping,
@@ -259,6 +286,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::RevealMap,
         targeting: None,
         is_throwable: false,
+        base_price: 50,
     },
     ItemDef {
         item_type: ItemType::ScrollOfSlow,
@@ -269,6 +297,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::ApplyEffectToVisible(EffectType::Slowed, SLOW_DURATION),
         targeting: None,
         is_throwable: false,
+        base_price: 40,
     },
     // =========================================================================
     // FOOD
@@ -282,6 +311,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Heal(CHEESE_HEAL),
         targeting: None,
         is_throwable: false,
+        base_price: 10,
     },
     ItemDef {
         item_type: ItemType::Bread,
@@ -292,6 +322,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Heal(BREAD_HEAL),
         targeting: None,
         is_throwable: false,
+        base_price: 10,
     },
     ItemDef {
         item_type: ItemType::Apple,
@@ -302,6 +333,7 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         use_effect: UseEffect::Heal(APPLE_HEAL),
         targeting: None,
         is_throwable: false,
+        base_price: 10,
     },
 ];
 

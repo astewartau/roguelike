@@ -40,6 +40,7 @@ fn spawn_doors(world: &mut World, grid: &Grid) {
         let (sprite, door) = match theme {
             RoomTheme::Overgrown => (tile_ids::DOOR_GREEN, Door::green()),
             RoomTheme::Crypt => (tile_ids::DOOR_GRATED, Door::grated()),
+            RoomTheme::Shop => (tile_ids::DOOR_SHOP, Door::shop()),
             _ => (tile_ids::DOOR, Door::new()),
         };
         world.spawn((
@@ -127,6 +128,34 @@ fn spawn_water_entities(world: &mut World, grid: &Grid) {
             VisualPosition::from_position(&pos),
             AnimatedSprite::water(),
         ));
+    }
+}
+
+/// Spawn shop decorations (jars, sacks) at shop decor positions.
+fn spawn_shop_decorations(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+    let decor_sprites = [
+        tile_ids::JAR_CLOSED,
+        tile_ids::JAR_OPEN,
+        tile_ids::BARREL,
+        tile_ids::ORE_SACK,
+    ];
+
+    for (x, y) in &grid.shop_decor_positions {
+        let pos = Position::new(*x, *y);
+        let sprite = decor_sprites.choose(rng).unwrap();
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::from_ref(*sprite),
+            BlocksMovement,
+        ));
+    }
+}
+
+/// Spawn the vendor in the shop room.
+fn spawn_vendor(world: &mut World, grid: &Grid, floor_num: u32) {
+    if let Some((x, y)) = grid.shop_position {
+        spawning::vendors::MERCHANT.spawn(world, x, y, floor_num);
     }
 }
 
@@ -268,7 +297,7 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Barkskin, BARKSKIN_COOLDOWN));
     }
 
-    // Spawn chests, doors, braziers, coffins, barrels, and water
+    // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     let mut rng = rand::thread_rng();
     spawn_chests(&mut world, grid, &mut rng);
     spawn_doors(&mut world, grid);
@@ -276,6 +305,8 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
     spawn_coffins(&mut world, grid, &mut rng);
     spawn_barrels(&mut world, grid, &mut rng);
     spawn_water_entities(&mut world, grid);
+    spawn_shop_decorations(&mut world, grid, &mut rng);
+    spawn_vendor(&mut world, grid, 0); // Floor 0 for initial world
 
     // Spawn wizard NPC
     if let Some(starting_room) = &grid.starting_room {
@@ -363,6 +394,7 @@ pub fn spawn_floor_entities(
     grid: &Grid,
     player_entity: Entity,
     player_spawn_pos: (i32, i32),
+    floor_num: u32,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
     events: &mut EventQueue,
@@ -377,11 +409,13 @@ pub fn spawn_floor_entities(
         vis_pos.y = player_spawn_pos.1 as f32;
     }
 
-    // Spawn chests, doors, and braziers
+    // Spawn chests, doors, braziers, and shop
     let mut rng = rand::thread_rng();
     spawn_chests(world, grid, &mut rng);
     spawn_doors(world, grid);
     spawn_braziers(world, grid);
+    spawn_shop_decorations(world, grid, &mut rng);
+    spawn_vendor(world, grid, floor_num);
 
     // Spawn enemies
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
