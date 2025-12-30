@@ -433,6 +433,8 @@ pub enum ItemType {
     Cheese,
     Bread,
     Apple,
+    // Traps
+    FireTrap,
 }
 
 // =============================================================================
@@ -575,6 +577,8 @@ pub enum ActionType {
     StartTaming { target: Entity },
     /// Druid ability: activate barkskin (damage reduction)
     ActivateBarkskin,
+    /// Place a fire trap at target location
+    PlaceFireTrap { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -603,6 +607,7 @@ impl ActionType {
             ActionType::ActivateSprint => SPRINT_ENERGY_COST,
             ActionType::StartTaming { .. } => TAME_ENERGY_COST,
             ActionType::ActivateBarkskin => BARKSKIN_ENERGY_COST,
+            ActionType::PlaceFireTrap { .. } => 1,
         }
     }
 }
@@ -1137,6 +1142,15 @@ impl LightSource {
 /// Marker component for entities that cause burning when stepped on
 #[derive(Debug, Clone, Copy)]
 pub struct CausesBurning;
+
+/// Fire trap component - causes burning when stepped on (but not by owner or their pets)
+#[derive(Debug, Clone, Copy)]
+pub struct PlacedFireTrap {
+    /// The entity that placed this trap
+    pub owner: Entity,
+    /// Initial burst damage when triggered
+    pub burst_damage: i32,
+}
 
 // =============================================================================
 // TAMING SYSTEM

@@ -35,6 +35,7 @@ pub struct UiIcons {
     pub cheese_uv: egui::Rect,
     pub bread_uv: egui::Rect,
     pub apple_uv: egui::Rect,
+    pub fire_trap_uv: egui::Rect,
     // Ability icons
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
@@ -71,6 +72,7 @@ impl UiIcons {
             cheese_uv: tileset.get_egui_uv(tile_ids::CHEESE.0, tile_ids::CHEESE.1),
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
+            fire_trap_uv: tileset.get_egui_uv(tile_ids::FIRE_TRAP.0, tile_ids::FIRE_TRAP.1),
             // Ability icons: AXE for Cleave, BLUE_POTION for Sprint, AMBER_POTION for Barkskin (brown)
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
             sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
@@ -112,6 +114,7 @@ impl UiIcons {
             ItemType::Cheese => self.cheese_uv,
             ItemType::Bread => self.bread_uv,
             ItemType::Apple => self.apple_uv,
+            ItemType::FireTrap => self.fire_trap_uv,
         }
     }
 

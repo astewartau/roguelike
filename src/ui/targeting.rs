@@ -238,6 +238,7 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
             Some(ItemType::RegenerationPotion) => "Click to throw regen potion",
             Some(ItemType::StrengthPotion) => "Click to throw strength potion",
             Some(ItemType::ConfusionPotion) => "Click to throw confusion potion",
+            Some(ItemType::FireTrap) => "Click to place fire trap",
             _ => {
                 if data.is_blink {
                     "Click to teleport"

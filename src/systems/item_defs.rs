@@ -17,6 +17,7 @@ pub enum ItemCategory {
     Potion,
     Scroll,
     Food,
+    Trap,
 }
 
 /// How an item is used when consumed
@@ -335,6 +336,23 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         is_throwable: false,
         base_price: 10,
     },
+    // =========================================================================
+    // TRAPS
+    // =========================================================================
+    ItemDef {
+        item_type: ItemType::FireTrap,
+        name: "Fire Trap",
+        category: ItemCategory::Trap,
+        weight: FIRE_TRAP_WEIGHT,
+        sprite: tile_ids::FIRE_TRAP,
+        use_effect: UseEffect::RequiresTarget,
+        targeting: Some(TargetingParams {
+            max_range: FIRE_TRAP_RANGE,
+            radius: 0,
+        }),
+        is_throwable: false,
+        base_price: 50,
+    },
 ];
 
 #[cfg(test)]
@@ -365,6 +383,7 @@ mod tests {
             ItemType::Cheese,
             ItemType::Bread,
             ItemType::Apple,
+            ItemType::FireTrap,
         ];
 
         for item in all_items {

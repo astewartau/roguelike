@@ -53,3 +53,11 @@ pub const CHEESE_HEAL: i32 = 8;
 pub const BREAD_HEAL: i32 = 10;
 /// Apple heal amount
 pub const APPLE_HEAL: i32 = 5;
+
+// Fire Trap
+/// Fire trap weight in kg
+pub const FIRE_TRAP_WEIGHT: f32 = 0.3;
+/// Fire trap placement range (adjacent tiles only)
+pub const FIRE_TRAP_RANGE: i32 = 1;
+/// Fire trap burst damage when triggered
+pub const FIRE_TRAP_BURST_DAMAGE: i32 = 15;

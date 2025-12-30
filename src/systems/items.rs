@@ -187,6 +187,8 @@ mod tests {
         // Targeted scrolls
         assert!(item_requires_target(ItemType::ScrollOfBlink));
         assert!(item_requires_target(ItemType::ScrollOfFireball));
+        // Fire trap requires targeting
+        assert!(item_requires_target(ItemType::FireTrap));
         // Potions are drinkable by default (throwable via context menu)
         assert!(!item_requires_target(ItemType::HealthPotion));
         assert!(!item_requires_target(ItemType::ConfusionPotion));

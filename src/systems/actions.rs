@@ -136,7 +136,74 @@ pub fn apply_move(
         });
     }
 
+    // Check if entity stepped on a fire trap
+    check_fire_trap_trigger(world, entity, target_x, target_y, events);
+
     ActionResult::Completed
+}
+
+/// Check if an entity stepping on a fire trap should trigger it.
+/// Fire traps ignore their owner and the owner's tamed pets.
+fn check_fire_trap_trigger(
+    world: &mut World,
+    victim: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) {
+    use crate::components::{PlacedFireTrap, TamedBy, Health};
+    use crate::constants::BURNING_DURATION;
+
+    // Find fire trap at this position
+    let trap_info: Option<(hecs::Entity, Entity, i32)> = world
+        .query::<(&Position, &PlacedFireTrap)>()
+        .iter()
+        .find_map(|(trap_id, (pos, trap))| {
+            if pos.x == target_x && pos.y == target_y {
+                Some((trap_id, trap.owner, trap.burst_damage))
+            } else {
+                None
+            }
+        });
+
+    let Some((trap_entity, trap_owner, burst_damage)) = trap_info else {
+        return;
+    };
+
+    // Check if victim is the owner
+    if victim == trap_owner {
+        return;
+    }
+
+    // Check if victim is a tamed pet of the owner
+    if let Ok(tamed_by) = world.get::<&TamedBy>(victim) {
+        if tamed_by.owner == trap_owner {
+            return;
+        }
+    }
+
+    // Trap triggered! Apply burst damage and burning effect
+    if let Ok(mut health) = world.get::<&mut Health>(victim) {
+        health.current -= burst_damage;
+    }
+
+    // Apply burning effect
+    effects::add_effect_to_entity(world, victim, EffectType::Burning, BURNING_DURATION);
+
+    // Emit events
+    events.push(GameEvent::FireTrapTriggered {
+        trap: trap_entity,
+        victim,
+        position: (target_x, target_y),
+    });
+
+    events.push(GameEvent::CaughtFire {
+        entity: victim,
+        position: (target_x, target_y),
+    });
+
+    // Destroy the trap after triggering
+    let _ = world.despawn(trap_entity);
 }
 
 /// Apply attack effect
@@ -1165,6 +1232,45 @@ pub fn apply_start_taming(
 
     // Emit event to show message and VFX
     events.push(GameEvent::TamingStarted { tamer, target });
+
+    ActionResult::Completed
+}
+
+// =============================================================================
+// TRAP ACTIONS
+// =============================================================================
+
+/// Place a fire trap at the target location
+pub fn apply_place_fire_trap(
+    world: &mut World,
+    placer: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::components::PlacedFireTrap;
+    use crate::constants::FIRE_TRAP_BURST_DAMAGE;
+
+    // Spawn the fire trap entity with pressure plate sprite
+    // Fire animation is rendered as overlay in rendering.rs (like burning entities)
+    let pos = Position::new(target_x, target_y);
+    let trap = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        // Base sprite (pressure plate)
+        Sprite::from_ref(tile_ids::PRESSURE_PLATE),
+        // Trap data - tracks owner and damage
+        PlacedFireTrap {
+            owner: placer,
+            burst_damage: FIRE_TRAP_BURST_DAMAGE,
+        },
+    ));
+
+    events.push(GameEvent::FireTrapPlaced {
+        trap,
+        placer,
+        position: (target_x, target_y),
+    });
 
     ActionResult::Completed
 }

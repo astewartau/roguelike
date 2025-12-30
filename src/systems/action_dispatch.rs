@@ -44,6 +44,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::ActivateSprint => SPRINT_ACTIVATION_DURATION, // Ranger ability (quick)
         ActionType::StartTaming { .. } => ACTION_WAIT_DURATION, // Starting to tame (quick)
         ActionType::ActivateBarkskin => BARKSKIN_ACTIVATION_DURATION, // Druid ability (quick)
+        ActionType::PlaceFireTrap { .. } => ACTION_DOOR_DURATION, // Quick placement
     };
 
     // Speed modifies duration: higher speed = shorter duration

@@ -102,6 +102,27 @@ pub fn validate_targeting(
         | ItemType::RegenerationPotion
         | ItemType::StrengthPotion
         | ItemType::ConfusionPotion => TargetingValidation::Valid,
+        // Fire trap requires walkable, unblocked destination (adjacent only)
+        ItemType::FireTrap => {
+            let walkable = grid
+                .get(target_x, target_y)
+                .map(|t| t.tile_type.is_walkable())
+                .unwrap_or(false);
+            if !walkable {
+                return TargetingValidation::BlockedTerrain;
+            }
+
+            // Check no entity blocks this position
+            let blocked = world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
+            if blocked {
+                return TargetingValidation::BlockedByEntity;
+            }
+
+            TargetingValidation::Valid
+        }
         _ => TargetingValidation::InvalidItemType,
     }
 }
@@ -169,6 +190,11 @@ pub fn intent_to_action(
                 | ItemType::StrengthPotion
                 | ItemType::ConfusionPotion => Some(ActionType::ThrowPotion {
                     potion_type: *item_type,
+                    target_x: *target_x,
+                    target_y: *target_y,
+                }),
+                // Fire trap placement
+                ItemType::FireTrap => Some(ActionType::PlaceFireTrap {
                     target_x: *target_x,
                     target_y: *target_y,
                 }),

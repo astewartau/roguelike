@@ -170,6 +170,15 @@ pub mod tile_ids {
     pub const BREAD: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 1, ITEMS_COLS)); // 26.b bread
     pub const APPLE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 2, ITEMS_COLS)); // 26.c apple
 
+    // Traps (inventory item uses flame sword icon)
+    pub const FIRE_TRAP: (SpriteSheet, u32) = (SpriteSheet::Items, rc(1, 10, ITEMS_COLS)); // 1.k flame sword
+
+    // ===== TILES SHEET - TRAPS =====
+
+    // Traps (row 17 of tiles.png)
+    pub const PRESSURE_PLATE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 9, TILES_COLS)); // 17.j pressure plate (up)
+    pub const PRESSURE_PLATE_DOWN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 10, TILES_COLS)); // 17.k pressure plate (down)
+
     // UI Icons (using items that work as icons)
     pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
     pub const DIAMOND: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant

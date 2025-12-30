@@ -323,6 +323,9 @@ fn apply_action_effects(
         ActionType::ActivateBarkskin => {
             actions::apply_activate_barkskin(world, entity, events)
         }
+        ActionType::PlaceFireTrap { target_x, target_y } => {
+            actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
+        }
     }
 }
 

@@ -51,7 +51,7 @@ impl DevTool {
 }
 
 /// All item types for the dev menu
-const ALL_ITEMS: [ItemType; 13] = [
+const ALL_ITEMS: [ItemType; 14] = [
     // Potions
     ItemType::HealthPotion,
     ItemType::RegenerationPotion,
@@ -67,6 +67,8 @@ const ALL_ITEMS: [ItemType; 13] = [
     ItemType::ScrollOfReveal,
     ItemType::ScrollOfMapping,
     ItemType::ScrollOfSlow,
+    // Traps
+    ItemType::FireTrap,
 ];
 
 /// State for the developer menu

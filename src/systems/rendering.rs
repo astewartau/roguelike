@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, Position, Sprite, StatusEffects, VisualPosition};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, StatusEffects, VisualPosition};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::fov::FOV;
 use crate::grid::Grid;
@@ -460,6 +460,41 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
             }
         }
     }
+
+    // Add fire overlays for fire traps (rendered on top of trap base)
+    for (_, (pos, vis_pos, _trap)) in
+        world.query::<(&Position, &VisualPosition, &PlacedFireTrap)>().iter()
+    {
+        let is_visible = grid
+            .get(pos.x, pos.y)
+            .map(|tile| tile.visible)
+            .unwrap_or(false);
+
+        if is_visible {
+            // Calculate fire animation frame (same as burning entities)
+            let frame_duration = 0.1;
+            let frame_count = 6;
+            let adjusted_time = real_time + (pos.x as f32 * 0.1 + pos.y as f32 * 0.07);
+            let frame = ((adjusted_time / frame_duration) as u32) % frame_count;
+            let fire_tile_id = tile_ids::FIRE_EFFECT.1 + frame;
+
+            let tile_brightness = grid.illumination
+                .get(pos.y as usize * grid.width + pos.x as usize)
+                .copied()
+                .unwrap_or(0.5);
+
+            fire_overlays.push(RenderEntity {
+                x: vis_pos.x,
+                y: vis_pos.y,
+                sprite: Sprite::new(SpriteSheet::AnimatedTiles, fire_tile_id),
+                brightness: (tile_brightness + 0.3).min(1.2), // Trap fire is bright
+                alpha: 0.9,
+                effects: effects::BURNING,
+                overlay: None,
+            });
+        }
+    }
+
     entities_to_render.append(&mut fire_overlays);
 
     entities_to_render

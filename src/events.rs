@@ -182,6 +182,18 @@ pub enum GameEvent {
         entity: Entity,
         position: (i32, i32),
     },
+    /// A fire trap was placed
+    FireTrapPlaced {
+        trap: Entity,
+        placer: Entity,
+        position: (i32, i32),
+    },
+    /// A fire trap was triggered
+    FireTrapTriggered {
+        trap: Entity,
+        victim: Entity,
+        position: (i32, i32),
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame
