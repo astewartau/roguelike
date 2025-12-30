@@ -48,3 +48,10 @@ pub const FIREBALL_DAMAGE: i32 = 25;
 pub const REVEAL_DURATION: f32 = 10.0;
 /// Radius around each enemy revealed by Scroll of Reveal
 pub const REVEAL_RADIUS: i32 = 3;
+
+/// Duration of burning effect in game-time seconds
+pub const BURNING_DURATION: f32 = 10.0;
+/// Damage dealt per second while burning
+pub const BURNING_DAMAGE_PER_SECOND: i32 = 2;
+/// Interval between burn damage ticks in game-time seconds
+pub const BURNING_DAMAGE_INTERVAL: f32 = 1.0;

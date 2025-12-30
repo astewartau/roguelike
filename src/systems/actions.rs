@@ -116,6 +116,26 @@ pub fn apply_move(
         });
     }
 
+    // Check if entity stepped into water (extinguishes fire)
+    if grid.water_positions.contains(&(target_x, target_y)) {
+        effects::remove_effect_from_entity(world, entity, EffectType::Burning);
+    }
+
+    // Check if entity stepped into a fire source (brazier, campfire) and catches fire
+    let stepped_on_fire = world
+        .query::<(&Position, &crate::components::CausesBurning)>()
+        .iter()
+        .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
+
+    if stepped_on_fire {
+        use crate::constants::BURNING_DURATION;
+        effects::add_effect_to_entity(world, entity, EffectType::Burning, BURNING_DURATION);
+        events.push(GameEvent::CaughtFire {
+            entity,
+            position: (target_x, target_y),
+        });
+    }
+
     ActionResult::Completed
 }
 

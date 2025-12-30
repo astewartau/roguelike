@@ -232,6 +232,7 @@ pub fn advance_until_player_ready(
 
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
+        time_system::tick_burn_damage(world, clock.time, events);
         time_system::tick_status_effects(world, elapsed);
         time_system::tick_ability_cooldowns(world, elapsed);
         time_system::tick_ranged_cooldowns(world, elapsed);
@@ -309,6 +310,7 @@ pub fn wait_for_energy(
             update_projectiles_at_time(world, grid, clock.time, events);
             time_system::tick_health_regen(world, clock.time, Some(events));
             time_system::tick_energy_regen(world, clock.time, Some(events));
+            time_system::tick_burn_damage(world, clock.time, events);
             time_system::tick_status_effects(world, elapsed);
             time_system::tick_ability_cooldowns(world, elapsed);
             time_system::tick_ranged_cooldowns(world, elapsed);

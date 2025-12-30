@@ -171,6 +171,17 @@ pub enum GameEvent {
         item: crate::components::ItemType,
         value: u32,
     },
+    /// An entity took burn damage from being on fire
+    BurnDamage {
+        entity: Entity,
+        position: (f32, f32),
+        damage: i32,
+    },
+    /// An entity caught on fire
+    CaughtFire {
+        entity: Entity,
+        position: (i32, i32),
+    },
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

@@ -161,6 +161,9 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                             StatusEffectType::Slowed => {
                                 ("Slowed", egui::Color32::from_rgb(100, 150, 200))
                             }
+                            StatusEffectType::Burning => {
+                                ("Burning", egui::Color32::from_rgb(255, 100, 50)) // Orange-red fire color
+                            }
                         };
                         ui.label(
                             egui::RichText::new(format!("{} ({:.0}s)", label, duration))

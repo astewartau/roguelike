@@ -28,8 +28,14 @@ pub fn add_effect(effects: &mut StatusEffects, effect_type: EffectType, duration
         effects.effects.push(ActiveEffect {
             effect_type,
             remaining_duration: duration,
+            last_damage_tick: 0.0, // First damage tick happens immediately
         });
     }
+}
+
+/// Remove an effect from a StatusEffects component
+pub fn remove_effect(effects: &mut StatusEffects, effect_type: EffectType) {
+    effects.effects.retain(|e| e.effect_type != effect_type);
 }
 
 // =============================================================================
@@ -53,6 +59,13 @@ pub fn add_effect_to_entity(
 ) {
     if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
         add_effect(&mut effects, effect_type, duration);
+    }
+}
+
+/// Remove an effect from an entity
+pub fn remove_effect_from_entity(world: &mut World, entity: Entity, effect_type: EffectType) {
+    if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
+        remove_effect(&mut effects, effect_type);
     }
 }
 

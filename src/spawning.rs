@@ -451,7 +451,7 @@ pub mod vendors {
 
 /// Spawn a campfire entity with light source and animated fire sprite
 pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::AnimatedSprite;
+    use crate::components::{AnimatedSprite, CausesBurning};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -459,12 +459,13 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         AnimatedSprite::fire_pit(),
         LightSource::campfire(),
+        CausesBurning,
     ))
 }
 
 /// Spawn a brazier entity with light source and animated fire sprite
 pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::AnimatedSprite;
+    use crate::components::{AnimatedSprite, CausesBurning};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -472,5 +473,6 @@ pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         AnimatedSprite::brazier(),
         LightSource::brazier(),
+        CausesBurning,
     ))
 }

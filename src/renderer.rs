@@ -881,10 +881,15 @@ impl Renderer {
             // AnimatedTiles first (ground effects like fire), then terrain, characters, monsters, items on top
             let sheets = [SpriteSheet::AnimatedTiles, SpriteSheet::Tiles, SpriteSheet::Rogues, SpriteSheet::Monsters, SpriteSheet::Items];
 
+            // First pass: render entity sprites (skip fire overlays, they render last)
             for sheet in sheets {
                 let mut instance_data = Vec::new();
 
                 for entity in entities {
+                    // Skip fire overlays - they render in a final pass
+                    if entity.effects & crate::systems::rendering::effects::BURNING != 0 {
+                        continue;
+                    }
                     if entity.sprite.sheet != sheet {
                         continue;
                     }
@@ -914,7 +919,7 @@ impl Renderer {
                 }
             }
 
-            // Second pass: render overlay sprites on top (also grouped by sheet)
+            // Second pass: render overlay sprites (weapons, etc.)
             for sheet in sheets {
                 let mut overlay_data = Vec::new();
 
@@ -946,6 +951,40 @@ impl Renderer {
 
                     let overlay_count = overlay_data.len() / 11;
                     self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, overlay_count as i32);
+                }
+            }
+
+            // Third pass: render fire overlays on top of everything
+            {
+                let mut fire_data = Vec::new();
+
+                for entity in entities {
+                    if entity.effects & crate::systems::rendering::effects::BURNING == 0 {
+                        continue;
+                    }
+
+                    let uv = tileset.get_uv(entity.sprite.sheet, entity.sprite.tile_id);
+
+                    fire_data.push(entity.x);
+                    fire_data.push(entity.y);
+                    fire_data.push(uv.u0);
+                    fire_data.push(uv.v0);
+                    fire_data.push(uv.u1);
+                    fire_data.push(uv.v1);
+                    fire_data.push(entity.brightness);
+                    fire_data.push(entity.alpha);
+                    fire_data.push(1.0); // tint R
+                    fire_data.push(1.0); // tint G
+                    fire_data.push(1.0); // tint B
+                }
+
+                if !fire_data.is_empty() {
+                    tileset.bind(&self.gl, SpriteSheet::AnimatedTiles, 0);
+                    self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+                    self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&fire_data), DYNAMIC_DRAW);
+
+                    let fire_count = fire_data.len() / 11;
+                    self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, fire_count as i32);
                 }
             }
 

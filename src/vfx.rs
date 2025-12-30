@@ -208,6 +208,14 @@ impl VfxManager {
                     }
                 }
             }
+            GameEvent::BurnDamage { position, damage, .. } => {
+                // Show damage number for burn damage
+                let tile_x = position.0 as i32;
+                let tile_y = position.1 as i32;
+                if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
+                    self.spawn_damage_number(position.0, position.1, *damage);
+                }
+            }
             _ => {}
         }
     }

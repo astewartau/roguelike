@@ -460,6 +460,8 @@ pub enum EffectType {
     Feared,
     /// Reduced speed (enemies only)
     Slowed,
+    /// On fire - takes damage over time
+    Burning,
 }
 
 /// An active status effect with remaining duration
@@ -468,6 +470,8 @@ pub struct ActiveEffect {
     pub effect_type: EffectType,
     /// Remaining duration in game-time seconds
     pub remaining_duration: f32,
+    /// Last time damage was dealt (for DoT effects like Burning)
+    pub last_damage_tick: f32,
 }
 
 /// Component for entities with active status effects
@@ -1129,6 +1133,10 @@ impl LightSource {
         }
     }
 }
+
+/// Marker component for entities that cause burning when stepped on
+#[derive(Debug, Clone, Copy)]
+pub struct CausesBurning;
 
 // =============================================================================
 // TAMING SYSTEM

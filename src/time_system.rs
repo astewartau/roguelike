@@ -496,3 +496,57 @@ pub fn tick_ranged_cooldowns(world: &mut World, elapsed: f32) {
     }
 }
 
+/// Process burn damage for entities with the Burning effect
+pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut EventQueue) {
+    use crate::components::Position;
+
+    // Collect entities that need to take burn damage
+    let mut burn_events: Vec<(Entity, (f32, f32), i32)> = Vec::new();
+    let mut deaths: Vec<Entity> = Vec::new();
+
+    // First pass: find burning entities and check if they should take damage
+    for (entity, (health, effects, pos)) in
+        world.query_mut::<(&mut Health, &mut StatusEffects, &Position)>()
+    {
+        // Find the burning effect
+        if let Some(burn_effect) = effects
+            .effects
+            .iter_mut()
+            .find(|e| e.effect_type == EffectType::Burning)
+        {
+            let time_since_last = current_time - burn_effect.last_damage_tick;
+            if time_since_last >= BURNING_DAMAGE_INTERVAL {
+                // Deal damage
+                let damage = BURNING_DAMAGE_PER_SECOND;
+                health.current = (health.current - damage).max(0);
+                burn_effect.last_damage_tick = current_time;
+
+                burn_events.push((entity, (pos.x as f32 + 0.5, pos.y as f32 + 0.5), damage));
+
+                if health.current <= 0 {
+                    deaths.push(entity);
+                }
+            }
+        }
+    }
+
+    // Emit burn damage events
+    for (entity, position, damage) in burn_events {
+        events.push(GameEvent::BurnDamage {
+            entity,
+            position,
+            damage,
+        });
+    }
+
+    // Handle deaths from burning
+    for entity in deaths {
+        if let Ok(pos) = world.get::<&Position>(entity) {
+            events.push(GameEvent::EntityDied {
+                entity,
+                position: (pos.x as f32 + 0.5, pos.y as f32 + 0.5),
+            });
+        }
+    }
+}
+

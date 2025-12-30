@@ -1,6 +1,7 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, Position, Sprite, VisualPosition};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, Position, Sprite, StatusEffects, VisualPosition};
+use crate::tile::{SpriteSheet, tile_ids};
 use crate::fov::FOV;
 use crate::grid::Grid;
 use hecs::{Entity, World};
@@ -12,12 +13,12 @@ const AMBIENT_BRIGHTNESS: f32 = 0.3;
 /// Must be less than AMBIENT_BRIGHTNESS to avoid jarring edge at FOV boundary
 const FOG_BRIGHTNESS: f32 = 0.2;
 
-/// Visual effect flags (bitfield) - reserved for future effects
+/// Visual effect flags (bitfield)
 pub mod effects {
     pub const NONE: u32 = 0;
-    // Future effects:
     // pub const POISONED: u32 = 1 << 0;
-    // pub const BURNING: u32 = 1 << 1;
+    /// Fire overlay - rendered in final pass on top of all entities
+    pub const BURNING: u32 = 1 << 1;
     // pub const FROZEN: u32 = 1 << 2;
     // pub const SHIELDED: u32 = 1 << 3;
 }
@@ -421,6 +422,45 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     if let Some(player) = player_render {
         entities_to_render.push(player);
     }
+
+    // Add fire overlays for burning entities (rendered on top)
+    let mut fire_overlays: Vec<RenderEntity> = Vec::new();
+    for (_, (pos, vis_pos, status)) in
+        world.query::<(&Position, &VisualPosition, &StatusEffects)>().iter()
+    {
+        // Check if entity is burning
+        if status.effects.iter().any(|e| e.effect_type == EffectType::Burning) {
+            let is_visible = grid
+                .get(pos.x, pos.y)
+                .map(|tile| tile.visible)
+                .unwrap_or(false);
+
+            if is_visible {
+                // Calculate fire animation frame (row 9 has 6 frames at 0.1s each)
+                let frame_duration = 0.1;
+                let frame_count = 6;
+                let adjusted_time = real_time + (pos.x as f32 * 0.1 + pos.y as f32 * 0.07); // Phase offset
+                let frame = ((adjusted_time / frame_duration) as u32) % frame_count;
+                let fire_tile_id = tile_ids::FIRE_EFFECT.1 + frame;
+
+                let tile_brightness = grid.illumination
+                    .get(pos.y as usize * grid.width + pos.x as usize)
+                    .copied()
+                    .unwrap_or(0.5);
+
+                fire_overlays.push(RenderEntity {
+                    x: vis_pos.x,
+                    y: vis_pos.y,
+                    sprite: Sprite::new(SpriteSheet::AnimatedTiles, fire_tile_id),
+                    brightness: (tile_brightness + 0.2).min(1.0), // Fire is bright
+                    alpha: 0.8, // Slightly transparent so entity shows through
+                    effects: effects::BURNING, // Mark for third-pass rendering
+                    overlay: None,
+                });
+            }
+        }
+    }
+    entities_to_render.append(&mut fire_overlays);
 
     entities_to_render
 }

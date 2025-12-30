@@ -182,6 +182,8 @@ pub mod tile_ids {
     pub const FIRE_PIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(4, 0, ANIMATED_TILES_COLS));
     /// Animated water - first frame, row 11 in animated-tiles.png (11 frames)
     pub const WATER_ANIMATED: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(11, 0, ANIMATED_TILES_COLS));
+    /// Fire effect - first frame, row 9 in animated-tiles.png (for burning entities)
+    pub const FIRE_EFFECT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(9, 0, ANIMATED_TILES_COLS));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
