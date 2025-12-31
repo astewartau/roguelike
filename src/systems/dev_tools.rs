@@ -45,6 +45,8 @@ pub fn execute_dev_spawn(
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> DevSpawnResult {
     // Check if the tile is walkable
@@ -84,6 +86,8 @@ pub fn execute_dev_spawn(
                 player_entity,
                 clock,
                 scheduler,
+                active_ai_tracker,
+                spatial_cache,
                 events,
                 &mut rng,
             );

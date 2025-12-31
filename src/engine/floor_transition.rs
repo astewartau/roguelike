@@ -152,6 +152,8 @@ pub fn load_floor(
     player_spawn_pos: (i32, i32),
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) {
     // Update player position
@@ -176,7 +178,7 @@ pub fn load_floor(
                     health.max = *health_max;
                 }
                 crate::systems::ai::decide_action(
-                    world, grid, enemy, player_entity, clock, scheduler, events, &mut rng,
+                    world, grid, enemy, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, &mut rng,
                 );
             }
             SavedEntityType::Chest { is_open, gold, items } => {
@@ -248,6 +250,8 @@ pub fn handle_floor_transition(
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> FloorTransitionResult {
     use crate::events::StairDirection;
@@ -283,6 +287,8 @@ pub fn handle_floor_transition(
             spawn_pos,
             clock,
             scheduler,
+            active_ai_tracker,
+            spatial_cache,
             events,
         );
         grid
@@ -302,10 +308,21 @@ pub fn handle_floor_transition(
             target_floor,
             clock,
             scheduler,
+            active_ai_tracker,
+            spatial_cache,
             events,
         );
         grid
     };
+
+    // Rebuild caches for the new floor
+    spatial_cache.rebuild_in_place(world);
+    active_ai_tracker.initialize_from_world(
+        world,
+        world.get::<&Position>(player_entity)
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0, 0)),
+    );
 
     let player_visual_pos = world
         .get::<&VisualPosition>(player_entity)

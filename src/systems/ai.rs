@@ -8,12 +8,14 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 use rand::Rng;
 
+use crate::active_ai_tracker::ActiveAITracker;
 use crate::components::{ActionType, Actor, AIState, ChaseAI, CompanionAI, EffectType, Equipment, Health, Position, RangedCooldown, TamedBy};
 use crate::constants::AI_ACTIVE_RADIUS;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::pathfinding::{self, BresenhamLineIter};
 use crate::queries;
+use crate::spatial_cache::SpatialCache;
 use crate::systems::action_dispatch;
 use crate::time_system::{self, ActionScheduler, GameClock};
 
@@ -25,10 +27,29 @@ pub fn decide_action(
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut ActiveAITracker,
+    spatial_cache: &SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
     puffin::profile_function!();
+
+    // FIRST: Distance check - cheapest operation, do this before anything else
+    let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
+    let player_pos = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y));
+
+    if let (Some(epos), Some(ppos)) = (entity_pos, player_pos) {
+        let distance = (epos.0 - ppos.0).abs() + (epos.1 - ppos.1).abs();
+        if distance > AI_ACTIVE_RADIUS {
+            // Too far from player - mark as dormant and DON'T reschedule
+            // Entity will be woken up when player moves close enough
+            active_tracker.mark_dormant(entity);
+            return;
+        }
+    } else {
+        // No position - can't process this entity
+        return;
+    }
 
     // Check if entity has Actor component
     let (can_act, energy_regen_interval, last_regen_time) = match world.get::<&Actor>(entity) {
@@ -57,28 +78,13 @@ pub fn decide_action(
         return;
     }
 
-    // Performance optimization: Skip AI for distant enemies
-    // Get positions early to check distance before expensive operations
-    let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
-    let player_pos = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y));
-
-    if let (Some(epos), Some(ppos)) = (entity_pos, player_pos) {
-        let distance = (epos.0 - ppos.0).abs() + (epos.1 - ppos.1).abs();
-        if distance > AI_ACTIVE_RADIUS {
-            // Too far from player - schedule a wakeup check later and skip this turn
-            let wakeup_delay = 0.5; // Check again in half a second of game time
-            scheduler.schedule(entity, clock.time + wakeup_delay);
-            return;
-        }
-    }
-
     // Determine AI action based on AI type
     let action_type = if let Some((owner, follow_distance)) = companion_ai {
         // Companion AI: follow owner and attack enemies
-        determine_companion_action(world, grid, entity, owner, follow_distance, rng)
+        determine_companion_action(world, grid, entity, owner, follow_distance, spatial_cache, rng)
     } else {
         // Regular enemy AI: chase and attack player
-        determine_action(world, grid, entity, player_entity, events, rng)
+        determine_action(world, grid, entity, player_entity, spatial_cache, events, rng)
     };
 
     // Start the action (with energy events)
@@ -91,6 +97,7 @@ fn determine_action(
     grid: &Grid,
     entity: Entity,
     player_entity: Entity,
+    spatial_cache: &SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) -> ActionType {
@@ -106,15 +113,16 @@ fn determine_action(
         Err(_) => return ActionType::Wait,
     };
 
+    // Get blocking positions from cache
+    let blocking_positions = spatial_cache.get_blocking_positions();
+
     // Check for status effects that override normal AI behavior
     let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
     let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
 
     // Confused: move randomly, ignore player entirely
     if is_confused {
-        let movement_blocking = queries::get_blocking_positions(world, Some(entity));
-
-        let (dx, dy) = random_wander(grid, entity_pos, &movement_blocking, rng);
+        let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -123,9 +131,7 @@ fn determine_action(
 
     // Feared: flee from player
     if is_feared {
-        let movement_blocking = queries::get_blocking_positions(world, Some(entity));
-
-        let (dx, dy) = flee_from_target(grid, entity_pos, player_pos, &movement_blocking, rng);
+        let (dx, dy) = flee_from_target(grid, entity_pos, player_pos, blocking_positions, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -166,7 +172,7 @@ fn determine_action(
         .unwrap_or(false);
 
     // Calculate visibility (checks for invisibility effect on player)
-    let can_see_player = can_see_target(world, grid, entity_pos, player_pos, sight_radius, Some(player_entity));
+    let can_see_player = can_see_target(world, grid, entity_pos, player_pos, sight_radius, Some(player_entity), spatial_cache);
 
     // Calculate distance to player (Chebyshev distance for ranged check)
     let distance = (entity_pos.0 - player_pos.0)
@@ -194,7 +200,7 @@ fn determine_action(
         // In range for ranged attack?
         if ranged_ready && distance >= ranged_min && distance <= ranged_max {
             // Check line of sight for projectile (no blocking entities in the way)
-            if has_clear_shot(world, entity_pos, player_pos) {
+            if has_clear_shot(entity_pos, player_pos, blocking_positions) {
                 return ActionType::ShootBow {
                     target_x: player_pos.0,
                     target_y: player_pos.1,
@@ -227,7 +233,7 @@ fn determine_action(
     }
 
     // Determine movement direction
-    let (dx, dy) = calculate_movement(world, grid, entity, entity_pos, target, rng);
+    let (dx, dy) = calculate_movement(grid, entity_pos, target, blocking_positions, rng);
 
     // If no movement, wait
     if dx == 0 && dy == 0 {
@@ -239,12 +245,10 @@ fn determine_action(
 }
 
 /// Check if there's a clear line of sight for a projectile (no blocking entities)
-fn has_clear_shot(world: &World, from: (i32, i32), to: (i32, i32)) -> bool {
-    let blocking = queries::get_blocking_positions(world, None);
-
+fn has_clear_shot(from: (i32, i32), to: (i32, i32), blocking: &HashSet<(i32, i32)>) -> bool {
     for (x, y) in BresenhamLineIter::new(from.0, from.1, to.0, to.1) {
-        // Skip the target position (we want to shoot AT the target)
-        if (x, y) == to {
+        // Skip the start and target positions
+        if (x, y) == from || (x, y) == to {
             continue;
         }
         if blocking.contains(&(x, y)) {
@@ -265,6 +269,7 @@ fn can_see_target(
     target: (i32, i32),
     sight_radius: i32,
     target_entity: Option<Entity>,
+    spatial_cache: &SpatialCache,
 ) -> bool {
     // Check if target entity is invisible
     if let Some(entity) = target_entity {
@@ -281,11 +286,11 @@ fn can_see_target(
         return false;
     }
 
-    // Collect vision-blocking positions
-    let vision_blocking = queries::get_vision_blocking_positions(world);
+    // Get vision-blocking positions from cache
+    let vision_blocking = spatial_cache.get_vision_blocking();
 
     // Check line of sight using Bresenham's algorithm
-    has_line_of_sight(grid, &vision_blocking, from.0, from.1, target.0, target.1)
+    has_line_of_sight(grid, vision_blocking, from.0, from.1, target.0, target.1)
 }
 
 /// Check if there's a clear line of sight between two points.
@@ -377,24 +382,20 @@ fn update_state_machine(
 
 /// Calculate the movement direction for an AI entity.
 fn calculate_movement(
-    world: &World,
     grid: &Grid,
-    entity: Entity,
     entity_pos: (i32, i32),
     target: Option<(i32, i32)>,
+    blocking: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
-    // Collect movement-blocking positions (used by both pathfinding and wandering)
-    let movement_blocking = queries::get_blocking_positions(world, Some(entity));
-
     if let Some((tx, ty)) = target {
         // Pathfind to target
-        pathfinding::next_step_toward(grid, entity_pos, (tx, ty), &movement_blocking)
+        pathfinding::next_step_toward(grid, entity_pos, (tx, ty), blocking)
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
     } else {
         // Idle: wander randomly
-        random_wander(grid, entity_pos, &movement_blocking, rng)
+        random_wander(grid, entity_pos, blocking, rng)
     }
 }
 
@@ -468,9 +469,11 @@ fn determine_companion_action(
     entity: Entity,
     owner: Entity,
     follow_distance: i32,
+    spatial_cache: &SpatialCache,
     rng: &mut impl Rng,
 ) -> ActionType {
     use crate::components::PlayerAttackTarget;
+    let _ = rng; // Companions don't wander randomly
 
     // Get companion position
     let companion_pos = match world.get::<&Position>(entity) {
@@ -483,6 +486,9 @@ fn determine_companion_action(
         Ok(p) => (p.x, p.y),
         Err(_) => return ActionType::Wait,
     };
+
+    // Get blocking positions from cache
+    let blocking = spatial_cache.get_blocking_positions();
 
     // Get last attacker from CompanionAI
     let last_attacker = world
@@ -515,12 +521,11 @@ fn determine_companion_action(
                 }
 
                 // Move toward attacker
-                let movement_blocking = queries::get_blocking_positions(world, Some(entity));
                 if let Some((nx, ny)) = pathfinding::next_step_toward(
                     grid,
                     companion_pos,
                     (attacker_pos.x, attacker_pos.y),
-                    &movement_blocking,
+                    blocking,
                 ) {
                     let move_dx = nx - companion_pos.0;
                     let move_dy = ny - companion_pos.1;
@@ -558,12 +563,11 @@ fn determine_companion_action(
                     }
 
                     // Move toward target
-                    let movement_blocking = queries::get_blocking_positions(world, Some(entity));
                     if let Some((nx, ny)) = pathfinding::next_step_toward(
                         grid,
                         companion_pos,
                         (target_pos.x, target_pos.y),
-                        &movement_blocking,
+                        blocking,
                     ) {
                         let move_dx = nx - companion_pos.0;
                         let move_dy = ny - companion_pos.1;
@@ -582,8 +586,7 @@ fn determine_companion_action(
         .max((companion_pos.1 - owner_pos.1).abs());
 
     if dist_to_owner > follow_distance {
-        let movement_blocking = queries::get_blocking_positions(world, Some(entity));
-        if let Some((nx, ny)) = pathfinding::next_step_toward(grid, companion_pos, owner_pos, &movement_blocking) {
+        if let Some((nx, ny)) = pathfinding::next_step_toward(grid, companion_pos, owner_pos, blocking) {
             let dx = nx - companion_pos.0;
             let dy = ny - companion_pos.1;
             if dx != 0 || dy != 0 {

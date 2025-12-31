@@ -1,9 +1,11 @@
 //! Core game state - owns the simulation data.
 
+use crate::active_ai_tracker::ActiveAITracker;
 use crate::components::{PlayerClass, Position};
 use crate::constants::*;
 use crate::events::EventQueue;
 use crate::grid::Grid;
+use crate::spatial_cache::SpatialCache;
 use crate::time_system::{ActionScheduler, GameClock};
 
 use hecs::{Entity, World};
@@ -37,6 +39,12 @@ pub struct GameState {
 
     /// Whether FOV needs recalculation (dirty flag for performance)
     pub fov_dirty: bool,
+
+    /// Spatial cache for efficient blocking position lookups
+    pub spatial_cache: SpatialCache,
+
+    /// Active AI tracker for dormant entity management
+    pub active_ai_tracker: ActiveAITracker,
 }
 
 impl GameState {
@@ -48,6 +56,12 @@ impl GameState {
         let game_clock = GameClock::new();
         let action_scheduler = ActionScheduler::new();
 
+        // Build spatial cache from initial world state
+        let spatial_cache = SpatialCache::rebuild_from_world(&world);
+
+        // Initialize active AI tracker (will be populated in initialize_ai)
+        let active_ai_tracker = ActiveAITracker::new();
+
         Self {
             world,
             grid,
@@ -57,12 +71,25 @@ impl GameState {
             game_clock,
             action_scheduler,
             fov_dirty: true, // Always calculate FOV on first frame
+            spatial_cache,
+            active_ai_tracker,
         }
     }
 
     /// Initialize AI actors after world creation.
     /// Must be called separately because it needs mutable access to events.
     pub fn initialize_ai(&mut self, events: &mut EventQueue) {
+        // Get player position for active AI tracking
+        let player_pos = self
+            .world
+            .get::<&Position>(self.player_entity)
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0, 0));
+
+        // Initialize active AI tracker based on player position
+        self.active_ai_tracker
+            .initialize_from_world(&self.world, player_pos);
+
         let mut rng = rand::thread_rng();
         initialization::initialize_ai_actors(
             &mut self.world,
@@ -70,6 +97,8 @@ impl GameState {
             self.player_entity,
             &self.game_clock,
             &mut self.action_scheduler,
+            &mut self.active_ai_tracker,
+            &self.spatial_cache,
             events,
             &mut rng,
         );

@@ -1,11 +1,13 @@
 //! Game simulation - turn execution, time advancement, and event processing.
 
+use crate::active_ai_tracker::ActiveAITracker;
 use crate::components::{ActionType, Actor, EffectType, Inventory};
 use crate::constants;
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::grid::Grid;
 use crate::input::TargetingMode;
 use crate::queries;
+use crate::spatial_cache::SpatialCache;
 use crate::systems;
 use crate::systems::action_dispatch;
 use crate::systems::player_input::{self, PlayerIntent};
@@ -63,6 +65,8 @@ pub fn execute_player_intent(
     intent: PlayerIntent,
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut ActiveAITracker,
+    spatial_cache: &SpatialCache,
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
@@ -109,7 +113,10 @@ pub fn execute_player_intent(
     }
 
     let mut rng = rand::thread_rng();
-    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
+    advance_until_player_ready(
+        world, grid, player_entity, clock, scheduler,
+        active_tracker, spatial_cache, events, &mut rng,
+    );
 
     let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
 
@@ -133,6 +140,8 @@ pub fn execute_player_turn(
     dy: i32,
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut ActiveAITracker,
+    spatial_cache: &SpatialCache,
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
@@ -167,7 +176,10 @@ pub fn execute_player_turn(
     }
 
     let mut rng = rand::thread_rng();
-    advance_until_player_ready(world, grid, player_entity, clock, scheduler, events, &mut rng);
+    advance_until_player_ready(
+        world, grid, player_entity, clock, scheduler,
+        active_tracker, spatial_cache, events, &mut rng,
+    );
 
     let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
 
@@ -200,6 +212,8 @@ pub fn advance_until_player_ready(
     player_entity: Entity,
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut ActiveAITracker,
+    spatial_cache: &SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
@@ -239,8 +253,21 @@ pub fn advance_until_player_ready(
 
         time_system::complete_action(world, grid, next_entity, events, clock.time);
 
-        if next_entity != player_entity {
-            systems::ai::decide_action(world, grid, next_entity, player_entity, clock, scheduler, events, rng);
+        // After player completes an action, check for dormant entities that should wake up
+        if next_entity == player_entity {
+            if let Some(player_pos) = queries::get_entity_position(world, player_entity) {
+                let newly_active = active_tracker.update_on_player_move(world, player_pos);
+                // Schedule newly awakened entities
+                for ai_entity in newly_active {
+                    scheduler.schedule(ai_entity, clock.time + 0.1);
+                }
+            }
+        } else {
+            // Non-player entity: let AI decide next action
+            systems::ai::decide_action(
+                world, grid, next_entity, player_entity, clock, scheduler,
+                active_tracker, spatial_cache, events, rng,
+            );
         }
     }
 }
@@ -255,6 +282,8 @@ pub fn wait_for_energy(
     required_energy: i32,
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut ActiveAITracker,
+    spatial_cache: &SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) -> bool {
@@ -320,7 +349,10 @@ pub fn wait_for_energy(
 
             // Let AI decide next action
             if next_entity != player_entity {
-                systems::ai::decide_action(world, grid, next_entity, player_entity, clock, scheduler, events, rng);
+                systems::ai::decide_action(
+                    world, grid, next_entity, player_entity, clock, scheduler,
+                    active_tracker, spatial_cache, events, rng,
+                );
             }
 
             // Check if player died

@@ -21,6 +21,8 @@ pub fn spawn_at_cursor(
     player_entity: Entity,
     game_clock: &GameClock,
     action_scheduler: &mut ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> bool {
     let world_pos = camera.screen_to_world(mouse_pos.0, mouse_pos.1);
@@ -36,6 +38,8 @@ pub fn spawn_at_cursor(
         player_entity,
         game_clock,
         action_scheduler,
+        active_ai_tracker,
+        spatial_cache,
         events,
     );
 

@@ -1,3 +1,4 @@
+mod active_ai_tracker;
 mod app;
 mod camera;
 mod components;
@@ -14,6 +15,7 @@ mod pathfinding;
 mod queries;
 mod render;
 mod renderer;
+mod spatial_cache;
 mod spawning;
 mod systems;
 mod tile;

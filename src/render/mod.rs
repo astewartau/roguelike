@@ -74,7 +74,7 @@ impl RenderContext {
 
         unsafe {
             use glow::HasContext;
-            gl.clear_color(0.1, 0.1, 0.1, 1.0);
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
 

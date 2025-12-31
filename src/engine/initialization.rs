@@ -354,27 +354,35 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
 }
 
 /// Initialize all AI actors with their first action in the time system.
+/// Only schedules entities that are currently active (within range of player).
 pub fn initialize_ai_actors(
     world: &mut World,
     grid: &Grid,
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    let ai_entities: Vec<Entity> = world
-        .query::<(&Actor, &ChaseAI)>()
+    // Only initialize AI for entities that are active (within range)
+    let active_entities: Vec<Entity> = active_tracker
+        .get_active_entities()
         .iter()
-        .map(|(id, _)| id)
+        .copied()
         .collect();
 
-    for entity in ai_entities {
-        crate::systems::ai::decide_action(world, grid, entity, player_entity, clock, scheduler, events, rng);
+    for entity in active_entities {
+        crate::systems::ai::decide_action(
+            world, grid, entity, player_entity, clock, scheduler,
+            active_tracker, spatial_cache, events, rng,
+        );
     }
 }
 
 /// Initialize a single AI actor (used when spawning new enemies mid-game).
+/// Only schedules the entity if it's within active range of the player.
 pub fn initialize_single_ai_actor(
     world: &mut World,
     grid: &Grid,
@@ -382,10 +390,19 @@ pub fn initialize_single_ai_actor(
     player_entity: Entity,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    crate::systems::ai::decide_action(world, grid, entity, player_entity, clock, scheduler, events, rng);
+    // Register the entity with the tracker (starts as dormant)
+    active_tracker.register_entity(entity);
+
+    // decide_action will check distance and either process or mark dormant
+    crate::systems::ai::decide_action(
+        world, grid, entity, player_entity, clock, scheduler,
+        active_tracker, spatial_cache, events, rng,
+    );
 }
 
 /// Spawn floor entities for a new (unsaved) floor.
@@ -397,6 +414,8 @@ pub fn spawn_floor_entities(
     floor_num: u32,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) {
     // Update player position
@@ -433,5 +452,5 @@ pub fn spawn_floor_entities(
     );
 
     // Initialize AI
-    initialize_ai_actors(world, grid, player_entity, clock, scheduler, events, &mut rng);
+    initialize_ai_actors(world, grid, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, &mut rng);
 }

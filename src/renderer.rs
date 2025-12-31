@@ -623,8 +623,8 @@ impl Renderer {
 
             gl.bind_vertex_array(None);
 
-            // Navy blue background
-            gl.clear_color(0.05, 0.08, 0.15, 1.0);
+            // Black background for unexplored areas
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
 
             // Enable blending for transparency
             gl.enable(BLEND);
