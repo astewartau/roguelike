@@ -68,6 +68,9 @@ impl RenderContext {
         entities: &[RenderEntity],
         vfx_effects: &[VisualEffect],
         fires: &[FireEffect],
+        player_pos: (f32, f32),
+        player_light_radius: f32,
+        light_sources: &[(f32, f32, f32, f32)],
         show_grid_lines: bool,
     ) {
         puffin::profile_function!();
@@ -81,7 +84,15 @@ impl RenderContext {
         {
             puffin::profile_scope!("render_tiles");
             self.renderer
-                .render(&self.camera, grid, &self.tileset, show_grid_lines)
+                .render(
+                    &self.camera,
+                    grid,
+                    &self.tileset,
+                    player_pos,
+                    player_light_radius,
+                    light_sources,
+                    show_grid_lines,
+                )
                 .unwrap();
         }
         {

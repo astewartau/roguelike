@@ -522,6 +522,47 @@ impl GameEngine {
         self.ui_state.as_ref().map(|u| u.show_grid_lines).unwrap_or(false)
     }
 
+    /// Get player position for lighting (uses visual position for smooth lighting).
+    pub fn player_visual_pos(&self) -> (f32, f32) {
+        self.state.as_ref().and_then(|s| {
+            s.world.get::<&crate::components::VisualPosition>(s.player_entity).ok()
+                .map(|vp| (vp.x + 0.5, vp.y + 0.5))  // Center of tile
+        }).unwrap_or((0.0, 0.0))
+    }
+
+    /// Get player light radius (FOV radius).
+    pub fn player_light_radius(&self) -> f32 {
+        crate::constants::FOV_RADIUS as f32
+    }
+
+    /// Collect light sources for rendering, sorted by distance to player.
+    pub fn light_sources(&self) -> Vec<(f32, f32, f32, f32)> {
+        let Some(ref state) = self.state else {
+            return Vec::new();
+        };
+
+        // Get player position for sorting
+        let player_pos = state.world
+            .get::<&crate::components::VisualPosition>(state.player_entity)
+            .map(|vp| (vp.x, vp.y))
+            .unwrap_or((0.0, 0.0));
+
+        let mut sources: Vec<_> = state.world
+            .query::<(&crate::components::Position, &crate::components::LightSource)>()
+            .iter()
+            .map(|(_, (pos, light))| (pos.x as f32 + 0.5, pos.y as f32 + 0.5, light.radius, light.intensity))
+            .collect();
+
+        // Sort by distance to player so nearby lights are prioritized (MAX_LIGHTS limit)
+        sources.sort_by(|a, b| {
+            let dist_a = (a.0 - player_pos.0).powi(2) + (a.1 - player_pos.1).powi(2);
+            let dist_b = (b.0 - player_pos.0).powi(2) + (b.1 - player_pos.1).powi(2);
+            dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        sources
+    }
+
     /// Run the UI and return actions. This handles the borrowing internally.
     /// When on start screen, shows class selection. Returns start_game action if player clicks Start.
     pub fn run_ui(

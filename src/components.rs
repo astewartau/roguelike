@@ -1125,7 +1125,7 @@ impl LightSource {
     /// Create a standard campfire light
     pub fn campfire() -> Self {
         Self {
-            radius: 6.0,
+            radius: 8.0,
             intensity: 1.0,
         }
     }
@@ -1133,8 +1133,8 @@ impl LightSource {
     /// Create a brazier light (smaller than campfire)
     pub fn brazier() -> Self {
         Self {
-            radius: 4.5,
-            intensity: 0.9,
+            radius: 6.0,
+            intensity: 0.95,
         }
     }
 }

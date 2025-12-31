@@ -11,15 +11,15 @@ const VERTEX_SHADER_SRC: &str = r#"#version 330 core
 layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
-layout (location = 3) in float aFogMult;
+layout (location = 3) in float aFogMult;    // Base illumination (fog of war)
 layout (location = 4) in float aAlpha;      // Transparency (1.0 = opaque)
 layout (location = 5) in vec3 aTint;        // Color tint (for water, etc.)
 
 uniform mat4 uProjection;
 
 out vec2 vTexCoord;
-out vec2 vLocalPos;
-out float vFog;
+out vec2 vWorldPos;
+out float vFogBase;
 out float vAlpha;
 out vec3 vTint;
 
@@ -29,20 +29,27 @@ void main() {
 
     // Interpolate UV based on vertex position (0-1)
     vTexCoord = mix(aInstanceUV.xy, aInstanceUV.zw, aPos);
-    vLocalPos = aPos;
-    vFog = aFogMult;
+    vWorldPos = worldPos;
+    vFogBase = aFogMult;
     vAlpha = aAlpha;
     vTint = aTint;
 }
 "#;
 
+const MAX_LIGHTS: usize = 256;
+
 const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
 in vec2 vTexCoord;
-in float vFog;
+in vec2 vWorldPos;
+in float vFogBase;
 in float vAlpha;
 in vec3 vTint;
 
 uniform sampler2D uTileset;
+uniform vec2 uPlayerPos;
+uniform float uPlayerLightRadius;
+uniform int uLightCount;
+uniform vec4 uLights[256];  // x, y, radius, intensity for each light
 
 out vec4 FragColor;
 
@@ -50,7 +57,36 @@ void main() {
     vec4 texColor = texture(uTileset, vTexCoord);
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
 
-    vec3 color = texColor.rgb * vFog * vTint;
+    // If fog base is low (fog of war), just use that value
+    // This handles explored-but-not-visible tiles
+    float brightness;
+    if (vFogBase < 0.25) {
+        brightness = vFogBase;
+    } else {
+        // Calculate smooth per-pixel lighting from player
+        float distToPlayer = distance(vWorldPos, uPlayerPos);
+        float t = clamp(1.0 - distToPlayer / uPlayerLightRadius, 0.0, 1.0);
+        brightness = 0.3 + 0.7 * t * t;  // Quadratic falloff with ambient
+
+        // Add smooth contributions from other light sources (braziers, campfires)
+        for (int i = 0; i < uLightCount && i < 256; i++) {
+            vec2 lightPos = uLights[i].xy;
+            float lightRadius = uLights[i].z;
+            float lightIntensity = uLights[i].w;
+            float distToLight = distance(vWorldPos, lightPos);
+            if (distToLight < lightRadius) {
+                float lt = 1.0 - distToLight / lightRadius;
+                // Match player light intensity (0.7 contribution at center)
+                brightness += 0.7 * lightIntensity * lt * lt;
+                // Add ambient boost near light sources (like player's 0.3 base)
+                brightness += 0.3 * lightIntensity * lt;
+            }
+        }
+
+        brightness = min(brightness, 1.5);  // Allow slight overbrightness
+    }
+
+    vec3 color = texColor.rgb * brightness * vTint;
     FragColor = vec4(color, texColor.a * vAlpha);
 }
 "#;
@@ -276,6 +312,11 @@ pub struct Renderer {
     instance_vbo: NativeBuffer,
     projection_loc: NativeUniformLocation,
     tileset_loc: NativeUniformLocation,
+    // Per-pixel lighting uniforms
+    player_pos_loc: NativeUniformLocation,
+    player_light_radius_loc: NativeUniformLocation,
+    light_count_loc: NativeUniformLocation,
+    lights_loc: NativeUniformLocation,
     // Grid line rendering
     grid_program: NativeProgram,
     grid_vao: NativeVertexArray,
@@ -336,6 +377,18 @@ impl Renderer {
             let tileset_loc = gl
                 .get_uniform_location(program, "uTileset")
                 .ok_or("Failed to get tileset uniform location")?;
+            let player_pos_loc = gl
+                .get_uniform_location(program, "uPlayerPos")
+                .ok_or("Failed to get player pos uniform location")?;
+            let player_light_radius_loc = gl
+                .get_uniform_location(program, "uPlayerLightRadius")
+                .ok_or("Failed to get player light radius uniform location")?;
+            let light_count_loc = gl
+                .get_uniform_location(program, "uLightCount")
+                .ok_or("Failed to get light count uniform location")?;
+            let lights_loc = gl
+                .get_uniform_location(program, "uLights")
+                .ok_or("Failed to get lights uniform location")?;
 
             // Create quad vertices (0,0 to 1,1)
             let vertices: [f32; 12] = [
@@ -638,6 +691,10 @@ impl Renderer {
                 instance_vbo,
                 projection_loc,
                 tileset_loc,
+                player_pos_loc,
+                player_light_radius_loc,
+                light_count_loc,
+                lights_loc,
                 grid_program,
                 grid_vao,
                 grid_vbo,
@@ -656,7 +713,16 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, camera: &Camera, grid: &Grid, tileset: &MultiTileset, show_grid_lines: bool) -> Result<(), String> {
+    pub fn render(
+        &mut self,
+        camera: &Camera,
+        grid: &Grid,
+        tileset: &MultiTileset,
+        player_pos: (f32, f32),
+        player_light_radius: f32,
+        light_sources: &[(f32, f32, f32, f32)],  // (x, y, radius, intensity)
+        show_grid_lines: bool,
+    ) -> Result<(), String> {
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
 
@@ -666,6 +732,25 @@ impl Renderer {
             // Bind Tiles sheet texture (all terrain is from Tiles sheet)
             tileset.bind(&self.gl, SpriteSheet::Tiles, 0);
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
+
+            // Set lighting uniforms
+            self.gl.uniform_2_f32(Some(&self.player_pos_loc), player_pos.0, player_pos.1);
+            self.gl.uniform_1_f32(Some(&self.player_light_radius_loc), player_light_radius);
+
+            // Pack light sources into array (up to MAX_LIGHTS)
+            let light_count = light_sources.len().min(MAX_LIGHTS);
+            self.gl.uniform_1_i32(Some(&self.light_count_loc), light_count as i32);
+
+            if light_count > 0 {
+                let mut light_data = [0.0f32; MAX_LIGHTS * 4];
+                for (i, &(x, y, radius, intensity)) in light_sources.iter().take(MAX_LIGHTS).enumerate() {
+                    light_data[i * 4] = x;
+                    light_data[i * 4 + 1] = y;
+                    light_data[i * 4 + 2] = radius;
+                    light_data[i * 4 + 3] = intensity;
+                }
+                self.gl.uniform_4_f32_slice(Some(&self.lights_loc), &light_data[..light_count * 4]);
+            }
 
             // Get visible bounds
             let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
@@ -684,7 +769,8 @@ impl Renderer {
 
                         let (sheet, tile_id) = tile.sprite();
                         let uv = tileset.get_uv(sheet, tile_id);
-                        // Use pre-computed illumination values for smooth lighting
+                        // Use pre-computed illumination for fog of war (low values)
+                        // Per-pixel lighting handles visible tiles
                         let idx = y as usize * grid.width + x as usize;
                         let fog = grid.illumination.get(idx).copied().unwrap_or(0.5);
 
