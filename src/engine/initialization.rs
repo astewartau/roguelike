@@ -297,6 +297,11 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Barkskin, BARKSKIN_COOLDOWN));
     }
 
+    // Necromancer gets a secondary ability (Fear)
+    if player_class == PlayerClass::Necromancer {
+        let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Fear, FEAR_ABILITY_COOLDOWN));
+    }
+
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     let mut rng = rand::thread_rng();
     spawn_chests(&mut world, grid, &mut rng);

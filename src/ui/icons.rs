@@ -40,6 +40,8 @@ pub struct UiIcons {
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
     pub barkskin_uv: egui::Rect,
+    pub life_drain_uv: egui::Rect,
+    pub fear_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -77,6 +79,9 @@ impl UiIcons {
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
             sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
             barkskin_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION.0, tile_ids::AMBER_POTION.1),
+            // RED_POTION for Life Drain (blood/life theme), SKULL for Fear
+            life_drain_uv: tileset.get_egui_uv(tile_ids::RED_POTION.0, tile_ids::RED_POTION.1),
+            fear_uv: tileset.get_egui_uv(tile_ids::SKULL.0, tile_ids::SKULL.1),
         }
     }
 

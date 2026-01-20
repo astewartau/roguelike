@@ -235,6 +235,21 @@ pub fn advance_until_player_ready(
         }
 
         let Some((next_entity, completion_time)) = scheduler.pop_next() else {
+            // Safety check: if scheduler is empty but player can't act, recover
+            if let Ok(mut actor) = world.get::<&mut Actor>(player_entity) {
+                // Case 1: Player has a stuck current_action
+                if actor.current_action.is_some() {
+                    eprintln!("[WARNING] Scheduler empty but player has current_action - clearing to prevent soft-lock");
+                    actor.current_action = None;
+                    continue; // Re-check if player can act now
+                }
+                // Case 2: Player has 0 energy but no action - grant minimum energy to prevent soft-lock
+                if actor.energy <= 0 {
+                    eprintln!("[WARNING] Scheduler empty and player has 0 energy - granting 1 energy to prevent soft-lock");
+                    actor.energy = 1;
+                    continue; // Re-check if player can act now
+                }
+            }
             return;
         };
 

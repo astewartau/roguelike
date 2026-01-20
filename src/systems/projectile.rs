@@ -129,6 +129,8 @@ pub fn update_projectiles(
             if let Ok(mut health) = world.get::<&mut Health>(target_entity) {
                 health.current -= damage;
             }
+            // Interrupt life drain if target was channeling
+            crate::systems::actions::interrupt_life_drain_on_damage(world, target_entity, events);
         }
 
         events.push(GameEvent::ProjectileHit {

@@ -323,6 +323,12 @@ fn apply_action_effects(
         ActionType::ActivateBarkskin => {
             actions::apply_activate_barkskin(world, entity, events)
         }
+        ActionType::StartLifeDrain { target } => {
+            actions::apply_start_life_drain(world, entity, *target, events)
+        }
+        ActionType::ActivateFear => {
+            actions::apply_activate_fear(world, entity, events)
+        }
         ActionType::PlaceFireTrap { target_x, target_y } => {
             actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
         }
@@ -533,8 +539,10 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
         }
     }
 
-    // Emit burn damage events
+    // Emit burn damage events and interrupt channeling
     for (entity, position, damage) in burn_events {
+        // Interrupt life drain if entity was channeling
+        actions::interrupt_life_drain_on_damage(world, entity, events);
         events.push(GameEvent::BurnDamage {
             entity,
             position,

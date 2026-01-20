@@ -144,11 +144,13 @@ pub fn run_start_screen(
                             PlayerClass::Fighter => "Sword",
                             PlayerClass::Ranger => "Bow",
                             PlayerClass::Druid => "Staff",
+                            PlayerClass::Necromancer => "Staff",
                         };
                         let inventory = match class {
                             PlayerClass::Fighter => "(empty)",
                             PlayerClass::Ranger => "Dagger",
                             PlayerClass::Druid => "(empty)",
+                            PlayerClass::Necromancer => "Health Potion",
                         };
 
                         ui.label(

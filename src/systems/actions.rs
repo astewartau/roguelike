@@ -7,8 +7,8 @@ use hecs::{Entity, World};
 
 use crate::components::{
     Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
-    EquippedWeapon, Health, Inventory, ItemType, LungeAnimation, PlayerAttackTarget, Position, Projectile,
-    ProjectileMarker, RangedCooldown, Sprite, Stats, StatusEffects, TamingInProgress, VisualPosition, Weapon, RangedWeapon,
+    EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, Player, PlayerAttackTarget, Position, Projectile,
+    ProjectileMarker, RangedCooldown, SecondaryAbility, Sprite, Stats, StatusEffects, TamedBy, TamingInProgress, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -187,6 +187,9 @@ fn check_fire_trap_trigger(
         health.current -= burst_damage;
     }
 
+    // Interrupt life drain if victim was channeling
+    interrupt_life_drain_on_damage(world, victim, events);
+
     // Apply burning effect
     effects::add_effect_to_entity(world, victim, EffectType::Burning, BURNING_DURATION);
 
@@ -266,6 +269,9 @@ pub fn apply_attack(
     if let Ok(mut health) = world.get::<&mut Health>(target) {
         health.current -= damage;
     }
+
+    // Interrupt life drain if target was channeling
+    interrupt_life_drain_on_damage(world, target, events);
 
     // Track attacker for companion retaliation (but not if attacked by owner)
     if let Ok(mut companion_ai) = world.get::<&mut CompanionAI>(target) {
@@ -790,6 +796,8 @@ pub fn apply_fireball(
         if let Ok(mut health) = world.get::<&mut Health>(entity) {
             health.current -= FIREBALL_DAMAGE;
         }
+        // Interrupt life drain if entity was channeling
+        interrupt_life_drain_on_damage(world, entity, events);
         events.push(GameEvent::AttackHit {
             attacker: caster,
             target: entity,
@@ -1067,6 +1075,9 @@ pub fn apply_cleave(
             health.current -= damage;
         }
 
+        // Interrupt life drain if target was channeling
+        interrupt_life_drain_on_damage(world, *target, events);
+
         // Emit attack event for VFX
         events.push(GameEvent::AttackHit {
             attacker,
@@ -1122,7 +1133,95 @@ pub fn apply_activate_barkskin(
     ActionResult::Completed
 }
 
-/// Apply wait action - handles taming progress if applicable
+/// Start life drain channeling (Necromancer ability)
+pub fn apply_start_life_drain(
+    world: &mut World,
+    caster: Entity,
+    target: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Verify target still exists and is alive
+    let target_alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(false);
+    if !target_alive {
+        return ActionResult::Invalid;
+    }
+
+    // Check range
+    let caster_pos = queries::get_entity_position(world, caster);
+    let target_pos = queries::get_entity_position(world, target);
+    match (caster_pos, target_pos) {
+        (Some((cx, cy)), Some((tx, ty))) => {
+            let dist = (cx - tx).abs().max((cy - ty).abs());
+            if dist > LIFE_DRAIN_RANGE {
+                return ActionResult::Invalid;
+            }
+        }
+        _ => return ActionResult::Invalid,
+    }
+
+    // Add LifeDrainInProgress component to start channeling
+    let _ = world.insert_one(caster, LifeDrainInProgress {
+        target,
+        tick_timer: 0.0, // Tick immediately on first wait
+    });
+
+    // Emit event to show VFX
+    events.push(GameEvent::LifeDrainStarted { caster, target });
+
+    ActionResult::Completed
+}
+
+/// Apply fear activation - causes nearby enemies to flee
+pub fn apply_activate_fear(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::constants::FEAR_ABILITY_DURATION;
+
+    // Get entity position
+    let entity_pos = crate::queries::get_entity_position(world, entity);
+    if entity_pos.is_none() {
+        return ActionResult::Invalid;
+    }
+    let (ex, ey) = entity_pos.unwrap();
+
+    // Apply fear to all visible enemies in range
+    let targets: Vec<hecs::Entity> = world
+        .query::<(&Position, &Health)>()
+        .without::<&Player>()
+        .without::<&TamedBy>()
+        .iter()
+        .filter(|(_, (pos, health))| {
+            let dx = (pos.x - ex).abs();
+            let dy = (pos.y - ey).abs();
+            dx <= crate::constants::FEAR_ABILITY_RADIUS
+                && dy <= crate::constants::FEAR_ABILITY_RADIUS
+                && health.current > 0
+        })
+        .map(|(e, _)| e)
+        .collect();
+
+    // Apply fear effect to each target
+    for target in targets {
+        crate::systems::effects::add_effect_to_entity(world, target, EffectType::Feared, FEAR_ABILITY_DURATION);
+    }
+
+    // Start the ability cooldown
+    if let Ok(mut ability) = world.get::<&mut SecondaryAbility>(entity) {
+        ability.start_cooldown();
+    }
+
+    // Emit event for VFX
+    events.push(GameEvent::FearActivated {
+        entity,
+        position: (ex, ey),
+    });
+
+    ActionResult::Completed
+}
+
+/// Apply wait action - handles taming and life drain progress if applicable
 pub fn apply_wait(
     world: &mut World,
     entity: Entity,
@@ -1173,7 +1272,143 @@ pub fn apply_wait(
         }
     }
 
+    // Check if entity is channeling life drain
+    let drain_info = world.get::<&LifeDrainInProgress>(entity)
+        .ok()
+        .map(|d| (d.target, d.tick_timer));
+
+    if let Some((target, tick_timer)) = drain_info {
+        tick_life_drain(world, entity, target, tick_timer, events);
+    }
+
     ActionResult::Completed
+}
+
+/// Tick life drain channeling - applies damage and healing
+fn tick_life_drain(
+    world: &mut World,
+    caster: Entity,
+    target: Entity,
+    tick_timer: f32,
+    events: &mut EventQueue,
+) {
+    // Check if target still exists and is alive
+    let target_alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(false);
+    if !target_alive {
+        // Target died - end drain and start cooldown
+        end_life_drain(world, caster, target, events, false);
+        return;
+    }
+
+    // Check range and get positions for VFX
+    let caster_pos = queries::get_entity_position(world, caster);
+    let target_pos = queries::get_entity_position(world, target);
+    let (cx, cy, tx, ty) = match (caster_pos, target_pos) {
+        (Some((cx, cy)), Some((tx, ty))) => {
+            let dist = (cx - tx).abs().max((cy - ty).abs());
+            if dist > LIFE_DRAIN_RANGE {
+                // Out of range - end drain and start cooldown
+                end_life_drain(world, caster, target, events, false);
+                return;
+            }
+            (cx, cy, tx, ty)
+        }
+        _ => {
+            // Invalid positions - end drain
+            end_life_drain(world, caster, target, events, false);
+            return;
+        }
+    };
+
+    // Update tick timer
+    let new_timer = tick_timer + ACTION_WAIT_DURATION;
+    if new_timer >= LIFE_DRAIN_TICK_INTERVAL {
+        // Time to tick! Apply damage and healing
+        let intelligence = world
+            .get::<&Stats>(caster)
+            .map(|s| s.intelligence)
+            .unwrap_or(10);
+
+        // Calculate damage: base + INT bonus
+        let damage = LIFE_DRAIN_DAMAGE_PER_TICK + (intelligence - 10) / 3;
+
+        // Apply damage to target
+        let target_died = if let Ok(mut health) = world.get::<&mut Health>(target) {
+            health.current -= damage;
+            health.current <= 0
+        } else {
+            false
+        };
+
+        // Heal caster (percentage of damage dealt)
+        let heal_amount = (damage as f32 * LIFE_DRAIN_HEAL_PERCENT) as i32;
+        if let Ok(mut health) = world.get::<&mut Health>(caster) {
+            health.current = (health.current + heal_amount).min(health.max);
+        }
+
+        // Emit tick event with positions for damage numbers
+        events.push(GameEvent::LifeDrainTick {
+            caster,
+            target,
+            caster_pos: (cx as f32 + 0.5, cy as f32 + 0.5),
+            target_pos: (tx as f32 + 0.5, ty as f32 + 0.5),
+            damage,
+            healed: heal_amount,
+        });
+
+        // Reset timer (or end if target died)
+        if target_died {
+            end_life_drain(world, caster, target, events, false);
+        } else {
+            // Reset tick timer
+            if let Ok(mut drain) = world.get::<&mut LifeDrainInProgress>(caster) {
+                drain.tick_timer = 0.0;
+            }
+        }
+    } else {
+        // Just update timer
+        if let Ok(mut drain) = world.get::<&mut LifeDrainInProgress>(caster) {
+            drain.tick_timer = new_timer;
+        }
+    }
+}
+
+/// Interrupt life drain if the caster takes damage
+/// Call this when an entity takes damage to check if they should stop channeling
+pub fn interrupt_life_drain_on_damage(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) {
+    // Check if this entity is channeling life drain (extract target to avoid borrow conflict)
+    let target = world.get::<&LifeDrainInProgress>(entity).ok().map(|d| d.target);
+    if let Some(target) = target {
+        end_life_drain(world, entity, target, events, true);
+    }
+}
+
+/// End life drain channeling and start cooldown
+fn end_life_drain(
+    world: &mut World,
+    caster: Entity,
+    target: Entity,
+    events: &mut EventQueue,
+    was_interrupted: bool,
+) {
+    // Remove the channeling component
+    let _ = world.remove_one::<LifeDrainInProgress>(caster);
+
+    // Start cooldown
+    if let Ok(mut ability) = world.get::<&mut ClassAbility>(caster) {
+        ability.start_cooldown();
+    }
+
+    // Emit appropriate event
+    if was_interrupted {
+        events.push(GameEvent::LifeDrainInterrupted { caster, target });
+    } else {
+        events.push(GameEvent::LifeDrainEnded { caster, target });
+    }
 }
 
 /// Complete taming - convert enemy to companion

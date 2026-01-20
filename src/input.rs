@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{Attackable, BlocksMovement, Container, Door, Health, ItemType, Position, Tameable};
+use crate::components::{AbilityType, Attackable, BlocksMovement, Container, Door, Health, ItemType, Player, Position, TamedBy, Tameable};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -729,7 +729,7 @@ pub fn process_frame(
             }
         }
     } else if input.pending_left_click && input.ability_targeting_mode.is_some() {
-        // Handle ability targeting click (e.g., Tame)
+        // Handle ability targeting click (e.g., Tame, LifeDrain)
         input.pending_left_click = false;
 
         if let Some(targeting) = input.ability_targeting_mode.clone() {
@@ -743,21 +743,48 @@ pub fn process_frame(
                 // Check range
                 let dist = (target_x - pos.x).abs().max((target_y - pos.y).abs());
                 if dist <= targeting.max_range {
-                    // Check if there's a tameable entity at this position
-                    let mut tameable_target = None;
-                    for (entity, (tpos, _)) in world.query::<(&Position, &Tameable)>().iter() {
-                        if tpos.x == target_x && tpos.y == target_y {
-                            tameable_target = Some(entity);
-                            break;
-                        }
-                    }
+                    match targeting.ability_type {
+                        AbilityType::Tame => {
+                            // Check if there's a tameable entity at this position
+                            let mut tameable_target = None;
+                            for (entity, (tpos, _)) in world.query::<(&Position, &Tameable)>().iter() {
+                                if tpos.x == target_x && tpos.y == target_y {
+                                    tameable_target = Some(entity);
+                                    break;
+                                }
+                            }
 
-                    if let Some(target_entity) = tameable_target {
-                        // Cancel targeting mode and create intent
-                        input.cancel_targeting();
-                        result.player_intent = Some(PlayerIntent::StartTaming { target: target_entity });
-                        result.from_keyboard = false;
-                        return result;
+                            if let Some(target_entity) = tameable_target {
+                                // Cancel targeting mode and create intent
+                                input.cancel_targeting();
+                                result.player_intent = Some(PlayerIntent::StartTaming { target: target_entity });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::LifeDrain => {
+                            // Check if there's an enemy entity at this position
+                            let mut enemy_target = None;
+                            for (entity, (tpos, health)) in world.query::<(&Position, &Health)>()
+                                .without::<&Player>()
+                                .without::<&TamedBy>()
+                                .iter()
+                            {
+                                if tpos.x == target_x && tpos.y == target_y && health.current > 0 {
+                                    enemy_target = Some(entity);
+                                    break;
+                                }
+                            }
+
+                            if let Some(target_entity) = enemy_target {
+                                // Cancel targeting mode and create intent
+                                input.cancel_targeting();
+                                result.player_intent = Some(PlayerIntent::StartLifeDrain { target: target_entity });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             } else {

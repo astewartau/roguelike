@@ -12,11 +12,12 @@ pub enum PlayerClass {
     Fighter,
     Ranger,
     Druid,
+    Necromancer,
 }
 
 impl PlayerClass {
     /// All available player classes
-    pub const ALL: [PlayerClass; 3] = [PlayerClass::Fighter, PlayerClass::Ranger, PlayerClass::Druid];
+    pub const ALL: [PlayerClass; 4] = [PlayerClass::Fighter, PlayerClass::Ranger, PlayerClass::Druid, PlayerClass::Necromancer];
 
     /// Display name for the class
     pub fn name(&self) -> &'static str {
@@ -24,6 +25,7 @@ impl PlayerClass {
             PlayerClass::Fighter => "Fighter",
             PlayerClass::Ranger => "Ranger",
             PlayerClass::Druid => "Druid",
+            PlayerClass::Necromancer => "Necromancer",
         }
     }
 
@@ -33,6 +35,7 @@ impl PlayerClass {
             PlayerClass::Fighter => tile_ids::FIGHTER,
             PlayerClass::Ranger => tile_ids::RANGER,
             PlayerClass::Druid => tile_ids::ELF,
+            PlayerClass::Necromancer => tile_ids::MONK,
         }
     }
 
@@ -42,6 +45,7 @@ impl PlayerClass {
             PlayerClass::Fighter => (16, 10, 12),
             PlayerClass::Ranger => (12, 10, 16),
             PlayerClass::Druid => (10, 16, 14),
+            PlayerClass::Necromancer => (10, 18, 10),
         }
     }
 
@@ -51,6 +55,7 @@ impl PlayerClass {
             PlayerClass::Fighter => EquippedWeapon::Melee(Weapon::sword()),
             PlayerClass::Ranger => EquippedWeapon::Ranged(RangedWeapon::bow()),
             PlayerClass::Druid => EquippedWeapon::Melee(Weapon::staff()),
+            PlayerClass::Necromancer => EquippedWeapon::Melee(Weapon::staff()),
         }
     }
 
@@ -60,6 +65,7 @@ impl PlayerClass {
             PlayerClass::Fighter => vec![],
             PlayerClass::Ranger => vec![ItemType::Dagger],
             PlayerClass::Druid => vec![ItemType::RegenerationPotion],
+            PlayerClass::Necromancer => vec![ItemType::HealthPotion],
         }
     }
 
@@ -69,6 +75,7 @@ impl PlayerClass {
             PlayerClass::Fighter => AbilityType::Cleave,
             PlayerClass::Ranger => AbilityType::Sprint,
             PlayerClass::Druid => AbilityType::Tame,
+            PlayerClass::Necromancer => AbilityType::LifeDrain,
         }
     }
 
@@ -78,6 +85,7 @@ impl PlayerClass {
             PlayerClass::Fighter => CLEAVE_COOLDOWN,
             PlayerClass::Ranger => SPRINT_COOLDOWN,
             PlayerClass::Druid => TAME_COOLDOWN,
+            PlayerClass::Necromancer => LIFE_DRAIN_COOLDOWN,
         }
     }
 }
@@ -97,6 +105,10 @@ pub enum AbilityType {
     Tame,
     /// Druid: Protective bark armor (50% damage reduction)
     Barkskin,
+    /// Necromancer: Drain life from a nearby enemy
+    LifeDrain,
+    /// Necromancer: Cause nearby enemies to flee
+    Fear,
 }
 
 impl AbilityType {
@@ -107,6 +119,8 @@ impl AbilityType {
             AbilityType::Sprint => "Sprint",
             AbilityType::Tame => "Tame Animal",
             AbilityType::Barkskin => "Barkskin",
+            AbilityType::LifeDrain => "Life Drain",
+            AbilityType::Fear => "Fear",
         }
     }
 
@@ -117,6 +131,8 @@ impl AbilityType {
             AbilityType::Sprint => "Double movement speed for 10 seconds",
             AbilityType::Tame => "Channel to tame a nearby animal",
             AbilityType::Barkskin => "Reduce damage by 50% for 15 seconds",
+            AbilityType::LifeDrain => "Channel to drain life from a nearby enemy",
+            AbilityType::Fear => "Cause nearby enemies to flee",
         }
     }
 
@@ -127,6 +143,8 @@ impl AbilityType {
             AbilityType::Sprint => SPRINT_ENERGY_COST,
             AbilityType::Tame => TAME_ENERGY_COST,
             AbilityType::Barkskin => BARKSKIN_ENERGY_COST,
+            AbilityType::LifeDrain => LIFE_DRAIN_ENERGY_COST,
+            AbilityType::Fear => FEAR_ABILITY_ENERGY_COST,
         }
     }
 }
@@ -577,6 +595,10 @@ pub enum ActionType {
     StartTaming { target: Entity },
     /// Druid ability: activate barkskin (damage reduction)
     ActivateBarkskin,
+    /// Necromancer ability: start draining life from a target (channeled)
+    StartLifeDrain { target: Entity },
+    /// Necromancer ability: cause nearby enemies to flee
+    ActivateFear,
     /// Place a fire trap at target location
     PlaceFireTrap { target_x: i32, target_y: i32 },
 }
@@ -607,6 +629,8 @@ impl ActionType {
             ActionType::ActivateSprint => SPRINT_ENERGY_COST,
             ActionType::StartTaming { .. } => TAME_ENERGY_COST,
             ActionType::ActivateBarkskin => BARKSKIN_ENERGY_COST,
+            ActionType::StartLifeDrain { .. } => LIFE_DRAIN_ENERGY_COST,
+            ActionType::ActivateFear => FEAR_ABILITY_ENERGY_COST,
             ActionType::PlaceFireTrap { .. } => 1,
         }
     }
@@ -1169,6 +1193,15 @@ pub struct TamingInProgress {
     pub progress: f32,
     /// Required time to complete taming
     pub required: f32,
+}
+
+/// Tracks active life drain channeling for the Necromancer
+#[derive(Debug, Clone, Copy)]
+pub struct LifeDrainInProgress {
+    /// The entity being drained
+    pub target: Entity,
+    /// Time until next tick of damage/healing
+    pub tick_timer: f32,
 }
 
 /// Marks an animal as tamed

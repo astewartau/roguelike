@@ -96,7 +96,7 @@ pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) 
         .collect()
 }
 
-/// Render floating damage numbers
+/// Render floating damage and heal numbers
 pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -107,8 +107,11 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
     let ppp = ctx.pixels_per_point();
 
     for effect in effects {
-        let VfxType::DamageNumber { amount } = &effect.effect_type else {
-            continue;
+        // Handle both damage and heal numbers
+        let (amount, is_heal) = match &effect.effect_type {
+            VfxType::DamageNumber { amount } => (*amount, false),
+            VfxType::HealNumber { amount } => (*amount, true),
+            _ => continue,
         };
 
         let progress = effect.progress();
@@ -129,11 +132,19 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         // Fade out as progress increases
         let alpha = ((1.0 - progress) * 255.0) as u8;
 
-        // Red color for damage
-        let color = egui::Color32::from_rgba_unmultiplied(255, 80, 80, alpha);
+        // Color: red for damage, green for healing
+        let color = if is_heal {
+            egui::Color32::from_rgba_unmultiplied(80, 255, 80, alpha)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 80, 80, alpha)
+        };
 
-        // Draw the damage number
-        let text = format!("{}", amount);
+        // Draw the number (with + prefix for healing)
+        let text = if is_heal {
+            format!("+{}", amount)
+        } else {
+            format!("{}", amount)
+        };
         let font_id = egui::FontId::monospace(20.0);
 
         painter.text(
@@ -583,5 +594,118 @@ pub fn draw_player_buff_auras(
         let inner_bark_alpha = (50.0 * pulse) as u8;
         let inner_bark_color = egui::Color32::from_rgba_unmultiplied(101, 67, 33, inner_bark_alpha);
         painter.circle_stroke(center, bark_radius * 0.7, egui::Stroke::new(2.0, inner_bark_color));
+    }
+}
+
+/// Data for life drain beam rendering
+pub struct LifeDrainBeamData {
+    pub caster_x: f32,
+    pub caster_y: f32,
+    pub target_x: f32,
+    pub target_y: f32,
+    pub time: f32,
+}
+
+/// Extract life drain beam data from the world
+pub fn get_life_drain_beam_data(
+    world: &World,
+    beams: &[crate::vfx::LifeDrainBeam],
+) -> Vec<LifeDrainBeamData> {
+    beams
+        .iter()
+        .filter_map(|beam| {
+            let caster_pos = world.get::<&VisualPosition>(beam.caster).ok()?;
+            let target_pos = world.get::<&VisualPosition>(beam.target).ok()?;
+            Some(LifeDrainBeamData {
+                caster_x: caster_pos.x + 0.5,
+                caster_y: caster_pos.y + 0.5,
+                target_x: target_pos.x + 0.5,
+                target_y: target_pos.y + 0.5,
+                time: beam.time,
+            })
+        })
+        .collect()
+}
+
+/// Render life drain beams (siphoning energy connection)
+pub fn draw_life_drain_beams(
+    ctx: &egui::Context,
+    camera: &Camera,
+    beams: &[LifeDrainBeamData],
+) {
+    if beams.is_empty() {
+        return;
+    }
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("life_drain_beams"),
+    ));
+
+    let ppp = ctx.pixels_per_point();
+
+    for beam in beams {
+        // Convert world positions to screen
+        let caster_screen = camera.world_to_screen(beam.caster_x, beam.caster_y);
+        let target_screen = camera.world_to_screen(beam.target_x, beam.target_y);
+
+        let caster_pos = egui::pos2(caster_screen.0 / ppp, caster_screen.1 / ppp);
+        let target_pos = egui::pos2(target_screen.0 / ppp, target_screen.1 / ppp);
+
+        // Pulsing animation
+        let pulse = 0.7 + 0.3 * (beam.time * 6.0).sin();
+        let wave = (beam.time * 4.0).sin();
+
+        // Draw main beam (dark purple/red gradient)
+        let beam_alpha = (180.0 * pulse) as u8;
+        let beam_color = egui::Color32::from_rgba_unmultiplied(150, 50, 100, beam_alpha);
+        painter.line_segment(
+            [caster_pos, target_pos],
+            egui::Stroke::new(3.0 * pulse, beam_color),
+        );
+
+        // Draw inner bright core
+        let core_alpha = (220.0 * pulse) as u8;
+        let core_color = egui::Color32::from_rgba_unmultiplied(220, 80, 120, core_alpha);
+        painter.line_segment(
+            [caster_pos, target_pos],
+            egui::Stroke::new(1.5 * pulse, core_color),
+        );
+
+        // Draw floating particles along the beam (moving from target to caster)
+        let dx = caster_pos.x - target_pos.x;
+        let dy = caster_pos.y - target_pos.y;
+        let len = (dx * dx + dy * dy).sqrt();
+
+        if len > 5.0 {
+            let num_particles = ((len / 15.0) as usize).max(3).min(8);
+            for i in 0..num_particles {
+                // Particle moves from target to caster over time
+                let base_t = i as f32 / num_particles as f32;
+                let t = (base_t + beam.time * 0.5).fract(); // Loop along beam
+
+                // Add some wave motion perpendicular to beam
+                let perpx = -dy / len;
+                let perpy = dx / len;
+                let wave_offset = wave * 3.0 * (1.0 - (t - 0.5).abs() * 2.0);
+
+                let px = target_pos.x + dx * t + perpx * wave_offset;
+                let py = target_pos.y + dy * t + perpy * wave_offset;
+
+                let particle_alpha = (150.0 * pulse * (1.0 - (t - 0.5).abs() * 1.5).max(0.0)) as u8;
+                let particle_color = egui::Color32::from_rgba_unmultiplied(255, 100, 150, particle_alpha);
+                painter.circle_filled(egui::pos2(px, py), 2.5 * pulse, particle_color);
+            }
+        }
+
+        // Draw glow at target (being drained)
+        let drain_glow_alpha = (100.0 * pulse) as u8;
+        let drain_glow_color = egui::Color32::from_rgba_unmultiplied(200, 50, 80, drain_glow_alpha);
+        painter.circle_filled(target_pos, 8.0 * pulse, drain_glow_color);
+
+        // Draw glow at caster (receiving life)
+        let heal_glow_alpha = (80.0 * pulse) as u8;
+        let heal_glow_color = egui::Color32::from_rgba_unmultiplied(100, 200, 100, heal_glow_alpha);
+        painter.circle_filled(caster_pos, 6.0 * pulse, heal_glow_color);
     }
 }

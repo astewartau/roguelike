@@ -128,6 +128,7 @@ pub mod tile_ids {
     pub const FIGHTER: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(2, 1, ROGUES_COLS)); // 2.b male fighter
     pub const RANGER: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 2, ROGUES_COLS)); // 1.c ranger
     pub const WIZARD: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(5, 1, ROGUES_COLS)); // 5.b male wizard
+    pub const MONK: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(3, 5, ROGUES_COLS)); // 3.f schema monk
     pub const KNIGHT: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(2, 0, ROGUES_COLS)); // 2.a knight
     pub const ELF: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 1, ROGUES_COLS)); // 1.b elf
     pub const DWARF: (SpriteSheet, u32) = (SpriteSheet::Rogues, rc(1, 0, ROGUES_COLS)); // 1.a dwarf

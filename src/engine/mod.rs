@@ -593,6 +593,12 @@ impl GameEngine {
                 let state = self.state.as_ref().expect("State should exist when playing");
                 let ui_state = self.ui_state.as_mut().expect("UI state should exist when playing");
 
+                // Extract life drain beam data for rendering
+                let life_drain_beams = crate::ui::get_life_drain_beam_data(
+                    &state.world,
+                    &self.vfx.life_drain_beams,
+                );
+
                 crate::ui::run_ui(
                     egui_glow,
                     window,
@@ -605,6 +611,7 @@ impl GameEngine {
                     tileset,
                     ui_icons,
                     &self.vfx.effects,
+                    &life_drain_beams,
                     self.input.targeting_mode.as_ref(),
                     self.input.ability_targeting_mode.as_ref(),
                     self.input.mouse_pos,
@@ -970,11 +977,19 @@ fn activate_class_ability(
         return false;
     }
 
-    // Tame ability enters targeting mode instead of executing immediately
+    // Tame and LifeDrain abilities enter targeting mode instead of executing immediately
     if ability_type == AbilityType::Tame {
         input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
             ability_type: AbilityType::Tame,
             max_range: crate::constants::TAME_RANGE,
+        });
+        return true;
+    }
+
+    if ability_type == AbilityType::LifeDrain {
+        input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ability_type: AbilityType::LifeDrain,
+            max_range: crate::constants::LIFE_DRAIN_RANGE,
         });
         return true;
     }
@@ -1005,7 +1020,9 @@ fn activate_class_ability(
         AbilityType::Cleave => ActionType::Cleave,
         AbilityType::Sprint => ActionType::ActivateSprint,
         AbilityType::Tame => unreachable!("Tame ability handled above with targeting mode"),
+        AbilityType::LifeDrain => unreachable!("LifeDrain ability handled above with targeting mode"),
         AbilityType::Barkskin => return false, // Barkskin is a secondary ability, not primary
+        AbilityType::Fear => return false,     // Fear is a secondary ability, not primary
     };
 
     // Start the action
@@ -1115,7 +1132,8 @@ fn activate_secondary_ability(
     // Determine action type based on ability
     let action_type = match ability_type {
         AbilityType::Barkskin => ActionType::ActivateBarkskin,
-        _ => return false, // Only Barkskin is a secondary ability for now
+        AbilityType::Fear => ActionType::ActivateFear,
+        _ => return false, // Only Barkskin and Fear are secondary abilities
     };
 
     // Start the action

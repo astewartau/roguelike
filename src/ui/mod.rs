@@ -29,9 +29,9 @@ pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarData};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data, TargetingOverlayData};
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
-    draw_enemy_status_indicators, draw_explosions, draw_player_buff_auras, draw_potion_splashes,
-    get_buff_aura_data, get_enemy_health_data, get_enemy_status_data, EnemyHealthData,
-    EnemyStatusData, PlayerBuffAuraData,
+    draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
+    draw_potion_splashes, get_buff_aura_data, get_enemy_health_data, get_enemy_status_data,
+    get_life_drain_beam_data, EnemyHealthData, EnemyStatusData, LifeDrainBeamData, PlayerBuffAuraData,
 };
 
 use crate::camera::Camera;
@@ -203,6 +203,7 @@ pub fn run_ui(
     tileset: &MultiTileset,
     icons: &UiIcons,
     vfx_effects: &[VisualEffect],
+    life_drain_beams: &[LifeDrainBeamData],
     targeting_mode: Option<&TargetingMode>,
     ability_targeting_mode: Option<&AbilityTargetingMode>,
     mouse_pos: (f32, f32),
@@ -331,6 +332,9 @@ pub fn run_ui(
 
         // Potion splash effects
         draw_potion_splashes(ctx, vfx_effects, camera);
+
+        // Life drain beams
+        draw_life_drain_beams(ctx, camera, life_drain_beams);
 
         // Developer menu
         draw_dev_menu(ctx, dev_menu, icons, tileset);

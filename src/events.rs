@@ -154,6 +154,11 @@ pub enum GameEvent {
     BarkskinActivated {
         entity: Entity,
     },
+    /// Fear ability activated (necromancer)
+    FearActivated {
+        entity: Entity,
+        position: (i32, i32),
+    },
     /// Player opened a shop with a vendor
     ShopOpened {
         vendor: Entity,
@@ -193,6 +198,30 @@ pub enum GameEvent {
         trap: Entity,
         victim: Entity,
         position: (i32, i32),
+    },
+    /// Life drain channeling started (necromancer)
+    LifeDrainStarted {
+        caster: Entity,
+        target: Entity,
+    },
+    /// Life drain tick (damage dealt, health restored)
+    LifeDrainTick {
+        caster: Entity,
+        target: Entity,
+        caster_pos: (f32, f32),
+        target_pos: (f32, f32),
+        damage: i32,
+        healed: i32,
+    },
+    /// Life drain ended (target died or out of range)
+    LifeDrainEnded {
+        caster: Entity,
+        target: Entity,
+    },
+    /// Life drain was interrupted (caster took damage)
+    LifeDrainInterrupted {
+        caster: Entity,
+        target: Entity,
     },
 }
 

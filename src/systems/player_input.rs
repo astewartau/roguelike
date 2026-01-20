@@ -34,6 +34,8 @@ pub enum PlayerIntent {
     },
     /// Start taming an animal (Druid ability)
     StartTaming { target: Entity },
+    /// Start draining life from a target (Necromancer channeled ability)
+    StartLifeDrain { target: Entity },
 }
 
 /// Result of validating a targeting action
@@ -204,6 +206,10 @@ pub fn intent_to_action(
 
         PlayerIntent::StartTaming { target } => {
             Some(ActionType::StartTaming { target: *target })
+        }
+
+        PlayerIntent::StartLifeDrain { target } => {
+            Some(ActionType::StartLifeDrain { target: *target })
         }
     }
 }

@@ -28,22 +28,36 @@ pub fn draw_ability_bar(ctx: &egui::Context, data: &AbilityBarData, icons: &UiIc
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 // Get the appropriate icon UV based on ability type
-                let (uv, tooltip) = match data.ability_type {
+                let (uv, tooltip, texture_id) = match data.ability_type {
                     AbilityType::Cleave => (
                         icons.cleave_uv,
                         "Cleave\nAttack all adjacent enemies\n\n[Q]",
+                        icons.items_texture_id,
                     ),
                     AbilityType::Sprint => (
                         icons.sprint_uv,
                         "Sprint\nDouble movement speed for 10s\n\n[Q]",
+                        icons.items_texture_id,
                     ),
                     AbilityType::Tame => (
                         icons.heart_uv,
                         "Tame Animal\nChannel to tame a nearby animal\n\n[Q]",
+                        icons.items_texture_id,
                     ),
                     AbilityType::Barkskin => (
                         icons.barkskin_uv,
                         "Barkskin\n50% damage reduction for 15s\n\n[E]",
+                        icons.items_texture_id,
+                    ),
+                    AbilityType::LifeDrain => (
+                        icons.life_drain_uv,
+                        "Life Drain\nDrain life from a nearby enemy\n\n[Q]",
+                        icons.items_texture_id,
+                    ),
+                    AbilityType::Fear => (
+                        icons.fear_uv,
+                        "Fear\nCause nearby enemies to flee\n\n[E]",
+                        icons.tiles_texture_id,
                     ),
                 };
 
@@ -74,7 +88,7 @@ pub fn draw_ability_bar(ctx: &egui::Context, data: &AbilityBarData, icons: &UiIc
 
                 // Draw the icon
                 let image = egui::Image::new(egui::load::SizedTexture::new(
-                    icons.items_texture_id,
+                    texture_id,
                     button_size,
                 ))
                 .uv(uv);
@@ -130,13 +144,26 @@ pub fn draw_secondary_ability_bar(ctx: &egui::Context, data: &AbilityBarData, ic
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 // Get the appropriate icon UV based on ability type
-                let (uv, tooltip) = match data.ability_type {
+                let (uv, tooltip, texture_id, ready_border_color) = match data.ability_type {
                     AbilityType::Barkskin => (
                         icons.barkskin_uv,
                         "Barkskin\n50% damage reduction for 15s\n\n[E]",
+                        icons.items_texture_id,
+                        egui::Color32::from_rgb(100, 140, 80), // Green border for nature
+                    ),
+                    AbilityType::Fear => (
+                        icons.fear_uv,
+                        "Fear\nCause nearby enemies to flee\n\n[E]",
+                        icons.tiles_texture_id,
+                        egui::Color32::from_rgb(128, 80, 160), // Purple border for dark magic
                     ),
                     // Secondary abilities only - others shouldn't appear here
-                    _ => (icons.heart_uv, "Unknown ability"),
+                    _ => (
+                        icons.heart_uv,
+                        "Unknown ability",
+                        icons.items_texture_id,
+                        style::colors::DUNGEON_GOLD,
+                    ),
                 };
 
                 // Create the button size
@@ -155,9 +182,9 @@ pub fn draw_secondary_ability_bar(ctx: &egui::Context, data: &AbilityBarData, ic
                 };
                 ui.painter().rect_filled(rect, 0.0, bg_color);
 
-                // Draw border - use brown/green for nature theme
+                // Draw border
                 let border_color = if data.can_use && data.cooldown_remaining <= 0.0 {
-                    egui::Color32::from_rgb(100, 140, 80) // Green border when ready
+                    ready_border_color
                 } else {
                     style::colors::BUTTON_BORDER
                 };
@@ -166,7 +193,7 @@ pub fn draw_secondary_ability_bar(ctx: &egui::Context, data: &AbilityBarData, ic
 
                 // Draw the icon
                 let image = egui::Image::new(egui::load::SizedTexture::new(
-                    icons.items_texture_id,
+                    texture_id,
                     button_size,
                 ))
                 .uv(uv);

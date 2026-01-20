@@ -88,30 +88,29 @@ pub fn draw_loot_window(
                 }
 
                 // Show items
-                ui.horizontal_wrapped(|ui| {
-                    for (i, item_type) in data.items.iter().enumerate() {
+                for (i, item_type) in data.items.iter().enumerate() {
+                    ui.horizontal(|ui| {
                         let uv = icons.get_item_uv(*item_type);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.items_texture_id,
-                            egui::vec2(48.0, 48.0),
+                            egui::vec2(40.0, 40.0),
                         ))
                         .uv(uv)
                         .bg_fill(style::colors::PANEL_BG);
 
-                        let response = ui.add(egui::ImageButton::new(image));
+                        let item_name = systems::item_name(*item_type);
+                        let response = ui.add(egui::ImageButton::new(image).frame(false));
 
                         if response
-                            .on_hover_text(format!(
-                                "{}\n\nClick to take",
-                                systems::item_name(*item_type)
-                            ))
+                            .on_hover_text(format!("{}\n\nClick to take", item_name))
                             .clicked()
                         {
                             actions.chest_item_to_take = Some(i);
                         }
-                    }
-                });
+                        ui.label(item_name);
+                    });
+                }
             }
 
             ui.add_space(10.0);

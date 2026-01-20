@@ -51,6 +51,8 @@ pub enum VfxType {
     Slash { angle: f32 },
     /// Floating damage number
     DamageNumber { amount: i32 },
+    /// Floating heal number (green, positive)
+    HealNumber { amount: i32 },
     /// Fire particle effect (looping)
     #[allow(dead_code)] // Reserved for torch/fire terrain
     Fire { seed: f32 },
@@ -74,6 +76,7 @@ impl VfxType {
         match self {
             VfxType::Slash { .. } => SLASH_VFX_DURATION,
             VfxType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
+            VfxType::HealNumber { .. } => DAMAGE_NUMBER_DURATION, // Same duration as damage
             VfxType::Fire { .. } => f32::INFINITY, // Fire loops forever
             VfxType::Alert => ALERT_DURATION,
             VfxType::Explosion { .. } => EXPLOSION_DURATION,
@@ -100,15 +103,37 @@ impl FireEffect {
     }
 }
 
+/// A persistent life drain beam effect (caster to target connection)
+pub struct LifeDrainBeam {
+    pub caster: hecs::Entity,
+    pub target: hecs::Entity,
+    pub time: f32, // Accumulated time for animation
+}
+
+impl LifeDrainBeam {
+    pub fn new(caster: hecs::Entity, target: hecs::Entity) -> Self {
+        Self { caster, target, time: 0.0 }
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        self.time += dt;
+    }
+}
+
 /// Manager for all active visual effects
 pub struct VfxManager {
     pub effects: Vec<VisualEffect>,
     pub fires: Vec<FireEffect>,
+    pub life_drain_beams: Vec<LifeDrainBeam>,
 }
 
 impl VfxManager {
     pub fn new() -> Self {
-        Self { effects: Vec::new(), fires: Vec::new() }
+        Self {
+            effects: Vec::new(),
+            fires: Vec::new(),
+            life_drain_beams: Vec::new(),
+        }
     }
 
     /// Spawn a new effect
@@ -147,12 +172,28 @@ impl VfxManager {
         self.fires.push(FireEffect::new(x, y, seed));
     }
 
+    /// Start a life drain beam effect between caster and target
+    pub fn start_life_drain_beam(&mut self, caster: hecs::Entity, target: hecs::Entity) {
+        // Remove any existing beam from this caster first
+        self.life_drain_beams.retain(|b| b.caster != caster);
+        self.life_drain_beams.push(LifeDrainBeam::new(caster, target));
+    }
+
+    /// Stop a life drain beam for the given caster
+    pub fn stop_life_drain_beam(&mut self, caster: hecs::Entity) {
+        self.life_drain_beams.retain(|b| b.caster != caster);
+    }
+
     /// Update all effects, removing finished ones
     pub fn update(&mut self, dt: f32) {
         self.effects.retain_mut(|effect| effect.update(dt));
         // Update fire animation times
         for fire in &mut self.fires {
             fire.update(dt);
+        }
+        // Update life drain beam animation times
+        for beam in &mut self.life_drain_beams {
+            beam.update(dt);
         }
     }
 
@@ -214,6 +255,29 @@ impl VfxManager {
                 let tile_y = position.1 as i32;
                 if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
                     self.spawn_damage_number(position.0, position.1, *damage);
+                }
+            }
+            GameEvent::LifeDrainStarted { caster, target } => {
+                // Start the life drain beam visual
+                self.start_life_drain_beam(*caster, *target);
+            }
+            GameEvent::LifeDrainEnded { caster, .. } | GameEvent::LifeDrainInterrupted { caster, .. } => {
+                // Stop the life drain beam visual
+                self.stop_life_drain_beam(*caster);
+            }
+            GameEvent::LifeDrainTick { target_pos, caster_pos, damage, healed, .. } => {
+                // Show damage number on target
+                let tile_x = target_pos.0 as i32;
+                let tile_y = target_pos.1 as i32;
+                if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
+                    self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
+                }
+                // Show heal number on caster (green/positive)
+                let caster_tile_x = caster_pos.0 as i32;
+                let caster_tile_y = caster_pos.1 as i32;
+                if grid.get(caster_tile_x, caster_tile_y).map(|t| t.visible).unwrap_or(false) {
+                    // Spawn heal number (using negative to indicate healing)
+                    self.spawn(caster_pos.0, caster_pos.1, VfxType::HealNumber { amount: *healed });
                 }
             }
             _ => {}
