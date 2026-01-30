@@ -22,6 +22,7 @@ pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
 
+use crate::audio::AudioManager;
 use crate::components::{AbilityType, ActionType, Actor, ClassAbility, PlayerClass};
 
 use crate::camera::Camera;
@@ -89,11 +90,19 @@ pub struct GameEngine {
 
     /// Accumulated real time (for animations)
     pub real_time: f32,
+
+    /// Audio manager for sound effects
+    pub audio: Option<AudioManager>,
 }
 
 impl GameEngine {
     /// Create a new game engine on the start screen.
     pub fn new() -> Self {
+        let audio = AudioManager::new();
+        if audio.is_none() {
+            eprintln!("Warning: Could not initialize audio system");
+        }
+
         Self {
             game_mode: GameMode::StartScreen,
             selected_class: Some(PlayerClass::Fighter), // Default selection
@@ -104,6 +113,7 @@ impl GameEngine {
             ui_state: None,
             dev_menu: DevMenu::new(),
             real_time: 0.0,
+            audio,
         }
     }
 
@@ -309,13 +319,15 @@ impl GameEngine {
         // Process events from remove_dead_entities
         let event_result = {
             puffin::profile_scope!("process_events");
-            process_events(
+            process_events_with_audio(
                 &mut self.events,
                 &mut state.world,
                 &state.grid,
+                &mut state.spatial_cache,
                 &mut self.vfx,
                 ui_state,
                 state.player_entity,
+                self.audio.as_ref(),
             )
         };
 
@@ -665,6 +677,7 @@ impl GameEngine {
                         &mut self.events,
                         &mut state.world,
                         &state.grid,
+                        &mut state.spatial_cache,
                         &mut self.vfx,
                         ui_state,
                         state.player_entity,
@@ -689,7 +702,7 @@ impl GameEngine {
                 &mut state.game_clock,
                 &mut state.action_scheduler,
                 &mut state.active_ai_tracker,
-                &state.spatial_cache,
+                &mut state.spatial_cache,
                 &mut self.events,
                 &mut self.vfx,
                 ui_state,
@@ -706,7 +719,7 @@ impl GameEngine {
                 &mut state.game_clock,
                 &mut state.action_scheduler,
                 &mut state.active_ai_tracker,
-                &state.spatial_cache,
+                &mut state.spatial_cache,
                 &mut self.events,
                 &mut self.vfx,
                 ui_state,
@@ -731,7 +744,7 @@ impl GameEngine {
                 &mut state.game_clock,
                 &mut state.action_scheduler,
                 &mut state.active_ai_tracker,
-                &state.spatial_cache,
+                &mut state.spatial_cache,
                 &mut self.events,
                 &mut self.vfx,
                 ui_state,
@@ -852,7 +865,7 @@ impl GameEngine {
             &mut state.game_clock,
             &mut state.action_scheduler,
             &mut state.active_ai_tracker,
-            &state.spatial_cache,
+            &mut state.spatial_cache,
             &mut self.events,
             &mut self.vfx,
             ui_state,
@@ -875,7 +888,7 @@ impl GameEngine {
             &mut state.game_clock,
             &mut state.action_scheduler,
             &mut state.active_ai_tracker,
-            &state.spatial_cache,
+            &mut state.spatial_cache,
             &mut self.events,
             &mut self.vfx,
             ui_state,
@@ -937,7 +950,7 @@ fn activate_class_ability(
     game_clock: &mut crate::time_system::GameClock,
     action_scheduler: &mut crate::time_system::ActionScheduler,
     active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
@@ -1011,7 +1024,7 @@ fn activate_class_ability(
 
     if !got_energy {
         // Player died or something went wrong during wait
-        let _ = process_events(events, world, grid, vfx, ui_state, player);
+        let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
         return false;
     }
 
@@ -1054,7 +1067,7 @@ fn activate_class_ability(
         );
     }
 
-    let _ = process_events(events, world, grid, vfx, ui_state, player);
+    let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
 
     start_result.is_ok()
 }
@@ -1067,7 +1080,7 @@ fn activate_secondary_ability(
     game_clock: &mut crate::time_system::GameClock,
     action_scheduler: &mut crate::time_system::ActionScheduler,
     active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
@@ -1125,7 +1138,7 @@ fn activate_secondary_ability(
 
     if !got_energy {
         // Player died or something went wrong during wait
-        let _ = process_events(events, world, grid, vfx, ui_state, player);
+        let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
         return false;
     }
 
@@ -1160,7 +1173,7 @@ fn activate_secondary_ability(
         );
     }
 
-    let _ = process_events(events, world, grid, vfx, ui_state, player);
+    let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
 
     start_result.is_ok()
 }

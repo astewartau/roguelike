@@ -1,5 +1,6 @@
 mod active_ai_tracker;
 mod app;
+mod audio;
 mod camera;
 mod components;
 mod constants;

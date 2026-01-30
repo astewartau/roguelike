@@ -66,7 +66,7 @@ pub fn execute_player_intent(
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
     active_tracker: &mut ActiveAITracker,
-    spatial_cache: &SpatialCache,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
@@ -118,7 +118,7 @@ pub fn execute_player_intent(
         active_tracker, spatial_cache, events, &mut rng,
     );
 
-    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
+    let event_result = process_events(events, world, grid, spatial_cache, vfx, ui_state, player_entity);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
@@ -141,7 +141,7 @@ pub fn execute_player_turn(
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
     active_tracker: &mut ActiveAITracker,
-    spatial_cache: &SpatialCache,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
@@ -181,7 +181,7 @@ pub fn execute_player_turn(
         active_tracker, spatial_cache, events, &mut rng,
     );
 
-    let event_result = process_events(events, world, grid, vfx, ui_state, player_entity);
+    let event_result = process_events(events, world, grid, spatial_cache, vfx, ui_state, player_entity);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
@@ -396,9 +396,24 @@ pub fn process_events(
     events: &mut EventQueue,
     world: &mut World,
     grid: &Grid,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     player_entity: Entity,
+) -> EventProcessingResult {
+    process_events_with_audio(events, world, grid, spatial_cache, vfx, ui_state, player_entity, None)
+}
+
+/// Process all pending events with optional audio manager.
+pub fn process_events_with_audio(
+    events: &mut EventQueue,
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+    player_entity: Entity,
+    audio: Option<&crate::audio::AudioManager>,
 ) -> EventProcessingResult {
     let mut result = EventProcessingResult {
         floor_transition: None,
@@ -408,13 +423,23 @@ pub fn process_events(
         skeleton_spawns: Vec::new(),
     };
 
-    for event in events.drain() {
+    // Collect events for audio processing
+    let event_list: Vec<_> = events.drain().collect();
+
+    // Process audio first
+    if let Some(audio_manager) = audio {
+        audio_manager.process_events(&event_list);
+    }
+
+    for event in event_list {
         vfx.handle_event(&event, grid);
         ui_state.handle_event(&event);
 
         match &event {
             GameEvent::DoorOpened { door, .. } => {
                 systems::handle_door_opened(world, *door);
+                // Update spatial cache so pathfinding sees the door as open
+                spatial_cache.clear_blocking_flags(*door);
             }
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
