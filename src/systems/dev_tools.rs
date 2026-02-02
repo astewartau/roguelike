@@ -70,7 +70,7 @@ pub fn execute_dev_spawn(
                 pos,
                 VisualPosition::from_position(&pos),
                 Sprite::from_ref(tile::tile_ids::CHEST_CLOSED),
-                Container::new(vec![ItemType::HealthPotion]),
+                Container::chest(vec![ItemType::HealthPotion], 0),
                 BlocksMovement,
             ));
             DevSpawnResult::Spawned(entity)

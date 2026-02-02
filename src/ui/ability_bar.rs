@@ -6,6 +6,21 @@ use super::icons::UiIcons;
 use super::style;
 use crate::components::AbilityType;
 
+/// Data for a single Ranger ability slot
+pub struct RangerAbilitySlot {
+    pub ability_type: AbilityType,
+    pub cooldown_remaining: f32,
+    pub cooldown_total: f32,
+    pub can_use: bool,
+}
+
+/// Data needed to render the Ranger ability bar (4 abilities)
+pub struct RangerAbilityBarData {
+    pub abilities: [RangerAbilitySlot; 4],
+    pub viewport_height: f32,
+    pub arrow_count: u32,
+}
+
 /// Data needed to render the ability bar
 pub struct AbilityBarData {
     pub ability_type: AbilityType,
@@ -58,6 +73,26 @@ pub fn draw_ability_bar(ctx: &egui::Context, data: &AbilityBarData, icons: &UiIc
                         icons.fear_uv,
                         "Fear\nCause nearby enemies to flee\n\n[E]",
                         icons.tiles_texture_id,
+                    ),
+                    AbilityType::Disengage => (
+                        icons.disengage_uv,
+                        "Disengage\nLeap 3 tiles away from enemies\n\n[1]",
+                        icons.items_texture_id,
+                    ),
+                    AbilityType::Tumble => (
+                        icons.tumble_uv,
+                        "Tumble\nRoll with brief invulnerability\n\n[2]",
+                        icons.items_texture_id,
+                    ),
+                    AbilityType::SnareTrap => (
+                        icons.snare_trap_uv,
+                        "Snare Trap\nPlace trap that roots enemies\n\n[3]",
+                        icons.tiles_texture_id,
+                    ),
+                    AbilityType::CripplingShot => (
+                        icons.crippling_shot_uv,
+                        "Crippling Shot\nArrow that slows target\n\n[4]",
+                        icons.items_texture_id,
                     ),
                 };
 
@@ -230,6 +265,142 @@ pub fn draw_secondary_ability_bar(ctx: &egui::Context, data: &AbilityBarData, ic
                         .color(style::colors::TEXT_MUTED)
                         .small(),
                 );
+            });
+        });
+
+    clicked
+}
+
+/// Render the Ranger ability bar with 4 ability slots.
+/// Returns the index of the clicked ability (0-3), or None if nothing was clicked.
+pub fn draw_ranger_ability_bar(ctx: &egui::Context, data: &RangerAbilityBarData, icons: &UiIcons) -> Option<usize> {
+    let mut clicked: Option<usize> = None;
+
+    // Total width for 4 abilities with spacing
+    let slot_size = 50.0;
+    let slot_spacing = 5.0;
+    let bar_width = slot_size * 4.0 + slot_spacing * 3.0 + 20.0; // Padding for frame
+
+    egui::Window::new("Ranger Abilities")
+        .fixed_pos([10.0, data.viewport_height - 100.0])
+        .fixed_size([bar_width, 90.0])
+        .title_bar(false)
+        .frame(style::dungeon_window_frame())
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                for (index, slot) in data.abilities.iter().enumerate() {
+                    // Get icon and tooltip for this ability
+                    let (uv, tooltip, texture_id) = match slot.ability_type {
+                        AbilityType::Disengage => (
+                            icons.disengage_uv,
+                            "Disengage\nLeap 3 tiles away from enemies\n\n[1]",
+                            icons.items_texture_id,
+                        ),
+                        AbilityType::Tumble => (
+                            icons.tumble_uv,
+                            "Tumble\nRoll with brief invulnerability\n\n[2]",
+                            icons.items_texture_id,
+                        ),
+                        AbilityType::SnareTrap => (
+                            icons.snare_trap_uv,
+                            "Snare Trap\nPlace trap that roots enemies\n\n[3]",
+                            icons.tiles_texture_id,
+                        ),
+                        AbilityType::CripplingShot => (
+                            icons.crippling_shot_uv,
+                            "Crippling Shot\nArrow that slows target\n\n[4]",
+                            icons.items_texture_id,
+                        ),
+                        _ => (
+                            icons.heart_uv,
+                            "Unknown ability",
+                            icons.items_texture_id,
+                        ),
+                    };
+
+                    let button_size = egui::vec2(slot_size, slot_size);
+                    let (rect, response) = ui.allocate_exact_size(button_size, egui::Sense::click());
+
+                    // Draw background
+                    let bg_color = if !slot.can_use {
+                        egui::Color32::from_rgb(30, 25, 25)
+                    } else if response.hovered() {
+                        style::colors::BUTTON_HOVER
+                    } else {
+                        style::colors::BUTTON_BG
+                    };
+                    ui.painter().rect_filled(rect, 0.0, bg_color);
+
+                    // Draw border
+                    let border_color = if slot.can_use && slot.cooldown_remaining <= 0.0 {
+                        style::colors::DUNGEON_GOLD
+                    } else {
+                        style::colors::BUTTON_BORDER
+                    };
+                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(2.0, border_color));
+
+                    // Draw the icon
+                    let image = egui::Image::new(egui::load::SizedTexture::new(
+                        texture_id,
+                        button_size,
+                    ))
+                    .uv(uv);
+                    image.paint_at(ui, rect);
+
+                    // Draw cooldown overlay
+                    if slot.cooldown_remaining > 0.0 {
+                        let overlay_color = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180);
+                        ui.painter().rect_filled(rect, 0.0, overlay_color);
+
+                        let cd_text = format!("{:.0}s", slot.cooldown_remaining);
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            cd_text,
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::WHITE,
+                        );
+                    }
+
+                    // Draw hotkey number in corner
+                    let hotkey_text = format!("{}", index + 1);
+                    let hotkey_pos = rect.left_top() + egui::vec2(3.0, 2.0);
+                    ui.painter().text(
+                        hotkey_pos,
+                        egui::Align2::LEFT_TOP,
+                        &hotkey_text,
+                        egui::FontId::proportional(10.0),
+                        style::colors::TEXT_MUTED,
+                    );
+
+                    // Handle click
+                    if response.clicked() && slot.can_use {
+                        clicked = Some(index);
+                    }
+
+                    // Tooltip
+                    response.on_hover_text(tooltip);
+
+                    // Add spacing between buttons
+                    if index < 3 {
+                        ui.add_space(slot_spacing);
+                    }
+                }
+            });
+
+            // Arrow count display
+            ui.horizontal(|ui| {
+                ui.add_space(5.0);
+                let arrow_color = if data.arrow_count > 5 {
+                    style::colors::TEXT_PRIMARY
+                } else if data.arrow_count > 0 {
+                    egui::Color32::from_rgb(200, 150, 50) // Yellow warning
+                } else {
+                    egui::Color32::from_rgb(200, 60, 60) // Red critical
+                };
+                ui.label(egui::RichText::new(format!("Arrows: {}", data.arrow_count))
+                    .color(arrow_color)
+                    .small());
             });
         });
 

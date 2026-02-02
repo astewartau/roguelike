@@ -239,6 +239,8 @@ pub fn complete_action(
     entity: Entity,
     events: &mut EventQueue,
     current_time: f32,
+    clock: &GameClock,
+    scheduler: &mut ActionScheduler,
 ) -> ActionResult {
     // Get the action to complete
     let action = {
@@ -251,12 +253,23 @@ pub fn complete_action(
         }
     };
 
+    // Check if this is a bow shot that needs recovery follow-up
+    let needs_recovery = matches!(
+        action.action_type,
+        ActionType::ShootBow { .. } | ActionType::ShootCripplingShot { .. }
+    );
+
     // Apply action effects
     let result = apply_action_effects(world, grid, entity, &action.action_type, events, current_time);
 
     // Clear action (energy regen is now time-based, not action-based)
     if let Ok(mut actor) = world.get::<&mut Actor>(entity) {
         actor.current_action = None;
+    }
+
+    // Auto-queue recovery action after bow shots
+    if needs_recovery && matches!(result, ActionResult::Completed) {
+        let _ = start_action(world, entity, ActionType::Recover, clock, scheduler);
     }
 
     result
@@ -331,6 +344,22 @@ fn apply_action_effects(
         }
         ActionType::PlaceFireTrap { target_x, target_y } => {
             actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
+        }
+        ActionType::Disengage => {
+            actions::apply_disengage(world, grid, entity, events)
+        }
+        ActionType::Tumble { target_x, target_y } => {
+            actions::apply_tumble(world, grid, entity, *target_x, *target_y, events)
+        }
+        ActionType::PlaceSnareTrap { target_x, target_y } => {
+            actions::apply_place_snare_trap(world, entity, *target_x, *target_y, events)
+        }
+        ActionType::ShootCripplingShot { target_x, target_y } => {
+            actions::apply_shoot_crippling_shot(world, grid, entity, *target_x, *target_y, events, current_time)
+        }
+        ActionType::Recover => {
+            // Recovery is just a time delay, no effects
+            ActionResult::Completed
         }
     }
 }
@@ -472,7 +501,7 @@ pub fn tick_status_effects(world: &mut World, elapsed: f32) {
 
 /// Process ability cooldown ticks
 pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
-    use crate::components::{ClassAbility, SecondaryAbility};
+    use crate::components::{ClassAbility, RangerAbilities, SecondaryAbility};
 
     if elapsed <= 0.0 {
         return;
@@ -488,6 +517,15 @@ pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
     for (_, ability) in world.query_mut::<&mut SecondaryAbility>() {
         if ability.cooldown_remaining > 0.0 {
             ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
+        }
+    }
+
+    // Also tick Ranger abilities
+    for (_, ra) in world.query_mut::<&mut RangerAbilities>() {
+        for (_, cooldown_remaining, _) in ra.abilities.iter_mut() {
+            if *cooldown_remaining > 0.0 {
+                *cooldown_remaining = (*cooldown_remaining - elapsed).max(0.0);
+            }
         }
     }
 }

@@ -422,6 +422,7 @@ pub mod vendors {
                 (ItemType::Bread, 2),
                 (ItemType::ScrollOfSpeed, 1),
                 (ItemType::ScrollOfProtection, 1),
+                (ItemType::Arrow, 10),
             ],
             2..=3 => vec![
                 (ItemType::HealthPotion, 2),
@@ -429,6 +430,7 @@ pub mod vendors {
                 (ItemType::ScrollOfInvisibility, 1),
                 (ItemType::ScrollOfBlink, 1),
                 (ItemType::Dagger, 1),
+                (ItemType::Arrow, 15),
             ],
             _ => vec![
                 (ItemType::HealthPotion, 3),
@@ -436,6 +438,7 @@ pub mod vendors {
                 (ItemType::ScrollOfFireball, 1),
                 (ItemType::ScrollOfFear, 1),
                 (ItemType::Sword, 1),
+                (ItemType::Arrow, 20),
             ],
         }
     }

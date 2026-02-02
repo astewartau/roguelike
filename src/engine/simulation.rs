@@ -1,7 +1,7 @@
 //! Game simulation - turn execution, time advancement, and event processing.
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, EffectType, Inventory};
+use crate::components::{ActionType, Actor, EffectType, Inventory, ItemType};
 use crate::constants;
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::grid::Grid;
@@ -70,6 +70,7 @@ pub fn execute_player_intent(
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
+    audio: Option<&crate::audio::AudioManager>,
 ) -> TurnExecutionResult {
     let can_act = world
         .get::<&Actor>(player_entity)
@@ -101,7 +102,7 @@ pub fn execute_player_intent(
         }
     };
 
-    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
+    if time_system::start_action(world, player_entity, action_type.clone(), clock, scheduler).is_err() {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
             floor_transition: None,
@@ -112,13 +113,26 @@ pub fn execute_player_intent(
         };
     }
 
+    // Start cooldown for Ranger abilities
+    if let Ok(mut ra) = world.get::<&mut crate::components::RangerAbilities>(player_entity) {
+        let ability_index = match &action_type {
+            ActionType::Tumble { .. } => Some(1), // Index 1 = Tumble
+            ActionType::PlaceSnareTrap { .. } => Some(2), // Index 2 = SnareTrap
+            ActionType::ShootCripplingShot { .. } => Some(3), // Index 3 = CripplingShot
+            _ => None,
+        };
+        if let Some(index) = ability_index {
+            ra.start_cooldown(index);
+        }
+    }
+
     let mut rng = rand::thread_rng();
     advance_until_player_ready(
         world, grid, player_entity, clock, scheduler,
         active_tracker, spatial_cache, events, &mut rng,
     );
 
-    let event_result = process_events(events, world, grid, spatial_cache, vfx, ui_state, player_entity);
+    let event_result = process_events_with_audio(events, world, grid, spatial_cache, vfx, ui_state, player_entity, audio);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
@@ -266,7 +280,7 @@ pub fn advance_until_player_ready(
         time_system::tick_ability_cooldowns(world, elapsed);
         time_system::tick_ranged_cooldowns(world, elapsed);
 
-        time_system::complete_action(world, grid, next_entity, events, clock.time);
+        time_system::complete_action(world, grid, next_entity, events, clock.time, clock, scheduler);
 
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
@@ -360,7 +374,7 @@ pub fn wait_for_energy(
             time_system::tick_ranged_cooldowns(world, elapsed);
 
             // Complete the action
-            time_system::complete_action(world, grid, next_entity, events, clock.time);
+            time_system::complete_action(world, grid, next_entity, events, clock.time, clock, scheduler);
 
             // Let AI decide next action
             if next_entity != player_entity {
@@ -426,9 +440,13 @@ pub fn process_events_with_audio(
     // Collect events for audio processing
     let event_list: Vec<_> = events.drain().collect();
 
-    // Process audio first
+    // Process audio first (with player position for distance-based volume)
     if let Some(audio_manager) = audio {
-        audio_manager.process_events(&event_list);
+        let player_pos = world
+            .get::<&crate::components::Position>(player_entity)
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0, 0));
+        audio_manager.process_events(&event_list, player_pos);
     }
 
     for event in event_list {
@@ -610,8 +628,27 @@ pub fn process_ui_actions(
                 );
                 systems::remove_item_from_inventory(world, player_entity, item_index);
             }
-            systems::ItemUseResult::IsWeapon { item_index, .. } => {
+            systems::ItemUseResult::IsWeapon { item_type, item_index } => {
                 systems::actions::apply_equip_weapon(world, player_entity, item_index);
+                events.push(GameEvent::WeaponEquipped {
+                    entity: player_entity,
+                    weapon_type: item_type,
+                });
+            }
+            systems::ItemUseResult::Used { item_type } => {
+                // Emit PotionDrunk event for potions
+                if matches!(
+                    item_type,
+                    ItemType::HealthPotion
+                        | ItemType::RegenerationPotion
+                        | ItemType::StrengthPotion
+                        | ItemType::ConfusionPotion
+                ) {
+                    events.push(GameEvent::PotionDrunk {
+                        entity: player_entity,
+                        potion_type: item_type,
+                    });
+                }
             }
             _ => {}
         }

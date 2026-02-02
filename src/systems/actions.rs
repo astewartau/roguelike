@@ -7,8 +7,8 @@ use hecs::{Entity, World};
 
 use crate::components::{
     Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
-    EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, Player, PlayerAttackTarget, Position, Projectile,
-    ProjectileMarker, RangedCooldown, SecondaryAbility, Sprite, Stats, StatusEffects, TamedBy, TamingInProgress, VisualPosition, Weapon, RangedWeapon,
+    EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, PlacedTrap, Player, PlayerAttackTarget, Position, Projectile,
+    ProjectileMarker, RangedCooldown, SecondaryAbility, Sprite, Stats, StatusEffects, TamedBy, TamingInProgress, TrapType, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -139,6 +139,9 @@ pub fn apply_move(
     // Check if entity stepped on a fire trap
     check_fire_trap_trigger(world, entity, target_x, target_y, events);
 
+    // Check if entity stepped on a snare trap
+    check_snare_trap_trigger(world, entity, target_x, target_y, events);
+
     ActionResult::Completed
 }
 
@@ -209,6 +212,60 @@ fn check_fire_trap_trigger(
     let _ = world.despawn(trap_entity);
 }
 
+/// Check if an entity stepping on a snare trap should trigger it.
+/// Snare traps ignore their owner and the owner's tamed pets.
+fn check_snare_trap_trigger(
+    world: &mut World,
+    victim: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) {
+    use crate::components::{PlacedTrap, TrapType, TamedBy};
+
+    // Find snare trap at this position
+    let trap_info: Option<(hecs::Entity, Entity, f32)> = world
+        .query::<(&Position, &PlacedTrap)>()
+        .iter()
+        .find_map(|(trap_id, (pos, trap))| {
+            if pos.x == target_x && pos.y == target_y {
+                if let TrapType::Snare { root_duration } = trap.trap_type {
+                    return Some((trap_id, trap.owner, root_duration));
+                }
+            }
+            None
+        });
+
+    let Some((trap_entity, trap_owner, root_duration)) = trap_info else {
+        return;
+    };
+
+    // Check if victim is the owner
+    if victim == trap_owner {
+        return;
+    }
+
+    // Check if victim is a tamed pet of the owner
+    if let Ok(tamed_by) = world.get::<&TamedBy>(victim) {
+        if tamed_by.owner == trap_owner {
+            return;
+        }
+    }
+
+    // Trap triggered! Apply rooted effect
+    effects::add_effect_to_entity(world, victim, EffectType::Rooted, root_duration);
+
+    // Emit event
+    events.push(GameEvent::SnareTrapTriggered {
+        trap: trap_entity,
+        victim,
+        position: (target_x, target_y),
+    });
+
+    // Destroy the trap after triggering
+    let _ = world.despawn(trap_entity);
+}
+
 /// Apply attack effect
 pub fn apply_attack(
     world: &mut World,
@@ -228,6 +285,7 @@ pub fn apply_attack(
     let has_strength_boost = queries::has_status_effect(world, attacker, EffectType::Strengthened);
     let has_protection = queries::has_status_effect(world, target, EffectType::Protected)
         || queries::has_status_effect(world, target, EffectType::Barkskin);
+    let is_invulnerable = queries::has_status_effect(world, target, EffectType::Invulnerable);
 
     // Calculate damage
     let base_damage = {
@@ -263,7 +321,12 @@ pub fn apply_attack(
         damage = (damage as f32 * PROTECTION_DAMAGE_REDUCTION) as i32;
     }
 
-    damage = damage.max(1);
+    // Invulnerable negates all damage
+    if is_invulnerable {
+        damage = 0;
+    } else {
+        damage = damage.max(1);
+    }
 
     // Apply damage to target
     if let Ok(mut health) = world.get::<&mut Health>(target) {
@@ -344,7 +407,11 @@ pub fn apply_open_door(
     let _ = world.remove_one::<BlocksMovement>(door);
     let _ = world.remove_one::<crate::components::BlocksVision>(door);
 
-    events.push(GameEvent::DoorOpened { door, opener });
+    let position = world
+        .get::<&Position>(door)
+        .map(|p| (p.x, p.y))
+        .unwrap_or((0, 0));
+    events.push(GameEvent::DoorOpened { door, opener, position });
 
     ActionResult::Completed
 }
@@ -378,21 +445,30 @@ pub fn apply_open_chest(
         None
     };
 
-    // Mark container as open
-    if let Ok(mut container) = world.get::<&mut Container>(chest) {
+    // Mark container as open and get type
+    let container_type = if let Ok(mut container) = world.get::<&mut Container>(chest) {
         container.is_open = true;
-    }
+        Some(container.container_type)
+    } else {
+        None
+    };
+
+    // Get container position for audio
+    let container_pos = world
+        .get::<&Position>(chest)
+        .map(|p| (p.x, p.y))
+        .unwrap_or((0, 0));
 
     // If skeleton spawns, only emit the spawn event (player must deal with skeleton first)
     // Otherwise, emit ContainerOpened to show loot UI
     if let Some(position) = spawn_pos {
         // Skeleton spawning - emit spawn event but skip loot UI
         // Still emit ContainerOpened for sprite change, but skeleton takes priority
-        events.push(GameEvent::ContainerOpened { container: chest, opener });
+        events.push(GameEvent::ContainerOpened { container: chest, opener, container_type, position: container_pos });
         events.push(GameEvent::CoffinSkeletonSpawn { position });
     } else {
         // No skeleton - normal loot behavior
-        events.push(GameEvent::ContainerOpened { container: chest, opener });
+        events.push(GameEvent::ContainerOpened { container: chest, opener, container_type, position: container_pos });
     }
 
     ActionResult::Completed
@@ -445,6 +521,8 @@ pub fn apply_shoot_bow(
     events: &mut EventQueue,
     current_time: f32,
 ) -> ActionResult {
+    use crate::constants::{RANGE_OPTIMAL_MIN, RANGE_OPTIMAL_MAX, RANGE_OPTIMAL_MULT, RANGE_CLOSE_MULT, RANGE_FAR_MULT};
+
     // Get shooter position
     let (start_x, start_y) = match queries::get_entity_position(world, shooter) {
         Some(p) => p,
@@ -454,6 +532,23 @@ pub fn apply_shoot_bow(
     // Can't shoot at yourself
     if start_x == target_x && start_y == target_y {
         return ActionResult::Blocked;
+    }
+
+    // Check if shooter is player (needs arrows) or enemy (unlimited ammo)
+    let is_player = world.get::<&Player>(shooter).is_ok();
+
+    // If player, check for and consume arrow from inventory
+    if is_player {
+        if let Ok(mut inventory) = world.get::<&mut Inventory>(shooter) {
+            if let Some(idx) = inventory.items.iter().position(|i| *i == ItemType::Arrow) {
+                inventory.items.remove(idx);
+            } else {
+                // No arrows! Can't shoot
+                return ActionResult::Blocked;
+            }
+        } else {
+            return ActionResult::Blocked;
+        }
     }
 
     // Get bow stats
@@ -468,7 +563,22 @@ pub fn apply_shoot_bow(
 
     // Calculate damage with stats
     let agility = world.get::<&Stats>(shooter).map(|s| s.agility).unwrap_or(10);
-    let damage = base_damage + (agility - 10) / 2;
+    let base_calc_damage = base_damage + (agility - 10) / 2;
+
+    // Apply range band modifier (only for player)
+    let damage = if is_player {
+        let distance = (target_x - start_x).abs().max((target_y - start_y).abs());
+        let range_mult = if distance >= RANGE_OPTIMAL_MIN && distance <= RANGE_OPTIMAL_MAX {
+            RANGE_OPTIMAL_MULT
+        } else if distance <= 2 {
+            RANGE_CLOSE_MULT
+        } else {
+            RANGE_FAR_MULT
+        };
+        (base_calc_damage as f32 * range_mult) as i32
+    } else {
+        base_calc_damage
+    };
 
     // Calculate line from shooter to target using Bresenham
     let path = calculate_arrow_path(start_x, start_y, target_x, target_y, arrow_speed, grid);
@@ -502,6 +612,8 @@ pub fn apply_shoot_bow(
             spawn_time: current_time,
             finished: None,
             potion_type: None,
+            on_hit_effect: None,
+            hit_enemy: false,
         },
         ProjectileMarker,
     ));
@@ -638,6 +750,8 @@ pub fn apply_throw_potion(
             spawn_time: current_time,
             finished: None,
             potion_type: Some(potion_type),
+            on_hit_effect: None,
+            hit_enemy: false,
         },
         ProjectileMarker,
     ));
@@ -1505,6 +1619,249 @@ pub fn apply_place_fire_trap(
         trap,
         placer,
         position: (target_x, target_y),
+    });
+
+    ActionResult::Completed
+}
+
+// =============================================================================
+// RANGER ABILITIES
+// =============================================================================
+
+/// Ranger ability: Disengage - leap away from the nearest enemy
+pub fn apply_disengage(
+    world: &mut World,
+    grid: &Grid,
+    entity: Entity,
+    _events: &mut EventQueue,
+) -> ActionResult {
+    use crate::fov::FOV;
+    use crate::constants::{DISENGAGE_DISTANCE, FOV_RADIUS};
+
+    // Get entity position
+    let pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Blocked,
+    };
+
+    // Find visible enemies
+    let visible_tiles = FOV::calculate(grid, pos.0, pos.1, FOV_RADIUS, None::<fn(i32, i32) -> bool>);
+    let visible_set: std::collections::HashSet<(i32, i32)> = visible_tiles.into_iter().collect();
+
+    // Find nearest enemy
+    let mut nearest_enemy: Option<(i32, i32, i32)> = None; // (x, y, distance_squared)
+    for (_, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+        if (enemy_pos.x, enemy_pos.y) == pos {
+            continue; // Skip self
+        }
+        if !visible_set.contains(&(enemy_pos.x, enemy_pos.y)) {
+            continue;
+        }
+        let dx = enemy_pos.x - pos.0;
+        let dy = enemy_pos.y - pos.1;
+        let dist_sq = dx * dx + dy * dy;
+        if nearest_enemy.is_none() || dist_sq < nearest_enemy.unwrap().2 {
+            nearest_enemy = Some((enemy_pos.x, enemy_pos.y, dist_sq));
+        }
+    }
+
+    // If no enemy found, just stay in place
+    let (enemy_x, enemy_y) = match nearest_enemy {
+        Some((x, y, _)) => (x, y),
+        None => return ActionResult::Completed, // No enemies, ability still goes on cooldown
+    };
+
+    // Calculate direction away from enemy
+    let dx = pos.0 - enemy_x;
+    let dy = pos.1 - enemy_y;
+    let len = ((dx * dx + dy * dy) as f32).sqrt().max(0.001);
+    let dir_x = (dx as f32 / len).round() as i32;
+    let dir_y = (dy as f32 / len).round() as i32;
+
+    // Try to find a valid landing spot
+    let try_offsets = [
+        (dir_x, dir_y),
+        (dir_y, -dir_x),  // Perpendicular
+        (-dir_y, dir_x),  // Other perpendicular
+    ];
+
+    for (off_x, off_y) in try_offsets {
+        if off_x == 0 && off_y == 0 {
+            continue;
+        }
+        let target_x = pos.0 + off_x * DISENGAGE_DISTANCE;
+        let target_y = pos.1 + off_y * DISENGAGE_DISTANCE;
+
+        // Check if target is walkable and unoccupied
+        if grid.get(target_x, target_y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+            let blocked = world.query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .any(|(_, (p, _))| p.x == target_x && p.y == target_y);
+
+            if !blocked {
+                // Teleport to target
+                if let Ok(mut pos) = world.get::<&mut Position>(entity) {
+                    pos.x = target_x;
+                    pos.y = target_y;
+                }
+                if let Ok(mut vpos) = world.get::<&mut VisualPosition>(entity) {
+                    vpos.x = target_x as f32;
+                    vpos.y = target_y as f32;
+                }
+                return ActionResult::Completed;
+            }
+        }
+    }
+
+    // All spots blocked, ability still goes on cooldown but no movement
+    ActionResult::Completed
+}
+
+/// Ranger ability: Tumble - roll to target position with brief invulnerability
+pub fn apply_tumble(
+    world: &mut World,
+    grid: &Grid,
+    entity: Entity,
+    target_x: i32,
+    target_y: i32,
+    _events: &mut EventQueue,
+) -> ActionResult {
+    use crate::constants::TUMBLE_INVULN_DURATION;
+
+    // Get entity position
+    let _pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Blocked,
+    };
+
+    // Check target is walkable terrain (ignore blocking entities - we roll through)
+    if !grid.get(target_x, target_y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
+        return ActionResult::Blocked;
+    }
+
+    // Teleport to target
+    if let Ok(mut p) = world.get::<&mut Position>(entity) {
+        p.x = target_x;
+        p.y = target_y;
+    }
+    if let Ok(mut vpos) = world.get::<&mut VisualPosition>(entity) {
+        vpos.x = target_x as f32;
+        vpos.y = target_y as f32;
+    }
+
+    // Apply invulnerability effect
+    effects::add_effect_to_entity(world, entity, EffectType::Invulnerable, TUMBLE_INVULN_DURATION);
+
+    ActionResult::Completed
+}
+
+/// Ranger ability: Place a snare trap that roots enemies
+pub fn apply_place_snare_trap(
+    world: &mut World,
+    placer: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::constants::SNARE_TRAP_ROOT_DURATION;
+
+    // Spawn the trap entity
+    let pos = Position::new(target_x, target_y);
+    let trap = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::PRESSURE_PLATE),
+        PlacedTrap {
+            owner: placer,
+            trap_type: TrapType::Snare { root_duration: SNARE_TRAP_ROOT_DURATION },
+        },
+    ));
+
+    // TODO: Add SnareTrapPlaced event when we create it
+    let _ = trap;
+
+    ActionResult::Completed
+}
+
+/// Ranger ability: Shoot a crippling arrow that slows the target
+pub fn apply_shoot_crippling_shot(
+    world: &mut World,
+    grid: &Grid,
+    shooter: Entity,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+    current_time: f32,
+) -> ActionResult {
+    use crate::constants::CRIPPLING_SHOT_SLOW_DURATION;
+
+    // Get shooter position and stats
+    let (start_x, start_y) = match world.get::<&Position>(shooter) {
+        Ok(pos) => (pos.x, pos.y),
+        Err(_) => return ActionResult::Blocked,
+    };
+
+    // Check for and consume arrow from inventory
+    if let Ok(mut inventory) = world.get::<&mut Inventory>(shooter) {
+        if let Some(idx) = inventory.items.iter().position(|i| *i == ItemType::Arrow) {
+            inventory.items.remove(idx);
+        } else {
+            // No arrows! Can't shoot
+            return ActionResult::Blocked;
+        }
+    } else {
+        return ActionResult::Blocked;
+    }
+
+    // Get bow stats
+    let (base_damage, arrow_speed) = if let Ok(equip) = world.get::<&Equipment>(shooter) {
+        match &equip.weapon {
+            Some(EquippedWeapon::Ranged(bow)) => (bow.base_damage, bow.arrow_speed),
+            _ => return ActionResult::Blocked, // No bow equipped
+        }
+    } else {
+        return ActionResult::Blocked;
+    };
+
+    // Calculate damage with stats (same as regular bow shot)
+    let agility = world.get::<&Stats>(shooter).map(|s| s.agility).unwrap_or(10);
+    let damage = base_damage + (agility - 10) / 2;
+
+    // Calculate arrow path using Bresenham
+    let path = calculate_arrow_path(start_x, start_y, target_x, target_y, arrow_speed, grid);
+
+    // Calculate direction for sprite rotation
+    let direction = {
+        let dx = (target_x - start_x) as f32;
+        let dy = (target_y - start_y) as f32;
+        let len = (dx * dx + dy * dy).sqrt().max(0.001);
+        (dx / len, dy / len)
+    };
+
+    // Spawn arrow projectile with on_hit_effect
+    let pos = Position::new(start_x, start_y);
+    let arrow = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::ARROW),
+        Projectile {
+            source: shooter,
+            damage,
+            path,
+            path_index: 0,
+            direction,
+            spawn_time: current_time,
+            finished: None,
+            potion_type: None,
+            on_hit_effect: Some((EffectType::Slowed, CRIPPLING_SHOT_SLOW_DURATION)),
+            hit_enemy: false,
+        },
+        ProjectileMarker,
+    ));
+
+    events.push(GameEvent::ProjectileSpawned {
+        projectile: arrow,
+        source: shooter,
     });
 
     ActionResult::Completed

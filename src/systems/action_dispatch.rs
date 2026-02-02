@@ -47,6 +47,11 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::StartLifeDrain { .. } => ACTION_WAIT_DURATION, // Starting life drain (quick)
         ActionType::ActivateFear => BARKSKIN_ACTIVATION_DURATION, // Necromancer ability (quick)
         ActionType::PlaceFireTrap { .. } => ACTION_DOOR_DURATION, // Quick placement
+        ActionType::Disengage => DISENGAGE_DURATION, // Ranger leap
+        ActionType::Tumble { .. } => TUMBLE_DURATION, // Ranger roll
+        ActionType::PlaceSnareTrap { .. } => SNARE_TRAP_DURATION, // Ranger trap
+        ActionType::ShootCripplingShot { .. } => ACTION_SHOOT_DURATION, // Same as bow shot
+        ActionType::Recover => ACTION_RECOVER_DURATION, // Post-shot recovery
     };
 
     // Speed modifies duration: higher speed = shorter duration

@@ -7,8 +7,8 @@ pub const DUNGEON_MIN_ROOM_SIZE: i32 = 4;
 /// Margin around rooms within their leaf
 pub const DUNGEON_ROOM_MARGIN: i32 = 1;
 /// Default dungeon width
-pub const DUNGEON_DEFAULT_WIDTH: usize = 100;
+pub const DUNGEON_DEFAULT_WIDTH: usize = 50;
 /// Default dungeon height
-pub const DUNGEON_DEFAULT_HEIGHT: usize = 100;
+pub const DUNGEON_DEFAULT_HEIGHT: usize = 50;
 /// Chance for a room to have a special theme (Overgrown, Flooded, etc.)
 pub const THEMED_ROOM_CHANCE: f32 = 0.25;

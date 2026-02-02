@@ -203,6 +203,13 @@ fn draw_stats_column(
     });
 }
 
+/// Represents an inventory slot for display (may be a stack or single item)
+struct InventorySlot {
+    item_type: crate::components::ItemType,
+    count: u32,
+    first_index: usize, // Index of first occurrence in inventory
+}
+
 fn draw_inventory_column(
     ui: &mut egui::Ui,
     world: &World,
@@ -224,10 +231,13 @@ fn draw_inventory_column(
                         .color(style::colors::TEXT_MUTED),
                 );
             } else {
+                // Build display slots: group stackable items, keep others separate
+                let slots = build_inventory_slots(&inventory.items);
+
                 ui.horizontal_wrapped(|ui| {
-                    for (i, item_type) in inventory.items.iter().enumerate() {
-                        let uv = icons.get_item_uv(*item_type);
-                        let is_throwable = systems::items::item_is_throwable(*item_type);
+                    for slot in &slots {
+                        let uv = icons.get_item_uv(slot.item_type);
+                        let is_throwable = systems::items::item_is_throwable(slot.item_type);
 
                         // Allocate space and paint black background manually
                         let size = egui::vec2(48.0, 48.0);
@@ -244,37 +254,103 @@ fn draw_inventory_column(
                         .uv(uv);
                         image.paint_at(ui, rect);
 
+                        // Draw stack count if more than 1
+                        if slot.count > 1 {
+                            let count_text = format!("{}", slot.count);
+                            // Draw shadow/outline for visibility
+                            let text_pos = rect.right_bottom() + egui::vec2(-4.0, -4.0);
+                            ui.painter().text(
+                                text_pos + egui::vec2(1.0, 1.0),
+                                egui::Align2::RIGHT_BOTTOM,
+                                &count_text,
+                                egui::FontId::proportional(14.0),
+                                egui::Color32::BLACK,
+                            );
+                            ui.painter().text(
+                                text_pos,
+                                egui::Align2::RIGHT_BOTTOM,
+                                &count_text,
+                                egui::FontId::proportional(14.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+
                         // Build hover text based on item type
-                        let hover_text = if is_throwable {
+                        let hover_text = if slot.count > 1 {
+                            format!(
+                                "{} (x{})\n\nRight-click for options",
+                                systems::item_name(slot.item_type),
+                                slot.count
+                            )
+                        } else if is_throwable {
                             format!(
                                 "{}\n\nLeft-click to drink\nRight-click for options",
-                                systems::item_name(*item_type)
+                                systems::item_name(slot.item_type)
                             )
                         } else {
                             format!(
                                 "{}\n\nLeft-click to use\nRight-click for options",
-                                systems::item_name(*item_type)
+                                systems::item_name(slot.item_type)
                             )
                         };
 
                         let response = response.on_hover_text(hover_text);
 
-                        // Left-click: use/drink the item
-                        if response.clicked() {
-                            actions.item_to_use = Some(i);
+                        // Left-click: use/drink the item (only for single items or non-stackables)
+                        if response.clicked() && slot.count == 1 {
+                            actions.item_to_use = Some(slot.first_index);
                         }
 
                         // Right-click: open context menu (for all items)
                         if response.secondary_clicked() {
                             // Get the screen position for the popup
                             let pos = response.rect.right_top();
-                            ui_state.item_context_menu = Some((i, pos));
+                            ui_state.item_context_menu = Some((slot.first_index, pos));
                         }
                     }
                 });
             }
         }
     });
+}
+
+/// Build inventory display slots, grouping stackable items together
+fn build_inventory_slots(items: &[crate::components::ItemType]) -> Vec<InventorySlot> {
+    use std::collections::HashMap;
+
+    let mut slots = Vec::new();
+    let mut stackable_counts: HashMap<crate::components::ItemType, (u32, usize)> = HashMap::new();
+
+    for (i, item_type) in items.iter().enumerate() {
+        if item_type.is_stackable() {
+            // Track count and first index for stackable items
+            stackable_counts
+                .entry(*item_type)
+                .and_modify(|(count, _)| *count += 1)
+                .or_insert((1, i));
+        } else {
+            // Non-stackable items get their own slot
+            slots.push(InventorySlot {
+                item_type: *item_type,
+                count: 1,
+                first_index: i,
+            });
+        }
+    }
+
+    // Add stackable items as single slots with counts
+    for (item_type, (count, first_index)) in stackable_counts {
+        slots.push(InventorySlot {
+            item_type,
+            count,
+            first_index,
+        });
+    }
+
+    // Sort slots so stackable items appear at the end (or you could sort differently)
+    slots.sort_by_key(|s| (s.item_type.is_stackable(), s.first_index));
+
+    slots
 }
 
 fn draw_item_context_menu(
@@ -285,14 +361,27 @@ fn draw_item_context_menu(
     actions: &mut UiActions,
 ) {
     if let Some((item_idx, pos)) = ui_state.item_context_menu {
-        // Get the item type to show appropriate options
-        let item_type = world
+        // Get the item type and count to show appropriate options
+        let (item_type, stack_count) = world
             .get::<&Inventory>(player_entity)
             .ok()
-            .and_then(|inv| inv.items.get(item_idx).copied());
+            .map(|inv| {
+                if let Some(&item) = inv.items.get(item_idx) {
+                    let count = if item.is_stackable() {
+                        inv.items.iter().filter(|&&i| i == item).count() as u32
+                    } else {
+                        1
+                    };
+                    (Some(item), count)
+                } else {
+                    (None, 0)
+                }
+            })
+            .unwrap_or((None, 0));
 
         if let Some(item_type) = item_type {
             let is_throwable = systems::items::item_is_throwable(item_type);
+            let is_stackable = item_type.is_stackable();
 
             egui::Area::new(egui::Id::new("item_context_menu"))
                 .fixed_pos(pos)
@@ -301,32 +390,48 @@ fn draw_item_context_menu(
                     style::dungeon_window_frame().show(ui, |ui| {
                         ui.set_min_width(120.0);
 
-                        // Show options based on item type
-                        if is_throwable {
-                            if ui.button("Drink").clicked() {
-                                actions.item_to_use = Some(item_idx);
-                                ui_state.item_context_menu = None;
-                            }
-                            if ui.button("Throw").clicked() {
-                                actions.item_to_throw = Some(item_idx);
-                                ui_state.item_context_menu = None;
-                            }
-                        } else {
-                            // Non-throwable items: Use/Equip
-                            let is_weapon = matches!(
-                                item_type,
-                                crate::components::ItemType::Sword
-                                    | crate::components::ItemType::Bow
+                        // Show item name with count for stacks
+                        if stack_count > 1 {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} (x{})",
+                                    systems::item_name(item_type),
+                                    stack_count
+                                ))
+                                .color(style::colors::TEXT_PRIMARY),
                             );
-                            let button_text = if is_weapon { "Equip" } else { "Use" };
-                            if ui.button(button_text).clicked() {
-                                actions.item_to_use = Some(item_idx);
-                                ui_state.item_context_menu = None;
+                            ui.separator();
+                        }
+
+                        // Show options based on item type (not for stackable ammo)
+                        if !is_stackable {
+                            if is_throwable {
+                                if ui.button("Drink").clicked() {
+                                    actions.item_to_use = Some(item_idx);
+                                    ui_state.item_context_menu = None;
+                                }
+                                if ui.button("Throw").clicked() {
+                                    actions.item_to_throw = Some(item_idx);
+                                    ui_state.item_context_menu = None;
+                                }
+                            } else {
+                                // Non-throwable items: Use/Equip
+                                let is_weapon = matches!(
+                                    item_type,
+                                    crate::components::ItemType::Sword
+                                        | crate::components::ItemType::Bow
+                                );
+                                let button_text = if is_weapon { "Equip" } else { "Use" };
+                                if ui.button(button_text).clicked() {
+                                    actions.item_to_use = Some(item_idx);
+                                    ui_state.item_context_menu = None;
+                                }
                             }
                         }
 
-                        // Drop option for all items
-                        if ui.button("Drop").clicked() {
+                        // Drop option - shows "Drop" for single items, "Drop One" for stacks
+                        let drop_text = if stack_count > 1 { "Drop One" } else { "Drop" };
+                        if ui.button(drop_text).clicked() {
                             actions.item_to_drop = Some(item_idx);
                             ui_state.item_context_menu = None;
                         }

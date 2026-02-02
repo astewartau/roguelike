@@ -1,8 +1,8 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Experience, Health, Position,
-    Sprite, Stats, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Equipment, Experience, Health,
+    ItemType, Position, Sprite, Stats, Weapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -115,7 +115,22 @@ pub fn remove_dead_entities(
 
         // Add loot container with random gold
         let gold = rng.gen_range(ENEMY_GOLD_DROP_MIN..=ENEMY_GOLD_DROP_MAX);
-        let _ = world.insert_one(id, Container::with_gold(vec![], gold));
+
+        // Check if enemy had a bow - 50% chance to drop arrows
+        let mut loot_items = Vec::new();
+        if let Ok(equipment) = world.get::<&Equipment>(id) {
+            if equipment.get_bow().is_some() {
+                // 50% chance to drop 1-3 arrows
+                if rng.gen::<f32>() < 0.5 {
+                    let arrow_count = rng.gen_range(1..=3);
+                    for _ in 0..arrow_count {
+                        loot_items.push(ItemType::Arrow);
+                    }
+                }
+            }
+        }
+
+        let _ = world.insert_one(id, Container::corpse(loot_items, gold));
     }
 }
 

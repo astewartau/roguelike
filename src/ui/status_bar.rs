@@ -164,6 +164,12 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                             StatusEffectType::Burning => {
                                 ("Burning", egui::Color32::from_rgb(255, 100, 50)) // Orange-red fire color
                             }
+                            StatusEffectType::Rooted => {
+                                ("Rooted", egui::Color32::from_rgb(139, 90, 43)) // Brown/root color
+                            }
+                            StatusEffectType::Invulnerable => {
+                                ("Invuln", egui::Color32::from_rgb(255, 215, 0)) // Gold color
+                            }
                         };
                         ui.label(
                             egui::RichText::new(format!("{} ({:.0}s)", label, duration))

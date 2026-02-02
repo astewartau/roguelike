@@ -380,8 +380,21 @@ impl GameEngine {
         }
 
         // Projectile cleanup
-        let finished = systems::cleanup_finished_projectiles(&state.world);
+        let (finished, arrow_recovery_info) = systems::cleanup_finished_projectiles(&state.world);
         systems::despawn_projectiles(&mut state.world, finished);
+
+        // Spawn recoverable arrows on the ground
+        // Missed arrows are always recovered; arrows that hit have 50% chance
+        for ((x, y), hit_enemy) in arrow_recovery_info {
+            let should_recover = if hit_enemy {
+                rand::random::<f32>() < 0.5
+            } else {
+                true // Missed arrows always recoverable
+            };
+            if should_recover {
+                systems::inventory::spawn_ground_item(&mut state.world, x, y, crate::components::ItemType::Arrow);
+            }
+        }
 
         // Update camera tracking (center of tile, not corner)
         if let Ok(vis_pos) = state.world.get::<&crate::components::VisualPosition>(state.player_entity) {
@@ -460,6 +473,11 @@ impl GameEngine {
         // Handle secondary ability button click from UI (Druid's Barkskin)
         if actions.use_secondary_ability {
             self.try_use_secondary_ability();
+        }
+
+        // Handle Ranger ability click from UI
+        if let Some(index) = actions.ranger_ability_clicked {
+            self.try_use_ranger_ability(index);
         }
 
         let ui_state = self.ui_state.as_mut().expect("UI state should exist");
@@ -673,7 +691,7 @@ impl GameEngine {
                     systems::cleanup_empty_ground_piles(&mut state.world);
                 }
                 crate::game::ContainerAction::Opened(_) => {
-                    let _ = process_events(
+                    let _ = process_events_with_audio(
                         &mut self.events,
                         &mut state.world,
                         &state.grid,
@@ -681,6 +699,7 @@ impl GameEngine {
                         &mut self.vfx,
                         ui_state,
                         state.player_entity,
+                        self.audio.as_ref(),
                     );
                 }
                 crate::game::ContainerAction::None => {}
@@ -726,6 +745,24 @@ impl GameEngine {
             );
         }
 
+        // Ranger ability activation (number keys 1-4)
+        if let Some(ability_index) = frame.ranger_ability {
+            activate_ranger_ability(
+                &mut state.world,
+                &state.grid,
+                state.player_entity,
+                ability_index,
+                &mut state.game_clock,
+                &mut state.action_scheduler,
+                &mut state.active_ai_tracker,
+                &mut state.spatial_cache,
+                &mut self.events,
+                &mut self.vfx,
+                ui_state,
+                &mut self.input,
+            );
+        }
+
         // Execute player intent
         if let Some(intent) = frame.player_intent {
             if let Some(item_index) = frame.item_to_remove {
@@ -748,6 +785,7 @@ impl GameEngine {
                 &mut self.events,
                 &mut self.vfx,
                 ui_state,
+                self.audio.as_ref(),
             );
 
             // Collect skeleton spawn positions before floor transition might invalidate state
@@ -766,9 +804,19 @@ impl GameEngine {
                                 &state.world,
                                 state.player_entity,
                             ) {
+                                let container_type = state.world
+                                    .get::<&crate::components::Container>(container_id)
+                                    .ok()
+                                    .map(|c| c.container_type);
+                                let position = state.world
+                                    .get::<&crate::components::Position>(container_id)
+                                    .map(|p| (p.x, p.y))
+                                    .unwrap_or((0, 0));
                                 self.events.push(crate::events::GameEvent::ContainerOpened {
                                     container: container_id,
                                     opener: state.player_entity,
+                                    container_type,
+                                    position,
                                 });
                             }
                         }
@@ -892,6 +940,30 @@ impl GameEngine {
             &mut self.events,
             &mut self.vfx,
             ui_state,
+        );
+    }
+
+    fn try_use_ranger_ability(&mut self, ability_index: usize) {
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+        let Some(ref mut ui_state) = self.ui_state else {
+            return;
+        };
+
+        activate_ranger_ability(
+            &mut state.world,
+            &state.grid,
+            state.player_entity,
+            ability_index,
+            &mut state.game_clock,
+            &mut state.action_scheduler,
+            &mut state.active_ai_tracker,
+            &mut state.spatial_cache,
+            &mut self.events,
+            &mut self.vfx,
+            ui_state,
+            &mut self.input,
         );
     }
 
@@ -1036,6 +1108,8 @@ fn activate_class_ability(
         AbilityType::LifeDrain => unreachable!("LifeDrain ability handled above with targeting mode"),
         AbilityType::Barkskin => return false, // Barkskin is a secondary ability, not primary
         AbilityType::Fear => return false,     // Fear is a secondary ability, not primary
+        // Ranger abilities are handled via RangerAbilities component and number keys
+        AbilityType::Disengage | AbilityType::Tumble | AbilityType::SnareTrap | AbilityType::CripplingShot => return false,
     };
 
     // Start the action
@@ -1176,6 +1250,125 @@ fn activate_secondary_ability(
     let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
 
     start_result.is_ok()
+}
+
+/// Activate a Ranger ability by index (0-3 for keys 1-4).
+fn activate_ranger_ability(
+    world: &mut hecs::World,
+    grid: &crate::grid::Grid,
+    player: Entity,
+    ability_index: usize,
+    game_clock: &mut crate::time_system::GameClock,
+    action_scheduler: &mut crate::time_system::ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+    input_state: &mut InputState,
+) -> bool {
+    use crate::components::RangerAbilities;
+    use crate::constants::*;
+
+    // Check if player is idle
+    let is_idle = world
+        .get::<&Actor>(player)
+        .map(|a| a.current_action.is_none())
+        .unwrap_or(false);
+
+    if !is_idle {
+        return false;
+    }
+
+    // Get Ranger abilities component
+    let ability_info = world
+        .get::<&RangerAbilities>(player)
+        .ok()
+        .and_then(|ra| ra.get(ability_index).cloned());
+
+    let Some((ability_type, cooldown_remaining, _)) = ability_info else {
+        return false; // Not a Ranger or invalid index
+    };
+
+    // Check if ability is ready
+    if cooldown_remaining > 0.0 {
+        return false;
+    }
+
+    // Get energy cost
+    let energy_cost = ability_type.energy_cost();
+
+    // Check if player can afford this
+    let can_afford = world
+        .get::<&Actor>(player)
+        .map(|a| a.max_energy >= energy_cost)
+        .unwrap_or(false);
+
+    if !can_afford {
+        return false;
+    }
+
+    // Handle ability based on type
+    match ability_type {
+        AbilityType::Disengage => {
+            // Disengage is immediate - no targeting needed
+            let mut rng = rand::thread_rng();
+            let got_energy = simulation::wait_for_energy(
+                world, grid, player, energy_cost, game_clock, action_scheduler,
+                active_ai_tracker, spatial_cache, events, &mut rng,
+            );
+
+            if !got_energy {
+                let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+                return false;
+            }
+
+            // Start the action
+            let start_result = time_system::start_action(
+                world, player, ActionType::Disengage, game_clock, action_scheduler,
+            );
+
+            if start_result.is_ok() {
+                // Start cooldown
+                if let Ok(mut ra) = world.get::<&mut RangerAbilities>(player) {
+                    ra.start_cooldown(ability_index);
+                }
+
+                simulation::advance_until_player_ready(
+                    world, grid, player, game_clock, action_scheduler,
+                    active_ai_tracker, spatial_cache, events, &mut rng,
+                );
+            }
+
+            let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+            start_result.is_ok()
+        }
+        AbilityType::Tumble => {
+            // Enter targeting mode
+            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+                ability_type: AbilityType::Tumble,
+                max_range: TUMBLE_DISTANCE,
+            });
+            true
+        }
+        AbilityType::SnareTrap => {
+            // Enter targeting mode (adjacent only)
+            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+                ability_type: AbilityType::SnareTrap,
+                max_range: SNARE_TRAP_RANGE,
+            });
+            true
+        }
+        AbilityType::CripplingShot => {
+            // Enter targeting mode (bow range)
+            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+                ability_type: AbilityType::CripplingShot,
+                max_range: BOW_RANGE,
+            });
+            true
+        }
+        _ => false, // Not a Ranger ability
+    }
 }
 
 /// Result of input processing (internal)

@@ -63,7 +63,15 @@ impl PlayerClass {
     pub fn starting_inventory(&self) -> Vec<ItemType> {
         match self {
             PlayerClass::Fighter => vec![],
-            PlayerClass::Ranger => vec![ItemType::Dagger],
+            // Ranger gets dagger and starting arrows
+            PlayerClass::Ranger => {
+                let mut items = vec![ItemType::Dagger];
+                // Add STARTING_ARROW_COUNT arrows
+                for _ in 0..crate::constants::STARTING_ARROW_COUNT {
+                    items.push(ItemType::Arrow);
+                }
+                items
+            },
             PlayerClass::Druid => vec![ItemType::RegenerationPotion],
             PlayerClass::Necromancer => vec![ItemType::HealthPotion],
         }
@@ -99,7 +107,7 @@ impl PlayerClass {
 pub enum AbilityType {
     /// Fighter: Attack all adjacent enemies
     Cleave,
-    /// Ranger: Temporary speed boost
+    /// Ranger: Temporary speed boost (legacy, being phased out)
     Sprint,
     /// Druid: Tame a nearby animal
     Tame,
@@ -109,6 +117,14 @@ pub enum AbilityType {
     LifeDrain,
     /// Necromancer: Cause nearby enemies to flee
     Fear,
+    /// Ranger: Leap away from nearest enemy
+    Disengage,
+    /// Ranger: Roll to target position with brief invulnerability
+    Tumble,
+    /// Ranger: Place a snare trap that roots enemies
+    SnareTrap,
+    /// Ranger: Shoot an arrow that slows the target
+    CripplingShot,
 }
 
 impl AbilityType {
@@ -121,6 +137,10 @@ impl AbilityType {
             AbilityType::Barkskin => "Barkskin",
             AbilityType::LifeDrain => "Life Drain",
             AbilityType::Fear => "Fear",
+            AbilityType::Disengage => "Disengage",
+            AbilityType::Tumble => "Tumble",
+            AbilityType::SnareTrap => "Snare Trap",
+            AbilityType::CripplingShot => "Crippling Shot",
         }
     }
 
@@ -133,6 +153,10 @@ impl AbilityType {
             AbilityType::Barkskin => "Reduce damage by 50% for 15 seconds",
             AbilityType::LifeDrain => "Channel to drain life from a nearby enemy",
             AbilityType::Fear => "Cause nearby enemies to flee",
+            AbilityType::Disengage => "Leap 3 tiles away from nearest enemy",
+            AbilityType::Tumble => "Roll to target with brief invulnerability",
+            AbilityType::SnareTrap => "Place a trap that roots enemies",
+            AbilityType::CripplingShot => "Arrow that slows the target",
         }
     }
 
@@ -145,6 +169,10 @@ impl AbilityType {
             AbilityType::Barkskin => BARKSKIN_ENERGY_COST,
             AbilityType::LifeDrain => LIFE_DRAIN_ENERGY_COST,
             AbilityType::Fear => FEAR_ABILITY_ENERGY_COST,
+            AbilityType::Disengage => DISENGAGE_ENERGY_COST,
+            AbilityType::Tumble => TUMBLE_ENERGY_COST,
+            AbilityType::SnareTrap => SNARE_TRAP_ENERGY_COST,
+            AbilityType::CripplingShot => CRIPPLING_SHOT_ENERGY_COST,
         }
     }
 }
@@ -425,7 +453,7 @@ impl Experience {
 }
 
 /// Item type - pure data enum, properties defined in systems
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemType {
     // Weapons
     Sword,
@@ -453,6 +481,15 @@ pub enum ItemType {
     Apple,
     // Traps
     FireTrap,
+    // Ammunition
+    Arrow,
+}
+
+impl ItemType {
+    /// Returns true if this item type stacks in inventory
+    pub fn is_stackable(&self) -> bool {
+        matches!(self, ItemType::Arrow)
+    }
 }
 
 // =============================================================================
@@ -482,6 +519,10 @@ pub enum EffectType {
     Slowed,
     /// On fire - takes damage over time
     Burning,
+    /// Cannot move but can still attack (from Snare Trap)
+    Rooted,
+    /// Immune to all damage (brief, from Tumble)
+    Invulnerable,
 }
 
 /// An active status effect with remaining duration
@@ -531,6 +572,10 @@ pub enum ContainerType {
     Chest,
     Coffin,
     Barrel,
+    /// Dead enemy corpse/bones
+    Corpse,
+    /// Items dropped on the ground
+    GroundPile,
 }
 
 /// Container component (for chests, coffins, barrels)
@@ -601,6 +646,16 @@ pub enum ActionType {
     ActivateFear,
     /// Place a fire trap at target location
     PlaceFireTrap { target_x: i32, target_y: i32 },
+    /// Ranger ability: leap away from nearest enemy
+    Disengage,
+    /// Ranger ability: roll to target position with invulnerability
+    Tumble { target_x: i32, target_y: i32 },
+    /// Ranger ability: place a snare trap that roots enemies
+    PlaceSnareTrap { target_x: i32, target_y: i32 },
+    /// Ranger ability: shoot arrow that slows target
+    ShootCripplingShot { target_x: i32, target_y: i32 },
+    /// Recovery after shooting (auto-queued, allows arrow to fly)
+    Recover,
 }
 
 impl ActionType {
@@ -632,6 +687,11 @@ impl ActionType {
             ActionType::StartLifeDrain { .. } => LIFE_DRAIN_ENERGY_COST,
             ActionType::ActivateFear => FEAR_ABILITY_ENERGY_COST,
             ActionType::PlaceFireTrap { .. } => 1,
+            ActionType::Disengage => DISENGAGE_ENERGY_COST,
+            ActionType::Tumble { .. } => TUMBLE_ENERGY_COST,
+            ActionType::PlaceSnareTrap { .. } => SNARE_TRAP_ENERGY_COST,
+            ActionType::ShootCripplingShot { .. } => CRIPPLING_SHOT_ENERGY_COST,
+            ActionType::Recover => 0, // Free action, just takes time
         }
     }
 }
@@ -745,19 +805,8 @@ impl VisualPosition {
 }
 
 impl Container {
-    /// Create a chest container (default)
-    pub fn new(items: Vec<ItemType>) -> Self {
-        Self {
-            container_type: ContainerType::Chest,
-            items,
-            gold: 0,
-            is_open: false,
-            spawn_chance: 0.0,
-        }
-    }
-
-    /// Create a chest with gold
-    pub fn with_gold(items: Vec<ItemType>, gold: u32) -> Self {
+    /// Create a chest container
+    pub fn chest(items: Vec<ItemType>, gold: u32) -> Self {
         Self {
             container_type: ContainerType::Chest,
             items,
@@ -782,6 +831,28 @@ impl Container {
     pub fn barrel(items: Vec<ItemType>) -> Self {
         Self {
             container_type: ContainerType::Barrel,
+            items,
+            gold: 0,
+            is_open: false,
+            spawn_chance: 0.0,
+        }
+    }
+
+    /// Create a corpse/bones container (from dead enemies)
+    pub fn corpse(items: Vec<ItemType>, gold: u32) -> Self {
+        Self {
+            container_type: ContainerType::Corpse,
+            items,
+            gold,
+            is_open: false,
+            spawn_chance: 0.0,
+        }
+    }
+
+    /// Create a ground item pile
+    pub fn ground_pile(items: Vec<ItemType>) -> Self {
+        Self {
+            container_type: ContainerType::GroundPile,
             items,
             gold: 0,
             is_open: false,
@@ -1048,6 +1119,10 @@ pub struct Projectile {
     pub finished: Option<(i32, i32, f32)>,
     /// If Some, this is a thrown potion that should splash on impact
     pub potion_type: Option<ItemType>,
+    /// Optional status effect to apply on hit (effect_type, duration)
+    pub on_hit_effect: Option<(EffectType, f32)>,
+    /// Whether this projectile hit an enemy (used for arrow recovery)
+    pub hit_enemy: bool,
 }
 
 /// Marker component for projectiles (for queries)
@@ -1174,6 +1249,74 @@ pub struct PlacedFireTrap {
     pub owner: Entity,
     /// Initial burst damage when triggered
     pub burst_damage: i32,
+}
+
+// =============================================================================
+// GENERALIZED TRAP SYSTEM
+// =============================================================================
+
+/// Types of placed traps
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrapType {
+    /// Fire trap: deals burst damage and applies Burning
+    Fire { burst_damage: i32 },
+    /// Snare trap: applies Rooted effect
+    Snare { root_duration: f32 },
+}
+
+/// Generalized trap component (will eventually replace PlacedFireTrap)
+#[derive(Debug, Clone, Copy)]
+pub struct PlacedTrap {
+    /// The entity that placed this trap
+    pub owner: Entity,
+    /// Type of trap and its parameters
+    pub trap_type: TrapType,
+}
+
+// =============================================================================
+// RANGER ABILITIES
+// =============================================================================
+
+/// Tracks all Ranger abilities with independent cooldowns
+#[derive(Debug, Clone)]
+pub struct RangerAbilities {
+    /// Array of (ability_type, cooldown_remaining, cooldown_total)
+    pub abilities: [(AbilityType, f32, f32); 4],
+}
+
+impl RangerAbilities {
+    pub fn new() -> Self {
+        Self {
+            abilities: [
+                (AbilityType::Disengage, 0.0, DISENGAGE_COOLDOWN),
+                (AbilityType::Tumble, 0.0, TUMBLE_COOLDOWN),
+                (AbilityType::SnareTrap, 0.0, SNARE_TRAP_COOLDOWN),
+                (AbilityType::CripplingShot, 0.0, CRIPPLING_SHOT_COOLDOWN),
+            ],
+        }
+    }
+
+    /// Get the ability at the given index (0-3)
+    pub fn get(&self, index: usize) -> Option<&(AbilityType, f32, f32)> {
+        self.abilities.get(index)
+    }
+
+    /// Get mutable reference to ability at given index
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut (AbilityType, f32, f32)> {
+        self.abilities.get_mut(index)
+    }
+
+    /// Check if ability at index is ready (cooldown <= 0)
+    pub fn is_ready(&self, index: usize) -> bool {
+        self.abilities.get(index).map(|(_, cd, _)| *cd <= 0.0).unwrap_or(false)
+    }
+
+    /// Start cooldown for ability at index
+    pub fn start_cooldown(&mut self, index: usize) {
+        if let Some((_, cooldown_remaining, cooldown_total)) = self.abilities.get_mut(index) {
+            *cooldown_remaining = *cooldown_total;
+        }
+    }
 }
 
 // =============================================================================

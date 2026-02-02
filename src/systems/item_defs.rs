@@ -353,6 +353,20 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         is_throwable: false,
         base_price: 50,
     },
+    // =========================================================================
+    // AMMUNITION
+    // =========================================================================
+    ItemDef {
+        item_type: ItemType::Arrow,
+        name: "Arrow",
+        category: ItemCategory::Trap, // Reuse category for now
+        weight: ARROW_WEIGHT,
+        sprite: tile_ids::ARROW,
+        use_effect: UseEffect::Equip, // Can't be "used" directly
+        targeting: None,
+        is_throwable: false,
+        base_price: 2, // Cheap per arrow
+    },
 ];
 
 #[cfg(test)]
@@ -384,6 +398,7 @@ mod tests {
             ItemType::Bread,
             ItemType::Apple,
             ItemType::FireTrap,
+            ItemType::Arrow,
         ];
 
         for item in all_items {

@@ -172,6 +172,8 @@ pub struct InputResult {
     pub ability_pressed: bool,
     /// Player wants to use secondary ability (E) - Druid only
     pub secondary_ability_pressed: bool,
+    /// Ranger ability key pressed (0-3 for keys 1-4)
+    pub ranger_ability: Option<usize>,
 }
 
 impl Default for InputResult {
@@ -186,6 +188,7 @@ impl Default for InputResult {
             wait: false,
             ability_pressed: false,
             secondary_ability_pressed: false,
+            ranger_ability: None,
         }
     }
 }
@@ -228,6 +231,17 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     // Secondary ability hotkey (E) - Druid only
     if input.keys_pressed.remove(&KeyCode::KeyE) {
         result.secondary_ability_pressed = true;
+    }
+
+    // Ranger ability hotkeys (1-4)
+    if input.keys_pressed.remove(&KeyCode::Digit1) {
+        result.ranger_ability = Some(0);
+    } else if input.keys_pressed.remove(&KeyCode::Digit2) {
+        result.ranger_ability = Some(1);
+    } else if input.keys_pressed.remove(&KeyCode::Digit3) {
+        result.ranger_ability = Some(2);
+    } else if input.keys_pressed.remove(&KeyCode::Digit4) {
+        result.ranger_ability = Some(3);
     }
 
     // Check if shift is held (don't consume - it's a modifier)
@@ -622,6 +636,8 @@ pub struct FrameInput {
     pub ability_pressed: bool,
     /// Player wants to use secondary ability (E) - Druid only
     pub secondary_ability_pressed: bool,
+    /// Ranger ability key pressed (0-3 for keys 1-4)
+    pub ranger_ability: Option<usize>,
 }
 
 impl Default for FrameInput {
@@ -637,6 +653,7 @@ impl Default for FrameInput {
             item_to_remove: None,
             ability_pressed: false,
             secondary_ability_pressed: false,
+            ranger_ability: None,
         }
     }
 }
@@ -662,6 +679,7 @@ pub fn process_frame(
     result.enter_pressed = kb.enter_pressed;
     result.ability_pressed = kb.ability_pressed;
     result.secondary_ability_pressed = kb.secondary_ability_pressed;
+    result.ranger_ability = kb.ranger_ability;
 
     // Check if player is dead
     let is_dead = world
@@ -783,6 +801,81 @@ pub fn process_frame(
                                 result.from_keyboard = false;
                                 return result;
                             }
+                        }
+                        AbilityType::Tumble => {
+                            // Tumble requires walkable, unblocked destination
+                            let walkable = grid
+                                .get(target_x, target_y)
+                                .map(|t| t.tile_type.is_walkable())
+                                .unwrap_or(false);
+                            if walkable {
+                                // Check no entity blocks this position
+                                let blocked = world
+                                    .query::<(&Position, &BlocksMovement)>()
+                                    .iter()
+                                    .any(|(_, (epos, _))| epos.x == target_x && epos.y == target_y);
+                                if !blocked {
+                                    input.cancel_targeting();
+                                    result.player_intent = Some(PlayerIntent::Tumble { target_x, target_y });
+                                    result.from_keyboard = false;
+                                    return result;
+                                }
+                            }
+                        }
+                        AbilityType::SnareTrap => {
+                            // Snare trap requires walkable, unblocked, adjacent destination
+                            let walkable = grid
+                                .get(target_x, target_y)
+                                .map(|t| t.tile_type.is_walkable())
+                                .unwrap_or(false);
+                            if walkable {
+                                let blocked = world
+                                    .query::<(&Position, &BlocksMovement)>()
+                                    .iter()
+                                    .any(|(_, (epos, _))| epos.x == target_x && epos.y == target_y);
+                                if !blocked {
+                                    input.cancel_targeting();
+                                    result.player_intent = Some(PlayerIntent::PlaceSnareTrap { target_x, target_y });
+                                    result.from_keyboard = false;
+                                    return result;
+                                }
+                            }
+                        }
+                        AbilityType::CripplingShot => {
+                            // Crippling shot requires line of sight and explored tile
+                            use crate::components::BlocksVision;
+                            use crate::fov::FOV;
+
+                            // Check if target tile is explored
+                            let is_explored = grid
+                                .get(target_x, target_y)
+                                .map(|tile| tile.explored)
+                                .unwrap_or(false);
+
+                            if is_explored {
+                                // Collect positions of entities that block vision (closed doors)
+                                let blocking_positions: std::collections::HashSet<(i32, i32)> = world
+                                    .query::<(&Position, &BlocksVision)>()
+                                    .iter()
+                                    .map(|(_, (epos, _))| (epos.x, epos.y))
+                                    .collect();
+
+                                let visible = FOV::calculate(
+                                    grid,
+                                    pos.x,
+                                    pos.y,
+                                    targeting.max_range,
+                                    Some(|x: i32, y: i32| blocking_positions.contains(&(x, y))),
+                                );
+                                let visible_set: std::collections::HashSet<(i32, i32)> = visible.into_iter().collect();
+                                if visible_set.contains(&(target_x, target_y)) {
+                                    input.cancel_targeting();
+                                    result.player_intent = Some(PlayerIntent::ShootCripplingShot { target_x, target_y });
+                                    result.from_keyboard = false;
+                                    return result;
+                                }
+                            }
+                            // Target not in LOS or unexplored - don't consume click
                         }
                         _ => {}
                     }

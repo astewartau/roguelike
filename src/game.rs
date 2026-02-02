@@ -46,9 +46,19 @@ pub fn handle_enter_key_container(
     }
 
     if let Some(container_id) = crate::systems::find_container_at_player(world, player_entity) {
+        let container_type = world
+            .get::<&crate::components::Container>(container_id)
+            .ok()
+            .map(|c| c.container_type);
+        let position = world
+            .get::<&crate::components::Position>(container_id)
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0, 0));
         events.push(crate::events::GameEvent::ContainerOpened {
             container: container_id,
             opener: player_entity,
+            container_type,
+            position,
         });
         return ContainerAction::Opened(container_id);
     }

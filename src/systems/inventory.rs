@@ -159,7 +159,7 @@ pub fn spawn_ground_item(world: &mut World, x: i32, y: i32, item: ItemType) -> E
             pos,
             VisualPosition::from_position(&pos),
             Sprite::from_ref(sprite_ref),
-            Container::new(vec![item]),
+            Container::ground_pile(vec![item]),
             GroundItemPile,
         ))
     }
@@ -211,7 +211,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::with_gold(vec![], 100),
+            Container::chest(vec![], 100),
         ));
 
         take_gold_from_container(&mut world, player, chest, None);
@@ -234,7 +234,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::with_gold(vec![ItemType::HealthPotion], 50),
+            Container::chest(vec![ItemType::HealthPotion], 50),
         ));
 
         take_all_from_container(&mut world, player, chest, None);
@@ -259,7 +259,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::new(vec![ItemType::HealthPotion]),
+            Container::chest(vec![ItemType::HealthPotion], 0),
         ));
 
         let success = take_item_from_container(&mut world, player, chest, 0, None);
@@ -283,7 +283,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::new(vec![ItemType::HealthPotion]),
+            Container::chest(vec![ItemType::HealthPotion], 0),
         ));
 
         let success = take_item_from_container(&mut world, player, chest, 5, None);

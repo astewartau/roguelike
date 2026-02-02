@@ -119,9 +119,14 @@ fn determine_action(
     // Check for status effects that override normal AI behavior
     let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
     let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
+    let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted);
+
+    // Rooted: cannot move, but can still attack adjacent targets
+    // We handle this by checking it before any movement decisions
+    // and only allowing attack actions if target is adjacent
 
     // Confused: move randomly, ignore player entirely
-    if is_confused {
+    if is_confused && !is_rooted {
         let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
@@ -129,8 +134,8 @@ fn determine_action(
         return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
 
-    // Feared: flee from player
-    if is_feared {
+    // Feared: flee from player (but can't flee if rooted)
+    if is_feared && !is_rooted {
         let (dx, dy) = flee_from_target(grid, entity_pos, player_pos, blocking_positions, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
@@ -230,6 +235,19 @@ fn determine_action(
     if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
         ai.state = new_state;
         ai.last_known_pos = new_last_known;
+    }
+
+    // If rooted, can only attack adjacent targets - cannot move
+    if is_rooted {
+        // Check if player is adjacent
+        let pdx = player_pos.0 - entity_pos.0;
+        let pdy = player_pos.1 - entity_pos.1;
+        if pdx.abs() <= 1 && pdy.abs() <= 1 && (pdx != 0 || pdy != 0) {
+            // Player is adjacent, attack them
+            return action_dispatch::determine_action_type(world, grid, entity, pdx, pdy);
+        }
+        // Not adjacent, just wait
+        return ActionType::Wait;
     }
 
     // Determine movement direction

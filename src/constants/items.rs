@@ -61,3 +61,13 @@ pub const FIRE_TRAP_WEIGHT: f32 = 0.3;
 pub const FIRE_TRAP_RANGE: i32 = 1;
 /// Fire trap burst damage when triggered
 pub const FIRE_TRAP_BURST_DAMAGE: i32 = 15;
+
+// Arrows (ammunition)
+/// Arrow weight in kg (per arrow)
+pub const ARROW_WEIGHT: f32 = 0.05;
+/// Starting arrow count for Ranger
+pub const STARTING_ARROW_COUNT: u32 = 20;
+/// Maximum arrows in a single stack
+pub const ARROW_STACK_MAX: u32 = 50;
+/// Arrows in a bundle pickup
+pub const ARROW_BUNDLE_COUNT: u32 = 10;

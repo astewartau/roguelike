@@ -36,12 +36,18 @@ pub struct UiIcons {
     pub bread_uv: egui::Rect,
     pub apple_uv: egui::Rect,
     pub fire_trap_uv: egui::Rect,
+    pub arrow_uv: egui::Rect,
     // Ability icons
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
     pub barkskin_uv: egui::Rect,
     pub life_drain_uv: egui::Rect,
     pub fear_uv: egui::Rect,
+    // Ranger ability icons
+    pub disengage_uv: egui::Rect,
+    pub tumble_uv: egui::Rect,
+    pub snare_trap_uv: egui::Rect,
+    pub crippling_shot_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -75,6 +81,7 @@ impl UiIcons {
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
             fire_trap_uv: tileset.get_egui_uv(tile_ids::FIRE_TRAP.0, tile_ids::FIRE_TRAP.1),
+            arrow_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
             // Ability icons: AXE for Cleave, BLUE_POTION for Sprint, AMBER_POTION for Barkskin (brown)
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
             sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
@@ -82,6 +89,11 @@ impl UiIcons {
             // RED_POTION for Life Drain (blood/life theme), SKULL for Fear
             life_drain_uv: tileset.get_egui_uv(tile_ids::RED_POTION.0, tile_ids::RED_POTION.1),
             fear_uv: tileset.get_egui_uv(tile_ids::SKULL.0, tile_ids::SKULL.1),
+            // Ranger ability icons (using placeholder sprites for now)
+            disengage_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
+            tumble_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
+            snare_trap_uv: tileset.get_egui_uv(tile_ids::PRESSURE_PLATE.0, tile_ids::PRESSURE_PLATE.1),
+            crippling_shot_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
         }
     }
 
@@ -120,6 +132,7 @@ impl UiIcons {
             ItemType::Bread => self.bread_uv,
             ItemType::Apple => self.apple_uv,
             ItemType::FireTrap => self.fire_trap_uv,
+            ItemType::Arrow => self.arrow_uv,
         }
     }
 

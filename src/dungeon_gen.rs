@@ -282,43 +282,58 @@ impl DungeonGenerator {
         root.collect_rooms(&mut room_rects);
 
         // Assign themes to rooms
+        // First room is always Normal (player spawn), last room is always Normal (stairs down)
+        // Guarantee at least one of each special type, plus exactly one Shop
         let mut themed_rooms: Vec<ThemedRoom> = room_rects
             .iter()
-            .enumerate()
-            .map(|(i, rect)| {
-                // First room is always Normal (player spawn)
-                let theme = if i == 0 {
-                    RoomTheme::Normal
-                } else {
-                    // Weighted theme selection:
-                    // Normal: 40%, Overgrown: 15%, Flooded: 15%, Crypt: 15%, Storage: 15%
-                    let roll: f32 = rng.gen();
-                    if roll < 0.40 {
-                        RoomTheme::Normal
-                    } else if roll < 0.55 {
-                        RoomTheme::Overgrown
-                    } else if roll < 0.70 {
-                        RoomTheme::Flooded
-                    } else if roll < 0.85 {
-                        RoomTheme::Crypt
-                    } else {
-                        RoomTheme::Storage
-                    }
-                };
-                ThemedRoom { rect: *rect, theme }
-            })
+            .map(|rect| ThemedRoom { rect: *rect, theme: RoomTheme::Normal })
             .collect();
 
-        // Force exactly one Shop room per floor (not first or last room)
-        // Pick a random middle room to become the shop
-        if themed_rooms.len() > 2 {
-            let last_idx = themed_rooms.len() - 1;
-            // Eligible rooms: indices 1 through second-to-last
-            let eligible_indices: Vec<usize> = (1..last_idx).collect();
-            if !eligible_indices.is_empty() {
-                let shop_idx = eligible_indices[rng.gen_range(0..eligible_indices.len())];
-                themed_rooms[shop_idx].theme = RoomTheme::Shop;
+        // Required themes (excluding Normal and Shop which are handled specially)
+        let required_themes = [
+            RoomTheme::Overgrown,
+            RoomTheme::Flooded,
+            RoomTheme::Crypt,
+            RoomTheme::Storage,
+        ];
+
+        // Eligible room indices: not first (player spawn) or last (stairs down)
+        let last_idx = themed_rooms.len().saturating_sub(1);
+        let mut available_indices: Vec<usize> = (1..last_idx).collect();
+
+        // Shuffle available indices for random assignment
+        for i in (1..available_indices.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            available_indices.swap(i, j);
+        }
+
+        // Assign one of each required theme
+        for (i, &theme) in required_themes.iter().enumerate() {
+            if i < available_indices.len() {
+                themed_rooms[available_indices[i]].theme = theme;
             }
+        }
+
+        // Assign exactly one Shop room from remaining available slots
+        if available_indices.len() > required_themes.len() {
+            themed_rooms[available_indices[required_themes.len()]].theme = RoomTheme::Shop;
+        }
+
+        // Fill remaining rooms with random themes (weighted)
+        let assigned_count = required_themes.len() + 1; // +1 for shop
+        for &idx in available_indices.iter().skip(assigned_count) {
+            let roll: f32 = rng.gen();
+            themed_rooms[idx].theme = if roll < 0.40 {
+                RoomTheme::Normal
+            } else if roll < 0.55 {
+                RoomTheme::Overgrown
+            } else if roll < 0.70 {
+                RoomTheme::Flooded
+            } else if roll < 0.85 {
+                RoomTheme::Crypt
+            } else {
+                RoomTheme::Storage
+            };
         }
 
         // Carve all rooms into the tile map (with terrain based on theme)
@@ -370,10 +385,18 @@ impl DungeonGenerator {
         // Collect chest spawn positions (center of each room except first and last)
         // First room has player spawn (and maybe stairs up on deeper floors)
         // Last room has stairs down
-        let chest_positions: Vec<(i32, i32)> = rooms.iter()
+        // Shop rooms: place chest in corner (not center, where vendor stands)
+        let chest_positions: Vec<(i32, i32)> = themed_rooms.iter()
             .enumerate()
-            .filter(|(i, _)| *i != 0 && *i != rooms.len() - 1)
-            .map(|(_, room)| room.center())
+            .filter(|(i, _)| *i != 0 && *i != themed_rooms.len() - 1)
+            .map(|(_, room)| {
+                if room.theme == RoomTheme::Shop {
+                    // Place chest in top-left corner area (offset from wall)
+                    (room.rect.x + 1, room.rect.y + 1)
+                } else {
+                    room.rect.center()
+                }
+            })
             .collect();
 
         // Generate brazier positions in room corners (skip starting room)
@@ -547,12 +570,38 @@ impl DungeonGenerator {
                 // Horizontal walls (floor to north/south) use "side" sprite (default)
                 let has_horizontal_neighbor = east_walkable || west_walkable;
 
+                // Check all diagonal neighbors for corner detection
+                let ne_walkable = if x < width - 1 && y > 0 {
+                    self.tiles[(y - 1) as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+                let nw_walkable = if x > 0 && y > 0 {
+                    self.tiles[(y - 1) as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+                let se_walkable = if x < width - 1 && y < height - 1 {
+                    self.tiles[(y + 1) as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+                let sw_walkable = if x > 0 && y < height - 1 {
+                    self.tiles[(y + 1) as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
+                } else {
+                    false
+                };
+
                 // Use WALL_TOP variant for:
                 // 1. Pure vertical walls (floor only to east/west)
-                // 2. Top corners (floor to south and east/west, but not north)
+                // 2. Top corners with direct horizontal floor neighbor
+                // 3. Top corner vertices: no cardinal floor neighbors, but floor diagonally to NE or NW
+                //    (top of room = higher Y, floor is at lower Y = north direction)
                 let is_vertical_wall = has_horizontal_neighbor && !north_walkable && !south_walkable;
-                let is_top_corner = south_walkable && has_horizontal_neighbor && !north_walkable;
-                let use_top_sprite = is_vertical_wall || is_top_corner;
+                let is_top_corner_direct = south_walkable && has_horizontal_neighbor && !north_walkable;
+                let is_top_corner_vertex = !north_walkable && !south_walkable && !east_walkable && !west_walkable
+                    && (ne_walkable || nw_walkable);
+                let use_top_sprite = is_vertical_wall || is_top_corner_direct || is_top_corner_vertex;
 
                 // Select themed wall sprites
                 let sprite = match adjacent_theme {
@@ -1194,13 +1243,14 @@ impl DungeonGenerator {
             }
 
             // Place 3-5 decorations around edges (avoiding center where vendor is)
+            // Also avoid top-left corner where chest is placed
             let num_decor = rng.gen_range(3..=5);
             let (center_x, center_y) = room.rect.center();
-            let mut used: Vec<(i32, i32)> = Vec::new();
+            let chest_pos = (room.rect.x + 1, room.rect.y + 1);
+            let mut used: Vec<(i32, i32)> = vec![chest_pos]; // Reserve chest spot
 
-            // Potential spots: corners and edge midpoints
+            // Potential spots: corners (except top-left for chest) and edge midpoints
             let potential_spots = [
-                (room.rect.x + 1, room.rect.y + 1),
                 (room.rect.x + room.rect.width - 2, room.rect.y + 1),
                 (room.rect.x + 1, room.rect.y + room.rect.height - 2),
                 (room.rect.x + room.rect.width - 2, room.rect.y + room.rect.height - 2),

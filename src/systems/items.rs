@@ -12,7 +12,7 @@ pub use super::item_defs::TargetingParams;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemUseResult {
     /// Item was used successfully and consumed
-    Used,
+    Used { item_type: ItemType },
     /// Item use failed (invalid index, missing component, etc.)
     Failed,
     /// Item requires a target selection before use (scrolls, throwable potions)
@@ -76,11 +76,11 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         }
         UseEffect::Heal(amount) => {
             apply_heal(world, entity, amount);
-            ItemUseResult::Used
+            ItemUseResult::Used { item_type }
         }
         UseEffect::ApplyEffect(effect_type, duration) => {
             apply_status_effect(world, entity, effect_type, duration);
-            ItemUseResult::Used
+            ItemUseResult::Used { item_type }
         }
         UseEffect::RevealEnemies => {
             return ItemUseResult::RevealEnemies;
@@ -99,7 +99,7 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
     };
 
     // Remove item from inventory (only for items that were fully consumed here)
-    if result == ItemUseResult::Used {
+    if matches!(result, ItemUseResult::Used { .. }) {
         remove_item_from_inventory(world, entity, item_index);
     }
 

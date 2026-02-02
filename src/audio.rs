@@ -17,13 +17,14 @@ pub enum SoundType {
     // Battle
     MeleeSwing,
     Spell,
-    SwordUnsheathe,
+    WeaponEquip,
 
     // Inventory
     CoinPickup,
     ItemPickup,
-    PotionUse,
-    ArmorEquip,
+    PotionPickup,
+    PotionDrink,
+    PotionThrow,
 
     // Interface
     UiClick,
@@ -79,7 +80,7 @@ impl AudioManager {
             Self::find_sounds(&base.join("battle"), &["spell.wav", "magic1.wav"]),
         );
         self.sounds.insert(
-            SoundType::SwordUnsheathe,
+            SoundType::WeaponEquip,
             Self::find_sounds(
                 &base.join("battle"),
                 &[
@@ -103,21 +104,22 @@ impl AudioManager {
             ),
         );
         self.sounds.insert(
-            SoundType::PotionUse,
-            Self::find_sounds(&base.join("inventory"), &["bottle.wav", "bubble.wav"]),
+            SoundType::PotionPickup,
+            Self::find_sounds(&base.join("inventory"), &["bubble.wav"]),
         );
         self.sounds.insert(
-            SoundType::ArmorEquip,
-            Self::find_sounds(&base.join("inventory"), &["armor-light.wav", "chainmail1.wav"]),
+            SoundType::PotionDrink,
+            Self::find_sounds(&base.join("inventory"), &["bubble3.wav"]),
+        );
+        self.sounds.insert(
+            SoundType::PotionThrow,
+            Self::find_sounds(&base.join("inventory"), &["bottle.wav"]),
         );
 
         // Interface sounds
         self.sounds.insert(
             SoundType::UiClick,
-            Self::find_sounds(
-                &base.join("interface"),
-                &["interface1.wav", "interface2.wav", "interface3.wav"],
-            ),
+            Self::find_sounds(&base.join("interface"), &["interface1.wav"]),
         );
 
         // World sounds
@@ -159,8 +161,32 @@ impl AudioManager {
             .collect()
     }
 
-    /// Play a random sound of the given type
+    /// Maximum distance at which sounds can be heard (in tiles)
+    const HEARING_RANGE: f32 = 15.0;
+
+    /// Play a random sound of the given type at full volume (for UI sounds)
     pub fn play(&self, sound_type: SoundType) {
+        self.play_with_volume(sound_type, 1.0);
+    }
+
+    /// Play a sound with distance-based volume attenuation
+    /// Returns false if the sound is out of range
+    pub fn play_at_distance(&self, sound_type: SoundType, distance: f32) -> bool {
+        if distance > Self::HEARING_RANGE {
+            return false;
+        }
+
+        // Calculate volume falloff: full volume at distance 0, zero at HEARING_RANGE
+        // Use inverse square-ish falloff for more natural sound
+        let normalized_distance = distance / Self::HEARING_RANGE;
+        let volume_multiplier = (1.0 - normalized_distance).powi(2);
+
+        self.play_with_volume(sound_type, volume_multiplier);
+        true
+    }
+
+    /// Play a sound with a specific volume multiplier
+    fn play_with_volume(&self, sound_type: SoundType, volume_multiplier: f32) {
         let Some(paths) = self.sounds.get(&sound_type) else {
             return;
         };
@@ -172,11 +198,11 @@ impl AudioManager {
         let mut rng = rand::thread_rng();
         let path = paths.choose(&mut rng).unwrap();
 
-        self.play_file(path);
+        self.play_file_with_volume(path, volume_multiplier);
     }
 
-    /// Play a specific sound file
-    fn play_file(&self, path: &PathBuf) {
+    /// Play a specific sound file with volume multiplier
+    fn play_file_with_volume(&self, path: &PathBuf, volume_multiplier: f32) {
         let Ok(file) = File::open(path) else {
             return;
         };
@@ -190,29 +216,61 @@ impl AudioManager {
             return;
         };
 
-        sink.set_volume(self.volume);
-        sink.append(source.amplify(self.volume));
+        let final_volume = self.volume * volume_multiplier;
+        sink.set_volume(final_volume);
+        sink.append(source.amplify(final_volume));
         sink.detach(); // Let it play in background
     }
 
+    /// Calculate distance between two positions
+    fn distance(p1: (i32, i32), p2: (i32, i32)) -> f32 {
+        let dx = (p1.0 - p2.0) as f32;
+        let dy = (p1.1 - p2.1) as f32;
+        (dx * dx + dy * dy).sqrt()
+    }
+
     /// Process game events and play appropriate sounds
-    pub fn process_events(&self, events: &[GameEvent]) {
+    /// player_pos is the player's current position for distance-based audio
+    pub fn process_events(&self, events: &[GameEvent], player_pos: (i32, i32)) {
+        use crate::components::ItemType;
+
         for event in events {
             match event {
-                GameEvent::AttackHit { .. } => {
-                    self.play(SoundType::MeleeSwing);
+                GameEvent::AttackHit { target_pos, .. } => {
+                    let pos = (target_pos.0 as i32, target_pos.1 as i32);
+                    let dist = Self::distance(player_pos, pos);
+                    self.play_at_distance(SoundType::MeleeSwing, dist);
                 }
-                GameEvent::EntityDied { .. } => {
-                    self.play(SoundType::MonsterHit);
+                GameEvent::EntityDied { position, .. } => {
+                    let pos = (position.0 as i32, position.1 as i32);
+                    let dist = Self::distance(player_pos, pos);
+                    self.play_at_distance(SoundType::MonsterHit, dist);
                 }
-                GameEvent::DoorOpened { .. } => {
-                    self.play(SoundType::DoorOpen);
+                GameEvent::DoorOpened { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::DoorOpen, dist);
                 }
-                GameEvent::ContainerOpened { .. } => {
-                    self.play(SoundType::DoorOpen);
+                GameEvent::ContainerOpened { container_type, position, .. } => {
+                    // Only play sound for actual chests, not bodies or ground items
+                    if *container_type == Some(crate::components::ContainerType::Chest) {
+                        let dist = Self::distance(player_pos, *position);
+                        self.play_at_distance(SoundType::DoorOpen, dist);
+                    }
                 }
-                GameEvent::ItemPickedUp { .. } => {
-                    self.play(SoundType::ItemPickup);
+                // Player-only sounds (always full volume since they're at player position)
+                GameEvent::ItemPickedUp { item, .. } => {
+                    // Potions get a different sound
+                    if matches!(
+                        item,
+                        ItemType::HealthPotion
+                            | ItemType::RegenerationPotion
+                            | ItemType::StrengthPotion
+                            | ItemType::ConfusionPotion
+                    ) {
+                        self.play(SoundType::PotionPickup);
+                    } else {
+                        self.play(SoundType::ItemPickup);
+                    }
                 }
                 GameEvent::GoldPickedUp { .. } => {
                     self.play(SoundType::CoinPickup);
@@ -220,29 +278,41 @@ impl AudioManager {
                 GameEvent::LevelUp { .. } => {
                     self.play(SoundType::UiClick);
                 }
-                GameEvent::ProjectileHit { .. } => {
-                    self.play(SoundType::MeleeSwing);
+                GameEvent::ProjectileHit { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::MeleeSwing, dist);
                 }
-                GameEvent::FireballExplosion { .. } => {
-                    self.play(SoundType::Spell);
+                GameEvent::FireballExplosion { x, y, .. } => {
+                    let dist = Self::distance(player_pos, (*x, *y));
+                    self.play_at_distance(SoundType::Spell, dist);
                 }
-                GameEvent::PotionSplash { .. } => {
-                    self.play(SoundType::PotionUse);
+                GameEvent::PotionSplash { x, y, .. } => {
+                    let dist = Self::distance(player_pos, (*x, *y));
+                    self.play_at_distance(SoundType::PotionThrow, dist);
                 }
-                GameEvent::CleavePerformed { .. } => {
-                    self.play(SoundType::MeleeSwing);
+                GameEvent::PotionDrunk { .. } => {
+                    self.play(SoundType::PotionDrink);
+                }
+                GameEvent::WeaponEquipped { .. } => {
+                    self.play(SoundType::WeaponEquip);
+                }
+                GameEvent::CleavePerformed { center, .. } => {
+                    let dist = Self::distance(player_pos, *center);
+                    self.play_at_distance(SoundType::MeleeSwing, dist);
                 }
                 GameEvent::BarkskinActivated { .. } => {
                     self.play(SoundType::Spell);
                 }
-                GameEvent::FearActivated { .. } => {
-                    self.play(SoundType::ShadeSound);
+                GameEvent::FearActivated { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::ShadeSound, dist);
                 }
                 GameEvent::ItemPurchased { .. } | GameEvent::ItemSold { .. } => {
                     self.play(SoundType::CoinPickup);
                 }
-                GameEvent::FireTrapTriggered { .. } => {
-                    self.play(SoundType::Spell);
+                GameEvent::FireTrapTriggered { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::Spell, dist);
                 }
                 GameEvent::LifeDrainStarted { .. } => {
                     self.play(SoundType::Spell);

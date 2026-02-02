@@ -3,7 +3,7 @@
 use crate::components::{
     AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility,
     Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, PlayerAttackTarget,
-    PlayerClass, Position, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
+    PlayerClass, Position, RangerAbilities, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
 use crate::dungeon_gen::RoomTheme;
@@ -188,15 +188,15 @@ fn generate_chest_contents(rng: &mut impl Rng) -> Container {
 
     let roll: f32 = rng.gen();
 
-    if roll < 0.35 {
+    let mut items = if roll < 0.35 {
         let item = *common_items.choose(rng).unwrap();
-        Container::with_gold(vec![item], rng.gen_range(5..15))
+        vec![item]
     } else if roll < 0.55 {
         let item = *uncommon_items.choose(rng).unwrap();
-        Container::with_gold(vec![item], rng.gen_range(8..20))
+        vec![item]
     } else if roll < 0.70 {
         let item = *rare_items.choose(rng).unwrap();
-        Container::with_gold(vec![item], rng.gen_range(10..25))
+        vec![item]
     } else if roll < 0.85 {
         let all_items = [
             ItemType::HealthPotion,
@@ -213,14 +213,31 @@ fn generate_chest_contents(rng: &mut impl Rng) -> Container {
             ItemType::ScrollOfMapping,
             ItemType::ScrollOfSlow,
         ];
-        let items = vec![
+        vec![
             *common_items.choose(rng).unwrap(),
             *all_items.choose(rng).unwrap(),
-        ];
-        Container::with_gold(items, rng.gen_range(10..25))
+        ]
     } else {
-        Container::with_gold(vec![], rng.gen_range(20..50))
+        vec![]
+    };
+
+    // 30% chance to include arrows (3-8 arrows)
+    if rng.gen::<f32>() < 0.30 {
+        let arrow_count = rng.gen_range(3..=8);
+        for _ in 0..arrow_count {
+            items.push(ItemType::Arrow);
+        }
     }
+
+    let gold = match roll {
+        r if r < 0.35 => rng.gen_range(5..15),
+        r if r < 0.55 => rng.gen_range(8..20),
+        r if r < 0.70 => rng.gen_range(10..25),
+        r if r < 0.85 => rng.gen_range(10..25),
+        _ => rng.gen_range(20..50),
+    };
+
+    Container::chest(items, gold)
 }
 
 /// Initialize the game world with player, enemies, and objects.
@@ -300,6 +317,11 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
     // Necromancer gets a secondary ability (Fear)
     if player_class == PlayerClass::Necromancer {
         let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Fear, FEAR_ABILITY_COOLDOWN));
+    }
+
+    // Ranger gets the RangerAbilities component for number key abilities
+    if player_class == PlayerClass::Ranger {
+        let _ = world.insert_one(player_entity, RangerAbilities::new());
     }
 
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop

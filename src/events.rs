@@ -39,11 +39,14 @@ pub enum GameEvent {
     DoorOpened {
         door: Entity,
         opener: Entity,
+        position: (i32, i32),
     },
     /// An entity opened a container (chest, bones, etc.)
     ContainerOpened {
         container: Entity,
         opener: Entity,
+        container_type: Option<crate::components::ContainerType>,
+        position: (i32, i32),
     },
     /// An entity picked up an item
     ItemPickedUp {
@@ -199,6 +202,12 @@ pub enum GameEvent {
         victim: Entity,
         position: (i32, i32),
     },
+    /// A snare trap was triggered
+    SnareTrapTriggered {
+        trap: Entity,
+        victim: Entity,
+        position: (i32, i32),
+    },
     /// Life drain channeling started (necromancer)
     LifeDrainStarted {
         caster: Entity,
@@ -222,6 +231,16 @@ pub enum GameEvent {
     LifeDrainInterrupted {
         caster: Entity,
         target: Entity,
+    },
+    /// A potion was drunk (consumed directly, not thrown)
+    PotionDrunk {
+        entity: Entity,
+        potion_type: crate::components::ItemType,
+    },
+    /// A weapon was equipped
+    WeaponEquipped {
+        entity: Entity,
+        weapon_type: crate::components::ItemType,
     },
 }
 

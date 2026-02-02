@@ -17,7 +17,7 @@ mod targeting;
 mod vfx;
 
 // Re-export public items from submodules
-pub use ability_bar::{draw_ability_bar, draw_secondary_ability_bar, AbilityBarData};
+pub use ability_bar::{draw_ability_bar, draw_secondary_ability_bar, draw_ranger_ability_bar, AbilityBarData, RangerAbilityBarData, RangerAbilitySlot};
 pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data, DialogueWindowData};
 pub use icons::UiIcons;
@@ -68,6 +68,8 @@ pub struct UiActions {
     pub use_ability: bool,
     /// Use secondary ability (E) - Druid only
     pub use_secondary_ability: bool,
+    /// Ranger ability clicked (index 0-3)
+    pub ranger_ability_clicked: Option<usize>,
     /// Buy item from vendor (index in vendor inventory)
     pub buy_item: Option<usize>,
     /// Sell item to vendor (index in player inventory)
@@ -120,7 +122,7 @@ impl GameUiState {
     /// Handle a game event, updating UI state as needed
     pub fn handle_event(&mut self, event: &GameEvent) {
         match event {
-            GameEvent::ContainerOpened { container, opener } => {
+            GameEvent::ContainerOpened { container, opener, .. } => {
                 // Only open loot window if player opened the container
                 if *opener == self.player_entity {
                     self.open_chest = Some(*container);
@@ -252,6 +254,40 @@ pub fn run_ui(
             }
         });
 
+    // Get Ranger ability bar data (if player is a Ranger)
+    let ranger_ability_data = world
+        .get::<&crate::components::RangerAbilities>(player_entity)
+        .ok()
+        .map(|ra| {
+            let max_energy = world
+                .get::<&crate::components::Actor>(player_entity)
+                .map(|actor| actor.max_energy)
+                .unwrap_or(0);
+
+            // Count arrows in inventory
+            let arrow_count = world
+                .get::<&crate::components::Inventory>(player_entity)
+                .map(|inv| inv.items.iter().filter(|i| **i == crate::components::ItemType::Arrow).count() as u32)
+                .unwrap_or(0);
+
+            let abilities: [RangerAbilitySlot; 4] = std::array::from_fn(|i| {
+                let (ability_type, cooldown_remaining, cooldown_total) = ra.abilities[i];
+                let can_afford = max_energy >= ability_type.energy_cost();
+                RangerAbilitySlot {
+                    ability_type,
+                    cooldown_remaining,
+                    cooldown_total,
+                    can_use: can_afford && cooldown_remaining <= 0.0,
+                }
+            });
+
+            RangerAbilityBarData {
+                abilities,
+                viewport_height: camera.viewport_height,
+                arrow_count,
+            }
+        });
+
     // Get loot window data if chest is open
     let loot_data = get_loot_window_data(
         world,
@@ -284,7 +320,7 @@ pub fn run_ui(
     // Extract UI data using helper functions
     let buff_aura_data = get_buff_aura_data(world, player_entity);
     // Try ability targeting first, then item targeting
-    let targeting_data = get_ability_targeting_overlay_data(world, player_entity, ability_targeting_mode, mouse_pos, camera)
+    let targeting_data = get_ability_targeting_overlay_data(world, player_entity, ability_targeting_mode, mouse_pos, camera, Some(grid))
         .or_else(|| get_targeting_overlay_data(world, player_entity, targeting_mode, mouse_pos, camera));
     let enemy_status_data = get_enemy_status_data(world, grid);
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
@@ -315,6 +351,13 @@ pub fn run_ui(
         if let Some(ref data) = secondary_ability_data {
             if draw_secondary_ability_bar(ctx, data, icons) {
                 actions.use_secondary_ability = true;
+            }
+        }
+
+        // Ranger ability bar (if player is a Ranger)
+        if let Some(ref data) = ranger_ability_data {
+            if let Some(index) = draw_ranger_ability_bar(ctx, data, icons) {
+                actions.ranger_ability_clicked = Some(index);
             }
         }
 

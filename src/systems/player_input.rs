@@ -36,6 +36,14 @@ pub enum PlayerIntent {
     StartTaming { target: Entity },
     /// Start draining life from a target (Necromancer channeled ability)
     StartLifeDrain { target: Entity },
+    /// Ranger: Disengage (leap away from nearest enemy)
+    Disengage,
+    /// Ranger: Tumble to target position with invulnerability
+    Tumble { target_x: i32, target_y: i32 },
+    /// Ranger: Place snare trap at target position
+    PlaceSnareTrap { target_x: i32, target_y: i32 },
+    /// Ranger: Shoot crippling shot that slows target
+    ShootCripplingShot { target_x: i32, target_y: i32 },
 }
 
 /// Result of validating a targeting action
@@ -211,6 +219,23 @@ pub fn intent_to_action(
         PlayerIntent::StartLifeDrain { target } => {
             Some(ActionType::StartLifeDrain { target: *target })
         }
+
+        PlayerIntent::Disengage => Some(ActionType::Disengage),
+
+        PlayerIntent::Tumble { target_x, target_y } => Some(ActionType::Tumble {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
+
+        PlayerIntent::PlaceSnareTrap { target_x, target_y } => Some(ActionType::PlaceSnareTrap {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
+
+        PlayerIntent::ShootCripplingShot { target_x, target_y } => Some(ActionType::ShootCripplingShot {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
     }
 }
 

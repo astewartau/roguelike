@@ -183,9 +183,8 @@ pub fn load_floor(
             }
             SavedEntityType::Chest { is_open, gold, items } => {
                 let sprite_ref = if *is_open { tile_ids::CHEST_OPEN } else { tile_ids::CHEST_CLOSED };
-                let mut container = Container::new(items.clone());
+                let mut container = Container::chest(items.clone(), *gold);
                 container.is_open = *is_open;
-                container.gold = *gold;
 
                 if *is_open && container.is_empty() {
                     world.spawn((
@@ -226,9 +225,8 @@ pub fn load_floor(
                 }
             }
             SavedEntityType::Bones { gold, items } => {
-                let mut container = Container::new(items.clone());
+                let mut container = Container::corpse(items.clone(), *gold);
                 container.is_open = true;
-                container.gold = *gold;
                 world.spawn((
                     pos,
                     VisualPosition::from_position(&pos),

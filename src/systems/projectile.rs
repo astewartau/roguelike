@@ -9,10 +9,12 @@
 //! 4. Real-time visual lerp animates the arrow to its final position
 //! 5. Once visual catches up, the arrow is despawned
 
-use crate::components::{Attackable, Health, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
+use crate::components::{Attackable, EffectType, Health, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
+use crate::queries;
 use crate::systems::actions::apply_potion_splash;
+use crate::systems::effects;
 use hecs::{Entity, World};
 
 /// Update all projectiles based on the current game time.
@@ -24,7 +26,7 @@ pub fn update_projectiles(
     current_time: f32,
     events: &mut EventQueue,
 ) {
-    let mut hits: Vec<(Entity, Option<Entity>, (i32, i32), i32)> = Vec::new();
+    let mut hits: Vec<(Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>)> = Vec::new();
     let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>)> = Vec::new();
 
     // Get all attackable entities and their positions for collision checking
@@ -66,7 +68,7 @@ pub fn update_projectiles(
             let tile = grid.get(tile_x, tile_y);
             let is_wall = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
             if is_wall {
-                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage));
+                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage, projectile.on_hit_effect));
                 // Mark as finished at wall position (one tile before the wall)
                 let final_pos = if i > 0 {
                     let (px, py, _) = projectile.path[i - 1];
@@ -91,6 +93,7 @@ pub fn update_projectiles(
                         Some(*target_entity),
                         (tile_x, tile_y),
                         projectile.damage,
+                        projectile.on_hit_effect,
                     ));
                     finished_projectiles.push((projectile_entity, tile_x, tile_y, projectile.potion_type));
                     hit_something = true;
@@ -123,21 +126,40 @@ pub fn update_projectiles(
     }
 
     // Apply damage and emit events
-    for (projectile_entity, target, position, damage) in hits {
+    for (projectile_entity, target, position, damage, on_hit_effect) in hits {
+        let mut actual_damage = damage;
         if let Some(target_entity) = target {
-            // Apply damage
-            if let Ok(mut health) = world.get::<&mut Health>(target_entity) {
-                health.current -= damage;
+            // Mark that this projectile hit an enemy (for arrow recovery)
+            if let Ok(mut projectile) = world.get::<&mut Projectile>(projectile_entity) {
+                projectile.hit_enemy = true;
             }
-            // Interrupt life drain if target was channeling
-            crate::systems::actions::interrupt_life_drain_on_damage(world, target_entity, events);
+
+            // Check for invulnerability
+            let is_invulnerable = queries::has_status_effect(world, target_entity, EffectType::Invulnerable);
+            if is_invulnerable {
+                actual_damage = 0;
+            }
+
+            // Apply damage
+            if actual_damage > 0 {
+                if let Ok(mut health) = world.get::<&mut Health>(target_entity) {
+                    health.current -= actual_damage;
+                }
+                // Interrupt life drain if target was channeling
+                crate::systems::actions::interrupt_life_drain_on_damage(world, target_entity, events);
+            }
+
+            // Apply on_hit_effect (even if invulnerable, effects like Slowed still apply)
+            if let Some((effect_type, duration)) = on_hit_effect {
+                effects::add_effect_to_entity(world, target_entity, effect_type, duration);
+            }
         }
 
         events.push(GameEvent::ProjectileHit {
             projectile: projectile_entity,
             target,
             position,
-            damage,
+            damage: actual_damage,
         });
     }
 
@@ -201,9 +223,11 @@ pub fn lerp_projectiles_realtime(world: &mut World, real_time_elapsed: f32, arro
 }
 
 /// Clean up finished projectiles whose visuals have caught up.
-/// Returns entities to despawn.
-pub fn cleanup_finished_projectiles(world: &World) -> Vec<Entity> {
+/// Returns (entities to despawn, arrow recovery info: (position, hit_enemy)).
+/// Arrows that missed are always recoverable; arrows that hit have 50% chance (handled by caller).
+pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<((i32, i32), bool)>) {
     let mut to_despawn = Vec::new();
+    let mut arrow_recovery_info = Vec::new();
 
     for (entity, (pos, vis_pos, projectile)) in
         world.query::<(&Position, &VisualPosition, &Projectile)>().iter()
@@ -221,10 +245,15 @@ pub fn cleanup_finished_projectiles(world: &World) -> Vec<Entity> {
         if dist < 0.1 {
             // Visual has caught up, safe to despawn
             to_despawn.push(entity);
+
+            // If this was an arrow (not a potion), it may be recoverable
+            if projectile.potion_type.is_none() {
+                arrow_recovery_info.push(((pos.x, pos.y), projectile.hit_enemy));
+            }
         }
     }
 
-    to_despawn
+    (to_despawn, arrow_recovery_info)
 }
 
 /// Despawn projectile entities

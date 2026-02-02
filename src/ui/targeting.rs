@@ -6,6 +6,7 @@ use crate::camera::Camera;
 use crate::components::{AbilityType, ItemType, Position, Tameable};
 use crate::input::{AbilityTargetingMode, TargetingMode};
 use hecs::World;
+use std::collections::HashSet;
 
 /// Data needed for the targeting overlay
 pub struct TargetingOverlayData {
@@ -20,6 +21,10 @@ pub struct TargetingOverlayData {
     pub ability_type: Option<AbilityType>,
     /// Positions of valid tame targets (entities with Tameable component)
     pub tameable_positions: Vec<(i32, i32)>,
+    /// Tiles visible from player's position (for LOS-required abilities like CripplingShot)
+    pub visible_tiles: Option<HashSet<(i32, i32)>>,
+    /// Whether this ability requires line of sight
+    pub requires_los: bool,
 }
 
 /// Extract targeting overlay data from targeting mode and world state
@@ -50,6 +55,8 @@ pub fn get_targeting_overlay_data(
         item_type: Some(targeting.item_type),
         ability_type: None,
         tameable_positions: Vec::new(),
+        visible_tiles: None,
+        requires_los: false,
     })
 }
 
@@ -60,6 +67,7 @@ pub fn get_ability_targeting_overlay_data(
     ability_targeting_mode: Option<&AbilityTargetingMode>,
     cursor_screen_pos: (f32, f32),
     camera: &Camera,
+    grid: Option<&crate::grid::Grid>,
 ) -> Option<TargetingOverlayData> {
     let targeting = ability_targeting_mode?;
 
@@ -79,6 +87,41 @@ pub fn get_ability_targeting_overlay_data(
         }
     }
 
+    // Calculate FOV for abilities that require line of sight (CripplingShot)
+    let requires_los = matches!(targeting.ability_type, AbilityType::CripplingShot);
+    let visible_tiles = if requires_los {
+        grid.map(|g| {
+            use crate::components::BlocksVision;
+            use crate::fov::FOV;
+
+            // Collect positions of entities that block vision (closed doors, etc.)
+            let blocking_positions: HashSet<(i32, i32)> = world
+                .query::<(&Position, &BlocksVision)>()
+                .iter()
+                .map(|(_, (pos, _))| (pos.x, pos.y))
+                .collect();
+
+            // Calculate FOV with vision-blocking entities
+            let visible_vec = FOV::calculate(
+                g,
+                player_pos.x,
+                player_pos.y,
+                targeting.max_range,
+                Some(|x: i32, y: i32| blocking_positions.contains(&(x, y))),
+            );
+
+            // Filter to only include explored tiles
+            visible_vec
+                .into_iter()
+                .filter(|&(x, y)| {
+                    g.get(x, y).map(|tile| tile.explored).unwrap_or(false)
+                })
+                .collect::<HashSet<(i32, i32)>>()
+        })
+    } else {
+        None
+    };
+
     Some(TargetingOverlayData {
         player_x: player_pos.x,
         player_y: player_pos.y,
@@ -90,6 +133,8 @@ pub fn get_ability_targeting_overlay_data(
         item_type: None,
         ability_type: Some(targeting.ability_type),
         tameable_positions,
+        visible_tiles,
+        requires_los,
     })
 }
 
@@ -120,10 +165,13 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
 
     // Check if this is ability targeting (Tame)
     let is_tame = matches!(data.ability_type, Some(AbilityType::Tame));
+    let is_crippling_shot = matches!(data.ability_type, Some(AbilityType::CripplingShot));
 
     // Draw tiles in range with a subtle highlight
     let range_color = if is_tame {
         egui::Color32::from_rgba_unmultiplied(150, 255, 150, 40) // Green tint for tame
+    } else if is_crippling_shot {
+        egui::Color32::from_rgba_unmultiplied(255, 200, 100, 40) // Orange tint for crippling shot
     } else {
         egui::Color32::from_rgba_unmultiplied(100, 150, 255, 40)
     };
@@ -138,6 +186,15 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
 
             let tile_x = data.player_x + dx;
             let tile_y = data.player_y + dy;
+
+            // For LOS-required abilities, only show visible tiles
+            if data.requires_los {
+                if let Some(ref visible) = data.visible_tiles {
+                    if !visible.contains(&(tile_x, tile_y)) {
+                        continue;
+                    }
+                }
+            }
 
             let rect = tile_rect(tile_x, tile_y);
             painter.rect_filled(rect, 0.0, range_color);
@@ -163,6 +220,16 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         (data.cursor_x - data.player_x).abs().max((data.cursor_y - data.player_y).abs());
     let in_range = cursor_dist <= data.max_range;
 
+    // Check line of sight for abilities that require it
+    let has_los = if data.requires_los {
+        data.visible_tiles
+            .as_ref()
+            .map(|v| v.contains(&(data.cursor_x, data.cursor_y)))
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
     // Check if cursor is over a valid tameable target
     let cursor_on_tameable = data.tameable_positions.contains(&(data.cursor_x, data.cursor_y));
 
@@ -174,6 +241,12 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
             egui::Color32::from_rgba_unmultiplied(255, 200, 100, 80) // Yellow/dim for no target
         } else {
             egui::Color32::from_rgba_unmultiplied(255, 50, 50, 120) // Red for out of range
+        }
+    } else if is_crippling_shot {
+        if in_range && has_los {
+            egui::Color32::from_rgba_unmultiplied(255, 200, 100, 150) // Orange for valid shot
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 120) // Red for blocked/out of range
         }
     } else if in_range {
         if data.is_blink {
@@ -230,6 +303,14 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         } else {
             "Select an animal"
         }
+    } else if is_crippling_shot {
+        if !in_range {
+            "Out of range"
+        } else if !has_los {
+            "No line of sight"
+        } else {
+            "Click to shoot"
+        }
     } else if in_range {
         match data.item_type {
             Some(ItemType::ScrollOfBlink) => "Click to teleport",
@@ -258,6 +339,12 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
             egui::Color32::from_rgb(255, 255, 150) // Yellow
         } else {
             egui::Color32::from_rgb(255, 100, 100) // Red
+        }
+    } else if is_crippling_shot {
+        if in_range && has_los {
+            egui::Color32::from_rgb(255, 220, 150) // Orange for valid
+        } else {
+            egui::Color32::from_rgb(255, 100, 100) // Red for blocked
         }
     } else if in_range {
         egui::Color32::WHITE
