@@ -430,6 +430,105 @@ pub fn apply_open_door(
     ActionResult::Completed
 }
 
+/// Apply close door effect
+pub fn apply_close_door(
+    world: &mut World,
+    closer: Entity,
+    door: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Verify door exists and is open
+    let is_open = if let Ok(door_comp) = world.get::<&Door>(door) {
+        door_comp.is_open
+    } else {
+        return ActionResult::Blocked;
+    };
+
+    if !is_open {
+        return ActionResult::Blocked;
+    }
+
+    // Check nobody is standing on the door tile
+    let door_pos = match world.get::<&Position>(door) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Blocked,
+    };
+
+    // Query for any entity with Position + BlocksMovement at the door's position (exclude the door itself)
+    for (id, (pos, _)) in world.query::<(&Position, &BlocksMovement)>().iter() {
+        if id != door && pos.x == door_pos.0 && pos.y == door_pos.1 {
+            return ActionResult::Blocked;
+        }
+    }
+
+    // Close the door
+    if let Ok(mut door_comp) = world.get::<&mut Door>(door) {
+        door_comp.is_open = false;
+    }
+
+    // Add BlocksMovement and BlocksVision components back
+    let _ = world.insert_one(door, BlocksMovement);
+    let _ = world.insert_one(door, crate::components::BlocksVision);
+
+    events.push(GameEvent::DoorClosed {
+        door,
+        closer,
+        position: door_pos,
+    });
+
+    ActionResult::Completed
+}
+
+/// Apply interact in a direction (Ctrl+movement).
+/// Checks for doors (open/close) and containers at the target tile.
+pub fn apply_interact_direction(
+    world: &mut World,
+    entity: Entity,
+    dx: i32,
+    dy: i32,
+    _spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Get entity position
+    let pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionResult::Invalid,
+    };
+
+    let target_x = pos.0 + dx;
+    let target_y = pos.1 + dy;
+
+    // Check for door at target
+    let door_info: Option<(hecs::Entity, bool)> = world
+        .query::<(&Position, &Door)>()
+        .iter()
+        .find(|(_, (p, _))| p.x == target_x && p.y == target_y)
+        .map(|(id, (_, door))| (id, door.is_open));
+
+    if let Some((door_id, is_open)) = door_info {
+        if is_open {
+            return apply_close_door(world, entity, door_id, events);
+        } else {
+            return apply_open_door(world, entity, door_id, events);
+        }
+    }
+
+    // Check for closed or non-empty container at target
+    let container_id: Option<hecs::Entity> = world
+        .query::<(&Position, &Container)>()
+        .iter()
+        .find(|(_, (p, container))| {
+            p.x == target_x && p.y == target_y && (!container.is_open || !container.is_empty())
+        })
+        .map(|(id, _)| id);
+
+    if let Some(chest_id) = container_id {
+        return apply_open_chest(world, entity, chest_id, events);
+    }
+
+    ActionResult::Blocked
+}
+
 /// Apply open chest effect
 pub fn apply_open_chest(
     world: &mut World,

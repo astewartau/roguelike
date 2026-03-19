@@ -41,6 +41,12 @@ pub enum GameEvent {
         opener: Entity,
         position: (i32, i32),
     },
+    /// An entity closed a door
+    DoorClosed {
+        door: Entity,
+        closer: Entity,
+        position: (i32, i32),
+    },
     /// An entity opened a container (chest, bones, etc.)
     ContainerOpened {
         container: Entity,

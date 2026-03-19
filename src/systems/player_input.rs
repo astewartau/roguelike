@@ -23,6 +23,8 @@ pub enum PlayerIntent {
     Move { dx: i32, dy: i32 },
     /// Force attack in a direction (Shift+move)
     AttackDirection { dx: i32, dy: i32 },
+    /// Interact with something in a direction (Ctrl+move)
+    InteractDirection { dx: i32, dy: i32 },
     /// Shoot equipped ranged weapon at target
     ShootRanged { target_x: i32, target_y: i32 },
     /// Use a targeted ability (blink, fireball)
@@ -166,6 +168,10 @@ pub fn intent_to_action(
 
         PlayerIntent::AttackDirection { dx, dy } => {
             Some(ActionType::AttackDirection { dx: *dx, dy: *dy })
+        }
+
+        PlayerIntent::InteractDirection { dx, dy } => {
+            Some(ActionType::InteractDirection { dx: *dx, dy: *dy })
         }
 
         PlayerIntent::ShootRanged { target_x, target_y } => {

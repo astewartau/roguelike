@@ -149,6 +149,25 @@ impl SpatialCache {
         }
     }
 
+    /// Set blocking flags for an entity (e.g., when door closes).
+    /// Inverse of `clear_blocking_flags`: adds the entity back into blocking sets.
+    pub fn set_blocking_flags(&mut self, entity: Entity, blocks_movement: bool, blocks_vision: bool) {
+        let Some(position) = self.entity_positions.get(&entity).copied() else {
+            return;
+        };
+
+        if let Some(flags) = self.entity_flags.get_mut(&entity) {
+            if blocks_movement && !flags.0 {
+                self.blocking_positions.insert(position);
+                flags.0 = true;
+            }
+            if blocks_vision && !flags.1 {
+                self.vision_blocking.insert(position);
+                flags.1 = true;
+            }
+        }
+    }
+
     /// Clear blocking flags for an entity (e.g., when door opens).
     /// Keeps the entity in tracking but removes from blocking sets.
     pub fn clear_blocking_flags(&mut self, entity: Entity) {

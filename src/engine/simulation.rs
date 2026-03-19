@@ -460,6 +460,11 @@ pub fn process_events_with_audio(
                 // Update spatial cache so pathfinding sees the door as open
                 spatial_cache.clear_blocking_flags(*door);
             }
+            GameEvent::DoorClosed { door, .. } => {
+                systems::handle_door_closed(world, *door);
+                // Update spatial cache so pathfinding sees the door as closed
+                spatial_cache.set_blocking_flags(*door, true, true);
+            }
             GameEvent::ContainerOpened { container, .. } => {
                 systems::handle_container_opened(world, *container);
             }

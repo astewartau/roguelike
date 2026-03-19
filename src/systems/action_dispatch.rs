@@ -27,6 +27,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         }
         ActionType::Attack { .. } => ACTION_ATTACK_DURATION,
         ActionType::AttackDirection { .. } => ACTION_ATTACK_DURATION,
+        ActionType::InteractDirection { .. } => ACTION_DOOR_DURATION,
         ActionType::OpenDoor { .. } => ACTION_DOOR_DURATION,
         ActionType::OpenChest { .. } => ACTION_CHEST_DURATION,
         ActionType::Wait => ACTION_WAIT_DURATION,

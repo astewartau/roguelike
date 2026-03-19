@@ -54,6 +54,24 @@ pub fn handle_door_opened(world: &mut World, door_id: Entity) {
     }
 }
 
+/// Handle a DoorClosed event - update sprite to the door's closed sprite
+pub fn handle_door_closed(world: &mut World, door_id: Entity) {
+    // Get the door's closed_sprite first
+    let closed_sprite = if let Ok(door) = world.get::<&Door>(door_id) {
+        Some(door.closed_sprite)
+    } else {
+        None
+    };
+
+    // Then update the sprite
+    if let Some((sheet, tile_id)) = closed_sprite {
+        if let Ok(mut sprite) = world.get::<&mut Sprite>(door_id) {
+            sprite.sheet = sheet;
+            sprite.tile_id = tile_id;
+        }
+    }
+}
+
 /// Turn dead entities into bones (health <= 0) and grant XP to player
 /// Also cancels any pending actions for dead entities in the scheduler
 pub fn remove_dead_entities(

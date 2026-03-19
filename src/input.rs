@@ -166,6 +166,8 @@ pub struct InputResult {
     pub movement: Option<(i32, i32)>,
     /// Attack direction intent (dx, dy) - Shift+movement
     pub attack_direction: Option<(i32, i32)>,
+    /// Interact direction intent (dx, dy) - Ctrl+movement
+    pub interact_direction: Option<(i32, i32)>,
     /// Player wants to wait (skip turn)
     pub wait: bool,
     /// Player wants to use class ability (Q)
@@ -185,6 +187,7 @@ impl Default for InputResult {
             enter_pressed: false,
             movement: None,
             attack_direction: None,
+            interact_direction: None,
             wait: false,
             ability_pressed: false,
             secondary_ability_pressed: false,
@@ -248,8 +251,12 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     let shift_held = input.keys_pressed.contains(&KeyCode::ShiftLeft)
         || input.keys_pressed.contains(&KeyCode::ShiftRight);
 
+    // Check if ctrl is held (don't consume - it's a modifier)
+    let ctrl_held = input.keys_pressed.contains(&KeyCode::ControlLeft)
+        || input.keys_pressed.contains(&KeyCode::ControlRight);
+
     // Movement or attack direction (only process once per key press)
-    // Shift+direction = attack direction, plain direction = movement
+    // Shift+direction = attack direction, Ctrl+direction = interact direction, plain direction = movement
     let direction = if input.keys_pressed.remove(&KeyCode::KeyW)
         || input.keys_pressed.remove(&KeyCode::ArrowUp)
     {
@@ -273,6 +280,8 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     if let Some(dir) = direction {
         if shift_held {
             result.attack_direction = Some(dir);
+        } else if ctrl_held {
+            result.interact_direction = Some(dir);
         } else {
             result.movement = Some(dir);
         }
@@ -894,6 +903,14 @@ pub fn process_frame(
     if let Some((dx, dy)) = kb.attack_direction {
         input.clear_path();
         result.player_intent = Some(PlayerIntent::AttackDirection { dx, dy });
+        result.from_keyboard = true;
+        return result;
+    }
+
+    // Interact direction (Ctrl+movement)
+    if let Some((dx, dy)) = kb.interact_direction {
+        input.clear_path();
+        result.player_intent = Some(PlayerIntent::InteractDirection { dx, dy });
         result.from_keyboard = true;
         return result;
     }

@@ -602,6 +602,8 @@ pub enum ActionType {
     Attack { target: Entity },
     /// Attacking in a direction (hits whatever is there at completion, or whiffs)
     AttackDirection { dx: i32, dy: i32 },
+    /// Interact with something in a direction (Ctrl+movement)
+    InteractDirection { dx: i32, dy: i32 },
     /// Opening a door
     OpenDoor { door: Entity },
     /// Opening/interacting with a chest
@@ -667,6 +669,7 @@ impl ActionType {
             ActionType::Move { .. } => 1,
             ActionType::Attack { .. } => 1,
             ActionType::AttackDirection { .. } => 1,
+            ActionType::InteractDirection { .. } => 1,
             ActionType::OpenDoor { .. } => 1,
             ActionType::OpenChest { .. } => 1,
             ActionType::Wait => 0, // Standing still is free
@@ -934,6 +937,8 @@ pub struct Door {
     pub is_open: bool,
     /// Sprite to use when door is open
     pub open_sprite: (crate::tile::SpriteSheet, u32),
+    /// Sprite to use when door is closed
+    pub closed_sprite: (crate::tile::SpriteSheet, u32),
 }
 
 impl Door {
@@ -943,6 +948,7 @@ impl Door {
         Self {
             is_open: false,
             open_sprite: tile_ids::DOOR_OPEN,
+            closed_sprite: tile_ids::DOOR,
         }
     }
 
@@ -952,6 +958,7 @@ impl Door {
         Self {
             is_open: false,
             open_sprite: tile_ids::DOOR_GREEN_OPEN,
+            closed_sprite: tile_ids::DOOR_GREEN,
         }
     }
 
@@ -961,6 +968,7 @@ impl Door {
         Self {
             is_open: false,
             open_sprite: tile_ids::DOOR_GRATED, // Same sprite open/closed
+            closed_sprite: tile_ids::DOOR_GRATED,
         }
     }
 
@@ -970,6 +978,7 @@ impl Door {
         Self {
             is_open: false,
             open_sprite: tile_ids::DOOR_SHOP_OPEN,
+            closed_sprite: tile_ids::DOOR_SHOP,
         }
     }
 }

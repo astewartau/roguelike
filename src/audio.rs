@@ -250,6 +250,10 @@ impl AudioManager {
                     let dist = Self::distance(player_pos, *position);
                     self.play_at_distance(SoundType::DoorOpen, dist);
                 }
+                GameEvent::DoorClosed { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::DoorOpen, dist);
+                }
                 GameEvent::ContainerOpened { container_type, position, .. } => {
                     // Only play sound for actual chests, not bodies or ground items
                     if *container_type == Some(crate::components::ContainerType::Chest) {

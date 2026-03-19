@@ -294,6 +294,9 @@ fn apply_action_effects(
         ActionType::AttackDirection { dx, dy } => {
             actions::apply_attack_direction(world, entity, *dx, *dy, events)
         }
+        ActionType::InteractDirection { dx, dy } => {
+            actions::apply_interact_direction(world, entity, *dx, *dy, spatial_cache, events)
+        }
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
         ActionType::Wait => {
