@@ -76,3 +76,19 @@ pub const RANGED_ATTACK_COOLDOWN: f32 = 1.5;
 pub const ENEMY_GOLD_DROP_MIN: u32 = 1;
 /// Gold dropped by enemies (max)
 pub const ENEMY_GOLD_DROP_MAX: u32 = 10;
+
+// THREAT SYSTEM
+/// Threat generated per point of damage dealt
+pub const THREAT_PER_DAMAGE: f32 = 1.0;
+/// Passive threat added per AI decision cycle when target is visible (enemies only)
+pub const THREAT_PASSIVE_VISIBILITY: f32 = 0.5;
+/// Threat decay rate per second for visible targets (slow)
+pub const THREAT_DECAY_VISIBLE: f32 = 0.5;
+/// Threat decay rate per second for non-visible targets (fast)
+pub const THREAT_DECAY_HIDDEN: f32 = 5.0;
+/// Minimum threat floor — threat decays to this instead of zero
+pub const THREAT_MINIMUM: f32 = 0.1;
+/// How long (seconds) an entry can sit at the minimum before being pruned
+pub const THREAT_MEMORY_DURATION: f32 = 20.0;
+/// Multiplier for companion threat when assisting player's target (lower = less priority)
+pub const THREAT_COMPANION_ASSIST_MULT: f32 = 0.5;

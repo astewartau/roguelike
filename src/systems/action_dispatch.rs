@@ -3,7 +3,7 @@
 //! Converts input into action types and calculates action durations.
 //! Extracted from time_system.rs to separate action semantics from time management.
 
-use crate::components::{ActionType, Attackable, BlocksMovement, Container, Door, FriendlyNPC, Position, TamedBy};
+use crate::components::{ActionType, Attackable, BlocksMovement, Container, Door, FriendlyNPC, Player, Position, TamedBy};
 use crate::constants::*;
 use crate::events::StairDirection;
 use crate::grid::Grid;
@@ -116,13 +116,16 @@ pub fn determine_action_type(
     }
 
     // Check for chest at target (closed, or open with items still inside)
-    for (id, (chest_pos, container, _)) in
-        world.query::<(&Position, &Container, &BlocksMovement)>().iter()
-    {
-        if chest_pos.x == target_x && chest_pos.y == target_y {
-            // Interact if closed OR if open but still has items
-            if !container.is_open || !container.is_empty() {
-                return ActionType::OpenChest { chest: id };
+    // Only the player can open chests - AI entities ignore them
+    if world.get::<&Player>(entity).is_ok() {
+        for (id, (chest_pos, container, _)) in
+            world.query::<(&Position, &Container, &BlocksMovement)>().iter()
+        {
+            if chest_pos.x == target_x && chest_pos.y == target_y {
+                // Interact if closed OR if open but still has items
+                if !container.is_open || !container.is_empty() {
+                    return ActionType::OpenChest { chest: id };
+                }
             }
         }
     }

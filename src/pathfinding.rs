@@ -265,6 +265,8 @@ mod tests {
             water_positions: vec![],
             coffin_positions: vec![],
             barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
         }
     }
 
@@ -292,6 +294,8 @@ mod tests {
             water_positions: vec![],
             coffin_positions: vec![],
             barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
         }
     }
 
@@ -393,6 +397,8 @@ mod tests {
             water_positions: vec![],
             coffin_positions: vec![],
             barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
@@ -419,6 +425,8 @@ mod tests {
             water_positions: vec![],
             coffin_positions: vec![],
             barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());

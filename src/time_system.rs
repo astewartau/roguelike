@@ -9,6 +9,7 @@ use crate::components::{
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
+use crate::spatial_cache::SpatialCache;
 use crate::systems::action_dispatch;
 use crate::systems::actions::{self, ActionResult};
 use crate::systems::effects;
@@ -237,6 +238,7 @@ pub fn complete_action(
     world: &mut World,
     grid: &Grid,
     entity: Entity,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     current_time: f32,
     clock: &GameClock,
@@ -260,7 +262,7 @@ pub fn complete_action(
     );
 
     // Apply action effects
-    let result = apply_action_effects(world, grid, entity, &action.action_type, events, current_time);
+    let result = apply_action_effects(world, grid, entity, &action.action_type, spatial_cache, events, current_time);
 
     // Clear action (energy regen is now time-based, not action-based)
     if let Ok(mut actor) = world.get::<&mut Actor>(entity) {
@@ -282,11 +284,12 @@ fn apply_action_effects(
     grid: &Grid,
     entity: Entity,
     action_type: &ActionType,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     current_time: f32,
 ) -> ActionResult {
     match action_type {
-        ActionType::Move { dx, dy, .. } => actions::apply_move(world, grid, entity, *dx, *dy, events),
+        ActionType::Move { dx, dy, .. } => actions::apply_move(world, grid, entity, *dx, *dy, spatial_cache, events),
         ActionType::Attack { target } => actions::apply_attack(world, entity, *target, events),
         ActionType::AttackDirection { dx, dy } => {
             actions::apply_attack_direction(world, entity, *dx, *dy, events)
@@ -307,7 +310,7 @@ fn apply_action_effects(
             actions::apply_throw_potion(world, grid, entity, *potion_type, *target_x, *target_y, events, current_time)
         }
         ActionType::Blink { target_x, target_y } => {
-            actions::apply_blink(world, grid, entity, *target_x, *target_y, events)
+            actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events)
         }
         ActionType::CastFireball { target_x, target_y } => {
             actions::apply_fireball(world, entity, *target_x, *target_y, events)
@@ -346,10 +349,10 @@ fn apply_action_effects(
             actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
         }
         ActionType::Disengage => {
-            actions::apply_disengage(world, grid, entity, events)
+            actions::apply_disengage(world, grid, entity, spatial_cache, events)
         }
         ActionType::Tumble { target_x, target_y } => {
-            actions::apply_tumble(world, grid, entity, *target_x, *target_y, events)
+            actions::apply_tumble(world, grid, entity, *target_x, *target_y, spatial_cache, events)
         }
         ActionType::PlaceSnareTrap { target_x, target_y } => {
             actions::apply_place_snare_trap(world, entity, *target_x, *target_y, events)

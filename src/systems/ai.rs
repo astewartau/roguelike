@@ -1,7 +1,11 @@
 //! AI decision-making and behavior systems.
 //!
-//! This module handles AI state machines, perception, and action selection
-//! for non-player entities.
+//! This module handles AI state machines, perception, threat-based targeting,
+//! and action selection for non-player entities.
+//!
+//! Enemies use a WoW-style threat table to decide who to chase. Companions
+//! operate in defensive mode — they only engage enemies that have attacked
+//! the player or that the player has attacked.
 
 use std::collections::HashSet;
 
@@ -9,8 +13,8 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, AIState, ChaseAI, CompanionAI, EffectType, Equipment, Health, Position, RangedCooldown, TamedBy};
-use crate::constants::AI_ACTIVE_RADIUS;
+use crate::components::{ActionType, Actor, AIState, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, Position, RangedCooldown, TamedBy};
+use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::pathfinding::{self, BresenhamLineIter};
@@ -18,6 +22,98 @@ use crate::queries;
 use crate::spatial_cache::SpatialCache;
 use crate::systems::action_dispatch;
 use crate::time_system::{self, ActionScheduler, GameClock};
+
+// =============================================================================
+// THREAT GENERATION
+// =============================================================================
+
+/// Generate threat on an enemy from a damage source.
+/// Call this whenever an entity deals damage to an entity that has ChaseAI.
+pub fn generate_threat(world: &mut World, enemy: Entity, threat_source: Entity, amount: f32) {
+    if let Ok(mut ai) = world.get::<&mut ChaseAI>(enemy) {
+        ai.add_threat(threat_source, amount);
+    }
+}
+
+/// Generate threat on a companion from a damage source.
+/// Call this whenever an entity deals damage to a companion.
+pub fn generate_companion_threat(world: &mut World, companion: Entity, threat_source: Entity, amount: f32) {
+    if let Ok(mut ai) = world.get::<&mut CompanionAI>(companion) {
+        ai.add_threat(threat_source, amount);
+    }
+}
+
+// =============================================================================
+// THREAT DECAY
+// =============================================================================
+
+/// Decay threat over time with visibility-aware rates.
+/// Visible targets decay slowly, non-visible targets decay fast.
+pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &SpatialCache, elapsed: f32) {
+    if elapsed <= 0.0 {
+        return;
+    }
+
+    // Collect entity positions for visibility checks
+    let positions: Vec<(Entity, (i32, i32))> = world
+        .query::<&Position>()
+        .iter()
+        .map(|(e, p)| (e, (p.x, p.y)))
+        .collect();
+
+    let pos_lookup = |entity: Entity| -> Option<(i32, i32)> {
+        positions.iter().find(|(e, _)| *e == entity).map(|(_, p)| *p)
+    };
+
+    // Decay enemy threat tables
+    for (_, (pos, ai)) in world.query_mut::<(&Position, &mut ChaseAI)>() {
+        let entity_pos = (pos.x, pos.y);
+        for entry in ai.threat_table.iter_mut() {
+            let target_visible = pos_lookup(entry.entity)
+                .map(|tp| is_within_sight(entity_pos, tp, ai.sight_radius)
+                    && has_line_of_sight(grid, spatial_cache.get_vision_blocking(), entity_pos.0, entity_pos.1, tp.0, tp.1))
+                .unwrap_or(false);
+            let decay_rate = if target_visible { THREAT_DECAY_VISIBLE } else { THREAT_DECAY_HIDDEN };
+            entry.threat = (entry.threat - decay_rate * elapsed).max(THREAT_MINIMUM);
+            if target_visible {
+                entry.time_at_minimum = 0.0;
+            } else if entry.threat <= THREAT_MINIMUM {
+                entry.time_at_minimum += elapsed;
+            }
+        }
+        ai.threat_table.retain(|e| e.time_at_minimum < THREAT_MEMORY_DURATION);
+    }
+
+    // Decay companion threat tables
+    for (_, (pos, ai)) in world.query_mut::<(&Position, &mut CompanionAI)>() {
+        let entity_pos = (pos.x, pos.y);
+        for entry in ai.threat_table.iter_mut() {
+            let target_visible = pos_lookup(entry.entity)
+                .map(|tp| is_within_sight(entity_pos, tp, 8) // Companions use fixed sight radius
+                    && has_line_of_sight(grid, spatial_cache.get_vision_blocking(), entity_pos.0, entity_pos.1, tp.0, tp.1))
+                .unwrap_or(false);
+            let decay_rate = if target_visible { THREAT_DECAY_VISIBLE } else { THREAT_DECAY_HIDDEN };
+            entry.threat = (entry.threat - decay_rate * elapsed).max(THREAT_MINIMUM);
+            if target_visible {
+                entry.time_at_minimum = 0.0;
+            } else if entry.threat <= THREAT_MINIMUM {
+                entry.time_at_minimum += elapsed;
+            }
+        }
+        ai.threat_table.retain(|e| e.time_at_minimum < THREAT_MEMORY_DURATION);
+    }
+}
+
+/// Simple distance check for sight (Chebyshev distance).
+fn is_within_sight(from: (i32, i32), to: (i32, i32), radius: i32) -> bool {
+    let dx = (from.0 - to.0).abs();
+    let dy = (from.1 - to.1).abs();
+    dx.max(dy) <= radius
+}
+
+// =============================================================================
+// AI DECISION ENTRY POINT
+// =============================================================================
 
 /// Have an AI entity decide and start its next action.
 pub fn decide_action(
@@ -41,13 +137,10 @@ pub fn decide_action(
     if let (Some(epos), Some(ppos)) = (entity_pos, player_pos) {
         let distance = (epos.0 - ppos.0).abs() + (epos.1 - ppos.1).abs();
         if distance > AI_ACTIVE_RADIUS {
-            // Too far from player - mark as dormant and DON'T reschedule
-            // Entity will be woken up when player moves close enough
             active_tracker.mark_dormant(entity);
             return;
         }
     } else {
-        // No position - can't process this entity
         return;
     }
 
@@ -80,18 +173,19 @@ pub fn decide_action(
 
     // Determine AI action based on AI type
     let action_type = if let Some((owner, follow_distance)) = companion_ai {
-        // Companion AI: follow owner and attack enemies
         determine_companion_action(world, grid, entity, owner, follow_distance, spatial_cache, rng)
     } else {
-        // Regular enemy AI: chase and attack player
         determine_action(world, grid, entity, player_entity, spatial_cache, events, rng)
     };
 
-    // Start the action (with energy events)
     let _ = time_system::start_action_with_events(world, entity, action_type, clock, scheduler, Some(events));
 }
 
-/// Determine what action an AI entity should take based on its state and perception.
+// =============================================================================
+// ENEMY AI (THREAT-BASED)
+// =============================================================================
+
+/// Determine what action an enemy AI entity should take based on threat tables.
 fn determine_action(
     world: &mut World,
     grid: &Grid,
@@ -107,12 +201,6 @@ fn determine_action(
         Err(_) => return ActionType::Wait,
     };
 
-    // Get player position
-    let player_pos = match world.get::<&Position>(player_entity) {
-        Ok(p) => (p.x, p.y),
-        Err(_) => return ActionType::Wait,
-    };
-
     // Get blocking positions from cache
     let blocking_positions = spatial_cache.get_blocking_positions();
 
@@ -121,11 +209,7 @@ fn determine_action(
     let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
     let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted);
 
-    // Rooted: cannot move, but can still attack adjacent targets
-    // We handle this by checking it before any movement decisions
-    // and only allowing attack actions if target is adjacent
-
-    // Confused: move randomly, ignore player entirely
+    // Confused: move randomly, ignore everything
     if is_confused && !is_rooted {
         let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, rng);
         if dx == 0 && dy == 0 {
@@ -134,41 +218,25 @@ fn determine_action(
         return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
 
-    // Feared: flee from player (but can't flee if rooted)
+    // Get AI state and parameters
+    let (sight_radius, current_state, ranged_min, ranged_max) =
+        match world.get::<&ChaseAI>(entity) {
+            Ok(ai) => (ai.sight_radius, ai.state, ai.ranged_min, ai.ranged_max),
+            Err(_) => return ActionType::Wait,
+        };
+
+    // Feared: flee from highest-threat source
     if is_feared && !is_rooted {
-        let (dx, dy) = flee_from_target(grid, entity_pos, player_pos, blocking_positions, rng);
+        let flee_from = world.get::<&ChaseAI>(entity).ok()
+            .and_then(|ai| ai.highest_threat().map(|e| e.entity))
+            .and_then(|e| queries::get_entity_position(world, e))
+            .unwrap_or_else(|| queries::get_entity_position(world, player_entity).unwrap_or(entity_pos));
+        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, blocking_positions, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
         return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
-
-    // Check for adjacent companions (tamed animals) and attack them if alive
-    for (companion_id, (companion_pos, _, health)) in world.query::<(&Position, &CompanionAI, &Health)>().iter() {
-        // Skip dead companions
-        if health.current <= 0 {
-            continue;
-        }
-        let dx = companion_pos.x - entity_pos.0;
-        let dy = companion_pos.y - entity_pos.1;
-        // Adjacent? Attack the companion!
-        if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
-            return ActionType::Attack { target: companion_id };
-        }
-    }
-
-    // Get AI state, sight radius, and ranged parameters
-    let (sight_radius, current_state, last_known, ranged_min, ranged_max) =
-        match world.get::<&ChaseAI>(entity) {
-            Ok(ai) => (
-                ai.sight_radius,
-                ai.state,
-                ai.last_known_pos,
-                ai.ranged_min,
-                ai.ranged_max,
-            ),
-            Err(_) => return ActionType::Wait,
-        };
 
     // Check if entity has a bow equipped (for ranged attacks)
     let has_ranged_weapon = world
@@ -176,51 +244,77 @@ fn determine_action(
         .map(|e| e.has_bow())
         .unwrap_or(false);
 
-    // Calculate visibility (checks for invisibility effect on player)
-    let can_see_player = can_see_target(world, grid, entity_pos, player_pos, sight_radius, Some(player_entity), spatial_cache);
-
-    // Calculate distance to player (Chebyshev distance for ranged check)
-    let distance = (entity_pos.0 - player_pos.0)
-        .abs()
-        .max((entity_pos.1 - player_pos.1).abs());
-
-    // Always update last_known_pos when we can see the player.
-    // This ensures we have the correct position even if we return early for ranged attacks.
-    // Without this, archers who keep shooting would have a stale last_known_pos from when
-    // they first spotted the player, causing them to investigate the wrong location.
-    if can_see_player {
-        if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
-            ai.last_known_pos = Some(player_pos);
+    // Build potential targets: player + all living companions
+    let mut potential_targets: Vec<(Entity, (i32, i32))> = Vec::new();
+    if let Some(ppos) = queries::get_entity_position(world, player_entity) {
+        potential_targets.push((player_entity, ppos));
+    }
+    for (comp_id, (comp_pos, _, health)) in world.query::<(&Position, &CompanionAI, &Health)>().iter() {
+        if health.current > 0 {
+            potential_targets.push((comp_id, (comp_pos.x, comp_pos.y)));
         }
     }
 
-    // Check for ranged attack opportunity
-    if can_see_player && has_ranged_weapon && ranged_max > 0 {
-        // Check if ranged attack is on cooldown
-        let ranged_ready = world
-            .get::<&RangedCooldown>(entity)
-            .map(|cd| cd.remaining <= 0.0)
-            .unwrap_or(true);
-
-        // In range for ranged attack?
-        if ranged_ready && distance >= ranged_min && distance <= ranged_max {
-            // Check line of sight for projectile (no blocking entities in the way)
-            if has_clear_shot(entity_pos, player_pos, blocking_positions) {
-                return ActionType::ShootBow {
-                    target_x: player_pos.0,
-                    target_y: player_pos.1,
-                };
+    // Visibility scan: check which targets we can see, add passive threat, update positions
+    let mut visible_targets: HashSet<Entity> = HashSet::new();
+    for &(target_entity, target_pos) in &potential_targets {
+        let can_see = can_see_target(world, grid, entity_pos, target_pos, sight_radius, Some(target_entity), spatial_cache);
+        if can_see {
+            visible_targets.insert(target_entity);
+            // Passive visibility threat (enemies notice things walking around)
+            if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
+                ai.add_threat(target_entity, THREAT_PASSIVE_VISIBILITY);
+                ai.update_target_pos(target_entity, target_pos);
             }
         }
     }
 
-    // Update state machine
-    let (new_state, target, new_last_known) = update_state_machine(
+    // Pick best target: highest threat that is visible or has a last_known_pos
+    let best_target: Option<(Entity, (i32, i32), bool)> = {
+        let ai = world.get::<&ChaseAI>(entity).ok();
+        ai.and_then(|ai| {
+            // Sort threat table by descending threat
+            let mut entries: Vec<_> = ai.threat_table.iter().collect();
+            entries.sort_by(|a, b| b.threat.partial_cmp(&a.threat).unwrap_or(std::cmp::Ordering::Equal));
+
+            for entry in entries {
+                // Check if target is alive
+                let alive = world.get::<&Health>(entry.entity)
+                    .map(|h| h.current > 0)
+                    .unwrap_or(false);
+                if !alive {
+                    continue;
+                }
+
+                let is_visible = visible_targets.contains(&entry.entity);
+                if is_visible {
+                    let pos = queries::get_entity_position(world, entry.entity).unwrap();
+                    return Some((entry.entity, pos, true));
+                } else if let Some(last_known) = entry.last_known_pos {
+                    return Some((entry.entity, last_known, false));
+                }
+            }
+            None
+        })
+    };
+
+    // Update current_target and state machine
+    let (chase_target_entity, chase_pos, target_visible) = match best_target {
+        Some((e, pos, vis)) => (Some(e), Some(pos), vis),
+        None => (None, None, false),
+    };
+
+    // Get the last_known_pos for the current target (for state machine)
+    let last_known = chase_target_entity.and_then(|te| {
+        world.get::<&ChaseAI>(entity).ok().and_then(|ai| ai.last_known_pos_for(te))
+    });
+
+    let (new_state, move_target, new_last_known) = update_state_machine(
         current_state,
         entity_pos,
-        player_pos,
+        chase_pos,
         last_known,
-        can_see_player,
+        target_visible,
     );
 
     // Emit state change event if state changed
@@ -234,38 +328,222 @@ fn determine_action(
     // Update AI state
     if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
         ai.state = new_state;
-        ai.last_known_pos = new_last_known;
+        ai.current_target = chase_target_entity;
+        // Update last_known_pos for the current target
+        if let Some(te) = chase_target_entity {
+            if let Some(lk) = new_last_known {
+                ai.update_target_pos(te, lk);
+            }
+        }
     }
 
     // If rooted, can only attack adjacent targets - cannot move
     if is_rooted {
-        // Check if player is adjacent
-        let pdx = player_pos.0 - entity_pos.0;
-        let pdy = player_pos.1 - entity_pos.1;
-        if pdx.abs() <= 1 && pdy.abs() <= 1 && (pdx != 0 || pdy != 0) {
-            // Player is adjacent, attack them
-            return action_dispatch::determine_action_type(world, grid, entity, pdx, pdy);
+        // Check all threat targets for adjacency
+        for &(target_entity, target_pos) in &potential_targets {
+            let dx = target_pos.0 - entity_pos.0;
+            let dy = target_pos.1 - entity_pos.1;
+            if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
+                return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
+            }
         }
-        // Not adjacent, just wait
         return ActionType::Wait;
     }
 
-    // Determine movement direction
-    let (dx, dy) = calculate_movement(grid, entity_pos, target, blocking_positions, rng);
+    // Check for ranged attack against best visible target in range
+    if has_ranged_weapon && ranged_max > 0 {
+        let ranged_ready = world
+            .get::<&RangedCooldown>(entity)
+            .map(|cd| cd.remaining <= 0.0)
+            .unwrap_or(true);
 
-    // If no movement, wait
+        if ranged_ready {
+            // Try to shoot highest-threat visible target in range
+            if let Ok(ai) = world.get::<&ChaseAI>(entity) {
+                let mut entries: Vec<_> = ai.threat_table.iter().collect();
+                entries.sort_by(|a, b| b.threat.partial_cmp(&a.threat).unwrap_or(std::cmp::Ordering::Equal));
+
+                for entry in entries {
+                    if !visible_targets.contains(&entry.entity) {
+                        continue;
+                    }
+                    if let Some(tp) = queries::get_entity_position(world, entry.entity) {
+                        let distance = (entity_pos.0 - tp.0).abs().max((entity_pos.1 - tp.1).abs());
+                        if distance >= ranged_min && distance <= ranged_max {
+                            if has_clear_shot(entity_pos, tp, blocking_positions) {
+                                return ActionType::ShootBow { target_x: tp.0, target_y: tp.1 };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Determine movement direction
+    let (dx, dy) = if let Some(target_pos) = move_target {
+        let pathfinding_blocked = ai_pathfinding_blocked(world, spatial_cache);
+        pathfinding::next_step_toward(grid, entity_pos, target_pos, &pathfinding_blocked)
+            .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
+            .unwrap_or((0, 0))
+    } else {
+        // Idle wandering
+        random_wander(grid, entity_pos, blocking_positions, rng)
+    };
+
     if dx == 0 && dy == 0 {
         return ActionType::Wait;
     }
 
-    // Determine action type (may convert to attack)
-    action_dispatch::determine_action_type(world, grid, entity, dx, dy)
+    let action = action_dispatch::determine_action_type(world, grid, entity, dx, dy);
+
+    // Don't attack fellow enemies - if we pathfound through one, just wait
+    if let ActionType::Attack { target } = action {
+        if world.get::<&ChaseAI>(target).is_ok() {
+            return ActionType::Wait;
+        }
+    }
+
+    action
 }
+
+// =============================================================================
+// COMPANION AI (DEFENSIVE MODE)
+// =============================================================================
+
+/// Determine what action a companion (tamed animal) should take.
+/// Defensive mode: only engages enemies that have attacked the player, that the
+/// player has attacked, or that have attacked the companion directly.
+fn determine_companion_action(
+    world: &World,
+    grid: &Grid,
+    entity: Entity,
+    owner: Entity,
+    follow_distance: i32,
+    spatial_cache: &SpatialCache,
+    rng: &mut impl Rng,
+) -> ActionType {
+    let _ = rng;
+
+    // Get companion position
+    let companion_pos = match world.get::<&Position>(entity) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionType::Wait,
+    };
+
+    // Get owner position
+    let owner_pos = match world.get::<&Position>(owner) {
+        Ok(p) => (p.x, p.y),
+        Err(_) => return ActionType::Wait,
+    };
+
+    let blocking = ai_pathfinding_blocked(world, spatial_cache);
+
+    // Priority 1: Fight highest-threat entry in our own threat table
+    // (enemies that attacked us or our owner)
+    if let Ok(ai) = world.get::<&CompanionAI>(entity) {
+        let mut entries: Vec<_> = ai.threat_table.iter().collect();
+        entries.sort_by(|a, b| b.threat.partial_cmp(&a.threat).unwrap_or(std::cmp::Ordering::Equal));
+
+        for entry in entries {
+            // Skip sibling companions
+            let is_sibling = world.get::<&TamedBy>(entry.entity)
+                .map(|t| t.owner == owner)
+                .unwrap_or(false);
+            if is_sibling {
+                continue;
+            }
+
+            // Check if target is still alive
+            let alive = world.get::<&Health>(entry.entity)
+                .map(|h| h.current > 0)
+                .unwrap_or(false);
+            if !alive {
+                continue;
+            }
+
+            if let Some(target_pos) = queries::get_entity_position(world, entry.entity) {
+                return pursue_target(world, grid, entity, companion_pos, entry.entity, target_pos, &blocking);
+            }
+        }
+    }
+
+    // Priority 2: Assist with enemies that have the player in their threat table
+    // (enemies currently in combat with the player)
+    let mut best_enemy: Option<(Entity, i32, (i32, i32))> = None;
+    for (enemy_id, (enemy_pos, ai, health)) in world.query::<(&Position, &ChaseAI, &Health)>().iter() {
+        if health.current <= 0 {
+            continue;
+        }
+        // Check if this enemy has threat on our owner
+        let has_owner_threat = ai.threat_table.iter().any(|e| e.entity == owner);
+        if !has_owner_threat {
+            continue;
+        }
+        let dist = (enemy_pos.x - companion_pos.0).abs() + (enemy_pos.y - companion_pos.1).abs();
+        if best_enemy.is_none() || dist < best_enemy.unwrap().1 {
+            best_enemy = Some((enemy_id, dist, (enemy_pos.x, enemy_pos.y)));
+        }
+    }
+    if let Some((enemy, _, enemy_pos)) = best_enemy {
+        return pursue_target(world, grid, entity, companion_pos, enemy, enemy_pos, &blocking);
+    }
+
+    // Priority 3: Follow owner if too far
+    let dist_to_owner = (companion_pos.0 - owner_pos.0)
+        .abs()
+        .max((companion_pos.1 - owner_pos.1).abs());
+
+    if dist_to_owner > follow_distance {
+        if let Some((nx, ny)) = pathfinding::next_step_toward(grid, companion_pos, owner_pos, &blocking) {
+            let dx = nx - companion_pos.0;
+            let dy = ny - companion_pos.1;
+            if dx != 0 || dy != 0 {
+                return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
+            }
+        }
+    }
+
+    ActionType::Wait
+}
+
+/// Helper: move toward or attack a target entity.
+fn pursue_target(
+    world: &World,
+    grid: &Grid,
+    entity: Entity,
+    entity_pos: (i32, i32),
+    target: Entity,
+    target_pos: (i32, i32),
+    blocked: &HashSet<(i32, i32)>,
+) -> ActionType {
+    let dx = target_pos.0 - entity_pos.0;
+    let dy = target_pos.1 - entity_pos.1;
+
+    // Adjacent? Attack!
+    if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
+        return ActionType::Attack { target };
+    }
+
+    // Pathfind toward target
+    if let Some((nx, ny)) = pathfinding::next_step_toward(grid, entity_pos, target_pos, blocked) {
+        let move_dx = nx - entity_pos.0;
+        let move_dy = ny - entity_pos.1;
+        if move_dx != 0 || move_dy != 0 {
+            return action_dispatch::determine_action_type(world, grid, entity, move_dx, move_dy);
+        }
+    }
+
+    ActionType::Wait
+}
+
+// =============================================================================
+// PERCEPTION
+// =============================================================================
 
 /// Check if there's a clear line of sight for a projectile (no blocking entities)
 fn has_clear_shot(from: (i32, i32), to: (i32, i32), blocking: &HashSet<(i32, i32)>) -> bool {
     for (x, y) in BresenhamLineIter::new(from.0, from.1, to.0, to.1) {
-        // Skip the start and target positions
         if (x, y) == from || (x, y) == to {
             continue;
         }
@@ -273,13 +551,10 @@ fn has_clear_shot(from: (i32, i32), to: (i32, i32), blocking: &HashSet<(i32, i32
             return false;
         }
     }
-
     true
 }
 
 /// Check if an entity can see a target position.
-/// Uses proximity-based detection: target must be within sight_radius AND have clear line of sight.
-/// If target_entity is provided, also checks if the target is invisible.
 fn can_see_target(
     world: &World,
     grid: &Grid,
@@ -296,26 +571,18 @@ fn can_see_target(
         }
     }
 
-    // Check distance (Chebyshev distance for more natural "sight" radius)
-    let dx = (from.0 - target.0).abs();
-    let dy = (from.1 - target.1).abs();
-    let distance = dx.max(dy);
-    if distance > sight_radius {
+    if !is_within_sight(from, target, sight_radius) {
         return false;
     }
 
-    // Get vision-blocking positions from cache
     let vision_blocking = spatial_cache.get_vision_blocking();
-
-    // Check line of sight using Bresenham's algorithm
     has_line_of_sight(grid, vision_blocking, from.0, from.1, target.0, target.1)
 }
 
 /// Check if there's a clear line of sight between two points.
-/// Uses Bresenham's line algorithm to check for blocking tiles.
 fn has_line_of_sight(
     grid: &Grid,
-    blocking_entities: &std::collections::HashSet<(i32, i32)>,
+    blocking_entities: &HashSet<(i32, i32)>,
     x0: i32,
     y0: i32,
     x1: i32,
@@ -341,19 +608,16 @@ fn has_line_of_sight(
             y += sy;
         }
 
-        // Don't check the destination tile itself
         if x == x1 && y == y1 {
             break;
         }
 
-        // Check if this tile blocks vision
         if let Some(tile) = grid.get(x, y) {
             if tile.tile_type.blocks_vision() {
                 return false;
             }
         }
 
-        // Check if an entity blocks vision here
         if blocking_entities.contains(&(x, y)) {
             return false;
         }
@@ -362,34 +626,54 @@ fn has_line_of_sight(
     true
 }
 
-/// Update the AI state machine based on perception.
+// =============================================================================
+// STATE MACHINE
+// =============================================================================
+
+/// Update the AI state machine based on perception (target-agnostic).
 fn update_state_machine(
     current_state: AIState,
     entity_pos: (i32, i32),
-    player_pos: (i32, i32),
+    target_pos: Option<(i32, i32)>,
     last_known: Option<(i32, i32)>,
-    can_see_player: bool,
+    can_see_target: bool,
 ) -> (AIState, Option<(i32, i32)>, Option<(i32, i32)>) {
+    // No target at all
+    if target_pos.is_none() && !can_see_target {
+        return match current_state {
+            AIState::Investigating => {
+                if last_known.map(|lk| lk == entity_pos).unwrap_or(true) {
+                    (AIState::Idle, None, None)
+                } else {
+                    (AIState::Investigating, last_known, last_known)
+                }
+            }
+            _ => (AIState::Idle, None, last_known),
+        };
+    }
+
     match current_state {
         AIState::Idle => {
-            if can_see_player {
-                (AIState::Chasing, Some(player_pos), Some(player_pos))
+            if can_see_target {
+                (AIState::Chasing, target_pos, target_pos)
+            } else if target_pos.is_some() {
+                // Have a last_known_pos from threat table but can't see — investigate
+                (AIState::Investigating, target_pos, target_pos)
             } else {
-                (AIState::Idle, None, last_known)
+                (AIState::Idle, None, None)
             }
         }
         AIState::Chasing => {
-            if can_see_player {
-                (AIState::Chasing, Some(player_pos), Some(player_pos))
+            if can_see_target {
+                (AIState::Chasing, target_pos, target_pos)
             } else {
                 (AIState::Investigating, last_known, last_known)
             }
         }
         AIState::Investigating => {
-            if can_see_player {
-                (AIState::Chasing, Some(player_pos), Some(player_pos))
+            if can_see_target {
+                (AIState::Chasing, target_pos, target_pos)
             } else if last_known.map(|lk| lk == entity_pos).unwrap_or(true) {
-                // Reached last known position, go idle
                 (AIState::Idle, None, None)
             } else {
                 (AIState::Investigating, last_known, last_known)
@@ -398,23 +682,30 @@ fn update_state_machine(
     }
 }
 
-/// Calculate the movement direction for an AI entity.
-fn calculate_movement(
-    grid: &Grid,
-    entity_pos: (i32, i32),
-    target: Option<(i32, i32)>,
-    blocking: &HashSet<(i32, i32)>,
-    rng: &mut impl Rng,
-) -> (i32, i32) {
-    if let Some((tx, ty)) = target {
-        // Pathfind to target
-        pathfinding::next_step_toward(grid, entity_pos, (tx, ty), blocking)
-            .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
-            .unwrap_or((0, 0))
-    } else {
-        // Idle: wander randomly
-        random_wander(grid, entity_pos, blocking, rng)
+// =============================================================================
+// PATHFINDING HELPERS
+// =============================================================================
+
+/// Build a blocked set for AI pathfinding that excludes traversable obstacles.
+fn ai_pathfinding_blocked(
+    world: &World,
+    spatial_cache: &SpatialCache,
+) -> HashSet<(i32, i32)> {
+    let mut blocked = spatial_cache.get_blocking_positions().clone();
+
+    for (_id, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
+        blocked.remove(&(pos.x, pos.y));
     }
+    for (_id, (pos, _)) in world.query::<(&Position, &CompanionAI)>().iter() {
+        blocked.remove(&(pos.x, pos.y));
+    }
+    for (_id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
+        if !door.is_open {
+            blocked.remove(&(pos.x, pos.y));
+        }
+    }
+
+    blocked
 }
 
 /// Pick a random adjacent walkable tile for wandering.
@@ -424,19 +715,24 @@ fn random_wander(
     blocked: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
-    let dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)];
-    let (dx, dy) = dirs[rng.gen_range(0..4)];
-    let target = (pos.0 + dx, pos.1 + dy);
+    let mut valid = [(0i32, 0i32); 4];
+    let mut count = 0;
+    for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+        let target = (pos.0 + dx, pos.1 + dy);
+        if grid.is_walkable(target.0, target.1) && !blocked.contains(&target) {
+            valid[count] = (dx, dy);
+            count += 1;
+        }
+    }
 
-    if grid.is_walkable(target.0, target.1) && !blocked.contains(&target) {
-        (dx, dy)
-    } else {
+    if count == 0 {
         (0, 0)
+    } else {
+        valid[rng.gen_range(0..count)]
     }
 }
 
 /// Flee from a target position - move in the opposite direction.
-/// Falls back to random movement if direct flee path is blocked.
 fn flee_from_target(
     grid: &Grid,
     pos: (i32, i32),
@@ -444,11 +740,9 @@ fn flee_from_target(
     blocked: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
-    // Calculate direction away from target
     let flee_dx = (pos.0 - target.0).signum();
     let flee_dy = (pos.1 - target.1).signum();
 
-    // Try to move directly away
     if flee_dx != 0 || flee_dy != 0 {
         let nx = pos.0 + flee_dx;
         let ny = pos.1 + flee_dy;
@@ -456,7 +750,6 @@ fn flee_from_target(
             return (flee_dx, flee_dy);
         }
 
-        // Try fleeing in just X direction
         if flee_dx != 0 {
             let nx = pos.0 + flee_dx;
             let ny = pos.1;
@@ -465,7 +758,6 @@ fn flee_from_target(
             }
         }
 
-        // Try fleeing in just Y direction
         if flee_dy != 0 {
             let nx = pos.0;
             let ny = pos.1 + flee_dy;
@@ -475,144 +767,5 @@ fn flee_from_target(
         }
     }
 
-    // Fallback to random movement if can't flee directly
     random_wander(grid, pos, blocked, rng)
-}
-
-/// Determine what action a companion (tamed animal) should take.
-/// Priority: retaliate against attacker > assist player's target > follow owner
-fn determine_companion_action(
-    world: &World,
-    grid: &Grid,
-    entity: Entity,
-    owner: Entity,
-    follow_distance: i32,
-    spatial_cache: &SpatialCache,
-    rng: &mut impl Rng,
-) -> ActionType {
-    use crate::components::PlayerAttackTarget;
-    let _ = rng; // Companions don't wander randomly
-
-    // Get companion position
-    let companion_pos = match world.get::<&Position>(entity) {
-        Ok(p) => (p.x, p.y),
-        Err(_) => return ActionType::Wait,
-    };
-
-    // Get owner position
-    let owner_pos = match world.get::<&Position>(owner) {
-        Ok(p) => (p.x, p.y),
-        Err(_) => return ActionType::Wait,
-    };
-
-    // Get blocking positions from cache
-    let blocking = spatial_cache.get_blocking_positions();
-
-    // Get last attacker from CompanionAI
-    let last_attacker = world
-        .get::<&CompanionAI>(entity)
-        .ok()
-        .and_then(|ai| ai.last_attacker);
-
-    // Priority 1: Retaliate against last attacker if alive and has position
-    if let Some(attacker) = last_attacker {
-        // Skip if attacker is another companion owned by the same player
-        let is_sibling_companion = world
-            .get::<&TamedBy>(attacker)
-            .map(|t| t.owner == owner)
-            .unwrap_or(false);
-
-        // Check if attacker is still alive
-        let attacker_alive = world
-            .get::<&Health>(attacker)
-            .map(|h| h.current > 0)
-            .unwrap_or(false);
-
-        if attacker_alive && !is_sibling_companion {
-            if let Ok(attacker_pos) = world.get::<&Position>(attacker) {
-                let dx = attacker_pos.x - companion_pos.0;
-                let dy = attacker_pos.y - companion_pos.1;
-
-                // Adjacent? Attack!
-                if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
-                    return ActionType::Attack { target: attacker };
-                }
-
-                // Move toward attacker
-                if let Some((nx, ny)) = pathfinding::next_step_toward(
-                    grid,
-                    companion_pos,
-                    (attacker_pos.x, attacker_pos.y),
-                    blocking,
-                ) {
-                    let move_dx = nx - companion_pos.0;
-                    let move_dy = ny - companion_pos.1;
-                    if move_dx != 0 || move_dy != 0 {
-                        return action_dispatch::determine_action_type(world, grid, entity, move_dx, move_dy);
-                    }
-                }
-            }
-        }
-    }
-
-    // Priority 2: Assist player's attack target if set and alive
-    if let Ok(player_target) = world.get::<&PlayerAttackTarget>(owner) {
-        if let Some(target) = player_target.target {
-            // Skip if target is another companion owned by the same player
-            let is_sibling_companion = world
-                .get::<&TamedBy>(target)
-                .map(|t| t.owner == owner)
-                .unwrap_or(false);
-
-            // Check if target is still alive
-            let target_alive = world
-                .get::<&Health>(target)
-                .map(|h| h.current > 0)
-                .unwrap_or(false);
-
-            if target_alive && !is_sibling_companion {
-                if let Ok(target_pos) = world.get::<&Position>(target) {
-                    let dx = target_pos.x - companion_pos.0;
-                    let dy = target_pos.y - companion_pos.1;
-
-                    // Adjacent? Attack!
-                    if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
-                        return ActionType::Attack { target };
-                    }
-
-                    // Move toward target
-                    if let Some((nx, ny)) = pathfinding::next_step_toward(
-                        grid,
-                        companion_pos,
-                        (target_pos.x, target_pos.y),
-                        blocking,
-                    ) {
-                        let move_dx = nx - companion_pos.0;
-                        let move_dy = ny - companion_pos.1;
-                        if move_dx != 0 || move_dy != 0 {
-                            return action_dispatch::determine_action_type(world, grid, entity, move_dx, move_dy);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Priority 3: Follow owner if too far
-    let dist_to_owner = (companion_pos.0 - owner_pos.0)
-        .abs()
-        .max((companion_pos.1 - owner_pos.1).abs());
-
-    if dist_to_owner > follow_distance {
-        if let Some((nx, ny)) = pathfinding::next_step_toward(grid, companion_pos, owner_pos, blocking) {
-            let dx = nx - companion_pos.0;
-            let dy = ny - companion_pos.1;
-            if dx != 0 || dy != 0 {
-                return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
-            }
-        }
-    }
-
-    // Otherwise, idle nearby (just wait, don't wander)
-    ActionType::Wait
 }

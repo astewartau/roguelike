@@ -26,7 +26,8 @@ pub fn update_projectiles(
     current_time: f32,
     events: &mut EventQueue,
 ) {
-    let mut hits: Vec<(Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>)> = Vec::new();
+    // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity)
+    let mut hits: Vec<(Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity)> = Vec::new();
     let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>)> = Vec::new();
 
     // Get all attackable entities and their positions for collision checking
@@ -68,7 +69,7 @@ pub fn update_projectiles(
             let tile = grid.get(tile_x, tile_y);
             let is_wall = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
             if is_wall {
-                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage, projectile.on_hit_effect));
+                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage, projectile.on_hit_effect, projectile.source));
                 // Mark as finished at wall position (one tile before the wall)
                 let final_pos = if i > 0 {
                     let (px, py, _) = projectile.path[i - 1];
@@ -94,6 +95,7 @@ pub fn update_projectiles(
                         (tile_x, tile_y),
                         projectile.damage,
                         projectile.on_hit_effect,
+                        projectile.source,
                     ));
                     finished_projectiles.push((projectile_entity, tile_x, tile_y, projectile.potion_type));
                     hit_something = true;
@@ -126,7 +128,7 @@ pub fn update_projectiles(
     }
 
     // Apply damage and emit events
-    for (projectile_entity, target, position, damage, on_hit_effect) in hits {
+    for (projectile_entity, target, position, damage, on_hit_effect, source) in hits {
         let mut actual_damage = damage;
         if let Some(target_entity) = target {
             // Mark that this projectile hit an enemy (for arrow recovery)
@@ -147,6 +149,12 @@ pub fn update_projectiles(
                 }
                 // Interrupt life drain if target was channeling
                 crate::systems::actions::interrupt_life_drain_on_damage(world, target_entity, events);
+
+                // Generate threat on the target for the projectile source
+                use crate::constants::THREAT_PER_DAMAGE;
+                let threat_amount = actual_damage as f32 * THREAT_PER_DAMAGE;
+                crate::systems::ai::generate_threat(world, target_entity, source, threat_amount);
+                crate::systems::ai::generate_companion_threat(world, target_entity, source, threat_amount);
             }
 
             // Apply on_hit_effect (even if invulnerable, effects like Slowed still apply)

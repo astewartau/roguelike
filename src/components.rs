@@ -748,20 +748,35 @@ impl Actor {
 /// AI behavior state
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AIState {
-    /// Wandering randomly, hasn't seen the player
+    /// Wandering randomly, hasn't seen any target
     Idle,
-    /// Actively chasing the player (can see them)
+    /// Actively chasing a target (can see them)
     Chasing,
-    /// Moving to last known player position after losing sight
+    /// Moving to last known target position after losing sight
     Investigating,
 }
 
-/// AI behavior: chase the player when spotted, wander otherwise
+/// A single entry in an entity's threat table.
 #[derive(Debug, Clone, Copy)]
+pub struct ThreatEntry {
+    pub entity: Entity,
+    pub threat: f32,
+    /// Last known position of this target (for investigating after losing sight)
+    pub last_known_pos: Option<(i32, i32)>,
+    /// How long threat has been at the minimum floor (seconds).
+    /// Entry is only pruned after this exceeds THREAT_MEMORY_DURATION.
+    pub time_at_minimum: f32,
+}
+
+/// AI behavior: chase the highest-threat target, wander otherwise
+#[derive(Debug, Clone)]
 pub struct ChaseAI {
     pub sight_radius: i32,
     pub state: AIState,
-    pub last_known_pos: Option<(i32, i32)>,
+    /// Per-target threat tracking
+    pub threat_table: Vec<ThreatEntry>,
+    /// The entity currently being pursued
+    pub current_target: Option<Entity>,
     /// Minimum range to use ranged attack (0 = melee only)
     pub ranged_min: i32,
     /// Maximum range for ranged attack (0 = melee only)
@@ -773,7 +788,8 @@ impl ChaseAI {
         Self {
             sight_radius,
             state: AIState::Idle,
-            last_known_pos: None,
+            threat_table: Vec::new(),
+            current_target: None,
             ranged_min: 0,
             ranged_max: 0,
         }
@@ -784,10 +800,57 @@ impl ChaseAI {
         Self {
             sight_radius,
             state: AIState::Idle,
-            last_known_pos: None,
+            threat_table: Vec::new(),
+            current_target: None,
             ranged_min,
             ranged_max,
         }
+    }
+
+    /// Add threat for a specific entity. Creates entry if not present.
+    pub fn add_threat(&mut self, target: Entity, amount: f32) {
+        if let Some(entry) = self.threat_table.iter_mut().find(|e| e.entity == target) {
+            entry.threat += amount;
+            entry.time_at_minimum = 0.0; // Reset memory timer on new threat
+        } else {
+            self.threat_table.push(ThreatEntry {
+                entity: target,
+                threat: amount,
+                last_known_pos: None,
+                time_at_minimum: 0.0,
+            });
+        }
+    }
+
+    /// Get the highest-threat entry.
+    pub fn highest_threat(&self) -> Option<&ThreatEntry> {
+        self.threat_table.iter().max_by(|a, b| a.threat.partial_cmp(&b.threat).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Remove a target from the threat table (e.g., on death).
+    pub fn remove_target(&mut self, target: Entity) {
+        self.threat_table.retain(|e| e.entity != target);
+        if self.current_target == Some(target) {
+            self.current_target = None;
+        }
+    }
+
+    /// Update last_known_pos for a target.
+    pub fn update_target_pos(&mut self, target: Entity, pos: (i32, i32)) {
+        if let Some(entry) = self.threat_table.iter_mut().find(|e| e.entity == target) {
+            entry.last_known_pos = Some(pos);
+        }
+    }
+
+    /// Get last_known_pos for a specific target.
+    pub fn last_known_pos_for(&self, target: Entity) -> Option<(i32, i32)> {
+        self.threat_table.iter().find(|e| e.entity == target).and_then(|e| e.last_known_pos)
+    }
+
+    /// Clear all threat (for floor transitions).
+    pub fn clear_threat(&mut self) {
+        self.threat_table.clear();
+        self.current_target = None;
     }
 }
 
@@ -1354,21 +1417,42 @@ pub struct TamedBy {
     pub owner: Entity,
 }
 
-/// AI for tamed companions - follows owner and attacks enemies
-#[derive(Debug, Clone, Copy)]
+/// AI for tamed companions - defensive mode, attacks enemies threatening owner
+#[derive(Debug, Clone)]
 pub struct CompanionAI {
     /// The player this companion follows
     pub owner: Entity,
     /// Maximum distance before following (Manhattan distance)
     pub follow_distance: i32,
-    /// Entity that last attacked this companion (for retaliation)
-    pub last_attacker: Option<Entity>,
+    /// Per-target threat tracking (populated by being attacked or owner combat)
+    pub threat_table: Vec<ThreatEntry>,
 }
 
-/// Tracks the player's last attack target (for companion assistance)
-#[derive(Debug, Clone, Copy)]
-pub struct PlayerAttackTarget {
-    pub target: Option<Entity>,
+impl CompanionAI {
+    /// Add threat for a specific entity. Creates entry if not present.
+    pub fn add_threat(&mut self, target: Entity, amount: f32) {
+        if let Some(entry) = self.threat_table.iter_mut().find(|e| e.entity == target) {
+            entry.threat += amount;
+            entry.time_at_minimum = 0.0; // Reset memory timer on new threat
+        } else {
+            self.threat_table.push(ThreatEntry {
+                entity: target,
+                threat: amount,
+                last_known_pos: None,
+                time_at_minimum: 0.0,
+            });
+        }
+    }
+
+    /// Get the highest-threat entry.
+    pub fn highest_threat(&self) -> Option<&ThreatEntry> {
+        self.threat_table.iter().max_by(|a, b| a.threat.partial_cmp(&b.threat).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Remove a target from the threat table (e.g., on death).
+    pub fn remove_target(&mut self, target: Entity) {
+        self.threat_table.retain(|e| e.entity != target);
+    }
 }
 
 // =============================================================================

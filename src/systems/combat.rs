@@ -1,7 +1,7 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Container, Door, Equipment, Experience, Health,
+    Actor, Attackable, BlocksMovement, ChaseAI, CompanionAI, Container, Door, Equipment, Experience, Health,
     ItemType, Position, Sprite, Stats, Weapon,
 };
 use crate::constants::*;
@@ -62,6 +62,7 @@ pub fn remove_dead_entities(
     rng: &mut impl Rng,
     events: &mut EventQueue,
     mut scheduler: Option<&mut ActionScheduler>,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
 ) {
     let mut to_convert = Vec::new();
 
@@ -98,13 +99,25 @@ pub fn remove_dead_entities(
             position,
         });
 
+        // Remove from spatial cache before removing components
+        spatial_cache.remove_entity(id);
+
         // Remove AI, Actor, Attackable, Stats components - turn into decoration
         let _ = world.remove_one::<Actor>(id);
         let _ = world.remove_one::<ChaseAI>(id);
+        let _ = world.remove_one::<CompanionAI>(id);
         let _ = world.remove_one::<Attackable>(id);
         let _ = world.remove_one::<Health>(id);
         let _ = world.remove_one::<BlocksMovement>(id); // Bones are walkable
         let _ = world.remove_one::<Stats>(id);
+
+        // Clean dead entity from all threat tables
+        for (_, ai) in world.query_mut::<&mut ChaseAI>() {
+            ai.remove_target(id);
+        }
+        for (_, ai) in world.query_mut::<&mut CompanionAI>() {
+            ai.remove_target(id);
+        }
 
         // Change sprite to bones (corpse)
         if let Ok(mut sprite) = world.get::<&mut Sprite>(id) {

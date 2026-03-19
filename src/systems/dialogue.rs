@@ -44,10 +44,12 @@ mod tests {
                         DialogueOption {
                             label: "Hi".to_string(),
                             next_node: Some(1),
+                            action: Default::default(),
                         },
                         DialogueOption {
                             label: "Bye".to_string(),
                             next_node: None,
+                            action: Default::default(),
                         },
                     ],
                 },
@@ -56,6 +58,7 @@ mod tests {
                     options: vec![DialogueOption {
                         label: "Fine".to_string(),
                         next_node: None,
+                        action: Default::default(),
                     }],
                 },
             ],

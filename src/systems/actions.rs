@@ -7,7 +7,7 @@ use hecs::{Entity, World};
 
 use crate::components::{
     Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
-    EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, PlacedTrap, Player, PlayerAttackTarget, Position, Projectile,
+    EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, PlacedTrap, Player, Position, Projectile,
     ProjectileMarker, RangedCooldown, SecondaryAbility, Sprite, Stats, StatusEffects, TamedBy, TamingInProgress, TrapType, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
@@ -43,6 +43,7 @@ pub fn apply_move(
     entity: Entity,
     dx: i32,
     dy: i32,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> ActionResult {
     // Get current position
@@ -109,6 +110,7 @@ pub fn apply_move(
         let from = (pos.x, pos.y);
         pos.x = target_x;
         pos.y = target_y;
+        spatial_cache.update_position(entity, from, (target_x, target_y));
         events.push(GameEvent::EntityMoved {
             entity,
             from,
@@ -192,6 +194,10 @@ fn check_fire_trap_trigger(
 
     // Interrupt life drain if victim was channeling
     interrupt_life_drain_on_damage(world, victim, events);
+
+    // Generate threat on the victim for the trap owner
+    crate::systems::ai::generate_threat(world, victim, trap_owner, burst_damage as f32 * THREAT_PER_DAMAGE);
+    crate::systems::ai::generate_companion_threat(world, victim, trap_owner, burst_damage as f32 * THREAT_PER_DAMAGE);
 
     // Apply burning effect
     effects::add_effect_to_entity(world, victim, EffectType::Burning, BURNING_DURATION);
@@ -336,16 +342,24 @@ pub fn apply_attack(
     // Interrupt life drain if target was channeling
     interrupt_life_drain_on_damage(world, target, events);
 
-    // Track attacker for companion retaliation (but not if attacked by owner)
-    if let Ok(mut companion_ai) = world.get::<&mut CompanionAI>(target) {
-        if companion_ai.owner != attacker {
-            companion_ai.last_attacker = Some(attacker);
+    // Generate threat on the target for the attacker (enemy gains threat on whoever hit it)
+    let threat_amount = damage as f32 * THREAT_PER_DAMAGE;
+    crate::systems::ai::generate_threat(world, target, attacker, threat_amount);
+    crate::systems::ai::generate_companion_threat(world, target, attacker, threat_amount);
+
+    // If target is the player, all companions become aware of the attacker
+    if world.get::<&Player>(target).is_ok() {
+        let comp_ids: Vec<Entity> = world.query::<&CompanionAI>().iter().map(|(id, _)| id).collect();
+        for comp_id in comp_ids {
+            crate::systems::ai::generate_companion_threat(world, comp_id, attacker, threat_amount);
         }
     }
-
-    // Track player's attack target for companion assistance
-    if let Ok(mut player_target) = world.get::<&mut PlayerAttackTarget>(attacker) {
-        player_target.target = Some(target);
+    // If attacker is the player, all companions gain awareness of the target
+    if world.get::<&Player>(attacker).is_ok() {
+        let comp_ids: Vec<Entity> = world.query::<&CompanionAI>().iter().map(|(id, _)| id).collect();
+        for comp_id in comp_ids {
+            crate::systems::ai::generate_companion_threat(world, comp_id, target, threat_amount * THREAT_COMPANION_ASSIST_MULT);
+        }
     }
 
     // Add lunge animation to attacker
@@ -824,6 +838,7 @@ pub fn apply_blink(
     entity: Entity,
     target_x: i32,
     target_y: i32,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> ActionResult {
     // Get current position
@@ -853,6 +868,7 @@ pub fn apply_blink(
         pos.x = target_x;
         pos.y = target_y;
     }
+    spatial_cache.update_position(entity, current_pos, (target_x, target_y));
 
     // Snap visual position (instant teleport, no lerping)
     if let Ok(mut vis_pos) = world.get::<&mut VisualPosition>(entity) {
@@ -912,6 +928,9 @@ pub fn apply_fireball(
         }
         // Interrupt life drain if entity was channeling
         interrupt_life_drain_on_damage(world, entity, events);
+        // Generate threat on fireball targets
+        crate::systems::ai::generate_threat(world, entity, caster, FIREBALL_DAMAGE as f32 * THREAT_PER_DAMAGE);
+        crate::systems::ai::generate_companion_threat(world, entity, caster, FIREBALL_DAMAGE as f32 * THREAT_PER_DAMAGE);
         events.push(GameEvent::AttackHit {
             attacker: caster,
             target: entity,
@@ -1192,6 +1211,11 @@ pub fn apply_cleave(
         // Interrupt life drain if target was channeling
         interrupt_life_drain_on_damage(world, *target, events);
 
+        // Generate threat on cleave targets
+        let cleave_threat = damage as f32 * THREAT_PER_DAMAGE;
+        crate::systems::ai::generate_threat(world, *target, attacker, cleave_threat);
+        crate::systems::ai::generate_companion_threat(world, *target, attacker, cleave_threat);
+
         // Emit attack event for VFX
         events.push(GameEvent::AttackHit {
             attacker,
@@ -1454,6 +1478,10 @@ fn tick_life_drain(
             false
         };
 
+        // Generate threat on life drain target
+        crate::systems::ai::generate_threat(world, target, caster, damage as f32 * THREAT_PER_DAMAGE);
+        crate::systems::ai::generate_companion_threat(world, target, caster, damage as f32 * THREAT_PER_DAMAGE);
+
         // Heal caster (percentage of damage dealt)
         let heal_amount = (damage as f32 * LIFE_DRAIN_HEAL_PERCENT) as i32;
         if let Ok(mut health) = world.get::<&mut Health>(caster) {
@@ -1545,7 +1573,7 @@ fn complete_taming(
     let _ = world.insert_one(target, CompanionAI {
         owner: tamer,
         follow_distance: 2,
-        last_attacker: None,
+        threat_table: Vec::new(),
     });
 
     // Remove taming state from player
@@ -1633,6 +1661,7 @@ pub fn apply_disengage(
     world: &mut World,
     grid: &Grid,
     entity: Entity,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     _events: &mut EventQueue,
 ) -> ActionResult {
     use crate::fov::FOV;
@@ -1700,10 +1729,11 @@ pub fn apply_disengage(
 
             if !blocked {
                 // Teleport to target
-                if let Ok(mut pos) = world.get::<&mut Position>(entity) {
-                    pos.x = target_x;
-                    pos.y = target_y;
+                if let Ok(mut p) = world.get::<&mut Position>(entity) {
+                    p.x = target_x;
+                    p.y = target_y;
                 }
+                spatial_cache.update_position(entity, pos, (target_x, target_y));
                 if let Ok(mut vpos) = world.get::<&mut VisualPosition>(entity) {
                     vpos.x = target_x as f32;
                     vpos.y = target_y as f32;
@@ -1724,12 +1754,13 @@ pub fn apply_tumble(
     entity: Entity,
     target_x: i32,
     target_y: i32,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     _events: &mut EventQueue,
 ) -> ActionResult {
     use crate::constants::TUMBLE_INVULN_DURATION;
 
     // Get entity position
-    let _pos = match world.get::<&Position>(entity) {
+    let from = match world.get::<&Position>(entity) {
         Ok(p) => (p.x, p.y),
         Err(_) => return ActionResult::Blocked,
     };
@@ -1744,6 +1775,7 @@ pub fn apply_tumble(
         p.x = target_x;
         p.y = target_y;
     }
+    spatial_cache.update_position(entity, from, (target_x, target_y));
     if let Ok(mut vpos) = world.get::<&mut VisualPosition>(entity) {
         vpos.x = target_x as f32;
         vpos.y = target_y as f32;

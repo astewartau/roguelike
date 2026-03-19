@@ -1,8 +1,8 @@
 //! World initialization - creates the game world and spawns initial entities.
 
 use crate::components::{
-    AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ChaseAI, ClassAbility,
-    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player, PlayerAttackTarget,
+    AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ClassAbility,
+    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player,
     PlayerClass, Position, RangerAbilities, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
@@ -306,7 +306,6 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         Attackable,
         StatusEffects::new(),
         ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
-        PlayerAttackTarget { target: None },
     ));
 
     // Druid gets a secondary ability (Barkskin)

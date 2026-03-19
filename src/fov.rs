@@ -207,6 +207,8 @@ mod tests {
             water_positions: vec![],
             coffin_positions: vec![],
             barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
         };
         for &(x, y) in walls {
             if let Some(tile) = grid.get_mut(x, y) {

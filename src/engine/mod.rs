@@ -313,6 +313,7 @@ impl GameEngine {
                 &mut rng,
                 &mut self.events,
                 Some(&mut state.action_scheduler),
+                &mut state.spatial_cache,
             );
         }
 
@@ -348,6 +349,7 @@ impl GameEngine {
         if !skeleton_spawns.is_empty() {
             for (x, y) in &skeleton_spawns {
                 let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
+                state.spatial_cache.register_entity(skeleton, (*x, *y), true, false);
                 let mut rng = rand::thread_rng();
                 initialization::initialize_single_ai_actor(
                     &mut state.world,
@@ -839,6 +841,7 @@ impl GameEngine {
                 let state = self.state.as_mut().expect("State should exist");
                 for (x, y) in &skeleton_spawns {
                     let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
+                    state.spatial_cache.register_entity(skeleton, (*x, *y), true, false);
                     let mut rng = rand::thread_rng();
                     initialization::initialize_single_ai_actor(
                         &mut state.world,

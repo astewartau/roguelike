@@ -227,7 +227,7 @@ pub fn advance_until_player_ready(
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
     active_tracker: &mut ActiveAITracker,
-    spatial_cache: &SpatialCache,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
@@ -279,8 +279,9 @@ pub fn advance_until_player_ready(
         time_system::tick_status_effects(world, elapsed);
         time_system::tick_ability_cooldowns(world, elapsed);
         time_system::tick_ranged_cooldowns(world, elapsed);
+        systems::ai::tick_threat_decay(world, grid, &*spatial_cache, elapsed);
 
-        time_system::complete_action(world, grid, next_entity, events, clock.time, clock, scheduler);
+        time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
 
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
@@ -295,7 +296,7 @@ pub fn advance_until_player_ready(
             // Non-player entity: let AI decide next action
             systems::ai::decide_action(
                 world, grid, next_entity, player_entity, clock, scheduler,
-                active_tracker, spatial_cache, events, rng,
+                active_tracker, &*spatial_cache, events, rng,
             );
         }
     }
@@ -312,7 +313,7 @@ pub fn wait_for_energy(
     clock: &mut GameClock,
     scheduler: &mut ActionScheduler,
     active_tracker: &mut ActiveAITracker,
-    spatial_cache: &SpatialCache,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) -> bool {
@@ -374,7 +375,7 @@ pub fn wait_for_energy(
             time_system::tick_ranged_cooldowns(world, elapsed);
 
             // Complete the action
-            time_system::complete_action(world, grid, next_entity, events, clock.time, clock, scheduler);
+            time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
 
             // Let AI decide next action
             if next_entity != player_entity {
