@@ -179,6 +179,86 @@ pub mod enemies {
         }),
         tameable: false,
     };
+
+    pub const GOBLIN: EnemyDef = EnemyDef {
+        name: "Goblin",
+        sprite: tile_ids::GOBLIN,
+        overlay_sprite: None,
+        health: GOBLIN_HEALTH,
+        max_energy: GOBLIN_MAX_ENERGY,
+        speed: GOBLIN_SPEED,
+        sight_radius: GOBLIN_SIGHT_RADIUS,
+        damage: GOBLIN_DAMAGE,
+        strength: GOBLIN_STRENGTH,
+        intelligence: GOBLIN_INTELLIGENCE,
+        agility: GOBLIN_AGILITY,
+        ranged: None,
+        tameable: false,
+    };
+
+    pub const ORC: EnemyDef = EnemyDef {
+        name: "Orc",
+        sprite: tile_ids::ORC,
+        overlay_sprite: None,
+        health: ORC_HEALTH,
+        max_energy: ORC_MAX_ENERGY,
+        speed: ORC_SPEED,
+        sight_radius: ORC_SIGHT_RADIUS,
+        damage: ORC_DAMAGE,
+        strength: ORC_STRENGTH,
+        intelligence: ORC_INTELLIGENCE,
+        agility: ORC_AGILITY,
+        ranged: None,
+        tameable: false,
+    };
+
+    pub const ZOMBIE: EnemyDef = EnemyDef {
+        name: "Zombie",
+        sprite: tile_ids::ZOMBIE,
+        overlay_sprite: None,
+        health: ZOMBIE_HEALTH,
+        max_energy: ZOMBIE_MAX_ENERGY,
+        speed: ZOMBIE_SPEED,
+        sight_radius: ZOMBIE_SIGHT_RADIUS,
+        damage: ZOMBIE_DAMAGE,
+        strength: ZOMBIE_STRENGTH,
+        intelligence: ZOMBIE_INTELLIGENCE,
+        agility: ZOMBIE_AGILITY,
+        ranged: None,
+        tameable: false,
+    };
+
+    pub const BAT: EnemyDef = EnemyDef {
+        name: "Giant Bat",
+        sprite: tile_ids::BAT,
+        overlay_sprite: None,
+        health: BAT_HEALTH,
+        max_energy: BAT_MAX_ENERGY,
+        speed: BAT_SPEED,
+        sight_radius: BAT_SIGHT_RADIUS,
+        damage: BAT_DAMAGE,
+        strength: BAT_STRENGTH,
+        intelligence: BAT_INTELLIGENCE,
+        agility: BAT_AGILITY,
+        ranged: None,
+        tameable: false,
+    };
+
+    pub const SLIME: EnemyDef = EnemyDef {
+        name: "Slime",
+        sprite: tile_ids::SLIME,
+        overlay_sprite: None,
+        health: SLIME_HEALTH,
+        max_energy: SLIME_MAX_ENERGY,
+        speed: SLIME_SPEED,
+        sight_radius: SLIME_SIGHT_RADIUS,
+        damage: SLIME_DAMAGE,
+        strength: SLIME_STRENGTH,
+        intelligence: SLIME_INTELLIGENCE,
+        agility: SLIME_AGILITY,
+        ranged: None,
+        tameable: false,
+    };
 }
 
 /// Spawn configuration for a dungeon level
@@ -193,24 +273,59 @@ pub struct SpawnEntry {
 }
 
 impl SpawnConfig {
-    /// Create a default spawn config for the first dungeon level
-    pub fn level_1() -> Self {
-        use crate::constants::{RAT_SPAWN_COUNT, SKELETON_ARCHER_SPAWN_COUNT, SKELETON_SPAWN_COUNT};
-        Self {
-            entries: vec![
-                SpawnEntry {
-                    enemy: enemies::RAT.clone(),
-                    count: RAT_SPAWN_COUNT,
-                },
-                SpawnEntry {
-                    enemy: enemies::SKELETON.clone(),
-                    count: SKELETON_SPAWN_COUNT,
-                },
-                SpawnEntry {
-                    enemy: enemies::SKELETON_ARCHER.clone(),
-                    count: SKELETON_ARCHER_SPAWN_COUNT,
-                },
+    /// Build a spawn roster appropriate to the given floor depth.
+    ///
+    /// Early floors lean on weak, fast fodder (rats, goblins, bats); deeper
+    /// floors swap in tougher bruisers (orcs, zombies) and more archers, and
+    /// scale up the count of heavy enemies so the dungeon gets harder as the
+    /// player descends.
+    pub fn for_floor(floor: u32) -> Self {
+        // Each tuple is (enemy template, count).
+        let roster: Vec<(EnemyDef, usize)> = match floor {
+            // Floor 0 — gentle introduction
+            0 => vec![
+                (enemies::RAT.clone(), 16),
+                (enemies::GOBLIN.clone(), 12),
+                (enemies::BAT.clone(), 8),
+                (enemies::SKELETON.clone(), 6),
             ],
+            // Floor 1 — skeletons and the first archers show up
+            1 => vec![
+                (enemies::RAT.clone(), 10),
+                (enemies::GOBLIN.clone(), 14),
+                (enemies::BAT.clone(), 8),
+                (enemies::SKELETON.clone(), 14),
+                (enemies::SLIME.clone(), 8),
+                (enemies::SKELETON_ARCHER.clone(), 4),
+            ],
+            // Floor 2 — bruisers arrive
+            2 => vec![
+                (enemies::GOBLIN.clone(), 10),
+                (enemies::SKELETON.clone(), 16),
+                (enemies::SLIME.clone(), 12),
+                (enemies::ORC.clone(), 6),
+                (enemies::ZOMBIE.clone(), 6),
+                (enemies::SKELETON_ARCHER.clone(), 6),
+            ],
+            // Floor 3+ — heavy, and ramps with depth
+            deep => {
+                let extra = (deep.saturating_sub(3)) as usize * 2;
+                vec![
+                    (enemies::SKELETON.clone(), 16),
+                    (enemies::SLIME.clone(), 10),
+                    (enemies::ORC.clone(), 10 + extra),
+                    (enemies::ZOMBIE.clone(), 12 + extra),
+                    (enemies::BAT.clone(), 6),
+                    (enemies::SKELETON_ARCHER.clone(), 8 + extra),
+                ]
+            }
+        };
+
+        Self {
+            entries: roster
+                .into_iter()
+                .map(|(enemy, count)| SpawnEntry { enemy, count })
+                .collect(),
         }
     }
 

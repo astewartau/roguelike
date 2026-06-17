@@ -5,8 +5,6 @@
 pub const AI_ACTIVE_RADIUS: i32 = 25;
 
 // SKELETON
-/// Number of skeletons to spawn
-pub const SKELETON_SPAWN_COUNT: usize = 25;
 /// Skeleton health
 pub const SKELETON_HEALTH: i32 = 40;
 /// Skeleton maximum energy pool
@@ -25,8 +23,6 @@ pub const SKELETON_AGILITY: i32 = 3;
 pub const SKELETON_DAMAGE: i32 = 6;
 
 // RAT
-/// Number of rats to spawn
-pub const RAT_SPAWN_COUNT: usize = 40;
 /// Rat health (weak)
 pub const RAT_HEALTH: i32 = 30;
 /// Rat maximum energy pool
@@ -45,8 +41,6 @@ pub const RAT_AGILITY: i32 = 8;
 pub const RAT_DAMAGE: i32 = 5;
 
 // SKELETON ARCHER
-/// Number of skeleton archers to spawn
-pub const SKELETON_ARCHER_SPAWN_COUNT: usize = 8;
 /// Skeleton archer health (slightly weaker than melee skeleton)
 pub const SKELETON_ARCHER_HEALTH: i32 = 40;
 /// Skeleton archer maximum energy pool
@@ -71,6 +65,56 @@ pub const SKELETON_ARCHER_MIN_RANGE: i32 = 2;
 pub const SKELETON_ARCHER_MAX_RANGE: i32 = 8;
 /// Cooldown between ranged attacks (seconds) - total time between shots ~3s
 pub const RANGED_ATTACK_COOLDOWN: f32 = 1.5;
+
+// GOBLIN - weak, fast melee swarmer for early floors
+pub const GOBLIN_HEALTH: i32 = 22;
+pub const GOBLIN_MAX_ENERGY: i32 = 4;
+pub const GOBLIN_SPEED: f32 = 1.4;
+pub const GOBLIN_SIGHT_RADIUS: i32 = 7;
+pub const GOBLIN_STRENGTH: i32 = 6;
+pub const GOBLIN_INTELLIGENCE: i32 = 2;
+pub const GOBLIN_AGILITY: i32 = 7;
+pub const GOBLIN_DAMAGE: i32 = 4;
+
+// ORC - slow, heavy-hitting bruiser
+pub const ORC_HEALTH: i32 = 75;
+pub const ORC_MAX_ENERGY: i32 = 3;
+pub const ORC_SPEED: f32 = 0.8;
+pub const ORC_SIGHT_RADIUS: i32 = 8;
+pub const ORC_STRENGTH: i32 = 15;
+pub const ORC_INTELLIGENCE: i32 = 2;
+pub const ORC_AGILITY: i32 = 3;
+pub const ORC_DAMAGE: i32 = 13;
+
+// ZOMBIE - very slow, high HP, relentless
+pub const ZOMBIE_HEALTH: i32 = 60;
+pub const ZOMBIE_MAX_ENERGY: i32 = 2;
+pub const ZOMBIE_SPEED: f32 = 0.55;
+pub const ZOMBIE_SIGHT_RADIUS: i32 = 7;
+pub const ZOMBIE_STRENGTH: i32 = 12;
+pub const ZOMBIE_INTELLIGENCE: i32 = 1;
+pub const ZOMBIE_AGILITY: i32 = 1;
+pub const ZOMBIE_DAMAGE: i32 = 8;
+
+// GIANT BAT - very fast, fragile harasser
+pub const BAT_HEALTH: i32 = 16;
+pub const BAT_MAX_ENERGY: i32 = 5;
+pub const BAT_SPEED: f32 = 2.2;
+pub const BAT_SIGHT_RADIUS: i32 = 9;
+pub const BAT_STRENGTH: i32 = 3;
+pub const BAT_INTELLIGENCE: i32 = 2;
+pub const BAT_AGILITY: i32 = 13;
+pub const BAT_DAMAGE: i32 = 3;
+
+// SLIME - slow, weak chip-damage fodder
+pub const SLIME_HEALTH: i32 = 24;
+pub const SLIME_MAX_ENERGY: i32 = 3;
+pub const SLIME_SPEED: f32 = 0.7;
+pub const SLIME_SIGHT_RADIUS: i32 = 5;
+pub const SLIME_STRENGTH: i32 = 5;
+pub const SLIME_INTELLIGENCE: i32 = 1;
+pub const SLIME_AGILITY: i32 = 2;
+pub const SLIME_DAMAGE: i32 = 4;
 
 /// Gold dropped by enemies (min)
 pub const ENEMY_GOLD_DROP_MIN: u32 = 1;

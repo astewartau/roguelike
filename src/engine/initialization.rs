@@ -373,7 +373,8 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         .filter(|&(x, y)| grid.is_walkable(x, y))
         .collect();
 
-    let spawn_config = spawning::SpawnConfig::level_1();
+    // init_world always builds the first floor (floor 0)
+    let spawn_config = spawning::SpawnConfig::for_floor(0);
     spawn_config.spawn_all(
         &mut world,
         &walkable_tiles,
@@ -474,7 +475,7 @@ pub fn spawn_floor_entities(
         .filter(|&(x, y)| grid.is_walkable(x, y))
         .collect();
 
-    let spawn_config = spawning::SpawnConfig::level_1();
+    let spawn_config = spawning::SpawnConfig::for_floor(floor_num);
     spawn_config.spawn_all(
         world,
         &walkable_tiles,
