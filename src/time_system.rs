@@ -334,7 +334,7 @@ fn apply_action_effects(
             actions::apply_cleave(world, entity, events)
         }
         ActionType::ActivateSprint => {
-            actions::apply_activate_sprint(world, entity)
+            actions::apply_activate_sprint(world, entity, events)
         }
         ActionType::StartTaming { target } => {
             actions::apply_start_taming(world, entity, *target, events)

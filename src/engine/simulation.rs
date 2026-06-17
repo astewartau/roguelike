@@ -453,6 +453,7 @@ pub fn process_events_with_audio(
     for event in event_list {
         vfx.handle_event(&event, grid);
         ui_state.handle_event(&event);
+        ui_state.message_log.record_event(&event, &*world);
 
         match &event {
             GameEvent::DoorOpened { door, .. } => {

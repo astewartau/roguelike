@@ -3,6 +3,23 @@ use crate::tile::{tile_ids, SpriteSheet};
 use hecs::Entity;
 
 // =============================================================================
+// IDENTITY
+// =============================================================================
+
+/// Human-readable display name for an entity.
+///
+/// Used by the message log (and, in future, tooltips and a bestiary) to refer
+/// to entities by name instead of by their opaque ECS id.
+#[derive(Debug, Clone)]
+pub struct Name(pub String);
+
+impl Name {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
+// =============================================================================
 // PLAYER CLASS
 // =============================================================================
 

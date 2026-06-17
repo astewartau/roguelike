@@ -26,8 +26,9 @@ pub fn update_projectiles(
     current_time: f32,
     events: &mut EventQueue,
 ) {
-    // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity)
-    let mut hits: Vec<(Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity)> = Vec::new();
+    // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity, potion_type)
+    type Hit = (Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity, Option<ItemType>);
+    let mut hits: Vec<Hit> = Vec::new();
     let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>)> = Vec::new();
 
     // Get all attackable entities and their positions for collision checking
@@ -69,7 +70,7 @@ pub fn update_projectiles(
             let tile = grid.get(tile_x, tile_y);
             let is_wall = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
             if is_wall {
-                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage, projectile.on_hit_effect, projectile.source));
+                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage, projectile.on_hit_effect, projectile.source, projectile.potion_type));
                 // Mark as finished at wall position (one tile before the wall)
                 let final_pos = if i > 0 {
                     let (px, py, _) = projectile.path[i - 1];
@@ -96,6 +97,7 @@ pub fn update_projectiles(
                         projectile.damage,
                         projectile.on_hit_effect,
                         projectile.source,
+                        projectile.potion_type,
                     ));
                     finished_projectiles.push((projectile_entity, tile_x, tile_y, projectile.potion_type));
                     hit_something = true;
@@ -128,7 +130,7 @@ pub fn update_projectiles(
     }
 
     // Apply damage and emit events
-    for (projectile_entity, target, position, damage, on_hit_effect, source) in hits {
+    for (projectile_entity, target, position, damage, on_hit_effect, source, potion_type) in hits {
         let mut actual_damage = damage;
         if let Some(target_entity) = target {
             // Mark that this projectile hit an enemy (for arrow recovery)
@@ -163,11 +165,22 @@ pub fn update_projectiles(
             }
         }
 
+        // Classify the projectile so the log can describe it specifically.
+        let kind = if potion_type.is_some() {
+            crate::events::DamageKind::Potion
+        } else if matches!(on_hit_effect, Some((EffectType::Slowed, _))) {
+            crate::events::DamageKind::CripplingShot
+        } else {
+            crate::events::DamageKind::Arrow
+        };
+
         events.push(GameEvent::ProjectileHit {
             projectile: projectile_entity,
+            source,
             target,
             position,
             damage: actual_damage,
+            kind,
         });
     }
 

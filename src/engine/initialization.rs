@@ -2,7 +2,7 @@
 
 use crate::components::{
     AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ClassAbility,
-    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Player,
+    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Name, Player,
     PlayerClass, Position, RangerAbilities, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
@@ -291,6 +291,7 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         player_start,
         VisualPosition::from_position(&player_start),
         Sprite::from_ref(player_class.sprite()),
+        Name::new(player_class.name()),
         Player,
         Actor::new(PLAYER_MAX_ENERGY, PLAYER_SPEED),
         Health::with_regen(

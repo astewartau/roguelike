@@ -11,6 +11,7 @@ mod hotbar;
 mod icons;
 mod inventory;
 mod loot_window;
+mod message_log;
 mod shop_window;
 mod start_screen;
 mod status_bar;
@@ -25,6 +26,7 @@ pub use hotbar::{ability_icon, ability_status, draw_drag_ghost, draw_hotbars, Ho
 pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data, LootWindowData};
+pub use message_log::{draw_message_log, MessageLog};
 pub use shop_window::{draw_shop_window, get_shop_window_data, ShopWindowData};
 pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarData};
@@ -120,6 +122,8 @@ pub struct GameUiState {
     pub hotbar_shift: [Option<HotbarEntry>; 5],
     /// Q/E hotbar (keys Q and E)
     pub hotbar_qe: [Option<HotbarEntry>; 2],
+    /// Scrolling combat/message log
+    pub message_log: MessageLog,
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -138,6 +142,7 @@ impl GameUiState {
             hotbar_main: [None; 5],
             hotbar_shift: [None; 5],
             hotbar_qe: [None; 2],
+            message_log: MessageLog::new(player_entity),
             player_entity,
         }
     }
@@ -291,6 +296,9 @@ pub fn run_ui(
 
         // Status bar (always visible)
         draw_status_bar(ctx, &status_data, icons, game_time);
+
+        // Scrolling combat/message log (bottom-left)
+        draw_message_log(ctx, &ui_state.message_log);
 
         // Quick-use hotbars (items + abilities, bottom-center)
         draw_hotbars(

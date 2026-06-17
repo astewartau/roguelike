@@ -25,8 +25,7 @@ pub struct RangedConfig {
 /// Definition of an enemy type - all the data needed to spawn one
 #[derive(Clone)]
 pub struct EnemyDef {
-    /// Display name (for future UI/logs)
-    #[allow(dead_code)] // Reserved for combat log/bestiary
+    /// Display name (used by the message log)
     pub name: &'static str,
     /// Sprite sheet and tile ID
     pub sprite: (SpriteSheet, u32),
@@ -111,6 +110,9 @@ impl EnemyDef {
                 BlocksMovement,
             ))
         };
+
+        // Name so the message log can refer to this enemy
+        let _ = world.insert_one(entity, crate::components::Name::new(self.name));
 
         // Add Tameable component for animals that can be tamed
         if self.tameable {

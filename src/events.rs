@@ -12,6 +12,24 @@ pub enum StairDirection {
     Down,
 }
 
+/// How a hit was delivered, so the message log can describe it specifically
+/// ("with your dagger", "your cleave", "the Skeleton Archer's arrow", ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageKind {
+    /// Basic melee swing with the attacker's equipped weapon.
+    Melee,
+    /// Fighter's Cleave ability.
+    Cleave,
+    /// Fireball scroll explosion.
+    Fireball,
+    /// A fired arrow (bow shot).
+    Arrow,
+    /// Ranger's Crippling Shot (a slowing arrow).
+    CripplingShot,
+    /// A thrown potion impact (splash, no direct damage).
+    Potion,
+}
+
 /// Game events that systems can emit and subscribe to.
 /// Many event fields exist for future handlers (VFX, audio, logging).
 #[derive(Debug, Clone)]
@@ -29,6 +47,10 @@ pub enum GameEvent {
         target: Entity,
         target_pos: (f32, f32),
         damage: i32,
+        /// How the hit was delivered (melee weapon, cleave, fireball, ...).
+        kind: DamageKind,
+        /// Whether this was a critical hit.
+        crit: bool,
     },
     /// An entity died
     EntityDied {
@@ -97,9 +119,13 @@ pub enum GameEvent {
     /// A projectile hit something
     ProjectileHit {
         projectile: Entity,
+        /// The entity that fired the projectile.
+        source: Entity,
         target: Option<Entity>,
         position: (i32, i32),
         damage: i32,
+        /// What kind of projectile this was (arrow, crippling shot, potion).
+        kind: DamageKind,
     },
     /// Player used stairs to change floors
     FloorTransition {
@@ -252,6 +278,12 @@ pub enum GameEvent {
     WeaponEquipped {
         entity: Entity,
         weapon_type: crate::components::ItemType,
+    },
+    /// A utility ability was activated that has no other dedicated event
+    /// (Sprint, Disengage, Tumble, Snare Trap). Used by the message log.
+    AbilityActivated {
+        entity: Entity,
+        ability: crate::components::AbilityType,
     },
 }
 

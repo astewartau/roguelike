@@ -6,7 +6,7 @@
 use hecs::{Entity, World};
 
 use crate::components::{
-    Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
+    AbilityType, Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
     EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, PlacedTrap, Player, Position, Projectile,
     ProjectileMarker, RangedCooldown, SecondaryAbility, Sprite, Stats, StatusEffects, TamedBy, TamingInProgress, TrapType, VisualPosition, Weapon, RangedWeapon,
 };
@@ -374,6 +374,8 @@ pub fn apply_attack(
         target,
         target_pos: (target_pos.0 + 0.5, target_pos.1 + 0.5),
         damage,
+        kind: crate::events::DamageKind::Melee,
+        crit: is_crit && !is_invulnerable,
     });
 
     ActionResult::Completed
@@ -1038,6 +1040,8 @@ pub fn apply_fireball(
             target: entity,
             target_pos: (x as f32 + 0.5, y as f32 + 0.5),
             damage: FIREBALL_DAMAGE,
+            kind: crate::events::DamageKind::Fireball,
+            crit: false,
         });
     }
 
@@ -1324,6 +1328,8 @@ pub fn apply_cleave(
             target: *target,
             target_pos: (*tx as f32 + 0.5, *ty as f32 + 0.5),
             damage,
+            kind: crate::events::DamageKind::Cleave,
+            crit: is_crit,
         });
     }
 
@@ -1341,11 +1347,17 @@ pub fn apply_cleave(
 pub fn apply_activate_sprint(
     world: &mut World,
     entity: Entity,
+    events: &mut EventQueue,
 ) -> ActionResult {
     use crate::constants::SPRINT_DURATION;
     use crate::systems::effects::add_effect_to_entity;
 
     add_effect_to_entity(world, entity, EffectType::SpeedBoost, SPRINT_DURATION);
+
+    events.push(GameEvent::AbilityActivated {
+        entity,
+        ability: AbilityType::Sprint,
+    });
 
     ActionResult::Completed
 }
@@ -1830,7 +1842,7 @@ pub fn apply_disengage(
     grid: &Grid,
     entity: Entity,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    _events: &mut EventQueue,
+    events: &mut EventQueue,
 ) -> ActionResult {
     use crate::fov::FOV;
     use crate::constants::{DISENGAGE_DISTANCE, FOV_RADIUS};
@@ -1840,6 +1852,11 @@ pub fn apply_disengage(
         Ok(p) => (p.x, p.y),
         Err(_) => return ActionResult::Blocked,
     };
+
+    events.push(GameEvent::AbilityActivated {
+        entity,
+        ability: AbilityType::Disengage,
+    });
 
     // Find visible enemies
     let visible_tiles = FOV::calculate(grid, pos.0, pos.1, FOV_RADIUS, None::<fn(i32, i32) -> bool>);
@@ -1923,7 +1940,7 @@ pub fn apply_tumble(
     target_x: i32,
     target_y: i32,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    _events: &mut EventQueue,
+    events: &mut EventQueue,
 ) -> ActionResult {
     use crate::constants::TUMBLE_INVULN_DURATION;
 
@@ -1937,6 +1954,11 @@ pub fn apply_tumble(
     if !grid.get(target_x, target_y).map(|t| t.tile_type.is_walkable()).unwrap_or(false) {
         return ActionResult::Blocked;
     }
+
+    events.push(GameEvent::AbilityActivated {
+        entity,
+        ability: AbilityType::Tumble,
+    });
 
     // Teleport to target
     if let Ok(mut p) = world.get::<&mut Position>(entity) {
@@ -1977,8 +1999,12 @@ pub fn apply_place_snare_trap(
         },
     ));
 
-    // TODO: Add SnareTrapPlaced event when we create it
     let _ = trap;
+
+    events.push(GameEvent::AbilityActivated {
+        entity: placer,
+        ability: AbilityType::SnareTrap,
+    });
 
     ActionResult::Completed
 }
