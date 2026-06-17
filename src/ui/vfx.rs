@@ -19,6 +19,7 @@ pub struct EnemyStatusData {
     pub is_slowed: bool,
     pub is_confused: bool,
     pub is_stunned: bool,
+    pub is_rooted: bool,
 }
 
 /// Data for an enemy's health bar
@@ -70,6 +71,7 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
             is_slowed: effects::has_effect(status_effects, EffectType::Slowed),
             is_confused: effects::has_effect(status_effects, EffectType::Confused),
             is_stunned: effects::has_effect(status_effects, EffectType::Stunned),
+            is_rooted: effects::has_effect(status_effects, EffectType::Rooted),
         })
         .collect()
 }
@@ -297,7 +299,6 @@ pub fn draw_enemy_status_indicators(
     ctx: &egui::Context,
     camera: &Camera,
     enemies: &[EnemyStatusData],
-    time: f32,
 ) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -306,8 +307,17 @@ pub fn draw_enemy_status_indicators(
 
     let ppp = ctx.pixels_per_point();
 
+    // Animate on real time so the pulse keeps going while game-time is paused
+    // (matches the player buff auras, which also use the real-time clock).
+    let time = ctx.input(|i| i.time) as f32;
+
     for enemy in enemies {
-        if !enemy.is_feared && !enemy.is_slowed && !enemy.is_confused && !enemy.is_stunned {
+        if !enemy.is_feared
+            && !enemy.is_slowed
+            && !enemy.is_confused
+            && !enemy.is_stunned
+            && !enemy.is_rooted
+        {
             continue;
         }
 
@@ -318,6 +328,9 @@ pub fn draw_enemy_status_indicators(
         }
         if enemy.is_feared {
             symbols.push(("!", egui::Color32::from_rgb(255, 80, 80))); // Red for fear
+        }
+        if enemy.is_rooted {
+            symbols.push(("⚓", egui::Color32::from_rgb(139, 90, 43))); // Brown anchor for root/snare
         }
         if enemy.is_slowed {
             symbols.push(("❄", egui::Color32::from_rgb(100, 150, 255))); // Blue for slow

@@ -319,7 +319,7 @@ pub fn run_ui(
         draw_alert_indicators(ctx, vfx_effects, camera);
 
         // Enemy status effect indicators (fear, slow, confusion)
-        draw_enemy_status_indicators(ctx, camera, &enemy_status_data, game_time);
+        draw_enemy_status_indicators(ctx, camera, &enemy_status_data);
 
         // Explosion effects (fireball)
         draw_explosions(ctx, vfx_effects, camera);
