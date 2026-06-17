@@ -241,7 +241,7 @@ pub mod enemies {
         intelligence: BAT_INTELLIGENCE,
         agility: BAT_AGILITY,
         ranged: None,
-        tameable: false,
+        tameable: true, // Beasts can be tamed by Druids; a fast scout companion
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -281,42 +281,45 @@ impl SpawnConfig {
     /// player descends.
     pub fn for_floor(floor: u32) -> Self {
         // Each tuple is (enemy template, count).
+        // Counts are tuned for the ~40x40 / ~8-room default floor so density
+        // stays comfortable; the smaller map means fewer enemies than a raw
+        // count would suggest.
         let roster: Vec<(EnemyDef, usize)> = match floor {
             // Floor 0 — gentle introduction
             0 => vec![
-                (enemies::RAT.clone(), 16),
-                (enemies::GOBLIN.clone(), 12),
-                (enemies::BAT.clone(), 8),
-                (enemies::SKELETON.clone(), 6),
+                (enemies::RAT.clone(), 10),
+                (enemies::GOBLIN.clone(), 8),
+                (enemies::BAT.clone(), 5),
+                (enemies::SKELETON.clone(), 4),
             ],
             // Floor 1 — skeletons and the first archers show up
             1 => vec![
-                (enemies::RAT.clone(), 10),
-                (enemies::GOBLIN.clone(), 14),
-                (enemies::BAT.clone(), 8),
-                (enemies::SKELETON.clone(), 14),
-                (enemies::SLIME.clone(), 8),
-                (enemies::SKELETON_ARCHER.clone(), 4),
+                (enemies::RAT.clone(), 6),
+                (enemies::GOBLIN.clone(), 9),
+                (enemies::BAT.clone(), 5),
+                (enemies::SKELETON.clone(), 9),
+                (enemies::SLIME.clone(), 5),
+                (enemies::SKELETON_ARCHER.clone(), 3),
             ],
             // Floor 2 — bruisers arrive
             2 => vec![
-                (enemies::GOBLIN.clone(), 10),
-                (enemies::SKELETON.clone(), 16),
-                (enemies::SLIME.clone(), 12),
-                (enemies::ORC.clone(), 6),
-                (enemies::ZOMBIE.clone(), 6),
-                (enemies::SKELETON_ARCHER.clone(), 6),
+                (enemies::GOBLIN.clone(), 6),
+                (enemies::SKELETON.clone(), 10),
+                (enemies::SLIME.clone(), 8),
+                (enemies::ORC.clone(), 4),
+                (enemies::ZOMBIE.clone(), 4),
+                (enemies::SKELETON_ARCHER.clone(), 4),
             ],
             // Floor 3+ — heavy, and ramps with depth
             deep => {
-                let extra = (deep.saturating_sub(3)) as usize * 2;
+                let extra = (deep.saturating_sub(3)) as usize;
                 vec![
-                    (enemies::SKELETON.clone(), 16),
-                    (enemies::SLIME.clone(), 10),
-                    (enemies::ORC.clone(), 10 + extra),
-                    (enemies::ZOMBIE.clone(), 12 + extra),
-                    (enemies::BAT.clone(), 6),
-                    (enemies::SKELETON_ARCHER.clone(), 8 + extra),
+                    (enemies::SKELETON.clone(), 10),
+                    (enemies::SLIME.clone(), 6),
+                    (enemies::ORC.clone(), 6 + extra),
+                    (enemies::ZOMBIE.clone(), 8 + extra),
+                    (enemies::BAT.clone(), 4),
+                    (enemies::SKELETON_ARCHER.clone(), 5 + extra),
                 ]
             }
         };

@@ -245,8 +245,8 @@ fn generate_chest_contents(rng: &mut impl Rng) -> Container {
 pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Position) {
     let mut world = World::new();
 
-    // Find player spawn position
-    let mut player_start = Position::new(50, 50);
+    // Find player spawn position (default to map center; overwritten below)
+    let mut player_start = Position::new(grid.width as i32 / 2, grid.height as i32 / 2);
     if let Some(starting_room) = &grid.starting_room {
         let (cx, cy) = starting_room.center();
         if grid.is_walkable(cx, cy) {
