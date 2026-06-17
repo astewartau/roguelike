@@ -46,6 +46,9 @@ pub fn apply_move(
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> ActionResult {
+    // Moving breaks any taming channel - the druid must stand still to tame.
+    interrupt_taming(world, entity, events);
+
     // Get current position
     let current_pos = match queries::get_entity_position(world, entity) {
         Some(p) => p,
@@ -1458,6 +1461,61 @@ pub fn apply_activate_fear(
     ActionResult::Completed
 }
 
+/// Activate Stun (Fighter): stun all nearby enemies for a few seconds.
+pub fn apply_activate_stun(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::constants::STUN_ABILITY_DURATION;
+
+    // Get entity position
+    let entity_pos = crate::queries::get_entity_position(world, entity);
+    if entity_pos.is_none() {
+        return ActionResult::Invalid;
+    }
+    let (ex, ey) = entity_pos.unwrap();
+
+    // Find all living enemies in range (exclude the player and tamed companions)
+    let targets: Vec<hecs::Entity> = world
+        .query::<(&Position, &Health)>()
+        .without::<&Player>()
+        .without::<&TamedBy>()
+        .iter()
+        .filter(|(_, (pos, health))| {
+            let dx = (pos.x - ex).abs();
+            let dy = (pos.y - ey).abs();
+            dx <= crate::constants::STUN_ABILITY_RADIUS
+                && dy <= crate::constants::STUN_ABILITY_RADIUS
+                && health.current > 0
+        })
+        .map(|(e, _)| e)
+        .collect();
+
+    // Apply the stun effect to each target
+    for target in targets {
+        crate::systems::effects::add_effect_to_entity(
+            world,
+            target,
+            EffectType::Stunned,
+            STUN_ABILITY_DURATION,
+        );
+    }
+
+    // Start the ability cooldown
+    if let Ok(mut ability) = world.get::<&mut SecondaryAbility>(entity) {
+        ability.start_cooldown();
+    }
+
+    // Emit event for sound/VFX
+    events.push(GameEvent::StunActivated {
+        entity,
+        position: (ex, ey),
+    });
+
+    ActionResult::Completed
+}
+
 /// Apply wait action - handles taming and life drain progress if applicable
 pub fn apply_wait(
     world: &mut World,
@@ -1649,6 +1707,17 @@ fn end_life_drain(
         events.push(GameEvent::LifeDrainInterrupted { caster, target });
     } else {
         events.push(GameEvent::LifeDrainEnded { caster, target });
+    }
+}
+
+/// Interrupt an in-progress taming channel (e.g. the tamer moved). Removes the
+/// channeling state and emits TamingFailed so the visual stops. The druid must
+/// stand still (keep waiting) to tame.
+pub fn interrupt_taming(world: &mut World, entity: Entity, events: &mut EventQueue) {
+    let target = world.get::<&TamingInProgress>(entity).ok().map(|t| t.target);
+    if let Some(target) = target {
+        let _ = world.remove_one::<TamingInProgress>(entity);
+        events.push(GameEvent::TamingFailed { tamer: entity, target });
     }
 }
 

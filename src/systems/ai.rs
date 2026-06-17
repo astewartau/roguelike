@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, AIState, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, Position, RangedCooldown, TamedBy};
+use crate::components::{ActionType, Actor, AIState, CausesBurning, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, PlacedFireTrap, Position, RangedCooldown, TamedBy};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -205,13 +205,19 @@ fn determine_action(
     let blocking_positions = spatial_cache.get_blocking_positions();
 
     // Check for status effects that override normal AI behavior
+    let is_stunned = queries::has_status_effect(world, entity, EffectType::Stunned);
     let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
     let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
     let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted);
 
-    // Confused: move randomly, ignore everything
+    // Stunned: cannot act at all - skip the turn entirely.
+    if is_stunned {
+        return ActionType::Wait;
+    }
+
+    // Confused: move randomly, ignore everything (including fire hazards)
     if is_confused && !is_rooted {
-        let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, rng);
+        let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, &HashSet::new(), rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -387,8 +393,9 @@ fn determine_action(
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
     } else {
-        // Idle wandering
-        random_wander(grid, entity_pos, blocking_positions, rng)
+        // Idle wandering — avoid wandering into fire hazards.
+        let fire = fire_positions(world);
+        random_wander(grid, entity_pos, blocking_positions, &fire, rng)
     };
 
     if dx == 0 && dy == 0 {
@@ -708,18 +715,36 @@ fn ai_pathfinding_blocked(
     blocked
 }
 
+/// Collect tile positions that cause burning (campfires, braziers, fire traps).
+/// Used so idle AI doesn't casually wander into a fire.
+fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
+    let mut fire = HashSet::new();
+    for (_id, (pos, _)) in world.query::<(&Position, &CausesBurning)>().iter() {
+        fire.insert((pos.x, pos.y));
+    }
+    for (_id, (pos, _)) in world.query::<(&Position, &PlacedFireTrap)>().iter() {
+        fire.insert((pos.x, pos.y));
+    }
+    fire
+}
+
 /// Pick a random adjacent walkable tile for wandering.
+/// Tiles in `fire` are avoided so idle AI doesn't walk into hazards.
 fn random_wander(
     grid: &Grid,
     pos: (i32, i32),
     blocked: &HashSet<(i32, i32)>,
+    fire: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
     let mut valid = [(0i32, 0i32); 4];
     let mut count = 0;
     for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
         let target = (pos.0 + dx, pos.1 + dy);
-        if grid.is_walkable(target.0, target.1) && !blocked.contains(&target) {
+        if grid.is_walkable(target.0, target.1)
+            && !blocked.contains(&target)
+            && !fire.contains(&target)
+        {
             valid[count] = (dx, dy);
             count += 1;
         }
@@ -767,5 +792,6 @@ fn flee_from_target(
         }
     }
 
-    random_wander(grid, pos, blocked, rng)
+    // Panicked flee fallback — desperation overrides fire avoidance.
+    random_wander(grid, pos, blocked, &HashSet::new(), rng)
 }

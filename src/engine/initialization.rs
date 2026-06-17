@@ -308,6 +308,11 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
     ));
 
+    // Fighter gets a secondary ability (Stun)
+    if player_class == PlayerClass::Fighter {
+        let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Stun, STUN_COOLDOWN));
+    }
+
     // Druid gets a secondary ability (Barkskin)
     if player_class == PlayerClass::Druid {
         let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Barkskin, BARKSKIN_COOLDOWN));

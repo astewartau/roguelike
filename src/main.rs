@@ -216,6 +216,18 @@ impl AppState {
             self.engine.start_game(class, &mut self.render_ctx.camera);
         }
 
+        // Handle retry action (from game over screen) - restart with same class
+        if ui_actions.retry_game {
+            if let Some(class) = self.engine.selected_class {
+                self.engine.start_game(class, &mut self.render_ctx.camera);
+            }
+        }
+
+        // Handle return to menu action (from game over screen)
+        if ui_actions.return_to_menu {
+            self.engine.return_to_start_screen();
+        }
+
         // Render game world (only when playing)
         if let Some(grid) = self.engine.grid() {
             puffin::profile_scope!("render_frame");

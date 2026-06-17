@@ -37,6 +37,12 @@ pub const FEAR_ABILITY_ENERGY_COST: i32 = 2;
 pub const FEAR_ABILITY_RADIUS: i32 = 5;
 pub const FEAR_ABILITY_DURATION: f32 = 30.0;
 
+// Fighter - Stun
+pub const STUN_COOLDOWN: f32 = 30.0;
+pub const STUN_ENERGY_COST: i32 = 2;
+pub const STUN_ABILITY_RADIUS: i32 = 3;
+pub const STUN_ABILITY_DURATION: f32 = 5.0;
+
 // Ranger - Disengage
 pub const DISENGAGE_COOLDOWN: f32 = 12.0;
 pub const DISENGAGE_ENERGY_COST: i32 = 1;

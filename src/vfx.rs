@@ -120,11 +120,29 @@ impl LifeDrainBeam {
     }
 }
 
+/// A persistent taming channel effect (tamer to target connection)
+pub struct TamingBeam {
+    pub tamer: hecs::Entity,
+    pub target: hecs::Entity,
+    pub time: f32, // Accumulated time for animation
+}
+
+impl TamingBeam {
+    pub fn new(tamer: hecs::Entity, target: hecs::Entity) -> Self {
+        Self { tamer, target, time: 0.0 }
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        self.time += dt;
+    }
+}
+
 /// Manager for all active visual effects
 pub struct VfxManager {
     pub effects: Vec<VisualEffect>,
     pub fires: Vec<FireEffect>,
     pub life_drain_beams: Vec<LifeDrainBeam>,
+    pub taming_beams: Vec<TamingBeam>,
 }
 
 impl VfxManager {
@@ -133,6 +151,7 @@ impl VfxManager {
             effects: Vec::new(),
             fires: Vec::new(),
             life_drain_beams: Vec::new(),
+            taming_beams: Vec::new(),
         }
     }
 
@@ -184,6 +203,18 @@ impl VfxManager {
         self.life_drain_beams.retain(|b| b.caster != caster);
     }
 
+    /// Start a taming channel effect between tamer and target
+    pub fn start_taming_beam(&mut self, tamer: hecs::Entity, target: hecs::Entity) {
+        // Remove any existing beam from this tamer first
+        self.taming_beams.retain(|b| b.tamer != tamer);
+        self.taming_beams.push(TamingBeam::new(tamer, target));
+    }
+
+    /// Stop a taming channel effect for the given tamer
+    pub fn stop_taming_beam(&mut self, tamer: hecs::Entity) {
+        self.taming_beams.retain(|b| b.tamer != tamer);
+    }
+
     /// Update all effects, removing finished ones
     pub fn update(&mut self, dt: f32) {
         self.effects.retain_mut(|effect| effect.update(dt));
@@ -193,6 +224,10 @@ impl VfxManager {
         }
         // Update life drain beam animation times
         for beam in &mut self.life_drain_beams {
+            beam.update(dt);
+        }
+        // Update taming beam animation times
+        for beam in &mut self.taming_beams {
             beam.update(dt);
         }
     }
@@ -256,6 +291,14 @@ impl VfxManager {
                 if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
                     self.spawn_damage_number(position.0, position.1, *damage);
                 }
+            }
+            GameEvent::TamingStarted { tamer, target } => {
+                // Start the taming channel visual
+                self.start_taming_beam(*tamer, *target);
+            }
+            GameEvent::TamingCompleted { tamer, .. } | GameEvent::TamingFailed { tamer, .. } => {
+                // Stop the taming channel visual
+                self.stop_taming_beam(*tamer);
             }
             GameEvent::LifeDrainStarted { caster, target } => {
                 // Start the life drain beam visual

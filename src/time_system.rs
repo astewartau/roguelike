@@ -348,6 +348,9 @@ fn apply_action_effects(
         ActionType::ActivateFear => {
             actions::apply_activate_fear(world, entity, events)
         }
+        ActionType::ActivateStun => {
+            actions::apply_activate_stun(world, entity, events)
+        }
         ActionType::PlaceFireTrap { target_x, target_y } => {
             actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
         }

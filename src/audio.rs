@@ -311,6 +311,10 @@ impl AudioManager {
                     let dist = Self::distance(player_pos, *position);
                     self.play_at_distance(SoundType::ShadeSound, dist);
                 }
+                GameEvent::StunActivated { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::Spell, dist);
+                }
                 GameEvent::ItemPurchased { .. } | GameEvent::ItemSold { .. } => {
                     self.play(SoundType::CoinPickup);
                 }

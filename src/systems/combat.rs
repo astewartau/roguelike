@@ -86,7 +86,10 @@ pub fn remove_dead_entities(
 
     for (id, (pos, health, stats)) in world.query::<(&Position, &Health, Option<&Stats>)>().iter()
     {
-        if health.current <= 0 {
+        // Never convert the player into a corpse - the player keeps its Health
+        // component (at <=0) so the engine can detect death and show the retry
+        // screen. The dead player is handled separately by the game over flow.
+        if id != player_entity && health.current <= 0 {
             let xp = calculate_xp_value(stats);
             to_convert.push((id, (pos.x as f32 + 0.5, pos.y as f32 + 0.5), xp));
         }

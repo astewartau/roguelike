@@ -18,6 +18,7 @@ pub struct EnemyStatusData {
     pub is_feared: bool,
     pub is_slowed: bool,
     pub is_confused: bool,
+    pub is_stunned: bool,
 }
 
 /// Data for an enemy's health bar
@@ -68,6 +69,7 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
             is_feared: effects::has_effect(status_effects, EffectType::Feared),
             is_slowed: effects::has_effect(status_effects, EffectType::Slowed),
             is_confused: effects::has_effect(status_effects, EffectType::Confused),
+            is_stunned: effects::has_effect(status_effects, EffectType::Stunned),
         })
         .collect()
 }
@@ -228,8 +230,10 @@ pub fn draw_enemy_health_bars(ctx: &egui::Context, camera: &Camera, enemies: &[E
         return;
     }
 
+    // Background order: above the (OpenGL) game world but below the egui UI
+    // windows (hotbars, status, inventory), which sit at Order::Middle.
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("enemy_health_bars"),
     ));
 
@@ -303,12 +307,15 @@ pub fn draw_enemy_status_indicators(
     let ppp = ctx.pixels_per_point();
 
     for enemy in enemies {
-        if !enemy.is_feared && !enemy.is_slowed && !enemy.is_confused {
+        if !enemy.is_feared && !enemy.is_slowed && !enemy.is_confused && !enemy.is_stunned {
             continue;
         }
 
         // Collect symbols to display
         let mut symbols: Vec<(&str, egui::Color32)> = Vec::new();
+        if enemy.is_stunned {
+            symbols.push(("*", egui::Color32::from_rgb(255, 230, 120))); // Gold "seeing stars" for stun
+        }
         if enemy.is_feared {
             symbols.push(("!", egui::Color32::from_rgb(255, 80, 80))); // Red for fear
         }
@@ -707,5 +714,117 @@ pub fn draw_life_drain_beams(
         let heal_glow_alpha = (80.0 * pulse) as u8;
         let heal_glow_color = egui::Color32::from_rgba_unmultiplied(100, 200, 100, heal_glow_alpha);
         painter.circle_filled(caster_pos, 6.0 * pulse, heal_glow_color);
+    }
+}
+
+/// Data for taming channel beam rendering
+pub struct TamingBeamData {
+    pub tamer_x: f32,
+    pub tamer_y: f32,
+    pub target_x: f32,
+    pub target_y: f32,
+    pub time: f32,
+}
+
+/// Extract taming beam data from the world. Only emits a beam while the tamer is
+/// still channeling (has a `TamingInProgress` component) and both ends exist.
+pub fn get_taming_beam_data(
+    world: &World,
+    beams: &[crate::vfx::TamingBeam],
+) -> Vec<TamingBeamData> {
+    beams
+        .iter()
+        .filter_map(|beam| {
+            world
+                .get::<&crate::components::TamingInProgress>(beam.tamer)
+                .ok()?;
+            let tamer_pos = world.get::<&VisualPosition>(beam.tamer).ok()?;
+            let target_pos = world.get::<&VisualPosition>(beam.target).ok()?;
+            Some(TamingBeamData {
+                tamer_x: tamer_pos.x + 0.5,
+                tamer_y: tamer_pos.y + 0.5,
+                target_x: target_pos.x + 0.5,
+                target_y: target_pos.y + 0.5,
+                time: beam.time,
+            })
+        })
+        .collect()
+}
+
+/// Render taming channels (calming nature connection from tamer to target).
+pub fn draw_taming_beams(ctx: &egui::Context, camera: &Camera, beams: &[TamingBeamData]) {
+    if beams.is_empty() {
+        return;
+    }
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("taming_beams"),
+    ));
+
+    let ppp = ctx.pixels_per_point();
+
+    for beam in beams {
+        let tamer_screen = camera.world_to_screen(beam.tamer_x, beam.tamer_y);
+        let target_screen = camera.world_to_screen(beam.target_x, beam.target_y);
+
+        let tamer_pos = egui::pos2(tamer_screen.0 / ppp, tamer_screen.1 / ppp);
+        let target_pos = egui::pos2(target_screen.0 / ppp, target_screen.1 / ppp);
+
+        // Gentle, calming pulse (slower than life drain's hungry pulse)
+        let pulse = 0.75 + 0.25 * (beam.time * 4.0).sin();
+        let wave = (beam.time * 3.0).sin();
+
+        // Main beam (soft green)
+        let beam_alpha = (150.0 * pulse) as u8;
+        let beam_color = egui::Color32::from_rgba_unmultiplied(90, 180, 100, beam_alpha);
+        painter.line_segment(
+            [tamer_pos, target_pos],
+            egui::Stroke::new(3.0 * pulse, beam_color),
+        );
+
+        // Inner bright core (pale gold-green)
+        let core_alpha = (210.0 * pulse) as u8;
+        let core_color = egui::Color32::from_rgba_unmultiplied(190, 230, 150, core_alpha);
+        painter.line_segment(
+            [tamer_pos, target_pos],
+            egui::Stroke::new(1.5 * pulse, core_color),
+        );
+
+        // Floating motes drifting from the tamer toward the target (offering calm)
+        let dx = target_pos.x - tamer_pos.x;
+        let dy = target_pos.y - tamer_pos.y;
+        let len = (dx * dx + dy * dy).sqrt();
+
+        if len > 5.0 {
+            let num_particles = ((len / 15.0) as usize).clamp(3, 8);
+            for i in 0..num_particles {
+                let base_t = i as f32 / num_particles as f32;
+                let t = (base_t + beam.time * 0.4).fract(); // drift along beam
+
+                let perpx = -dy / len;
+                let perpy = dx / len;
+                let wave_offset = wave * 3.0 * (1.0 - (t - 0.5).abs() * 2.0);
+
+                let px = tamer_pos.x + dx * t + perpx * wave_offset;
+                let py = tamer_pos.y + dy * t + perpy * wave_offset;
+
+                let particle_alpha =
+                    (150.0 * pulse * (1.0 - (t - 0.5).abs() * 1.5).max(0.0)) as u8;
+                let particle_color =
+                    egui::Color32::from_rgba_unmultiplied(210, 235, 140, particle_alpha);
+                painter.circle_filled(egui::pos2(px, py), 2.5 * pulse, particle_color);
+            }
+        }
+
+        // Soft glow at the target (being soothed)
+        let target_glow_alpha = (110.0 * pulse) as u8;
+        let target_glow_color = egui::Color32::from_rgba_unmultiplied(120, 220, 120, target_glow_alpha);
+        painter.circle_filled(target_pos, 8.0 * pulse, target_glow_color);
+
+        // Warm glow at the tamer (channeling)
+        let tamer_glow_alpha = (80.0 * pulse) as u8;
+        let tamer_glow_color = egui::Color32::from_rgba_unmultiplied(220, 200, 110, tamer_glow_alpha);
+        painter.circle_filled(tamer_pos, 6.0 * pulse, tamer_glow_color);
     }
 }

@@ -4,9 +4,10 @@
 
 pub mod style;
 
-mod ability_bar;
 mod dev_menu;
 mod dialogue;
+mod game_over_screen;
+mod hotbar;
 mod icons;
 mod inventory;
 mod loot_window;
@@ -17,9 +18,10 @@ mod targeting;
 mod vfx;
 
 // Re-export public items from submodules
-pub use ability_bar::{draw_ability_bar, draw_secondary_ability_bar, draw_ranger_ability_bar, AbilityBarData, RangerAbilityBarData, RangerAbilitySlot};
 pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data, DialogueWindowData};
+pub use game_over_screen::{run_game_over_screen, GameOverChoice};
+pub use hotbar::{ability_icon, ability_status, draw_drag_ghost, draw_hotbars, HotbarDrag, HotbarEntry};
 pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data, LootWindowData};
@@ -30,8 +32,9 @@ pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, 
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
-    draw_potion_splashes, get_buff_aura_data, get_enemy_health_data, get_enemy_status_data,
-    get_life_drain_beam_data, EnemyHealthData, EnemyStatusData, LifeDrainBeamData, PlayerBuffAuraData,
+    draw_potion_splashes, draw_taming_beams, get_buff_aura_data, get_enemy_health_data,
+    get_enemy_status_data, get_life_drain_beam_data, get_taming_beam_data, EnemyHealthData,
+    EnemyStatusData, LifeDrainBeamData, PlayerBuffAuraData, TamingBeamData,
 };
 
 use crate::camera::Camera;
@@ -64,23 +67,31 @@ pub struct UiActions {
     pub dialogue_option_selected: Option<usize>,
     /// Start the game with selected class (from start screen)
     pub start_game: Option<crate::components::PlayerClass>,
-    /// Use class ability (Q)
-    pub use_ability: bool,
-    /// Use secondary ability (E) - Druid only
-    pub use_secondary_ability: bool,
-    /// Ranger ability clicked (index 0-3)
-    pub ranger_ability_clicked: Option<usize>,
+    /// Activate an ability (from a hotbar slot)
+    pub ability_to_use: Option<crate::components::AbilityType>,
     /// Buy item from vendor (index in vendor inventory)
     pub buy_item: Option<usize>,
     /// Sell item to vendor (index in player inventory)
     pub sell_item: Option<usize>,
     /// Close the shop window
     pub close_shop: bool,
+    /// Restart the run with the same class (from the game over screen)
+    pub retry_game: bool,
+    /// Return to the class selection screen (from the game over screen)
+    pub return_to_menu: bool,
 }
 
 // =============================================================================
 // GAME UI STATE (event-driven)
 // =============================================================================
+
+/// Which tab is shown in the Character window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CharacterTab {
+    #[default]
+    Inventory,
+    Spellbook,
+}
 
 /// Game UI state that responds to events.
 ///
@@ -101,6 +112,14 @@ pub struct GameUiState {
     pub item_context_menu: Option<(usize, egui::Pos2)>,
     /// Context menu for equipped weapon (screen position)
     pub equipped_context_menu: Option<egui::Pos2>,
+    /// Which tab the Character window shows
+    pub character_tab: CharacterTab,
+    /// Main hotbar (keys 1-5)
+    pub hotbar_main: [Option<HotbarEntry>; 5],
+    /// Shift hotbar (keys Shift+1-5), auto-filled with abilities at run start
+    pub hotbar_shift: [Option<HotbarEntry>; 5],
+    /// Q/E hotbar (keys Q and E)
+    pub hotbar_qe: [Option<HotbarEntry>; 2],
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -115,6 +134,10 @@ impl GameUiState {
             show_grid_lines: false,
             item_context_menu: None,
             equipped_context_menu: None,
+            character_tab: CharacterTab::default(),
+            hotbar_main: [None; 5],
+            hotbar_shift: [None; 5],
+            hotbar_qe: [None; 2],
             player_entity,
         }
     }
@@ -206,6 +229,7 @@ pub fn run_ui(
     icons: &UiIcons,
     vfx_effects: &[VisualEffect],
     life_drain_beams: &[LifeDrainBeamData],
+    taming_beams: &[TamingBeamData],
     targeting_mode: Option<&TargetingMode>,
     ability_targeting_mode: Option<&AbilityTargetingMode>,
     mouse_pos: (f32, f32),
@@ -215,78 +239,6 @@ pub fn run_ui(
 
     // Get status bar data
     let status_data = get_status_bar_data(world, player_entity);
-
-    // Get ability bar data (if player has a class ability)
-    let ability_data = world
-        .get::<&crate::components::ClassAbility>(player_entity)
-        .ok()
-        .map(|ability| {
-            // Check if player CAN have enough energy (max_energy >= cost)
-            // The actual waiting for energy happens when the action is executed
-            let can_afford = world
-                .get::<&crate::components::Actor>(player_entity)
-                .map(|actor| actor.max_energy >= ability.ability_type.energy_cost())
-                .unwrap_or(false);
-            AbilityBarData {
-                ability_type: ability.ability_type,
-                cooldown_remaining: ability.cooldown_remaining,
-                cooldown_total: ability.cooldown_total,
-                can_use: can_afford && ability.is_ready(),
-                viewport_height: camera.viewport_height,
-            }
-        });
-
-    // Get secondary ability bar data (Druid's Barkskin)
-    let secondary_ability_data = world
-        .get::<&crate::components::SecondaryAbility>(player_entity)
-        .ok()
-        .map(|ability| {
-            let can_afford = world
-                .get::<&crate::components::Actor>(player_entity)
-                .map(|actor| actor.max_energy >= ability.ability_type.energy_cost())
-                .unwrap_or(false);
-            AbilityBarData {
-                ability_type: ability.ability_type,
-                cooldown_remaining: ability.cooldown_remaining,
-                cooldown_total: ability.cooldown_total,
-                can_use: can_afford && ability.is_ready(),
-                viewport_height: camera.viewport_height,
-            }
-        });
-
-    // Get Ranger ability bar data (if player is a Ranger)
-    let ranger_ability_data = world
-        .get::<&crate::components::RangerAbilities>(player_entity)
-        .ok()
-        .map(|ra| {
-            let max_energy = world
-                .get::<&crate::components::Actor>(player_entity)
-                .map(|actor| actor.max_energy)
-                .unwrap_or(0);
-
-            // Count arrows in inventory
-            let arrow_count = world
-                .get::<&crate::components::Inventory>(player_entity)
-                .map(|inv| inv.items.iter().filter(|i| **i == crate::components::ItemType::Arrow).count() as u32)
-                .unwrap_or(0);
-
-            let abilities: [RangerAbilitySlot; 4] = std::array::from_fn(|i| {
-                let (ability_type, cooldown_remaining, cooldown_total) = ra.abilities[i];
-                let can_afford = max_energy >= ability_type.energy_cost();
-                RangerAbilitySlot {
-                    ability_type,
-                    cooldown_remaining,
-                    cooldown_total,
-                    can_use: can_afford && cooldown_remaining <= 0.0,
-                }
-            });
-
-            RangerAbilityBarData {
-                abilities,
-                viewport_height: camera.viewport_height,
-                arrow_count,
-            }
-        });
 
     // Get loot window data if chest is open
     let loot_data = get_loot_window_data(
@@ -338,28 +290,19 @@ pub fn run_ui(
         }
 
         // Status bar (always visible)
-        draw_status_bar(ctx, &status_data, icons);
+        draw_status_bar(ctx, &status_data, icons, game_time);
 
-        // Ability bar (if player has a class ability)
-        if let Some(ref data) = ability_data {
-            if draw_ability_bar(ctx, data, icons) {
-                actions.use_ability = true;
-            }
-        }
-
-        // Secondary ability bar (Druid only - Barkskin)
-        if let Some(ref data) = secondary_ability_data {
-            if draw_secondary_ability_bar(ctx, data, icons) {
-                actions.use_secondary_ability = true;
-            }
-        }
-
-        // Ranger ability bar (if player is a Ranger)
-        if let Some(ref data) = ranger_ability_data {
-            if let Some(index) = draw_ranger_ability_bar(ctx, data, icons) {
-                actions.ranger_ability_clicked = Some(index);
-            }
-        }
+        // Quick-use hotbars (items + abilities, bottom-center)
+        draw_hotbars(
+            ctx,
+            world,
+            player_entity,
+            icons,
+            &mut ui_state.hotbar_main,
+            &mut ui_state.hotbar_shift,
+            &mut ui_state.hotbar_qe,
+            &mut actions,
+        );
 
         // Floating damage numbers
         draw_damage_numbers(ctx, vfx_effects, camera);
@@ -378,6 +321,9 @@ pub fn run_ui(
 
         // Life drain beams
         draw_life_drain_beams(ctx, camera, life_drain_beams);
+
+        // Taming channels
+        draw_taming_beams(ctx, camera, taming_beams);
 
         // Developer menu
         draw_dev_menu(ctx, dev_menu, icons, tileset);
@@ -405,6 +351,9 @@ pub fn run_ui(
             };
             draw_inventory_window(ctx, world, player_entity, &inv_data, icons, ui_state, &mut actions);
         }
+
+        // Drag preview icon under the cursor (drawn last so it's on top)
+        draw_drag_ghost(ctx, icons);
     });
 
     actions

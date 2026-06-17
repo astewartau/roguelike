@@ -125,6 +125,8 @@ pub enum AbilityType {
     SnareTrap,
     /// Ranger: Shoot an arrow that slows the target
     CripplingShot,
+    /// Fighter: Stun all nearby enemies for a few seconds
+    Stun,
 }
 
 impl AbilityType {
@@ -141,6 +143,7 @@ impl AbilityType {
             AbilityType::Tumble => "Tumble",
             AbilityType::SnareTrap => "Snare Trap",
             AbilityType::CripplingShot => "Crippling Shot",
+            AbilityType::Stun => "Stun",
         }
     }
 
@@ -157,6 +160,7 @@ impl AbilityType {
             AbilityType::Tumble => "Roll to target with brief invulnerability",
             AbilityType::SnareTrap => "Place a trap that roots enemies",
             AbilityType::CripplingShot => "Arrow that slows the target",
+            AbilityType::Stun => "Stun all nearby enemies for 5 seconds",
         }
     }
 
@@ -173,6 +177,7 @@ impl AbilityType {
             AbilityType::Tumble => TUMBLE_ENERGY_COST,
             AbilityType::SnareTrap => SNARE_TRAP_ENERGY_COST,
             AbilityType::CripplingShot => CRIPPLING_SHOT_ENERGY_COST,
+            AbilityType::Stun => STUN_ENERGY_COST,
         }
     }
 }
@@ -523,6 +528,8 @@ pub enum EffectType {
     Rooted,
     /// Immune to all damage (brief, from Tumble)
     Invulnerable,
+    /// Cannot act at all (from Fighter's Stun ability)
+    Stunned,
 }
 
 /// An active status effect with remaining duration
@@ -646,6 +653,8 @@ pub enum ActionType {
     StartLifeDrain { target: Entity },
     /// Necromancer ability: cause nearby enemies to flee
     ActivateFear,
+    /// Fighter ability: stun nearby enemies
+    ActivateStun,
     /// Place a fire trap at target location
     PlaceFireTrap { target_x: i32, target_y: i32 },
     /// Ranger ability: leap away from nearest enemy
@@ -689,6 +698,7 @@ impl ActionType {
             ActionType::ActivateBarkskin => BARKSKIN_ENERGY_COST,
             ActionType::StartLifeDrain { .. } => LIFE_DRAIN_ENERGY_COST,
             ActionType::ActivateFear => FEAR_ABILITY_ENERGY_COST,
+            ActionType::ActivateStun => STUN_ENERGY_COST,
             ActionType::PlaceFireTrap { .. } => 1,
             ActionType::Disengage => DISENGAGE_ENERGY_COST,
             ActionType::Tumble { .. } => TUMBLE_ENERGY_COST,

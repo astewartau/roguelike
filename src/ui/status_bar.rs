@@ -8,6 +8,15 @@ use crate::components::{EffectType as StatusEffectType, Health, Inventory, Statu
 use crate::systems;
 use hecs::World;
 
+/// Format elapsed game time (seconds) as HH:MM:SS, starting from 00:00:00.
+pub fn format_game_clock(seconds: f32) -> String {
+    let total = seconds.max(0.0) as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let secs = total % 60;
+    format!("{:02}:{:02}:{:02}", hours, minutes, secs)
+}
+
 /// Data needed to render the status bar
 pub struct StatusBarData {
     pub health_current: i32,
@@ -58,10 +67,11 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
     }
 }
 
-/// Render the status bar (health, XP, gold, status effects)
-pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcons) {
+/// Render the status bar (health, XP, gold, game clock, status effects)
+pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcons, game_time: f32) {
     // Calculate window height based on number of status effects
-    let base_height = 90.0;
+    // (base includes the HP, XP, gold and game-clock rows)
+    let base_height = 112.0;
     let effects_height = if data.active_effects.is_empty() {
         0.0
     } else {
@@ -128,6 +138,20 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                 ui.label(format!("{}", data.gold));
             });
 
+            // Elapsed game time (HH:MM:SS)
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Time")
+                        .color(style::colors::TEXT_MUTED)
+                        .small(),
+                );
+                ui.label(
+                    egui::RichText::new(format_game_clock(game_time))
+                        .monospace()
+                        .color(style::colors::TEXT_PRIMARY),
+                );
+            });
+
             // Active status effects
             if !data.active_effects.is_empty() {
                 ui.separator();
@@ -169,6 +193,9 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                             }
                             StatusEffectType::Invulnerable => {
                                 ("Invuln", egui::Color32::from_rgb(255, 215, 0)) // Gold color
+                            }
+                            StatusEffectType::Stunned => {
+                                ("Stunned", egui::Color32::from_rgb(255, 230, 120)) // Pale gold
                             }
                         };
                         ui.label(

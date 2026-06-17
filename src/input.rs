@@ -170,12 +170,6 @@ pub struct InputResult {
     pub interact_direction: Option<(i32, i32)>,
     /// Player wants to wait (skip turn)
     pub wait: bool,
-    /// Player wants to use class ability (Q)
-    pub ability_pressed: bool,
-    /// Player wants to use secondary ability (E) - Druid only
-    pub secondary_ability_pressed: bool,
-    /// Ranger ability key pressed (0-3 for keys 1-4)
-    pub ranger_ability: Option<usize>,
 }
 
 impl Default for InputResult {
@@ -189,9 +183,6 @@ impl Default for InputResult {
             attack_direction: None,
             interact_direction: None,
             wait: false,
-            ability_pressed: false,
-            secondary_ability_pressed: false,
-            ranger_ability: None,
         }
     }
 }
@@ -226,26 +217,9 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
         result.wait = true;
     }
 
-    // Ability hotkey (Q)
-    if input.keys_pressed.remove(&KeyCode::KeyQ) {
-        result.ability_pressed = true;
-    }
-
-    // Secondary ability hotkey (E) - Druid only
-    if input.keys_pressed.remove(&KeyCode::KeyE) {
-        result.secondary_ability_pressed = true;
-    }
-
-    // Ranger ability hotkeys (1-4)
-    if input.keys_pressed.remove(&KeyCode::Digit1) {
-        result.ranger_ability = Some(0);
-    } else if input.keys_pressed.remove(&KeyCode::Digit2) {
-        result.ranger_ability = Some(1);
-    } else if input.keys_pressed.remove(&KeyCode::Digit3) {
-        result.ranger_ability = Some(2);
-    } else if input.keys_pressed.remove(&KeyCode::Digit4) {
-        result.ranger_ability = Some(3);
-    }
+    // Note: Q, E and the number keys (1-5, Shift+1-5) are intentionally NOT
+    // consumed here - they drive the hotbars, which read them in the egui UI
+    // layer (src/ui/hotbar.rs).
 
     // Check if shift is held (don't consume - it's a modifier)
     let shift_held = input.keys_pressed.contains(&KeyCode::ShiftLeft)
@@ -641,12 +615,6 @@ pub struct FrameInput {
     pub from_keyboard: bool,
     /// Item index to remove from inventory (for targeting actions)
     pub item_to_remove: Option<usize>,
-    /// Player wants to use class ability (Q)
-    pub ability_pressed: bool,
-    /// Player wants to use secondary ability (E) - Druid only
-    pub secondary_ability_pressed: bool,
-    /// Ranger ability key pressed (0-3 for keys 1-4)
-    pub ranger_ability: Option<usize>,
 }
 
 impl Default for FrameInput {
@@ -660,9 +628,6 @@ impl Default for FrameInput {
             player_intent: None,
             from_keyboard: false,
             item_to_remove: None,
-            ability_pressed: false,
-            secondary_ability_pressed: false,
-            ranger_ability: None,
         }
     }
 }
@@ -686,9 +651,6 @@ pub fn process_frame(
     result.toggle_inventory = kb.toggle_inventory;
     result.toggle_grid_lines = kb.toggle_grid_lines;
     result.enter_pressed = kb.enter_pressed;
-    result.ability_pressed = kb.ability_pressed;
-    result.secondary_ability_pressed = kb.secondary_ability_pressed;
-    result.ranger_ability = kb.ranger_ability;
 
     // Check if player is dead
     let is_dead = world

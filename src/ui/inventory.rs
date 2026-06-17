@@ -4,9 +4,10 @@
 
 use super::icons::UiIcons;
 use super::style;
-use super::GameUiState;
-use super::UiActions;
-use crate::components::{Equipment, Inventory, Stats};
+use super::{ability_icon, ability_status, CharacterTab, GameUiState, HotbarDrag, HotbarEntry, UiActions};
+use crate::components::{
+    AbilityType, ClassAbility, Equipment, Inventory, RangerAbilities, SecondaryAbility, Stats,
+};
 use crate::systems;
 use hecs::World;
 
@@ -49,15 +50,35 @@ pub fn draw_inventory_window(
                         actions,
                     );
 
-                    // Right column: Inventory
-                    draw_inventory_column(
-                        &mut columns[1],
-                        world,
-                        player_entity,
-                        icons,
-                        ui_state,
-                        actions,
-                    );
+                    // Right column: Inventory / Spellbook tabs
+                    let col = &mut columns[1];
+                    col.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut ui_state.character_tab,
+                            CharacterTab::Inventory,
+                            "INVENTORY",
+                        );
+                        ui.selectable_value(
+                            &mut ui_state.character_tab,
+                            CharacterTab::Spellbook,
+                            "SPELLBOOK",
+                        );
+                    });
+                    col.separator();
+                    col.add_space(6.0);
+                    match ui_state.character_tab {
+                        CharacterTab::Inventory => draw_inventory_column(
+                            col,
+                            world,
+                            player_entity,
+                            icons,
+                            ui_state,
+                            actions,
+                        ),
+                        CharacterTab::Spellbook => {
+                            draw_spellbook_column(col, world, player_entity, icons)
+                        }
+                    }
                 });
             }
         });
@@ -240,8 +261,10 @@ fn draw_inventory_column(
                         let is_throwable = systems::items::item_is_throwable(slot.item_type);
 
                         // Allocate space and paint black background manually
+                        // (click_and_drag so the slot can both be used and dragged to the hotbar)
                         let size = egui::vec2(48.0, 48.0);
-                        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+                        let (rect, response) =
+                            ui.allocate_exact_size(size, egui::Sense::click_and_drag());
 
                         // Paint black background first
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
@@ -296,6 +319,15 @@ fn draw_inventory_column(
 
                         let response = response.on_hover_text(hover_text);
 
+                        // Drag source: carry this item type to the hotbar (ammo excluded)
+                        if response.drag_started()
+                            && slot.item_type != crate::components::ItemType::Arrow
+                        {
+                            response.dnd_set_drag_payload(HotbarDrag::external(HotbarEntry::Item(
+                                slot.item_type,
+                            )));
+                        }
+
                         // Left-click: use/drink the item (only for single items or non-stackables)
                         if response.clicked() && slot.count == 1 {
                             actions.item_to_use = Some(slot.first_index);
@@ -311,6 +343,94 @@ fn draw_inventory_column(
                 });
             }
         }
+    });
+}
+
+/// Render the spellbook: the player's abilities as drag sources for the hotbar.
+fn draw_spellbook_column(
+    ui: &mut egui::Ui,
+    world: &World,
+    player_entity: hecs::Entity,
+    icons: &UiIcons,
+) {
+    ui.vertical(|ui| {
+        ui.heading("SPELLBOOK");
+        ui.separator();
+        ui.add_space(10.0);
+
+        // Collect the player's abilities (class, then secondary, then ranger).
+        let mut abilities: Vec<AbilityType> = Vec::new();
+        if let Ok(a) = world.get::<&ClassAbility>(player_entity) {
+            abilities.push(a.ability_type);
+        }
+        if let Ok(a) = world.get::<&SecondaryAbility>(player_entity) {
+            abilities.push(a.ability_type);
+        }
+        if let Ok(ra) = world.get::<&RangerAbilities>(player_entity) {
+            for (at, _, _) in ra.abilities.iter() {
+                abilities.push(*at);
+            }
+        }
+
+        if abilities.is_empty() {
+            ui.label(
+                egui::RichText::new("(no abilities)")
+                    .italics()
+                    .color(style::colors::TEXT_MUTED),
+            );
+            return;
+        }
+
+        ui.label(
+            egui::RichText::new("Drag a spell onto a hotbar slot")
+                .small()
+                .color(style::colors::TEXT_MUTED),
+        );
+        ui.add_space(8.0);
+
+        ui.horizontal_wrapped(|ui| {
+            for ability in abilities {
+                let size = egui::vec2(48.0, 48.0);
+                let (rect, response) =
+                    ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+
+                ui.painter().rect_filled(rect, 0.0, style::colors::BUTTON_BG);
+
+                let (cd, _total, can_afford) = ability_status(world, player_entity, ability);
+                let ready = cd <= 0.0 && can_afford;
+                let tint = if ready {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 110)
+                };
+                let (tex, uv) = ability_icon(icons, ability);
+                egui::Image::new(egui::load::SizedTexture::new(tex, size))
+                    .uv(uv)
+                    .tint(tint)
+                    .paint_at(ui, rect);
+
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(2.0, style::colors::BUTTON_BORDER),
+                );
+
+                // Drag source: carry this ability to a hotbar slot.
+                if response.drag_started() {
+                    response.dnd_set_drag_payload(HotbarDrag::external(HotbarEntry::Ability(
+                        ability,
+                    )));
+                }
+
+                response.on_hover_text(format!(
+                    "{}\n{}\n\nDrag to a hotbar slot",
+                    ability.name(),
+                    ability.description()
+                ));
+
+                ui.add_space(6.0);
+            }
+        });
     });
 }
 

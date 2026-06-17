@@ -23,7 +23,10 @@ pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
 
 use crate::audio::AudioManager;
-use crate::components::{AbilityType, ActionType, Actor, ClassAbility, PlayerClass};
+use crate::components::{
+    AbilityType, ActionType, Actor, ClassAbility, Health, PlayerClass, RangerAbilities,
+    SecondaryAbility,
+};
 
 use crate::camera::Camera;
 use crate::events::EventQueue;
@@ -52,6 +55,9 @@ pub enum GameMode {
     StartScreen,
     /// Playing the game
     Playing,
+    /// Player has died - showing the retry screen (state is kept so the
+    /// frozen dungeon stays visible behind the overlay)
+    GameOver,
 }
 
 /// Result of a game tick - contains everything needed for rendering
@@ -149,7 +155,28 @@ impl GameEngine {
             camera.set_tracking_target(glam::Vec2::new(x + 0.5, y + 0.5));
         }
 
-        let ui_state = GameUiState::new(state.player_entity);
+        let mut ui_state = GameUiState::new(state.player_entity);
+
+        // Auto-fill the main hotbar with the player's abilities (class, then
+        // secondary, then ranger, in order) so they're usable right away.
+        {
+            let mut entries: Vec<AbilityType> = Vec::new();
+            if let Ok(a) = state.world.get::<&ClassAbility>(state.player_entity) {
+                entries.push(a.ability_type);
+            }
+            if let Ok(a) = state.world.get::<&SecondaryAbility>(state.player_entity) {
+                entries.push(a.ability_type);
+            }
+            if let Ok(ra) = state.world.get::<&RangerAbilities>(state.player_entity) {
+                for (at, _, _) in ra.abilities.iter() {
+                    entries.push(*at);
+                }
+            }
+            for (slot, ability) in ui_state.hotbar_main.iter_mut().zip(entries) {
+                *slot = Some(crate::ui::HotbarEntry::Ability(ability));
+            }
+        }
+
         self.state = Some(state);
         self.ui_state = Some(ui_state);
         self.game_mode = GameMode::Playing;
@@ -158,6 +185,16 @@ impl GameEngine {
     /// Check if we're currently playing (not on start screen).
     pub fn is_playing(&self) -> bool {
         self.game_mode == GameMode::Playing
+    }
+
+    /// Tear down the current run and return to the class selection screen.
+    pub fn return_to_start_screen(&mut self) {
+        self.state = None;
+        self.ui_state = None;
+        self.input = InputState::new();
+        self.vfx = VfxManager::new();
+        self.events = EventQueue::new();
+        self.game_mode = GameMode::StartScreen;
     }
 
     /// Get a reference to the UI state (panics if not playing).
@@ -272,6 +309,21 @@ impl GameEngine {
 
         // Accumulate real time for animations
         self.real_time += dt;
+
+        // Transition to the game over screen once the player dies. State is kept
+        // alive so the dungeon keeps rendering (frozen) behind the retry overlay.
+        if self.game_mode == GameMode::Playing {
+            if let Some(state) = &self.state {
+                let player_dead = state
+                    .world
+                    .get::<&Health>(state.player_entity)
+                    .map(|h| h.is_dead())
+                    .unwrap_or(false);
+                if player_dead {
+                    self.game_mode = GameMode::GameOver;
+                }
+            }
+        }
 
         // Only run game simulation when playing
         if self.state.is_none() {
@@ -467,19 +519,9 @@ impl GameEngine {
             state.game_clock.time,
         );
 
-        // Handle ability button click from UI
-        if actions.use_ability {
-            self.try_use_class_ability();
-        }
-
-        // Handle secondary ability button click from UI (Druid's Barkskin)
-        if actions.use_secondary_ability {
-            self.try_use_secondary_ability();
-        }
-
-        // Handle Ranger ability click from UI
-        if let Some(index) = actions.ranger_ability_clicked {
-            self.try_use_ranger_ability(index);
+        // Handle ability activation from a hotbar slot
+        if let Some(ability_type) = actions.ability_to_use {
+            self.try_use_ability(ability_type);
         }
 
         let ui_state = self.ui_state.as_mut().expect("UI state should exist");
@@ -621,6 +663,24 @@ impl GameEngine {
                 actions.start_game = start_result;
                 actions
             }
+            GameMode::GameOver => {
+                let (time_survived, floor) = self
+                    .state
+                    .as_ref()
+                    .map(|s| (s.game_clock.time, s.current_floor))
+                    .unwrap_or((0.0, 0));
+
+                let choice =
+                    crate::ui::run_game_over_screen(egui_glow, window, time_survived, floor);
+
+                let mut actions = crate::ui::UiActions::default();
+                match choice {
+                    crate::ui::GameOverChoice::Retry => actions.retry_game = true,
+                    crate::ui::GameOverChoice::MainMenu => actions.return_to_menu = true,
+                    crate::ui::GameOverChoice::None => {}
+                }
+                actions
+            }
             GameMode::Playing => {
                 let state = self.state.as_ref().expect("State should exist when playing");
                 let ui_state = self.ui_state.as_mut().expect("UI state should exist when playing");
@@ -629,6 +689,12 @@ impl GameEngine {
                 let life_drain_beams = crate::ui::get_life_drain_beam_data(
                     &state.world,
                     &self.vfx.life_drain_beams,
+                );
+
+                // Extract taming channel data for rendering
+                let taming_beams = crate::ui::get_taming_beam_data(
+                    &state.world,
+                    &self.vfx.taming_beams,
                 );
 
                 crate::ui::run_ui(
@@ -644,6 +710,7 @@ impl GameEngine {
                     ui_icons,
                     &self.vfx.effects,
                     &life_drain_beams,
+                    &taming_beams,
                     self.input.targeting_mode.as_ref(),
                     self.input.ability_targeting_mode.as_ref(),
                     self.input.mouse_pos,
@@ -714,56 +781,8 @@ impl GameEngine {
             return result;
         }
 
-        // Class ability activation (Q key)
-        if frame.ability_pressed {
-            activate_class_ability(
-                &mut state.world,
-                &state.grid,
-                state.player_entity,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut self.vfx,
-                ui_state,
-                &mut self.input,
-            );
-        }
-
-        // Secondary ability activation (E key) - Druid's Barkskin
-        if frame.secondary_ability_pressed {
-            activate_secondary_ability(
-                &mut state.world,
-                &state.grid,
-                state.player_entity,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut self.vfx,
-                ui_state,
-            );
-        }
-
-        // Ranger ability activation (number keys 1-4)
-        if let Some(ability_index) = frame.ranger_ability {
-            activate_ranger_ability(
-                &mut state.world,
-                &state.grid,
-                state.player_entity,
-                ability_index,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut self.vfx,
-                ui_state,
-                &mut self.input,
-            );
-        }
+        // Abilities are activated from the hotbars (see ability_to_use in
+        // process_ui_actions), not from dedicated keybinds anymore.
 
         // Execute player intent
         if let Some(intent) = frame.player_intent {
@@ -901,6 +920,52 @@ impl GameEngine {
     }
 
     /// Try to use the player's class ability (called from UI button)
+    /// Activate an ability by type, routing to whichever component holds it
+    /// (class ability, secondary ability, or a ranger ability slot).
+    fn try_use_ability(&mut self, ability_type: AbilityType) {
+        enum Route {
+            Class,
+            Secondary,
+            Ranger(usize),
+        }
+
+        let route = {
+            let Some(ref state) = self.state else {
+                return;
+            };
+            let world = &state.world;
+            let player = state.player_entity;
+
+            if world
+                .get::<&ClassAbility>(player)
+                .map(|a| a.ability_type == ability_type)
+                .unwrap_or(false)
+            {
+                Route::Class
+            } else if world
+                .get::<&SecondaryAbility>(player)
+                .map(|a| a.ability_type == ability_type)
+                .unwrap_or(false)
+            {
+                Route::Secondary
+            } else if let Some(index) = world
+                .get::<&RangerAbilities>(player)
+                .ok()
+                .and_then(|ra| ra.abilities.iter().position(|(at, _, _)| *at == ability_type))
+            {
+                Route::Ranger(index)
+            } else {
+                return;
+            }
+        };
+
+        match route {
+            Route::Class => self.try_use_class_ability(),
+            Route::Secondary => self.try_use_secondary_ability(),
+            Route::Ranger(index) => self.try_use_ranger_ability(index),
+        }
+    }
+
     fn try_use_class_ability(&mut self) {
         let Some(ref mut state) = self.state else {
             return;
@@ -1111,6 +1176,7 @@ fn activate_class_ability(
         AbilityType::LifeDrain => unreachable!("LifeDrain ability handled above with targeting mode"),
         AbilityType::Barkskin => return false, // Barkskin is a secondary ability, not primary
         AbilityType::Fear => return false,     // Fear is a secondary ability, not primary
+        AbilityType::Stun => return false,     // Stun is a secondary ability, not primary
         // Ranger abilities are handled via RangerAbilities component and number keys
         AbilityType::Disengage | AbilityType::Tumble | AbilityType::SnareTrap | AbilityType::CripplingShot => return false,
     };
@@ -1223,7 +1289,8 @@ fn activate_secondary_ability(
     let action_type = match ability_type {
         AbilityType::Barkskin => ActionType::ActivateBarkskin,
         AbilityType::Fear => ActionType::ActivateFear,
-        _ => return false, // Only Barkskin and Fear are secondary abilities
+        AbilityType::Stun => ActionType::ActivateStun,
+        _ => return false, // Only Barkskin, Fear and Stun are secondary abilities
     };
 
     // Start the action

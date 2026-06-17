@@ -168,6 +168,11 @@ pub enum GameEvent {
         entity: Entity,
         position: (i32, i32),
     },
+    /// Stun ability activated (fighter)
+    StunActivated {
+        entity: Entity,
+        position: (i32, i32),
+    },
     /// Player opened a shop with a vendor
     ShopOpened {
         vendor: Entity,

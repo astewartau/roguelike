@@ -47,6 +47,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::ActivateBarkskin => BARKSKIN_ACTIVATION_DURATION, // Druid ability (quick)
         ActionType::StartLifeDrain { .. } => ACTION_WAIT_DURATION, // Starting life drain (quick)
         ActionType::ActivateFear => BARKSKIN_ACTIVATION_DURATION, // Necromancer ability (quick)
+        ActionType::ActivateStun => BARKSKIN_ACTIVATION_DURATION, // Fighter ability (quick)
         ActionType::PlaceFireTrap { .. } => ACTION_DOOR_DURATION, // Quick placement
         ActionType::Disengage => DISENGAGE_DURATION, // Ranger leap
         ActionType::Tumble { .. } => TUMBLE_DURATION, // Ranger roll
