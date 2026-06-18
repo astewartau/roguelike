@@ -132,24 +132,28 @@ pub fn determine_action_type(
         }
     }
 
-    // Check for stairs at target
-    if let Some(tile) = grid.get(target_x, target_y) {
-        match tile.tile_type {
-            TileType::StairsDown => {
-                return ActionType::UseStairs {
-                    x: target_x,
-                    y: target_y,
-                    direction: StairDirection::Down,
-                };
+    // Check for stairs at target - only the player uses stairs. AI entities
+    // (companions, enemies) treat staircase tiles as ordinary floor, otherwise
+    // an AI stepping onto stairs would emit a FloorTransition for the whole game.
+    if world.get::<&Player>(entity).is_ok() {
+        if let Some(tile) = grid.get(target_x, target_y) {
+            match tile.tile_type {
+                TileType::StairsDown => {
+                    return ActionType::UseStairs {
+                        x: target_x,
+                        y: target_y,
+                        direction: StairDirection::Down,
+                    };
+                }
+                TileType::StairsUp => {
+                    return ActionType::UseStairs {
+                        x: target_x,
+                        y: target_y,
+                        direction: StairDirection::Up,
+                    };
+                }
+                _ => {}
             }
-            TileType::StairsUp => {
-                return ActionType::UseStairs {
-                    x: target_x,
-                    y: target_y,
-                    direction: StairDirection::Up,
-                };
-            }
-            _ => {}
         }
     }
 

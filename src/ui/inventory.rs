@@ -371,6 +371,8 @@ fn draw_spellbook_column(
                 abilities.push(*at);
             }
         }
+        // Rest is a universal ability available to every class.
+        abilities.push(AbilityType::Rest);
 
         if abilities.is_empty() {
             ui.label(

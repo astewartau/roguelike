@@ -144,6 +144,8 @@ pub enum AbilityType {
     CripplingShot,
     /// Fighter: Stun all nearby enemies for a few seconds
     Stun,
+    /// Universal: Rest to fast-forward time until healed or interrupted
+    Rest,
 }
 
 impl AbilityType {
@@ -161,6 +163,7 @@ impl AbilityType {
             AbilityType::SnareTrap => "Snare Trap",
             AbilityType::CripplingShot => "Crippling Shot",
             AbilityType::Stun => "Stun",
+            AbilityType::Rest => "Rest",
         }
     }
 
@@ -178,6 +181,7 @@ impl AbilityType {
             AbilityType::SnareTrap => "Place a trap that roots enemies",
             AbilityType::CripplingShot => "Arrow that slows the target",
             AbilityType::Stun => "Stun all nearby enemies for 5 seconds",
+            AbilityType::Rest => "Rest until healed or an enemy spots you",
         }
     }
 
@@ -195,6 +199,7 @@ impl AbilityType {
             AbilityType::SnareTrap => SNARE_TRAP_ENERGY_COST,
             AbilityType::CripplingShot => CRIPPLING_SHOT_ENERGY_COST,
             AbilityType::Stun => STUN_ENERGY_COST,
+            AbilityType::Rest => 0,
         }
     }
 }

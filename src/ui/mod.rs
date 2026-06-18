@@ -120,8 +120,8 @@ pub struct GameUiState {
     pub hotbar_main: [Option<HotbarEntry>; 5],
     /// Shift hotbar (keys Shift+1-5), auto-filled with abilities at run start
     pub hotbar_shift: [Option<HotbarEntry>; 5],
-    /// Q/E hotbar (keys Q and E)
-    pub hotbar_qe: [Option<HotbarEntry>; 2],
+    /// Q/E/R hotbar (keys Q, E and R). The R slot is pre-filled with Rest.
+    pub hotbar_qer: [Option<HotbarEntry>; 3],
     /// Scrolling combat/message log
     pub message_log: MessageLog,
     /// The player entity (needed to filter events)
@@ -141,7 +141,7 @@ impl GameUiState {
             character_tab: CharacterTab::default(),
             hotbar_main: [None; 5],
             hotbar_shift: [None; 5],
-            hotbar_qe: [None; 2],
+            hotbar_qer: [None; 3],
             message_log: MessageLog::new(player_entity),
             player_entity,
         }
@@ -308,7 +308,7 @@ pub fn run_ui(
             icons,
             &mut ui_state.hotbar_main,
             &mut ui_state.hotbar_shift,
-            &mut ui_state.hotbar_qe,
+            &mut ui_state.hotbar_qer,
             &mut actions,
         );
 

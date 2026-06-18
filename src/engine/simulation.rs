@@ -1,7 +1,9 @@
 //! Game simulation - turn execution, time advancement, and event processing.
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, EffectType, Inventory, ItemType};
+use crate::components::{
+    ActionType, Actor, AIState, ChaseAI, EffectType, Health, Inventory, ItemType, TamedBy,
+};
 use crate::constants;
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::grid::Grid;
@@ -142,6 +144,107 @@ pub fn execute_player_intent(
         enemy_spotted_player: event_result.enemy_spotted_player,
         skeleton_spawns: event_result.skeleton_spawns,
     }
+}
+
+/// Outcome of a Rest action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestOutcome {
+    /// Rested up to full health.
+    Healed,
+    /// An enemy became alerted, cutting the rest short.
+    Interrupted,
+    /// Player was already at full health, so nothing happened.
+    AlreadyFull,
+    /// An enemy was already alerted, so resting was refused.
+    Unsafe,
+}
+
+/// Whether the player is currently at (or above) full health.
+fn player_at_full_health(world: &World, player: Entity) -> bool {
+    world
+        .get::<&Health>(player)
+        .map(|h| h.current >= h.max)
+        .unwrap_or(true)
+}
+
+/// Whether any hostile enemy is currently aware of a target (chasing or
+/// investigating). Tamed companions are excluded — they use `CompanionAI`, but
+/// we guard with `TamedBy` as well so a friendly never blocks resting.
+pub fn any_enemy_alerted(world: &World, _player: Entity) -> bool {
+    for (id, ai) in world.query::<&ChaseAI>().iter() {
+        if world.get::<&TamedBy>(id).is_ok() {
+            continue;
+        }
+        if matches!(ai.state, AIState::Chasing | AIState::Investigating) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Rest: repeatedly fast-forward the simulation (one short Wait at a time, so
+/// enemies still get their turns to notice the player) until the player reaches
+/// full health or an enemy becomes alerted.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_rest(
+    world: &mut World,
+    grid: &Grid,
+    player_entity: Entity,
+    clock: &mut GameClock,
+    scheduler: &mut ActionScheduler,
+    active_tracker: &mut ActiveAITracker,
+    spatial_cache: &mut SpatialCache,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+    audio: Option<&crate::audio::AudioManager>,
+) -> RestOutcome {
+    if player_at_full_health(world, player_entity) {
+        return RestOutcome::AlreadyFull;
+    }
+    if any_enemy_alerted(world, player_entity) {
+        return RestOutcome::Unsafe;
+    }
+
+    // Safety bound so a never-healing edge case can't hang the game. Each step
+    // is one Wait (ACTION_WAIT_DURATION); this caps the simulated rest length.
+    const MAX_REST_STEPS: u32 = 200_000;
+
+    for _ in 0..MAX_REST_STEPS {
+        let result = execute_player_intent(
+            world,
+            grid,
+            player_entity,
+            PlayerIntent::Wait,
+            clock,
+            scheduler,
+            active_tracker,
+            spatial_cache,
+            events,
+            vfx,
+            ui_state,
+            audio,
+        );
+
+        // The Wait couldn't run (player dead/blocked) — stop resting.
+        if result.turn_result != TurnResult::Started {
+            return RestOutcome::Interrupted;
+        }
+
+        // An enemy noticed us this step, or we took damage — cut rest short.
+        if result.enemy_spotted_player
+            || result.player_took_damage
+            || any_enemy_alerted(world, player_entity)
+        {
+            return RestOutcome::Interrupted;
+        }
+
+        if player_at_full_health(world, player_entity) {
+            return RestOutcome::Healed;
+        }
+    }
+
+    RestOutcome::Healed
 }
 
 /// Execute a player turn based on movement input.

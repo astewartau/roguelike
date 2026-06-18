@@ -175,6 +175,10 @@ impl GameEngine {
             for (slot, ability) in ui_state.hotbar_main.iter_mut().zip(entries) {
                 *slot = Some(crate::ui::HotbarEntry::Ability(ability));
             }
+
+            // Everyone gets Rest, bound to the R slot of the Q/E/R hotbar.
+            ui_state.hotbar_qer[2] =
+                Some(crate::ui::HotbarEntry::Ability(AbilityType::Rest));
         }
 
         self.state = Some(state);
@@ -923,6 +927,12 @@ impl GameEngine {
     /// Activate an ability by type, routing to whichever component holds it
     /// (class ability, secondary ability, or a ranger ability slot).
     fn try_use_ability(&mut self, ability_type: AbilityType) {
+        // Rest is a universal ability not tied to a class component.
+        if ability_type == AbilityType::Rest {
+            self.try_rest();
+            return;
+        }
+
         enum Route {
             Class,
             Secondary,
@@ -1033,6 +1043,58 @@ impl GameEngine {
             ui_state,
             &mut self.input,
         );
+    }
+
+    /// Rest: fast-forward simulated time until the player is fully healed or an
+    /// enemy becomes alerted. Universal ability bound to the R hotbar slot.
+    fn try_rest(&mut self) {
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+        let Some(ref mut ui_state) = self.ui_state else {
+            return;
+        };
+
+        // Only rest while idle (not mid-action).
+        let is_idle = state
+            .world
+            .get::<&Actor>(state.player_entity)
+            .map(|a| a.current_action.is_none())
+            .unwrap_or(false);
+        if !is_idle {
+            return;
+        }
+
+        let outcome = simulation::execute_rest(
+            &mut state.world,
+            &state.grid,
+            state.player_entity,
+            &mut state.game_clock,
+            &mut state.action_scheduler,
+            &mut state.active_ai_tracker,
+            &mut state.spatial_cache,
+            &mut self.events,
+            &mut self.vfx,
+            ui_state,
+            self.audio.as_ref(),
+        );
+
+        match outcome {
+            simulation::RestOutcome::Healed => {
+                ui_state.message_log.system("You rest and recover to full health.");
+            }
+            simulation::RestOutcome::Interrupted => {
+                ui_state.message_log.system("Your rest is interrupted!");
+            }
+            simulation::RestOutcome::AlreadyFull => {
+                ui_state.message_log.system("You are already at full health.");
+            }
+            simulation::RestOutcome::Unsafe => {
+                ui_state.message_log.system("You can't rest with enemies nearby.");
+            }
+        }
+
+        state.fov_dirty = true;
     }
 
     fn handle_floor_transition(
@@ -1179,6 +1241,7 @@ fn activate_class_ability(
         AbilityType::Stun => return false,     // Stun is a secondary ability, not primary
         // Ranger abilities are handled via RangerAbilities component and number keys
         AbilityType::Disengage | AbilityType::Tumble | AbilityType::SnareTrap | AbilityType::CripplingShot => return false,
+        AbilityType::Rest => return false, // Rest is handled in try_use_ability, never routed here
     };
 
     // Start the action

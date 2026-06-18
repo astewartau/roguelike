@@ -53,7 +53,7 @@ pub struct AudioManager {
 impl AudioManager {
     /// Create a new audio manager and load sounds
     pub fn new() -> Option<Self> {
-        let (stream, stream_handle) = OutputStream::try_default().ok()?;
+        let (stream, stream_handle) = Self::open_output_stream()?;
 
         let mut manager = Self {
             _stream: stream,
@@ -64,6 +64,35 @@ impl AudioManager {
 
         manager.load_sounds();
         Some(manager)
+    }
+
+    /// Open an output stream, preferring a device that routes through the system
+    /// sound server (PipeWire/PulseAudio). cpal's raw ALSA default grabs the
+    /// first hardware card directly (`hw:0`), which bypasses PipeWire entirely —
+    /// so audio comes out of the built-in analog jack and never follows the
+    /// user's chosen default sink (e.g. a Bluetooth speaker). Routing through the
+    /// "pipewire"/"pulse" PCM lets the OS send our audio wherever it's pointed.
+    fn open_output_stream() -> Option<(OutputStream, OutputStreamHandle)> {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+        let host = rodio::cpal::default_host();
+        if let Ok(devices) = host.output_devices() {
+            let devices: Vec<_> = devices.collect();
+            for target in ["pipewire", "pulse"] {
+                for dev in &devices {
+                    if dev.name().map(|n| n == target).unwrap_or(false) {
+                        if let Ok(stream) = OutputStream::try_from_device(dev) {
+                            eprintln!("[audio] output via '{target}' (follows system default sink)");
+                            return Some(stream);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to cpal's default device (raw ALSA / other platforms).
+        eprintln!("[audio] no PipeWire/Pulse device found; using cpal default");
+        OutputStream::try_default().ok()
     }
 
     /// Load all sound file paths

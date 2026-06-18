@@ -4,7 +4,7 @@
 //! can hold either an inventory item or an ability (a [`HotbarEntry`]):
 //! - Main:  5 slots, keys `1`-`5`
 //! - Shift: 5 slots, keys `Shift+1`-`Shift+5`
-//! - Q/E:   2 slots, keys `Q` / `E`
+//! - Q/E/R: 3 slots, keys `Q` / `E` / `R`
 //!
 //! Items are dragged in from the inventory, abilities from the Spellbook tab.
 //! Dragging from one hotbar slot onto another swaps them. Slots are bound by
@@ -72,6 +72,7 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
         AbilityType::SnareTrap => (icons.tiles_texture_id, icons.snare_trap_uv),
         AbilityType::CripplingShot => (icons.items_texture_id, icons.crippling_shot_uv),
         AbilityType::Stun => (icons.items_texture_id, icons.diamond_uv),
+        AbilityType::Rest => (icons.items_texture_id, icons.heart_uv),
     }
 }
 
@@ -110,13 +111,13 @@ pub fn draw_hotbars(
     icons: &UiIcons,
     main: &mut [Option<HotbarEntry>; 5],
     shift: &mut [Option<HotbarEntry>; 5],
-    qe: &mut [Option<HotbarEntry>; 2],
+    qer: &mut [Option<HotbarEntry>; 3],
     actions: &mut UiActions,
 ) {
     let shift_held = ctx.input(|i| i.modifiers.shift);
 
     let group_w = |n: usize| n as f32 * SLOT_SIZE + (n as f32 - 1.0) * SLOT_SPACING;
-    let total = group_w(5) + GROUP_GAP + group_w(5) + GROUP_GAP + group_w(2);
+    let total = group_w(5) + GROUP_GAP + group_w(5) + GROUP_GAP + group_w(3);
     let screen = ctx.screen_rect();
     let pos_x = (screen.width() - total) / 2.0;
     let pos_y = screen.height() - SLOT_SIZE - BOTTOM_MARGIN - 8.0;
@@ -142,8 +143,8 @@ pub fn draw_hotbars(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 draw_bar(
-                    ui, world, player, icons, &qe[..], Bar::Qe,
-                    &[egui::Key::Q, egui::Key::E], false, shift_held,
+                    ui, world, player, icons, &qer[..], Bar::Qe,
+                    &[egui::Key::Q, egui::Key::E, egui::Key::R], false, shift_held,
                     actions, &mut pending_drop, &mut pending_clear,
                 );
                 ui.add_space(GROUP_GAP);
@@ -163,43 +164,43 @@ pub fn draw_hotbars(
     if let Some((tgt, drag)) = pending_drop {
         match drag.source {
             Some(src) if src != tgt => {
-                let src_entry = slot_ref(main, shift, qe, src);
-                let tgt_entry = slot_ref(main, shift, qe, tgt);
-                *slot_mut(main, shift, qe, tgt) = src_entry;
-                *slot_mut(main, shift, qe, src) = tgt_entry;
+                let src_entry = slot_ref(main, shift, qer, src);
+                let tgt_entry = slot_ref(main, shift, qer, tgt);
+                *slot_mut(main, shift, qer, tgt) = src_entry;
+                *slot_mut(main, shift, qer, src) = tgt_entry;
             }
             Some(_) => {} // dropped onto itself
-            None => *slot_mut(main, shift, qe, tgt) = Some(drag.entry),
+            None => *slot_mut(main, shift, qer, tgt) = Some(drag.entry),
         }
     }
     if let Some(addr) = pending_clear {
-        *slot_mut(main, shift, qe, addr) = None;
+        *slot_mut(main, shift, qer, addr) = None;
     }
 }
 
 fn slot_ref(
     main: &[Option<HotbarEntry>; 5],
     shift: &[Option<HotbarEntry>; 5],
-    qe: &[Option<HotbarEntry>; 2],
+    qer: &[Option<HotbarEntry>; 3],
     (bar, i): SlotAddr,
 ) -> Option<HotbarEntry> {
     match bar {
         Bar::Main => main[i],
         Bar::Shift => shift[i],
-        Bar::Qe => qe[i],
+        Bar::Qe => qer[i],
     }
 }
 
 fn slot_mut<'a>(
     main: &'a mut [Option<HotbarEntry>; 5],
     shift: &'a mut [Option<HotbarEntry>; 5],
-    qe: &'a mut [Option<HotbarEntry>; 2],
+    qer: &'a mut [Option<HotbarEntry>; 3],
     (bar, i): SlotAddr,
 ) -> &'a mut Option<HotbarEntry> {
     match bar {
         Bar::Main => &mut main[i],
         Bar::Shift => &mut shift[i],
-        Bar::Qe => &mut qe[i],
+        Bar::Qe => &mut qer[i],
     }
 }
 
@@ -208,7 +209,7 @@ fn slot_label(bar: Bar, i: usize) -> String {
     match bar {
         Bar::Main => format!("{}", i + 1),
         Bar::Shift => format!("S{}", i + 1),
-        Bar::Qe => ["Q", "E"].get(i).copied().unwrap_or("?").to_string(),
+        Bar::Qe => ["Q", "E", "R"].get(i).copied().unwrap_or("?").to_string(),
     }
 }
 

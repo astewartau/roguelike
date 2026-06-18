@@ -58,6 +58,11 @@ impl MessageLog {
         }
     }
 
+    /// Push a system/informational line (e.g. resting feedback).
+    pub fn system(&mut self, text: impl Into<String>) {
+        self.push(text.into(), log_colors::INFO);
+    }
+
     /// Push a line. Consecutive identical lines collapse into a "(x2)" counter.
     fn push(&mut self, text: String, color: Color32) {
         if let Some(last) = self.messages.back_mut() {
