@@ -68,6 +68,14 @@ pub struct TickResult {
     pub window_action: Option<WindowAction>,
 }
 
+/// Game-seconds of simulation fast-forwarded per real second while resting.
+/// Higher = the world (and natural regen) races ahead faster; very high values
+/// approach an instant jump with little visible motion. At natural regen of
+/// ~0.1 HP/game-sec, 48 gives ~4.8 HP/real-sec (a full 50 HP heal in ~10s).
+const REST_TIME_SCALE: f32 = 48.0;
+/// Cap on Wait-steps simulated in a single frame, so a stutter can't run away.
+const REST_MAX_STEPS_PER_FRAME: i32 = 64;
+
 /// The game engine - owns all game state and simulation logic.
 pub struct GameEngine {
     /// Current game mode (start screen or playing)
@@ -99,6 +107,12 @@ pub struct GameEngine {
 
     /// Audio manager for sound effects
     pub audio: Option<AudioManager>,
+
+    /// True while the player is resting (time auto-fast-forwards each frame).
+    resting: bool,
+
+    /// Accumulates fast-forwarded game-time toward the next rest step.
+    rest_accumulator: f32,
 }
 
 impl GameEngine {
@@ -120,6 +134,8 @@ impl GameEngine {
             dev_menu: DevMenu::new(),
             real_time: 0.0,
             audio,
+            resting: false,
+            rest_accumulator: 0.0,
         }
     }
 
@@ -346,6 +362,12 @@ impl GameEngine {
         let mut window_action = None;
         if input_result.toggle_fullscreen {
             window_action = Some(WindowAction::ToggleFullscreen);
+        }
+
+        // Fast-forward the simulation while resting (a few Wait-steps per frame).
+        {
+            puffin::profile_scope!("update_rest");
+            self.update_rest(dt);
         }
 
         // Now extract state references for the rest
@@ -713,6 +735,7 @@ impl GameEngine {
                     tileset,
                     ui_icons,
                     &self.vfx.effects,
+                    self.vfx.resting_bubble.as_ref(),
                     &life_drain_beams,
                     &taming_beams,
                     self.input.targeting_mode.as_ref(),
@@ -743,6 +766,25 @@ impl GameEngine {
 
         // UI toggles
         result.toggle_fullscreen = frame.toggle_fullscreen;
+
+        // While resting, the simulation auto-advances (see update_rest); swallow
+        // normal input. Any movement, interaction, or fresh click cancels rest.
+        if self.resting {
+            let interacted = frame.player_intent.is_some()
+                || frame.enter_pressed
+                || frame.toggle_inventory
+                || frame.toggle_grid_lines
+                || !self.input.player_path.is_empty();
+            if interacted {
+                self.input.clear_path();
+                self.resting = false;
+                self.rest_accumulator = 0.0;
+                self.vfx.clear_resting_bubble();
+                ui_state.message_log.system("You stop resting.");
+            }
+            return result;
+        }
+
         if frame.toggle_inventory {
             ui_state.toggle_inventory();
         }
@@ -1045,9 +1087,14 @@ impl GameEngine {
         );
     }
 
-    /// Rest: fast-forward simulated time until the player is fully healed or an
-    /// enemy becomes alerted. Universal ability bound to the R hotbar slot.
+    /// Toggle resting. Pressing Rest while already resting cancels it; otherwise
+    /// it begins resting if it's safe and the player isn't already full.
     fn try_rest(&mut self) {
+        if self.resting {
+            self.stop_rest("You stop resting.");
+            return;
+        }
+
         let Some(ref mut state) = self.state else {
             return;
         };
@@ -1055,7 +1102,7 @@ impl GameEngine {
             return;
         };
 
-        // Only rest while idle (not mid-action).
+        // Only start resting while idle (not mid-action).
         let is_idle = state
             .world
             .get::<&Actor>(state.player_entity)
@@ -1065,36 +1112,107 @@ impl GameEngine {
             return;
         }
 
-        let outcome = simulation::execute_rest(
-            &mut state.world,
-            &state.grid,
-            state.player_entity,
-            &mut state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &mut state.spatial_cache,
-            &mut self.events,
-            &mut self.vfx,
-            ui_state,
-            self.audio.as_ref(),
-        );
+        if simulation::player_at_full_health(&state.world, state.player_entity) {
+            ui_state.message_log.system("You are already at full health.");
+            return;
+        }
+        if simulation::any_enemy_alerted(&state.world, state.player_entity) {
+            ui_state.message_log.system("You can't rest with enemies nearby.");
+            return;
+        }
 
-        match outcome {
-            simulation::RestOutcome::Healed => {
-                ui_state.message_log.system("You rest and recover to full health.");
+        // Begin resting and show the Zzz bubble. Healing happens purely from the
+        // game's normal time-based regen as the Wait steps advance the clock.
+        self.resting = true;
+        self.rest_accumulator = 0.0;
+        if let Ok(pos) = state.world.get::<&crate::components::Position>(state.player_entity) {
+            self.vfx.set_resting_bubble(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
+        }
+        ui_state.message_log.system("You settle down to rest...");
+    }
+
+    /// End resting, clear its boost and bubble, and log `message`.
+    fn stop_rest(&mut self, message: &str) {
+        if !self.resting {
+            return;
+        }
+        self.resting = false;
+        self.rest_accumulator = 0.0;
+        self.vfx.clear_resting_bubble();
+        if let Some(ref mut ui_state) = self.ui_state {
+            ui_state.message_log.system(message);
+        }
+    }
+
+    /// Advance the rest fast-forward by one frame's worth of game-time, stepping
+    /// the simulation in small Wait increments so motion stays animated. Stops
+    /// when the player is fully healed or an enemy becomes alerted.
+    fn update_rest(&mut self, dt: f32) {
+        if !self.resting {
+            return;
+        }
+
+        // How many discrete Wait-steps to run this frame, paced by real time.
+        self.rest_accumulator += dt * REST_TIME_SCALE;
+        let mut steps =
+            (self.rest_accumulator / crate::constants::ACTION_WAIT_DURATION) as i32;
+        if steps <= 0 {
+            return;
+        }
+        steps = steps.min(REST_MAX_STEPS_PER_FRAME);
+        self.rest_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
+
+        for _ in 0..steps {
+            let Some(ref mut state) = self.state else {
+                self.resting = false;
+                return;
+            };
+            let Some(ref mut ui_state) = self.ui_state else {
+                self.resting = false;
+                return;
+            };
+
+            // Stop conditions checked before each step.
+            if simulation::player_at_full_health(&state.world, state.player_entity) {
+                self.stop_rest("You finish resting, fully recovered.");
+                return;
             }
-            simulation::RestOutcome::Interrupted => {
-                ui_state.message_log.system("Your rest is interrupted!");
+            if simulation::any_enemy_alerted(&state.world, state.player_entity) {
+                self.stop_rest("Your rest is interrupted!");
+                return;
             }
-            simulation::RestOutcome::AlreadyFull => {
-                ui_state.message_log.system("You are already at full health.");
-            }
-            simulation::RestOutcome::Unsafe => {
-                ui_state.message_log.system("You can't rest with enemies nearby.");
+
+            let result = execute_player_intent(
+                &mut state.world,
+                &state.grid,
+                state.player_entity,
+                crate::systems::player_input::PlayerIntent::Wait,
+                &mut state.game_clock,
+                &mut state.action_scheduler,
+                &mut state.active_ai_tracker,
+                &mut state.spatial_cache,
+                &mut self.events,
+                &mut self.vfx,
+                ui_state,
+                self.audio.as_ref(),
+            );
+            state.fov_dirty = true;
+
+            if result.turn_result != simulation::TurnResult::Started
+                || result.enemy_spotted_player
+                || result.player_took_damage
+            {
+                self.stop_rest("Your rest is interrupted!");
+                return;
             }
         }
 
-        state.fov_dirty = true;
+        // Keep the bubble pinned above the (stationary) player.
+        if let Some(ref state) = self.state {
+            if let Ok(pos) = state.world.get::<&crate::components::Position>(state.player_entity) {
+                self.vfx.set_resting_bubble(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
+            }
+        }
     }
 
     fn handle_floor_transition(

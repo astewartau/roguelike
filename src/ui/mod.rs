@@ -34,6 +34,7 @@ pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, 
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
+    draw_resting_indicators,
     draw_potion_splashes, draw_taming_beams, get_buff_aura_data, get_enemy_health_data,
     get_enemy_status_data, get_life_drain_beam_data, get_taming_beam_data, EnemyHealthData,
     EnemyStatusData, LifeDrainBeamData, PlayerBuffAuraData, TamingBeamData,
@@ -233,6 +234,7 @@ pub fn run_ui(
     tileset: &MultiTileset,
     icons: &UiIcons,
     vfx_effects: &[VisualEffect],
+    resting_bubble: Option<&crate::vfx::RestingBubble>,
     life_drain_beams: &[LifeDrainBeamData],
     taming_beams: &[TamingBeamData],
     targeting_mode: Option<&TargetingMode>,
@@ -317,6 +319,9 @@ pub fn run_ui(
 
         // Alert indicators (enemy spotted player)
         draw_alert_indicators(ctx, vfx_effects, camera);
+
+        // Resting indicator ("Zzz" bubble)
+        draw_resting_indicators(ctx, resting_bubble, camera);
 
         // Enemy status effect indicators (fear, slow, confusion)
         draw_enemy_status_indicators(ctx, camera, &enemy_status_data);

@@ -137,12 +137,21 @@ impl TamingBeam {
     }
 }
 
+/// A persistent "Zzz" bubble shown above the player while resting.
+pub struct RestingBubble {
+    pub x: f32,
+    pub y: f32,
+    pub time: f32, // Accumulated time for the bob animation
+}
+
 /// Manager for all active visual effects
 pub struct VfxManager {
     pub effects: Vec<VisualEffect>,
     pub fires: Vec<FireEffect>,
     pub life_drain_beams: Vec<LifeDrainBeam>,
     pub taming_beams: Vec<TamingBeam>,
+    /// Persistent resting indicator, present only while the player is resting.
+    pub resting_bubble: Option<RestingBubble>,
 }
 
 impl VfxManager {
@@ -152,6 +161,7 @@ impl VfxManager {
             fires: Vec::new(),
             life_drain_beams: Vec::new(),
             taming_beams: Vec::new(),
+            resting_bubble: None,
         }
     }
 
@@ -173,6 +183,22 @@ impl VfxManager {
     /// Spawn an alert indicator "!" above an entity
     pub fn spawn_alert(&mut self, x: f32, y: f32) {
         self.spawn(x, y, VfxType::Alert);
+    }
+
+    /// Show (or move) the persistent resting "Zzz" bubble above a position.
+    pub fn set_resting_bubble(&mut self, x: f32, y: f32) {
+        match &mut self.resting_bubble {
+            Some(b) => {
+                b.x = x;
+                b.y = y;
+            }
+            None => self.resting_bubble = Some(RestingBubble { x, y, time: 0.0 }),
+        }
+    }
+
+    /// Hide the resting bubble (rest ended).
+    pub fn clear_resting_bubble(&mut self) {
+        self.resting_bubble = None;
     }
 
     /// Spawn an explosion effect (fireball)
@@ -229,6 +255,10 @@ impl VfxManager {
         // Update taming beam animation times
         for beam in &mut self.taming_beams {
             beam.update(dt);
+        }
+        // Advance the resting bubble's bob animation
+        if let Some(bubble) = &mut self.resting_bubble {
+            bubble.time += dt;
         }
     }
 

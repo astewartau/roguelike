@@ -226,6 +226,66 @@ pub fn draw_alert_indicators(ctx: &egui::Context, effects: &[VisualEffect], came
     }
 }
 
+/// Render the persistent resting indicator ("Zzz" speech bubble) above the
+/// player while they are resting. Drawn from a single persistent bubble (not the
+/// timed VFX list) so it stays put and gently bobs for the whole rest.
+pub fn draw_resting_indicators(
+    ctx: &egui::Context,
+    bubble: Option<&crate::vfx::RestingBubble>,
+    camera: &Camera,
+) {
+    let Some(bubble) = bubble else {
+        return;
+    };
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("resting_indicators"),
+    ));
+    let ppp = ctx.pixels_per_point();
+
+    // Quick fade/scale-in over the first ~0.2s, then hold.
+    let appear = (bubble.time / 0.2).min(1.0);
+    let alpha = (appear * 255.0) as u8;
+    if alpha == 0 {
+        return;
+    }
+    let scale = 0.6 + 0.4 * appear;
+
+    // Gentle vertical bob.
+    let bob = (bubble.time * 3.0).sin() * 0.06;
+    let rise_offset = 0.95 + bob;
+    let screen_pos = camera.world_to_screen(bubble.x, bubble.y + rise_offset);
+    let center = egui::pos2(screen_pos.0 / ppp, screen_pos.1 / ppp);
+
+    let font_id = egui::FontId::proportional(20.0 * scale);
+    let text_color = egui::Color32::from_rgba_unmultiplied(40, 50, 80, alpha);
+    let bubble_fill = egui::Color32::from_rgba_unmultiplied(245, 248, 255, alpha);
+    let bubble_stroke = egui::Stroke::new(
+        1.5,
+        egui::Color32::from_rgba_unmultiplied(120, 140, 180, alpha),
+    );
+
+    // Size the rounded bubble around the text.
+    let galley = painter.layout_no_wrap("Zzz".to_string(), font_id.clone(), text_color);
+    let pad = egui::vec2(8.0 * scale, 5.0 * scale);
+    let rect = egui::Rect::from_center_size(center, galley.size() + pad * 2.0);
+    let rounding = rect.height() / 2.0;
+
+    // Little tail pointing down toward the player (drawn first, then covered by
+    // the bubble body so only the protruding tip shows).
+    let tail = vec![
+        egui::pos2(center.x - 5.0 * scale, rect.bottom() - 1.0),
+        egui::pos2(center.x + 5.0 * scale, rect.bottom() - 1.0),
+        egui::pos2(center.x - 2.0 * scale, rect.bottom() + 7.0 * scale),
+    ];
+    painter.add(egui::Shape::convex_polygon(tail, bubble_fill, bubble_stroke));
+
+    painter.rect_filled(rect, rounding, bubble_fill);
+    painter.rect_stroke(rect, rounding, bubble_stroke);
+    painter.text(center, egui::Align2::CENTER_CENTER, "Zzz", font_id, text_color);
+}
+
 /// Render health bars above damaged enemies
 pub fn draw_enemy_health_bars(ctx: &egui::Context, camera: &Camera, enemies: &[EnemyHealthData]) {
     if enemies.is_empty() {
