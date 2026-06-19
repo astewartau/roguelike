@@ -21,6 +21,36 @@ pub fn run_start_screen(
     let mut start_clicked = None;
 
     egui_glow.run(window, |ctx| {
+        // Keyboard navigation: arrows/WASD change class, Enter/Space starts.
+        // Default-select the first class so the menu always has a highlight and
+        // Enter works straight away.
+        let classes = PlayerClass::ALL;
+        if selected_class.is_none() {
+            *selected_class = Some(classes[0]);
+        }
+        ctx.input(|i| {
+            use egui::Key;
+            let cur = selected_class
+                .and_then(|c| classes.iter().position(|&x| x == c))
+                .unwrap_or(0);
+            let next = i.key_pressed(Key::ArrowRight)
+                || i.key_pressed(Key::D)
+                || i.key_pressed(Key::ArrowDown)
+                || i.key_pressed(Key::S);
+            let prev = i.key_pressed(Key::ArrowLeft)
+                || i.key_pressed(Key::A)
+                || i.key_pressed(Key::ArrowUp)
+                || i.key_pressed(Key::W);
+            if next {
+                *selected_class = Some(classes[(cur + 1) % classes.len()]);
+            } else if prev {
+                *selected_class = Some(classes[(cur + classes.len() - 1) % classes.len()]);
+            }
+            if i.key_pressed(Key::Enter) || i.key_pressed(Key::Space) {
+                start_clicked = *selected_class;
+            }
+        });
+
         // Center the window
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(egui::Color32::from_rgb(20, 20, 30)))

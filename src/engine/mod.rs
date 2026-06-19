@@ -55,6 +55,8 @@ pub enum GameMode {
     StartScreen,
     /// Playing the game
     Playing,
+    /// Paused - showing the pause menu over a frozen dungeon
+    Paused,
     /// Player has died - showing the retry screen (state is kept so the
     /// frozen dungeon stays visible behind the overlay)
     GameOver,
@@ -105,6 +107,9 @@ pub struct GameEngine {
     /// Accumulated real time (for animations)
     pub real_time: f32,
 
+    /// Highlighted option index in the pause menu (keyboard navigation)
+    pause_selected: usize,
+
     /// Audio manager for sound effects
     pub audio: Option<AudioManager>,
 
@@ -133,6 +138,7 @@ impl GameEngine {
             ui_state: None,
             dev_menu: DevMenu::new(),
             real_time: 0.0,
+            pause_selected: 0,
             audio,
             resting: false,
             rest_accumulator: 0.0,
@@ -227,6 +233,48 @@ impl GameEngine {
         self.ui_state.as_mut().expect("UI state not initialized - game not started")
     }
 
+    /// Handle the Escape key. Escape never quits the game directly; instead it
+    /// backs out of whatever is open (targeting, dev menu, UI windows), and if
+    /// nothing is open it opens the pause menu. From the pause menu it resumes;
+    /// from the start screen it quits.
+    fn handle_escape(&mut self) -> Option<WindowAction> {
+        match self.game_mode {
+            GameMode::Paused => {
+                // Resume play; drop any keys held during the menu.
+                self.game_mode = GameMode::Playing;
+                self.input.keys_pressed.clear();
+                None
+            }
+            GameMode::Playing => {
+                // 1. Cancel an in-progress targeting prompt.
+                if self.input.is_targeting() {
+                    self.input.cancel_targeting();
+                    return None;
+                }
+                // 2. Close the dev menu.
+                if self.dev_menu.visible {
+                    self.dev_menu.visible = false;
+                    return None;
+                }
+                // 3. Close any open game UI window (inventory, dialogue, shop, loot).
+                if let Some(ui) = self.ui_state.as_mut() {
+                    if ui.close_open_menus() {
+                        return None;
+                    }
+                }
+                // 4. Nothing open — open the pause menu.
+                self.game_mode = GameMode::Paused;
+                self.pause_selected = 0;
+                self.input.keys_pressed.clear();
+                None
+            }
+            // From the start screen, Escape quits.
+            GameMode::StartScreen => Some(WindowAction::Exit),
+            // The game-over screen has its own buttons; ignore Escape.
+            GameMode::GameOver => None,
+        }
+    }
+
     /// Handle a window event.
     /// Returns a WindowAction if the engine wants the window to do something.
     pub fn handle_event(
@@ -242,12 +290,7 @@ impl GameEngine {
                         match key_event.state {
                             ElementState::Pressed => {
                                 if key == KeyCode::Escape {
-                                    if self.input.is_targeting() {
-                                        self.input.cancel_targeting();
-                                        return None;
-                                    } else {
-                                        return Some(WindowAction::Exit);
-                                    }
+                                    return self.handle_escape();
                                 }
                                 if key == KeyCode::Backquote {
                                     self.dev_menu.toggle();
@@ -354,10 +397,14 @@ impl GameEngine {
             };
         }
 
-        // Handle input first (needs full &mut self access)
-        let input_result = {
+        // Handle input first (needs full &mut self access). Skip entirely when
+        // not actively playing (e.g. paused) so the turn-based simulation stays
+        // frozen behind the menu.
+        let input_result = if self.game_mode == GameMode::Playing {
             puffin::profile_scope!("process_input");
             self.process_input(camera)
+        } else {
+            InputResult::default()
         };
         let mut window_action = None;
         if input_result.toggle_fullscreen {
@@ -707,6 +754,23 @@ impl GameEngine {
                 }
                 actions
             }
+            GameMode::Paused => {
+                let choice =
+                    crate::ui::run_pause_screen(egui_glow, window, &mut self.pause_selected);
+
+                let mut actions = crate::ui::UiActions::default();
+                match choice {
+                    crate::ui::PauseChoice::Resume => {
+                        self.game_mode = GameMode::Playing;
+                        self.input.keys_pressed.clear();
+                    }
+                    crate::ui::PauseChoice::Retry => actions.retry_game = true,
+                    crate::ui::PauseChoice::MainMenu => actions.return_to_menu = true,
+                    crate::ui::PauseChoice::Exit => actions.exit_game = true,
+                    crate::ui::PauseChoice::None => {}
+                }
+                actions
+            }
             GameMode::Playing => {
                 let state = self.state.as_ref().expect("State should exist when playing");
                 let ui_state = self.ui_state.as_mut().expect("UI state should exist when playing");
@@ -798,6 +862,16 @@ impl GameEngine {
         }
         if frame.toggle_grid_lines {
             ui_state.toggle_grid_lines();
+        }
+        if frame.toggle_sneak {
+            let player = state.player_entity;
+            if state.world.get::<&crate::components::Sneaking>(player).is_ok() {
+                let _ = state.world.remove_one::<crate::components::Sneaking>(player);
+                ui_state.message_log.system("You stop sneaking.");
+            } else {
+                let _ = state.world.insert_one(player, crate::components::Sneaking);
+                ui_state.message_log.system("You move into a crouch and start sneaking.");
+            }
         }
 
         // Enter key: container interaction (chests, bones, ground items)

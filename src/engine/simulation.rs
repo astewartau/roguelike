@@ -305,6 +305,7 @@ pub fn advance_until_player_ready(
         time_system::tick_ability_cooldowns(world, elapsed);
         time_system::tick_ranged_cooldowns(world, elapsed);
         systems::ai::tick_threat_decay(world, grid, &*spatial_cache, elapsed);
+        systems::ai::tick_alarms(world, elapsed);
 
         time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
 
@@ -398,6 +399,7 @@ pub fn wait_for_energy(
             time_system::tick_status_effects(world, elapsed);
             time_system::tick_ability_cooldowns(world, elapsed);
             time_system::tick_ranged_cooldowns(world, elapsed);
+            systems::ai::tick_alarms(world, elapsed);
 
             // Complete the action
             time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);

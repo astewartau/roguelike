@@ -111,6 +111,11 @@ pub enum GameEvent {
         entity: Entity,
         new_state: crate::components::AIState,
     },
+    /// An enemy raised an alarm shout (for VFX bubble / audio)
+    EnemyShout {
+        entity: Entity,
+        position: (i32, i32),
+    },
     /// A projectile was spawned
     ProjectileSpawned {
         projectile: Entity,

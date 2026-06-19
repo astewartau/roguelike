@@ -160,6 +160,8 @@ pub struct InputResult {
     pub toggle_inventory: bool,
     /// Player wants to toggle grid lines
     pub toggle_grid_lines: bool,
+    /// Player wants to toggle sneak mode
+    pub toggle_sneak: bool,
     /// Player pressed Enter (take all / loot)
     pub enter_pressed: bool,
     /// Movement intent (dx, dy)
@@ -178,6 +180,7 @@ impl Default for InputResult {
             toggle_fullscreen: false,
             toggle_inventory: false,
             toggle_grid_lines: false,
+            toggle_sneak: false,
             enter_pressed: false,
             movement: None,
             attack_direction: None,
@@ -205,6 +208,11 @@ pub fn process_keyboard(input: &mut InputState) -> InputResult {
     // Toggle grid lines
     if input.keys_pressed.remove(&KeyCode::BracketRight) {
         result.toggle_grid_lines = true;
+    }
+
+    // Toggle sneak mode
+    if input.keys_pressed.remove(&KeyCode::KeyC) {
+        result.toggle_sneak = true;
     }
 
     // Enter key
@@ -605,6 +613,8 @@ pub struct FrameInput {
     pub toggle_inventory: bool,
     /// Player wants to toggle grid lines
     pub toggle_grid_lines: bool,
+    /// Player wants to toggle sneak mode
+    pub toggle_sneak: bool,
     /// Player pressed Enter (take all / loot)
     pub enter_pressed: bool,
     /// Player is dead - no actions allowed
@@ -623,6 +633,7 @@ impl Default for FrameInput {
             toggle_fullscreen: false,
             toggle_inventory: false,
             toggle_grid_lines: false,
+            toggle_sneak: false,
             enter_pressed: false,
             player_dead: false,
             player_intent: None,
@@ -650,6 +661,7 @@ pub fn process_frame(
     result.toggle_fullscreen = kb.toggle_fullscreen;
     result.toggle_inventory = kb.toggle_inventory;
     result.toggle_grid_lines = kb.toggle_grid_lines;
+    result.toggle_sneak = kb.toggle_sneak;
     result.enter_pressed = kb.enter_pressed;
 
     // Check if player is dead

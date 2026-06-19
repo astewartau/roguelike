@@ -132,7 +132,81 @@ pub const THREAT_DECAY_VISIBLE: f32 = 0.5;
 pub const THREAT_DECAY_HIDDEN: f32 = 5.0;
 /// Minimum threat floor — threat decays to this instead of zero
 pub const THREAT_MINIMUM: f32 = 0.1;
-/// How long (seconds) an entry can sit at the minimum before being pruned
-pub const THREAT_MEMORY_DURATION: f32 = 20.0;
+/// How long (seconds) an entry can sit at the minimum before being pruned.
+/// Kept short so an enemy that loses the player (and can't reach the last-known
+/// spot) gives up and returns to wandering instead of lingering.
+pub const THREAT_MEMORY_DURATION: f32 = 8.0;
 /// Multiplier for companion threat when assisting player's target (lower = less priority)
 pub const THREAT_COMPANION_ASSIST_MULT: f32 = 0.5;
+
+// =============================================================================
+// AWARENESS: SLEEP, STEALTH, NOISE, SHOUT
+// =============================================================================
+
+/// Chance (0-1) that an enemy spawns asleep rather than awake-but-unaware.
+pub const SLEEP_CHANCE: f64 = 0.75;
+/// Threat seeded on a target when an enemy is woken by noise or a shout
+/// (enough to sit above the minimum so it investigates).
+pub const WAKE_THREAT: f32 = 3.0;
+
+// --- Gradual detection (alertness meter) ---
+// An unaware enemy with line-of-sight builds "alertness" each turn based on how
+// close the player is; crossing the threshold wakes it. This makes waking
+// gradual (a ripple, not a flash) and distance/agility dependent.
+
+/// Alertness needed to fully wake.
+pub const ALERTNESS_WAKE_THRESHOLD: f32 = 100.0;
+/// Base alertness gained per turn at point-blank range, before stealth/sleep
+/// modifiers (scaled down by distance, player agility, and sleep depth).
+pub const ALERTNESS_BASE_GAIN: f32 = 120.0;
+/// Alertness lost per turn when the enemy currently can't detect the player.
+pub const ALERTNESS_DECAY: f32 = 25.0;
+/// Each point of player agility above 10 adds this to the stealth divisor
+/// (higher agility => slower detection). agi 14 => /1.24, agi 20 => /1.6.
+pub const AGILITY_STEALTH_FACTOR: f32 = 0.06;
+/// Multiplier on alertness gain while the enemy is asleep (deeper sleep = slower).
+pub const ASLEEP_ALERT_MULT: f32 = 0.6;
+
+// --- Sneak (player crouch toggle) ---
+/// Movement speed multiplier while sneaking (slower = the tradeoff).
+pub const SNEAK_SPEED_MULT: f32 = 0.6;
+/// Multiplier on how fast unaware enemies gain alertness on a sneaking player.
+pub const SNEAK_ALERTNESS_MULT: f32 = 0.35;
+/// Multiplier on a not-yet-alerted (Idle) enemy's sight range vs a sneaking
+/// player — lets you slip past awake-but-unalerted wanderers.
+pub const SNEAK_SIGHT_MULT: f32 = 0.5;
+
+/// Effective detection radius (tiles) when the target is standing in concealing
+/// terrain (tall grass). At 1, only an adjacent enemy can pick you out of the
+/// grass — everyone else loses your exact position (a ranged enemy will still
+/// fire at the tile it last saw you on, so keep moving).
+pub const CONCEAL_SIGHT_RADIUS: i32 = 1;
+
+/// Damage multiplier for hitting an unaware enemy (sneak attack).
+pub const SNEAK_ATTACK_MULT: f32 = 2.0;
+
+/// Noise radii (tiles) for combat actions — louder actions wake sleepers farther.
+pub const MELEE_NOISE_RADIUS: i32 = 4;
+pub const RANGED_NOISE_RADIUS: i32 = 6;
+pub const EXPLOSION_NOISE_RADIUS: i32 = 10;
+
+/// Alarm shout: channel duration (seconds), wake radius (tiles), cooldown (seconds).
+pub const SHOUT_DURATION: f32 = 1.5;
+pub const SHOUT_WAKE_RADIUS: i32 = 8;
+pub const SHOUT_COOLDOWN: f32 = 12.0;
+
+// =============================================================================
+// MORALE
+// =============================================================================
+
+/// Enemy flees (becomes Feared) when below this fraction of max HP and a morale
+/// check fails.
+pub const MORALE_HP_THRESHOLD: f32 = 0.3;
+/// Chance per damaging hit (while below the HP threshold) that the enemy panics.
+pub const MORALE_FLEE_CHANCE: f64 = 0.4;
+/// How long a panicked enemy flees (seconds).
+pub const MORALE_FEAR_DURATION: f32 = 4.0;
+/// Radius (tiles) within which allies make a morale check when a comrade dies.
+pub const ALLY_DEATH_MORALE_RADIUS: i32 = 5;
+/// Chance an in-radius ally panics when a comrade dies.
+pub const ALLY_DEATH_MORALE_CHANCE: f64 = 0.3;

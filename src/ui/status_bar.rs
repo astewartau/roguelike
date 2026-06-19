@@ -4,8 +4,10 @@
 
 use super::icons::UiIcons;
 use super::style;
-use crate::components::{EffectType as StatusEffectType, Health, Inventory, StatusEffects};
+use crate::components::{EffectType as StatusEffectType, Health, Inventory, Position, StatusEffects};
+use crate::grid::Grid;
 use crate::systems;
+use crate::tile::TileType;
 use hecs::World;
 
 /// Format elapsed game time (seconds) as HH:MM:SS, starting from 00:00:00.
@@ -26,12 +28,16 @@ pub struct StatusBarData {
     pub gold: u32,
     /// Total flat defense from equipped armor
     pub defense: i32,
+    /// Whether the player is currently concealed (standing in tall grass)
+    pub is_concealed: bool,
+    /// Whether the player is currently sneaking (crouch toggle)
+    pub is_sneaking: bool,
     /// Active status effects with remaining duration
     pub active_effects: Vec<(StatusEffectType, f32)>,
 }
 
 /// Extract status bar data from the world
-pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> StatusBarData {
+pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Grid) -> StatusBarData {
     let (health_current, health_max) = world
         .get::<&Health>(player_entity)
         .map(|h| (h.current, h.max))
@@ -46,6 +52,16 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
         .get::<&crate::components::Equipment>(player_entity)
         .map(|e| e.total_defense())
         .unwrap_or(0);
+
+    // Concealed is a derived/positional state: true while standing in tall grass.
+    let is_concealed = world
+        .get::<&Position>(player_entity)
+        .ok()
+        .and_then(|p| grid.get(p.x, p.y).map(|t| t.tile_type == TileType::TallGrass))
+        .unwrap_or(false);
+
+    // Sneaking is a derived state from the crouch toggle (Sneaking marker).
+    let is_sneaking = world.get::<&crate::components::Sneaking>(player_entity).is_ok();
 
     let (xp_progress, xp_level) = world
         .get::<&crate::components::Experience>(player_entity)
@@ -71,6 +87,8 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
         xp_level,
         gold,
         defense,
+        is_concealed,
+        is_sneaking,
         active_effects,
     }
 }
@@ -86,7 +104,9 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
         25.0
     };
     let defense_height = if data.defense > 0 { 22.0 } else { 0.0 };
-    let window_height = base_height + effects_height + defense_height;
+    let concealed_height = if data.is_concealed { 22.0 } else { 0.0 };
+    let sneaking_height = if data.is_sneaking { 22.0 } else { 0.0 };
+    let window_height = base_height + effects_height + defense_height + concealed_height + sneaking_height;
 
     egui::Window::new("Status")
         .fixed_pos([10.0, 10.0])
@@ -151,6 +171,26 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
             if data.defense > 0 {
                 ui.horizontal(|ui| {
                     ui.label(format!("🛡 Defense: {}", data.defense));
+                });
+            }
+
+            // Concealed (derived: standing in tall grass)
+            if data.is_concealed {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("🌿 Concealed")
+                            .color(egui::Color32::from_rgb(120, 200, 120)),
+                    );
+                });
+            }
+
+            // Sneaking (derived: crouch toggle)
+            if data.is_sneaking {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("👁 Sneaking")
+                            .color(egui::Color32::from_rgb(150, 120, 210)),
+                    );
                 });
             }
 

@@ -49,6 +49,8 @@ pub struct EnemyDef {
     pub ranged: Option<RangedConfig>,
     /// Whether this enemy can be tamed (for Druid ability)
     pub tameable: bool,
+    /// Whether this enemy is smart enough to open doors and raise an alarm shout
+    pub can_open_doors: bool,
 }
 
 impl EnemyDef {
@@ -64,7 +66,7 @@ impl EnemyDef {
         let status_effects = StatusEffects::new();
 
         // Build AI and equipment based on whether enemy has ranged capability
-        let (chase_ai, equipment) = if let Some(ranged) = &self.ranged {
+        let (mut chase_ai, equipment) = if let Some(ranged) = &self.ranged {
             (
                 ChaseAI::with_ranged(self.sight_radius, ranged.min_range, ranged.max_range),
                 Equipment::with_weapons(
@@ -78,6 +80,8 @@ impl EnemyDef {
                 Equipment::with_weapon(Weapon::claws(self.damage)),
             )
         };
+        // Enemies start unaware of the player (asleep or idly patrolling).
+        chase_ai.state = crate::components::AIState::Unaware;
 
         // Spawn with or without overlay sprite
         let entity = if let Some(overlay_ref) = self.overlay_sprite {
@@ -119,6 +123,16 @@ impl EnemyDef {
             let _ = world.insert_one(entity, Tameable);
         }
 
+        // Most enemies start asleep; the rest are awake but unaware (patrolling).
+        if rand::random::<f64>() < crate::constants::SLEEP_CHANCE {
+            let _ = world.insert_one(entity, crate::components::Asleep);
+        }
+
+        // Smart enemies can open doors and raise alarm shouts.
+        if self.can_open_doors {
+            let _ = world.insert_one(entity, crate::components::CanOpenDoors);
+        }
+
         entity
     }
 }
@@ -142,6 +156,7 @@ pub mod enemies {
         agility: SKELETON_AGILITY,
         ranged: None,
         tameable: false,
+        can_open_doors: true,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -158,6 +173,7 @@ pub mod enemies {
         agility: RAT_AGILITY,
         ranged: None,
         tameable: true, // Rats are animals and can be tamed by Druids
+        can_open_doors: false,
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -178,6 +194,7 @@ pub mod enemies {
             damage: SKELETON_ARCHER_BOW_DAMAGE,
         }),
         tameable: false,
+        can_open_doors: true,
     };
 
     pub const GOBLIN: EnemyDef = EnemyDef {
@@ -194,6 +211,7 @@ pub mod enemies {
         agility: GOBLIN_AGILITY,
         ranged: None,
         tameable: false,
+        can_open_doors: true,
     };
 
     pub const ORC: EnemyDef = EnemyDef {
@@ -210,6 +228,7 @@ pub mod enemies {
         agility: ORC_AGILITY,
         ranged: None,
         tameable: false,
+        can_open_doors: true,
     };
 
     pub const ZOMBIE: EnemyDef = EnemyDef {
@@ -226,6 +245,7 @@ pub mod enemies {
         agility: ZOMBIE_AGILITY,
         ranged: None,
         tameable: false,
+        can_open_doors: false,
     };
 
     pub const BAT: EnemyDef = EnemyDef {
@@ -242,6 +262,7 @@ pub mod enemies {
         agility: BAT_AGILITY,
         ranged: None,
         tameable: true, // Beasts can be tamed by Druids; a fast scout companion
+        can_open_doors: false,
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -258,6 +279,7 @@ pub mod enemies {
         agility: SLIME_AGILITY,
         ranged: None,
         tameable: false,
+        can_open_doors: false,
     };
 }
 

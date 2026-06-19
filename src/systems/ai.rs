@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, AIState, CausesBurning, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, PlacedFireTrap, Position, RangedCooldown, TamedBy, TamingInProgress};
+use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, TamedBy, TamingInProgress};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -70,8 +70,17 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
         let entity_pos = (pos.x, pos.y);
         for entry in ai.threat_table.iter_mut() {
             let target_visible = pos_lookup(entry.entity)
-                .map(|tp| is_within_sight(entity_pos, tp, ai.sight_radius)
-                    && has_line_of_sight(grid, spatial_cache.get_vision_blocking(), entity_pos.0, entity_pos.1, tp.0, tp.1))
+                .map(|tp| {
+                    // A target concealed in tall grass is only "visible" up close,
+                    // so threat decays fast once they break contact into cover.
+                    let eff = if is_concealed(grid, tp) {
+                        ai.sight_radius.min(CONCEAL_SIGHT_RADIUS)
+                    } else {
+                        ai.sight_radius
+                    };
+                    is_within_sight(entity_pos, tp, eff)
+                        && has_line_of_sight(grid, spatial_cache.get_vision_blocking(), entity_pos.0, entity_pos.1, tp.0, tp.1)
+                })
                 .unwrap_or(false);
             let decay_rate = if target_visible { THREAT_DECAY_VISIBLE } else { THREAT_DECAY_HIDDEN };
             entry.threat = (entry.threat - decay_rate * elapsed).max(THREAT_MINIMUM);
@@ -109,6 +118,100 @@ fn is_within_sight(from: (i32, i32), to: (i32, i32), radius: i32) -> bool {
     let dx = (from.0 - to.0).abs();
     let dy = (from.1 - to.1).abs();
     dx.max(dy) <= radius
+}
+
+// =============================================================================
+// AWARENESS: WAKE, NOISE, SHOUT
+// =============================================================================
+
+/// Find the player entity (single Player marker).
+fn find_player(world: &World) -> Option<Entity> {
+    world.query::<&Player>().iter().next().map(|(id, _)| id)
+}
+
+/// True if any unaware enemy is within `radius` (Chebyshev) of `center`.
+fn unaware_ally_near(world: &World, center: (i32, i32), radius: i32, exclude: Entity) -> bool {
+    world.query::<(&Position, &ChaseAI)>().iter().any(|(id, (pos, ai))| {
+        id != exclude
+            && ai.state == AIState::Unaware
+            && (pos.x - center.0).abs().max((pos.y - center.1).abs()) <= radius
+    })
+}
+
+/// Wake a single unaware enemy, sending it to investigate `toward`.
+fn wake_one(world: &mut World, entity: Entity, player: Entity, toward: (i32, i32)) {
+    let _ = world.remove_one::<Asleep>(entity);
+    if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
+        if ai.state == AIState::Unaware {
+            ai.state = AIState::Investigating;
+        }
+        ai.add_threat(player, WAKE_THREAT);
+        ai.update_target_pos(player, toward);
+    }
+}
+
+/// Wake every unaware enemy within `radius` of `center` (noise / shout). Woken
+/// enemies head toward `center` to investigate the disturbance.
+pub fn wake_enemies_in_radius(world: &mut World, center: (i32, i32), radius: i32) {
+    let Some(player) = find_player(world) else { return };
+    let to_wake: Vec<Entity> = world
+        .query::<(&Position, &ChaseAI)>()
+        .iter()
+        .filter(|(_, (pos, ai))| {
+            ai.state == AIState::Unaware
+                && (pos.x - center.0).abs().max((pos.y - center.1).abs()) <= radius
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for e in to_wake {
+        wake_one(world, e, player, center);
+    }
+}
+
+/// Advance alarm-shout channels and shout cooldowns each frame. When a shout
+/// finishes it wakes nearby unaware allies; an interrupted shout (component
+/// removed on damage) simply never completes.
+pub fn tick_alarms(world: &mut World, elapsed: f32) {
+    // Decrement shout cooldowns.
+    for (_, ai) in world.query_mut::<&mut ChaseAI>() {
+        if ai.shout_cooldown > 0.0 {
+            ai.shout_cooldown = (ai.shout_cooldown - elapsed).max(0.0);
+        }
+    }
+    // Advance active shouts; collect completed ones.
+    let mut completed: Vec<(Entity, (i32, i32))> = Vec::new();
+    for (id, (pos, alarm)) in world.query_mut::<(&Position, &mut AlarmInProgress)>() {
+        alarm.remaining -= elapsed;
+        if alarm.remaining <= 0.0 {
+            completed.push((id, (pos.x, pos.y)));
+        }
+    }
+    for (id, pos) in completed {
+        let _ = world.remove_one::<AlarmInProgress>(id);
+        wake_enemies_in_radius(world, pos, SHOUT_WAKE_RADIUS);
+    }
+}
+
+/// Cancel an entity's in-progress alarm shout (e.g. when it takes damage).
+pub fn interrupt_shout_on_damage(world: &mut World, entity: Entity) {
+    let _ = world.remove_one::<AlarmInProgress>(entity);
+}
+
+/// Wake an enemy that was attacked while unaware, sending it after the player.
+/// No-op for already-aware enemies and non-enemies.
+pub fn wake_on_attacked(world: &mut World, entity: Entity) {
+    let is_unaware = world
+        .get::<&ChaseAI>(entity)
+        .map(|ai| ai.state == AIState::Unaware)
+        .unwrap_or(false);
+    if !is_unaware {
+        return;
+    }
+    let Some(player) = find_player(world) else { return };
+    let toward = queries::get_entity_position(world, player).unwrap_or_else(|| {
+        queries::get_entity_position(world, entity).unwrap_or((0, 0))
+    });
+    wake_one(world, entity, player, toward);
 }
 
 // =============================================================================
@@ -225,11 +328,14 @@ fn determine_action(
     }
 
     // Get AI state and parameters
-    let (sight_radius, current_state, ranged_min, ranged_max) =
+    let (sight_radius, mut current_state, ranged_min, ranged_max) =
         match world.get::<&ChaseAI>(entity) {
             Ok(ai) => (ai.sight_radius, ai.state, ai.ranged_min, ai.ranged_max),
             Err(_) => return ActionType::Wait,
         };
+
+    // Is the player sneaking? (reduces detection by unaware/unalerted enemies)
+    let player_sneaking = world.get::<&Sneaking>(player_entity).is_ok();
 
     // Feared: flee from highest-threat source
     if is_feared && !is_rooted {
@@ -242,6 +348,76 @@ fn determine_action(
             return ActionType::Wait;
         }
         return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
+    }
+
+    // Busy raising an alarm shout — keep channeling (advanced by tick_alarms).
+    if world.get::<&AlarmInProgress>(entity).is_ok() {
+        return ActionType::Wait;
+    }
+
+    // Unaware (asleep or idly patrolling): not yet aware of the player. Build an
+    // alertness meter when the player is in sight — faster the closer they are,
+    // slower the higher the player's agility and the deeper the sleep. Crossing
+    // the threshold wakes the enemy (gradual, not instant). Out of sight, the
+    // meter decays back down.
+    if current_state == AIState::Unaware {
+        let asleep = world.get::<&Asleep>(entity).is_ok();
+        let seen = queries::get_entity_position(world, player_entity).and_then(|p| {
+            if can_see_target(world, grid, entity_pos, p, sight_radius, Some(player_entity), spatial_cache) {
+                Some((entity_pos.0 - p.0).abs().max((entity_pos.1 - p.1).abs()))
+            } else {
+                None
+            }
+        });
+
+        let mut woke = false;
+        if let Some(dist) = seen {
+            // Proximity factor: 1.0 point-blank, ~0 at the edge of sight.
+            let proximity = ((sight_radius - dist).max(0) as f32) / (sight_radius.max(1) as f32);
+            let agility = world.get::<&Stats>(player_entity).map(|s| s.agility).unwrap_or(10);
+            let stealth = 1.0 + ((agility - 10).max(0) as f32) * AGILITY_STEALTH_FACTOR;
+            let mut gain = ALERTNESS_BASE_GAIN * proximity / stealth;
+            if asleep {
+                gain *= ASLEEP_ALERT_MULT;
+            }
+            if player_sneaking {
+                gain *= SNEAK_ALERTNESS_MULT;
+            }
+            let new_alert = world.get::<&ChaseAI>(entity).map(|a| a.alertness + gain).unwrap_or(0.0);
+            if new_alert >= ALERTNESS_WAKE_THRESHOLD {
+                woke = true;
+            } else if let Ok(mut a) = world.get::<&mut ChaseAI>(entity) {
+                a.alertness = new_alert;
+            }
+        } else if let Ok(mut a) = world.get::<&mut ChaseAI>(entity) {
+            a.alertness = (a.alertness - ALERTNESS_DECAY).max(0.0);
+        }
+
+        if woke {
+            // Fully roused — commit to the chase (seed threat so a sneaking
+            // player can't immediately slip back out of the reduced-sight scan).
+            let _ = world.remove_one::<Asleep>(entity);
+            let ppos = queries::get_entity_position(world, player_entity);
+            if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
+                ai.state = AIState::Chasing;
+                ai.alertness = 0.0;
+                ai.add_threat(player_entity, WAKE_THREAT);
+                if let Some(p) = ppos {
+                    ai.update_target_pos(player_entity, p);
+                }
+            }
+            current_state = AIState::Chasing;
+        } else if asleep {
+            return ActionType::Wait; // still sleeping (perhaps stirring)
+        } else {
+            // Awake but unaware: patrol/wander.
+            let fire = fire_positions(world);
+            let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, &fire, rng);
+            if dx == 0 && dy == 0 {
+                return ActionType::Wait;
+            }
+            return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
+        }
     }
 
     // Check if entity has a bow equipped (for ranged attacks)
@@ -264,7 +440,16 @@ fn determine_action(
     // Visibility scan: check which targets we can see, add passive threat, update positions
     let mut visible_targets: HashSet<Entity> = HashSet::new();
     for &(target_entity, target_pos) in &potential_targets {
-        let can_see = can_see_target(world, grid, entity_pos, target_pos, sight_radius, Some(target_entity), spatial_cache);
+        // A sneaking player is harder for a not-yet-alerted (Idle) enemy to spot.
+        let eff_sight = if target_entity == player_entity
+            && player_sneaking
+            && current_state == AIState::Idle
+        {
+            (((sight_radius as f32) * SNEAK_SIGHT_MULT).round() as i32).max(1)
+        } else {
+            sight_radius
+        };
+        let can_see = can_see_target(world, grid, entity_pos, target_pos, eff_sight, Some(target_entity), spatial_cache);
         if can_see {
             visible_targets.insert(target_entity);
             // Passive visibility threat (enemies notice things walking around)
@@ -331,15 +516,40 @@ fn determine_action(
         });
     }
 
+    // Give up: reached the target's last-known position without reacquiring sight
+    // (Investigating -> Idle). Forget the target entirely so we resume wandering
+    // instead of re-pathing to the same stale spot forever.
+    let gave_up = current_state == AIState::Investigating && new_state == AIState::Idle;
+
     // Update AI state
     if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
         ai.state = new_state;
         ai.current_target = chase_target_entity;
-        // Update last_known_pos for the current target
-        if let Some(te) = chase_target_entity {
+        if gave_up {
+            if let Some(te) = chase_target_entity {
+                ai.remove_target(te);
+            }
+        } else if let Some(te) = chase_target_entity {
+            // Update last_known_pos for the current target
             if let Some(lk) = new_last_known {
                 ai.update_target_pos(te, lk);
             }
+        }
+    }
+
+    // Raise an alarm shout: a smart, aware enemy with a sleeping ally nearby and
+    // no shout on cooldown begins a channeled shout (interruptible). It wakes
+    // nearby unaware allies on completion (see tick_alarms).
+    let is_aware = matches!(new_state, AIState::Chasing | AIState::Investigating);
+    if is_aware && !is_rooted && world.get::<&CanOpenDoors>(entity).is_ok() {
+        let ready = world.get::<&ChaseAI>(entity).map(|ai| ai.shout_cooldown <= 0.0).unwrap_or(false);
+        if ready && unaware_ally_near(world, entity_pos, SHOUT_WAKE_RADIUS, entity) {
+            let _ = world.insert_one(entity, AlarmInProgress { remaining: SHOUT_DURATION });
+            if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
+                ai.shout_cooldown = SHOUT_COOLDOWN;
+            }
+            events.push(GameEvent::EnemyShout { entity, position: entity_pos });
+            return ActionType::Wait;
         }
     }
 
@@ -364,16 +574,23 @@ fn determine_action(
             .unwrap_or(true);
 
         if ranged_ready {
-            // Try to shoot highest-threat visible target in range
+            // Shoot the highest-threat target in range. If it's visible, aim at
+            // it directly; if we've lost sight of it (e.g. it slipped into grass)
+            // but we're still aware, fire a shot at the tile we last saw it on —
+            // so concealment only saves you if you keep moving.
             if let Ok(ai) = world.get::<&ChaseAI>(entity) {
                 let mut entries: Vec<_> = ai.threat_table.iter().collect();
                 entries.sort_by(|a, b| b.threat.partial_cmp(&a.threat).unwrap_or(std::cmp::Ordering::Equal));
 
                 for entry in entries {
-                    if !visible_targets.contains(&entry.entity) {
-                        continue;
-                    }
-                    if let Some(tp) = queries::get_entity_position(world, entry.entity) {
+                    let aim = if visible_targets.contains(&entry.entity) {
+                        queries::get_entity_position(world, entry.entity)
+                    } else if is_aware {
+                        entry.last_known_pos
+                    } else {
+                        None
+                    };
+                    if let Some(tp) = aim {
                         let distance = (entity_pos.0 - tp.0).abs().max((entity_pos.1 - tp.1).abs());
                         if distance >= ranged_min && distance <= ranged_max {
                             if has_clear_shot(entity_pos, tp, blocking_positions) {
@@ -388,7 +605,8 @@ fn determine_action(
 
     // Determine movement direction
     let (dx, dy) = if let Some(target_pos) = move_target {
-        let pathfinding_blocked = ai_pathfinding_blocked(world, spatial_cache);
+        let can_open = world.get::<&CanOpenDoors>(entity).is_ok();
+        let pathfinding_blocked = ai_pathfinding_blocked(world, spatial_cache, can_open);
         pathfinding::next_step_toward(grid, entity_pos, target_pos, &pathfinding_blocked)
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
@@ -444,7 +662,8 @@ fn determine_companion_action(
         Err(_) => return ActionType::Wait,
     };
 
-    let blocking = ai_pathfinding_blocked(world, spatial_cache);
+    // Companions follow their owner and can route through doors like the player.
+    let blocking = ai_pathfinding_blocked(world, spatial_cache, true);
 
     // Don't attack an animal the owner is currently taming — let the channel finish.
     let taming_target = world.get::<&TamingInProgress>(owner).ok().map(|t| t.target);
@@ -590,12 +809,27 @@ fn can_see_target(
         }
     }
 
-    if !is_within_sight(from, target, sight_radius) {
+    // Concealment: a target standing in tall grass can only be noticed from close
+    // range — cap the effective detection radius.
+    let effective_radius = if is_concealed(grid, target) {
+        sight_radius.min(CONCEAL_SIGHT_RADIUS)
+    } else {
+        sight_radius
+    };
+
+    if !is_within_sight(from, target, effective_radius) {
         return false;
     }
 
     let vision_blocking = spatial_cache.get_vision_blocking();
     has_line_of_sight(grid, vision_blocking, from.0, from.1, target.0, target.1)
+}
+
+/// True if the tile at `pos` conceals a target standing on it (tall grass).
+fn is_concealed(grid: &Grid, pos: (i32, i32)) -> bool {
+    grid.get(pos.0, pos.1)
+        .map(|t| matches!(t.tile_type, crate::tile::TileType::TallGrass))
+        .unwrap_or(false)
 }
 
 /// Check if there's a clear line of sight between two points.
@@ -672,7 +906,9 @@ fn update_state_machine(
     }
 
     match current_state {
-        AIState::Idle => {
+        // Unaware is resolved before the state machine in determine_action; treat
+        // it like Idle here for exhaustiveness.
+        AIState::Unaware | AIState::Idle => {
             if can_see_target {
                 (AIState::Chasing, target_pos, target_pos)
             } else if target_pos.is_some() {
@@ -706,9 +942,13 @@ fn update_state_machine(
 // =============================================================================
 
 /// Build a blocked set for AI pathfinding that excludes traversable obstacles.
+/// Build the set of impassable tiles for AI pathfinding. Other actors are walked
+/// through (they move out of the way). Closed doors are treated as passable only
+/// if `can_open_doors` — dumb enemies must route around them.
 fn ai_pathfinding_blocked(
     world: &World,
     spatial_cache: &SpatialCache,
+    can_open_doors: bool,
 ) -> HashSet<(i32, i32)> {
     let mut blocked = spatial_cache.get_blocking_positions().clone();
 
@@ -718,9 +958,11 @@ fn ai_pathfinding_blocked(
     for (_id, (pos, _)) in world.query::<(&Position, &CompanionAI)>().iter() {
         blocked.remove(&(pos.x, pos.y));
     }
-    for (_id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
-        if !door.is_open {
-            blocked.remove(&(pos.x, pos.y));
+    if can_open_doors {
+        for (_id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
+            if !door.is_open {
+                blocked.remove(&(pos.x, pos.y));
+            }
         }
     }
 

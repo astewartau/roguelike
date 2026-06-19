@@ -12,6 +12,7 @@ mod icons;
 mod inventory;
 mod loot_window;
 mod message_log;
+mod pause_screen;
 mod shop_window;
 mod start_screen;
 mod status_bar;
@@ -27,6 +28,7 @@ pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data, LootWindowData};
 pub use message_log::{draw_message_log, MessageLog};
+pub use pause_screen::{run_pause_screen, PauseChoice};
 pub use shop_window::{draw_shop_window, get_shop_window_data, ShopWindowData};
 pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarData};
@@ -84,8 +86,10 @@ pub struct UiActions {
     pub close_shop: bool,
     /// Restart the run with the same class (from the game over screen)
     pub retry_game: bool,
-    /// Return to the class selection screen (from the game over screen)
+    /// Return to the class selection screen (from the game over / pause screen)
     pub return_to_menu: bool,
+    /// Quit the application (from the pause menu)
+    pub exit_game: bool,
 }
 
 // =============================================================================
@@ -195,6 +199,41 @@ impl GameUiState {
         self.talking_to = None;
     }
 
+    /// Close any open UI window/popup. Returns true if something was closed
+    /// (used by Escape to back out one layer at a time before pausing).
+    pub fn close_open_menus(&mut self) -> bool {
+        let mut closed = false;
+        // Context menus first (they sit on top of the inventory).
+        if self.item_context_menu.is_some() {
+            self.item_context_menu = None;
+            closed = true;
+        }
+        if self.equipped_context_menu.is_some() {
+            self.equipped_context_menu = None;
+            closed = true;
+        }
+        if closed {
+            return true;
+        }
+        if self.show_inventory {
+            self.show_inventory = false;
+            closed = true;
+        }
+        if self.open_chest.is_some() {
+            self.open_chest = None;
+            closed = true;
+        }
+        if self.shopping_at.is_some() {
+            self.shopping_at = None;
+            closed = true;
+        }
+        if self.talking_to.is_some() {
+            self.talking_to = None;
+            closed = true;
+        }
+        closed
+    }
+
     /// Toggle inventory visibility
     pub fn toggle_inventory(&mut self) {
         self.show_inventory = !self.show_inventory;
@@ -253,7 +292,7 @@ pub fn run_ui(
     let mut actions = UiActions::default();
 
     // Get status bar data
-    let status_data = get_status_bar_data(world, player_entity);
+    let status_data = get_status_bar_data(world, player_entity, grid);
 
     // Get loot window data if chest is open
     let loot_data = get_loot_window_data(

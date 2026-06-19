@@ -654,12 +654,33 @@ impl DungeonGenerator {
 
         // Then apply theme-specific terrain
         match room.theme {
-            RoomTheme::Normal => {}
+            RoomTheme::Normal => self.add_cover_scatter(room, rng),
             RoomTheme::Overgrown => self.add_grass_patches(room, rng),
             RoomTheme::Flooded => self.add_water_pools(room, rng),
-            RoomTheme::Crypt => {} // Crypt uses standard floor, coffins added separately
-            RoomTheme::Storage => {} // Storage uses standard floor, barrels added separately
+            RoomTheme::Crypt => self.add_cover_scatter(room, rng), // standard floor + a little cover
+            RoomTheme::Storage => self.add_cover_scatter(room, rng), // barrels added separately
             RoomTheme::Shop => self.add_shop_floor(room, rng),
+        }
+    }
+
+    /// Scatter a little tall-grass cover through an otherwise plain room so there
+    /// is always something to break line of sight or hide in. Kept sparse (a few
+    /// small tufts) so the room still reads as a stone room, not overgrown.
+    fn add_cover_scatter(&mut self, room: &ThemedRoom, rng: &mut impl Rng) {
+        let area = room.rect.width * room.rect.height;
+        let clumps = (area / 30).max(1); // scales gently with room size
+        for _ in 0..clumps {
+            let cx = rng.gen_range(room.rect.x..room.rect.x + room.rect.width);
+            let cy = rng.gen_range(room.rect.y..room.rect.y + room.rect.height);
+            for _ in 0..rng.gen_range(2..=4) {
+                let x = (cx + rng.gen_range(-1..=1)).clamp(room.rect.x, room.rect.x + room.rect.width - 1);
+                let y = (cy + rng.gen_range(-1..=1)).clamp(room.rect.y, room.rect.y + room.rect.height - 1);
+                if let Some(idx) = self.get_index(x, y) {
+                    if self.tiles[idx].tile_type == TileType::Floor {
+                        self.set_tile(x, y, TileType::TallGrass);
+                    }
+                }
+            }
         }
     }
 

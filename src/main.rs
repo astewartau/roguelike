@@ -143,7 +143,9 @@ impl ApplicationHandler for App {
                 state.render_ctx.camera.viewport_height = size.height as f32;
             }
             WindowEvent::RedrawRequested => {
-                state.update_and_render();
+                if state.update_and_render() {
+                    event_loop.exit();
+                }
                 state.window.request_redraw();
             }
             _ => {
@@ -170,7 +172,9 @@ impl ApplicationHandler for App {
 }
 
 impl AppState {
-    fn update_and_render(&mut self) {
+    /// Runs one frame. Returns true if the app should exit (e.g. the player
+    /// chose Exit in the pause menu).
+    fn update_and_render(&mut self) -> bool {
         puffin::GlobalProfiler::lock().new_frame();
         puffin::profile_function!();
 
@@ -223,10 +227,14 @@ impl AppState {
             }
         }
 
-        // Handle return to menu action (from game over screen)
+        // Handle return to menu action (from game over / pause screen)
         if ui_actions.return_to_menu {
             self.engine.return_to_start_screen();
         }
+
+        // Quit requested from the pause menu (propagated to the caller, which
+        // has the event loop).
+        let exit_requested = ui_actions.exit_game;
 
         // Render game world (only when playing)
         if let Some(grid) = self.engine.grid() {
@@ -253,6 +261,8 @@ impl AppState {
 
         // Swap buffers
         self.gl_surface.swap_buffers(&self.gl_context).unwrap();
+
+        exit_requested
     }
 
     fn toggle_fullscreen(&mut self) {

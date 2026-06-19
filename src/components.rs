@@ -413,6 +413,11 @@ impl AnimatedSprite {
 #[derive(Debug, Clone, Copy)]
 pub struct Player;
 
+/// Marker for an entity that is sneaking (player crouch toggle): slower movement,
+/// much harder for unaware/unalerted enemies to detect.
+#[derive(Debug, Clone, Copy)]
+pub struct Sneaking;
+
 /// Health component - pure data
 #[derive(Debug, Clone, Copy)]
 pub struct Health {
@@ -873,12 +878,34 @@ impl Actor {
 /// AI behavior state
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AIState {
-    /// Wandering randomly, hasn't seen any target
+    /// Not yet aware of any target (sleeping or idly patrolling). Won't chase
+    /// until it perceives a target or is woken by noise/a shout.
+    Unaware,
+    /// Wandering randomly, has been aware but currently has no target
     Idle,
     /// Actively chasing a target (can see them)
     Chasing,
     /// Moving to last known target position after losing sight
     Investigating,
+}
+
+/// Marker for an enemy that is asleep (a deeper subset of `AIState::Unaware`).
+/// Asleep enemies stay put, perceive at a reduced range, and take extra damage
+/// from the first hit (sneak attack). Removed when the enemy wakes.
+#[derive(Debug, Clone, Copy)]
+pub struct Asleep;
+
+/// Marker for enemies intelligent enough to open doors (and to raise an alarm
+/// shout). Dumb beasts/undead lack it, so a closed door stops them.
+#[derive(Debug, Clone, Copy)]
+pub struct CanOpenDoors;
+
+/// Active alarm-shout channel. While present the enemy is busy shouting; when
+/// `remaining` reaches zero it wakes nearby unaware allies. Interruptible —
+/// removed if the shouter takes damage.
+#[derive(Debug, Clone, Copy)]
+pub struct AlarmInProgress {
+    pub remaining: f32,
 }
 
 /// A single entry in an entity's threat table.
@@ -906,6 +933,11 @@ pub struct ChaseAI {
     pub ranged_min: i32,
     /// Maximum range for ranged attack (0 = melee only)
     pub ranged_max: i32,
+    /// Seconds until this enemy can raise an alarm shout again (0 = ready)
+    pub shout_cooldown: f32,
+    /// Detection meter while Unaware: builds when the player is seen, decays
+    /// otherwise; crossing the wake threshold rouses the enemy (gradual waking).
+    pub alertness: f32,
 }
 
 impl ChaseAI {
@@ -917,6 +949,8 @@ impl ChaseAI {
             current_target: None,
             ranged_min: 0,
             ranged_max: 0,
+            shout_cooldown: 0.0,
+            alertness: 0.0,
         }
     }
 
@@ -929,6 +963,8 @@ impl ChaseAI {
             current_target: None,
             ranged_min,
             ranged_max,
+            shout_cooldown: 0.0,
+            alertness: 0.0,
         }
     }
 

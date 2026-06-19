@@ -4,7 +4,7 @@
 //! health bars, status indicators, and buff auras.
 
 use crate::camera::Camera;
-use crate::components::{ChaseAI, EffectType, Health, ItemType, StatusEffects, VisualPosition};
+use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, ItemType, StatusEffects, VisualPosition};
 use crate::constants::{DAMAGE_NUMBER_RISE, POTION_SPLASH_RADIUS};
 use crate::grid::Grid;
 use crate::systems::effects;
@@ -20,6 +20,9 @@ pub struct EnemyStatusData {
     pub is_confused: bool,
     pub is_stunned: bool,
     pub is_rooted: bool,
+    pub is_asleep: bool,
+    pub is_shouting: bool,
+    pub is_stirring: bool,
 }
 
 /// Data for an enemy's health bar
@@ -37,6 +40,7 @@ pub struct PlayerBuffAuraData {
     pub has_regen: bool,
     pub has_protected: bool,
     pub has_barkskin: bool,
+    pub is_sneaking: bool,
 }
 
 /// Extract player buff aura data from the world
@@ -50,28 +54,36 @@ pub fn get_buff_aura_data(world: &World, player_entity: Entity) -> Option<Player
         has_regen: effects::has_effect(&status_effects, EffectType::Regenerating),
         has_protected: effects::has_effect(&status_effects, EffectType::Protected),
         has_barkskin: effects::has_effect(&status_effects, EffectType::Barkskin),
+        is_sneaking: world.get::<&crate::components::Sneaking>(player_entity).is_ok(),
     })
 }
 
 /// Extract enemy status effect data from the world
 pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData> {
     world
-        .query::<(&VisualPosition, &ChaseAI, &StatusEffects)>()
+        .query::<(&VisualPosition, &ChaseAI, &StatusEffects, Option<&Asleep>, Option<&AlarmInProgress>)>()
         .iter()
-        .filter(|(_, (pos, _, _))| {
+        .filter(|(_, (pos, _, _, _, _))| {
             // Only show for visible tiles
             grid.get(pos.x as i32, pos.y as i32)
                 .map(|t| t.visible)
                 .unwrap_or(false)
         })
-        .map(|(_, (pos, _, status_effects))| EnemyStatusData {
-            x: pos.x,
-            y: pos.y,
-            is_feared: effects::has_effect(status_effects, EffectType::Feared),
-            is_slowed: effects::has_effect(status_effects, EffectType::Slowed),
-            is_confused: effects::has_effect(status_effects, EffectType::Confused),
-            is_stunned: effects::has_effect(status_effects, EffectType::Stunned),
-            is_rooted: effects::has_effect(status_effects, EffectType::Rooted),
+        .map(|(_, (pos, ai, status_effects, asleep, alarm))| {
+            let stirring = ai.state == crate::components::AIState::Unaware && ai.alertness > 0.0;
+            EnemyStatusData {
+                x: pos.x,
+                y: pos.y,
+                is_feared: effects::has_effect(status_effects, EffectType::Feared),
+                is_slowed: effects::has_effect(status_effects, EffectType::Slowed),
+                is_confused: effects::has_effect(status_effects, EffectType::Confused),
+                is_stunned: effects::has_effect(status_effects, EffectType::Stunned),
+                is_rooted: effects::has_effect(status_effects, EffectType::Rooted),
+                // Show "stirring" instead of "asleep" once the meter starts rising.
+                is_asleep: asleep.is_some() && !stirring,
+                is_shouting: alarm.is_some(),
+                is_stirring: stirring,
+            }
         })
         .collect()
 }
@@ -377,12 +389,24 @@ pub fn draw_enemy_status_indicators(
             && !enemy.is_confused
             && !enemy.is_stunned
             && !enemy.is_rooted
+            && !enemy.is_asleep
+            && !enemy.is_shouting
+            && !enemy.is_stirring
         {
             continue;
         }
 
         // Collect symbols to display
         let mut symbols: Vec<(&str, egui::Color32)> = Vec::new();
+        if enemy.is_asleep {
+            symbols.push(("z", egui::Color32::from_rgb(150, 180, 220))); // Pale blue "Zzz" for sleep
+        }
+        if enemy.is_stirring {
+            symbols.push(("?", egui::Color32::from_rgb(255, 220, 120))); // Yellow "?" — noticing you
+        }
+        if enemy.is_shouting {
+            symbols.push(("❗", egui::Color32::from_rgb(255, 160, 40))); // Orange alarm for shouting
+        }
         if enemy.is_stunned {
             symbols.push(("*", egui::Color32::from_rgb(255, 230, 120))); // Gold "seeing stars" for stun
         }
@@ -594,7 +618,7 @@ pub fn draw_player_buff_auras(
     let Some(data) = data else {
         return;
     };
-    if !data.has_regen && !data.has_protected && !data.has_barkskin {
+    if !data.has_regen && !data.has_protected && !data.has_barkskin && !data.is_sneaking {
         return;
     }
 
@@ -613,6 +637,26 @@ pub fn draw_player_buff_auras(
 
     // Center of the player tile
     let center = egui::pos2(egui_x + tile_size / 2.0, egui_y - tile_size / 2.0);
+
+    // Sneaking indicator: an eye emoji tucked into the top-right corner of the
+    // player sprite (foreground so it reads over the sprite/terrain).
+    if data.is_sneaking {
+        let fg = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("sneak_indicator"),
+        ));
+        // Top-left corner of the player tile (like the other status indicators).
+        let corner = egui::pos2(center.x - tile_size * 0.32, center.y - tile_size * 0.32);
+        let font = egui::FontId::proportional((tile_size * 0.5).clamp(14.0, 24.0));
+        // Transparent deep blue/purple.
+        fg.text(
+            corner,
+            egui::Align2::CENTER_CENTER,
+            "👁",
+            font,
+            egui::Color32::from_rgba_unmultiplied(110, 80, 190, 170),
+        );
+    }
 
     // Use real time for smooth animation (not game time)
     let real_time = ctx.input(|i| i.time) as f32;

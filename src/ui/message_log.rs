@@ -48,6 +48,8 @@ pub struct MessageLog {
     messages: VecDeque<LogMessage>,
     /// The player entity, used to phrase messages from the player's POV.
     player_entity: Entity,
+    /// Whether the one-time "you can close doors" tip has been shown.
+    door_tip_shown: bool,
 }
 
 impl MessageLog {
@@ -55,6 +57,7 @@ impl MessageLog {
         Self {
             messages: VecDeque::new(),
             player_entity,
+            door_tip_shown: false,
         }
     }
 
@@ -307,6 +310,12 @@ impl MessageLog {
                 self.push(
                     format!("You equip {}.", crate::systems::item_name(*weapon_type)),
                     log_colors::INFO,
+                );
+            }
+            GameEvent::DoorOpened { opener, .. } if *opener == me && !self.door_tip_shown => {
+                self.door_tip_shown = true;
+                self.system(
+                    "Tip: hold Ctrl and press a direction to close a door — useful for shaking pursuers.",
                 );
             }
             GameEvent::ItemPurchased { item, price, .. } => {

@@ -84,7 +84,14 @@ pub fn apply_move(
         }
     }
     if let Some(door_id) = door_to_open {
-        return apply_open_door(world, entity, door_id, events);
+        // Only the player and door-capable enemies can open doors; dumb enemies
+        // are stopped by a closed door.
+        let can_open = world.get::<&Player>(entity).is_ok()
+            || world.get::<&crate::components::CanOpenDoors>(entity).is_ok();
+        if can_open {
+            return apply_open_door(world, entity, door_id, events);
+        }
+        return ActionResult::Blocked;
     }
 
     // Check for container (chest) at target
@@ -698,6 +705,9 @@ pub fn apply_shoot_bow(
         return ActionResult::Blocked;
     }
 
+    // Firing a bow is loud — wake nearby sleeping enemies.
+    crate::systems::ai::wake_enemies_in_radius(world, (start_x, start_y), RANGED_NOISE_RADIUS);
+
     // Calculate normalized direction
     let dx = target_x - start_x;
     let dy = target_y - start_y;
@@ -1007,6 +1017,9 @@ pub fn apply_fireball(
         y: target_y,
         radius: FIREBALL_RADIUS,
     });
+
+    // A fireball is very loud — wake sleeping enemies over a wide area.
+    crate::systems::ai::wake_enemies_in_radius(world, (target_x, target_y), EXPLOSION_NOISE_RADIUS);
 
     // Collect all attackable entities in radius
     let mut damaged: Vec<(Entity, i32, i32)> = Vec::new();

@@ -31,7 +31,16 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
         return 0;
     }
 
-    let mut dmg = raw;
+    // Sneak attack: an unaware target takes extra damage from this hit.
+    let unaware = world
+        .get::<&ChaseAI>(target)
+        .map(|ai| ai.state == crate::components::AIState::Unaware)
+        .unwrap_or(false);
+    let mut dmg = if unaware {
+        (raw as f32 * SNEAK_ATTACK_MULT) as i32
+    } else {
+        raw
+    };
 
     // Flat armor reduction (0 for entities without armor).
     let defense = world
@@ -49,9 +58,35 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
 
     dmg = dmg.max(1);
 
+    let pos = world.get::<&Position>(target).map(|p| (p.x, p.y)).ok();
+    let mut hp_after = (0, 1);
     if let Ok(mut health) = world.get::<&mut Health>(target) {
         health.current -= dmg;
+        hp_after = (health.current, health.max.max(1));
     }
+
+    // Taking a hit cancels any alarm shout and wakes an unaware victim.
+    crate::systems::ai::interrupt_shout_on_damage(world, target);
+    crate::systems::ai::wake_on_attacked(world, target);
+
+    // Morale: a surviving enemy that drops below the HP threshold may panic.
+    if hp_after.0 > 0 && world.get::<&ChaseAI>(target).is_ok() {
+        let frac = hp_after.0 as f32 / hp_after.1 as f32;
+        if frac < MORALE_HP_THRESHOLD && rand::thread_rng().gen_bool(MORALE_FLEE_CHANCE) {
+            crate::systems::effects::add_effect_to_entity(
+                world,
+                target,
+                EffectType::Feared,
+                MORALE_FEAR_DURATION,
+            );
+        }
+    }
+
+    // Combat is loud: wake nearby sleeping enemies that "hear" the impact.
+    if let Some(pos) = pos {
+        crate::systems::ai::wake_enemies_in_radius(world, pos, MELEE_NOISE_RADIUS);
+    }
+
     dmg
 }
 
@@ -146,6 +181,12 @@ pub fn remove_dead_entities(
         }
     }
 
+    // Remember where enemies fell, for the ally-death morale check below.
+    let death_positions: Vec<(i32, i32)> = to_convert
+        .iter()
+        .map(|(_, p, _)| (p.0 as i32, p.1 as i32))
+        .collect();
+
     for (id, position, _xp) in to_convert {
         // Cancel any pending actions for this entity
         if let Some(ref mut sched) = scheduler {
@@ -203,6 +244,28 @@ pub fn remove_dead_entities(
         }
 
         let _ = world.insert_one(id, Container::corpse(loot_items, gold));
+    }
+
+    // Ally-death morale: living enemies near a fresh corpse may panic and flee.
+    for (dx, dy) in death_positions {
+        let nearby: Vec<Entity> = world
+            .query::<(&Position, &ChaseAI, &Health)>()
+            .iter()
+            .filter(|(_, (pos, _, h))| {
+                h.current > 0 && (pos.x - dx).abs().max((pos.y - dy).abs()) <= ALLY_DEATH_MORALE_RADIUS
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for e in nearby {
+            if rng.gen_bool(ALLY_DEATH_MORALE_CHANCE) {
+                crate::systems::effects::add_effect_to_entity(
+                    world,
+                    e,
+                    EffectType::Feared,
+                    MORALE_FEAR_DURATION,
+                );
+            }
+        }
     }
 }
 

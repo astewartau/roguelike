@@ -174,6 +174,7 @@ pub fn start_action_with_events(
     // Check for speed-modifying effects before borrowing Actor
     let has_speed_boost = effects::entity_has_effect(world, entity, EffectType::SpeedBoost);
     let has_slow = effects::entity_has_effect(world, entity, EffectType::Slowed);
+    let is_sneaking = world.get::<&crate::components::Sneaking>(entity).is_ok();
 
     // Get actor component
     let mut actor = world
@@ -195,13 +196,18 @@ pub fn start_action_with_events(
     let remaining = actor.energy;
 
     // Calculate effective speed (base speed modified by effects)
-    let effective_speed = if has_speed_boost {
+    let mut effective_speed = if has_speed_boost {
         actor.speed * SPEED_BOOST_MULTIPLIER
     } else if has_slow {
         actor.speed * SLOW_MULTIPLIER
     } else {
         actor.speed
     };
+    // Sneaking trades movement speed for stealth (only movement is slowed, so a
+    // sneak attack itself isn't penalized).
+    if is_sneaking && matches!(action_type, ActionType::Move { .. }) {
+        effective_speed *= SNEAK_SPEED_MULT;
+    }
 
     // Calculate completion time
     let duration = action_dispatch::calculate_action_duration(&action_type, effective_speed);
