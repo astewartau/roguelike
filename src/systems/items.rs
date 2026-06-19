@@ -3,7 +3,7 @@
 use crate::components::{Health, Inventory, ItemType};
 use hecs::{Entity, World};
 
-use super::item_defs::{get_def, UseEffect};
+use super::item_defs::{get_def, ItemCategory, UseEffect};
 
 // Re-export TargetingParams from item_defs for external use
 pub use super::item_defs::TargetingParams;
@@ -19,6 +19,8 @@ pub enum ItemUseResult {
     RequiresTarget { item_type: ItemType, item_index: usize },
     /// Item is a weapon that should be equipped
     IsWeapon { item_type: ItemType, item_index: usize },
+    /// Item is armor that should be equipped to a body/head slot
+    IsArmor { item_type: ItemType, item_index: usize },
     /// Scroll of Reveal: show all enemies on floor
     RevealEnemies,
     /// Scroll of Mapping: reveal entire floor layout
@@ -61,7 +63,7 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         if item_index >= inv.items.len() {
             return ItemUseResult::Failed;
         }
-        inv.items[item_index]
+        inv.items[item_index].kind
     };
 
     let def = get_def(item_type);
@@ -69,6 +71,9 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
     // Handle based on use effect from definition
     let result = match def.use_effect {
         UseEffect::Equip => {
+            if def.category == ItemCategory::Armor {
+                return ItemUseResult::IsArmor { item_type, item_index };
+            }
             return ItemUseResult::IsWeapon { item_type, item_index };
         }
         UseEffect::RequiresTarget => {
@@ -128,7 +133,7 @@ pub fn remove_item_from_inventory(world: &mut World, entity: Entity, item_index:
     if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
         if item_index < inv.items.len() {
             let item = inv.items.remove(item_index);
-            inv.current_weight_kg -= item_weight(item);
+            inv.current_weight_kg -= item_weight(item.kind);
         }
     }
 }

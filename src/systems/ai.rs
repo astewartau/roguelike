@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, AIState, CausesBurning, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, PlacedFireTrap, Position, RangedCooldown, TamedBy};
+use crate::components::{ActionType, Actor, AIState, CausesBurning, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, PlacedFireTrap, Position, RangedCooldown, TamedBy, TamingInProgress};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -446,6 +446,9 @@ fn determine_companion_action(
 
     let blocking = ai_pathfinding_blocked(world, spatial_cache);
 
+    // Don't attack an animal the owner is currently taming — let the channel finish.
+    let taming_target = world.get::<&TamingInProgress>(owner).ok().map(|t| t.target);
+
     // Priority 1: Fight highest-threat entry in our own threat table
     // (enemies that attacked us or our owner)
     if let Ok(ai) = world.get::<&CompanionAI>(entity) {
@@ -458,6 +461,11 @@ fn determine_companion_action(
                 .map(|t| t.owner == owner)
                 .unwrap_or(false);
             if is_sibling {
+                continue;
+            }
+
+            // Skip the animal the owner is currently taming
+            if taming_target == Some(entry.entity) {
                 continue;
             }
 
@@ -480,6 +488,10 @@ fn determine_companion_action(
     let mut best_enemy: Option<(Entity, i32, (i32, i32))> = None;
     for (enemy_id, (enemy_pos, ai, health)) in world.query::<(&Position, &ChaseAI, &Health)>().iter() {
         if health.current <= 0 {
+            continue;
+        }
+        // Skip the animal the owner is currently taming
+        if taming_target == Some(enemy_id) {
             continue;
         }
         // Check if this enemy has threat on our owner

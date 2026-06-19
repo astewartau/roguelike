@@ -17,6 +17,20 @@ pub const DAGGER_WEIGHT: f32 = 0.5;
 /// Staff weight in kg
 pub const STAFF_WEIGHT: f32 = 1.0;
 
+/// Leather armor weight in kg
+pub const LEATHER_ARMOR_WEIGHT: f32 = 4.0;
+/// Chain mail weight in kg
+pub const CHAIN_MAIL_WEIGHT: f32 = 8.0;
+/// Helmet weight in kg
+pub const HELMET_WEIGHT: f32 = 2.0;
+
+/// Leather armor base defense (body slot)
+pub const LEATHER_ARMOR_DEFENSE: i32 = 2;
+/// Chain mail base defense (body slot)
+pub const CHAIN_MAIL_DEFENSE: i32 = 4;
+/// Helmet base defense (head slot)
+pub const HELMET_DEFENSE: i32 = 1;
+
 /// Sword base damage
 pub const SWORD_BASE_DAMAGE: i32 = 10;
 /// Sword damage bonus

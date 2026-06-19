@@ -48,7 +48,7 @@ pub fn get_shop_window_data(
     let player_items: Vec<(ItemType, u32)> = player_inv
         .items
         .iter()
-        .map(|item| (*item, get_sell_price(*item)))
+        .map(|item| (item.kind, get_sell_price(item.kind)))
         .collect();
 
     Some(ShopWindowData {

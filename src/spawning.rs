@@ -542,6 +542,8 @@ pub mod vendors {
                 (ItemType::Bread, 2),
                 (ItemType::ScrollOfSpeed, 1),
                 (ItemType::ScrollOfProtection, 1),
+                (ItemType::LeatherArmor, 1),
+                (ItemType::Helmet, 1),
                 (ItemType::Arrow, 10),
             ],
             2..=3 => vec![
@@ -550,6 +552,7 @@ pub mod vendors {
                 (ItemType::ScrollOfInvisibility, 1),
                 (ItemType::ScrollOfBlink, 1),
                 (ItemType::Dagger, 1),
+                (ItemType::LeatherArmor, 1),
                 (ItemType::Arrow, 15),
             ],
             _ => vec![
@@ -558,6 +561,7 @@ pub mod vendors {
                 (ItemType::ScrollOfFireball, 1),
                 (ItemType::ScrollOfFear, 1),
                 (ItemType::Sword, 1),
+                (ItemType::ChainMail, 1),
                 (ItemType::Arrow, 20),
             ],
         }

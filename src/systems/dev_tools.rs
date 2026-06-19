@@ -6,7 +6,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{BlocksMovement, Container, ItemType, Position, Sprite, VisualPosition};
+use crate::components::{BlocksMovement, Container, ItemInstance, ItemType, Position, Sprite, VisualPosition};
 use crate::events::EventQueue;
 use crate::engine;
 use crate::grid::Grid;
@@ -70,7 +70,7 @@ pub fn execute_dev_spawn(
                 pos,
                 VisualPosition::from_position(&pos),
                 Sprite::from_ref(tile::tile_ids::CHEST_CLOSED),
-                Container::chest(vec![ItemType::HealthPotion], 0),
+                Container::chest(vec![ItemInstance::plain(ItemType::HealthPotion)], 0),
                 BlocksMovement,
             ));
             DevSpawnResult::Spawned(entity)
@@ -121,7 +121,7 @@ pub fn give_item_to_player(world: &mut World, player_entity: Entity, item: ItemT
 
     if let Ok(mut inv) = world.get::<&mut Inventory>(player_entity) {
         let weight = item_weight(item);
-        inv.items.push(item);
+        inv.items.push(ItemInstance::plain(item));
         inv.current_weight_kg += weight;
     }
 }

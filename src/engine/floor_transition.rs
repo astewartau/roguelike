@@ -1,7 +1,7 @@
 //! Floor transition and save/load logic for multi-floor dungeons.
 
 use crate::components::{
-    BlocksMovement, BlocksVision, ChaseAI, Container, Door, Health, ItemType,
+    BlocksMovement, BlocksVision, ChaseAI, Container, Door, Health, ItemInstance,
     Position, Sprite, VisualPosition,
 };
 use crate::constants::*;
@@ -37,14 +37,14 @@ pub enum SavedEntityType {
     Chest {
         is_open: bool,
         gold: u32,
-        items: Vec<ItemType>,
+        items: Vec<ItemInstance>,
     },
     Door {
         is_open: bool,
     },
     Bones {
         gold: u32,
-        items: Vec<ItemType>,
+        items: Vec<ItemInstance>,
     },
 }
 

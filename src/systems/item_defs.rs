@@ -14,6 +14,7 @@ use crate::tile::{tile_ids, SpriteSheet};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemCategory {
     Weapon,
+    Armor,
     Potion,
     Scroll,
     Food,
@@ -84,6 +85,33 @@ pub fn get_sell_price(item: ItemType) -> u32 {
     get_def(item).base_price / 2
 }
 
+/// Base flat defense granted by an armor item kind (before affixes).
+/// Returns 0 for non-armor kinds.
+pub fn armor_base_defense(item: ItemType) -> i32 {
+    match item {
+        ItemType::LeatherArmor => LEATHER_ARMOR_DEFENSE,
+        ItemType::ChainMail => CHAIN_MAIL_DEFENSE,
+        ItemType::Helmet => HELMET_DEFENSE,
+        _ => 0,
+    }
+}
+
+/// Which equipment slot an armor item kind occupies. Returns `None` for non-armor.
+pub fn armor_slot(item: ItemType) -> Option<ArmorSlot> {
+    match item {
+        ItemType::LeatherArmor | ItemType::ChainMail => Some(ArmorSlot::Body),
+        ItemType::Helmet => Some(ArmorSlot::Head),
+        _ => None,
+    }
+}
+
+/// Equipment slot an armor piece occupies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmorSlot {
+    Body,
+    Head,
+}
+
 /// Static table of all item definitions
 pub static ITEM_DEFS: &[ItemDef] = &[
     // =========================================================================
@@ -132,6 +160,42 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         targeting: None,
         is_throwable: false,
         base_price: 70,
+    },
+    // =========================================================================
+    // ARMOR
+    // =========================================================================
+    ItemDef {
+        item_type: ItemType::LeatherArmor,
+        name: "Leather Armor",
+        category: ItemCategory::Armor,
+        weight: LEATHER_ARMOR_WEIGHT,
+        sprite: tile_ids::LEATHER_ARMOR,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+        base_price: 60,
+    },
+    ItemDef {
+        item_type: ItemType::ChainMail,
+        name: "Chain Mail",
+        category: ItemCategory::Armor,
+        weight: CHAIN_MAIL_WEIGHT,
+        sprite: tile_ids::CHAIN_MAIL,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+        base_price: 140,
+    },
+    ItemDef {
+        item_type: ItemType::Helmet,
+        name: "Helmet",
+        category: ItemCategory::Armor,
+        weight: HELMET_WEIGHT,
+        sprite: tile_ids::HELMET,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+        base_price: 50,
     },
     // =========================================================================
     // POTIONS

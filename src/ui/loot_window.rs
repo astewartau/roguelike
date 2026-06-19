@@ -5,13 +5,13 @@
 use super::icons::UiIcons;
 use super::style;
 use super::UiActions;
-use crate::components::{Container, ItemType};
+use crate::components::{Container, ItemInstance};
 use crate::systems;
 use hecs::World;
 
 /// Data needed to render the loot window
 pub struct LootWindowData {
-    pub items: Vec<ItemType>,
+    pub items: Vec<ItemInstance>,
     pub gold: u32,
     pub viewport_width: f32,
     pub viewport_height: f32,
@@ -88,9 +88,10 @@ pub fn draw_loot_window(
                 }
 
                 // Show items
-                for (i, item_type) in data.items.iter().enumerate() {
+                for (i, instance) in data.items.iter().enumerate() {
+                    let item_type = instance.kind;
                     ui.horizontal(|ui| {
-                        let uv = icons.get_item_uv(*item_type);
+                        let uv = icons.get_item_uv(item_type);
 
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.items_texture_id,
@@ -99,16 +100,29 @@ pub fn draw_loot_window(
                         .uv(uv)
                         .bg_fill(style::colors::PANEL_BG);
 
-                        let item_name = systems::item_name(*item_type);
+                        let item_name = systems::item_name(item_type);
                         let response = ui.add(egui::ImageButton::new(image).frame(false));
 
+                        // Affix lines for the hover tooltip
+                        let affix_text: String = instance
+                            .affixes
+                            .iter()
+                            .map(|a| format!("\n{}", a.label()))
+                            .collect();
                         if response
-                            .on_hover_text(format!("{}\n\nClick to take", item_name))
+                            .on_hover_text(format!(
+                                "{} ({}){}\n\nClick to take",
+                                item_name,
+                                instance.rarity.label(),
+                                affix_text
+                            ))
                             .clicked()
                         {
                             actions.chest_item_to_take = Some(i);
                         }
-                        ui.label(item_name);
+                        ui.label(
+                            egui::RichText::new(item_name).color(style::rarity_color(instance.rarity)),
+                        );
                     });
                 }
             }

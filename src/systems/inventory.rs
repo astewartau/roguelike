@@ -1,15 +1,15 @@
 //! Inventory and container interaction systems.
 
-use crate::components::{BlocksMovement, Container, GroundItemPile, Inventory, ItemType, Position, Sprite, VisualPosition};
+use crate::components::{BlocksMovement, Container, GroundItemPile, Inventory, ItemInstance, Position, Sprite, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
 use crate::systems::item_defs;
 use crate::systems::items::item_weight;
 use hecs::{Entity, World};
 
 /// Add an item directly to an entity's inventory
-pub fn add_item_to_inventory(world: &mut World, entity: Entity, item: ItemType) -> bool {
+pub fn add_item_to_inventory(world: &mut World, entity: Entity, item: ItemInstance) -> bool {
     if let Ok(mut inventory) = world.get::<&mut Inventory>(entity) {
-        inventory.current_weight_kg += item_weight(item);
+        inventory.current_weight_kg += item_weight(item.kind);
         inventory.items.push(item);
         true
     } else {
@@ -38,12 +38,13 @@ pub fn take_item_from_container(
 
     // Add to player inventory
     if let Ok(mut inventory) = world.get::<&mut Inventory>(player_entity) {
-        inventory.current_weight_kg += item_weight(item);
+        inventory.current_weight_kg += item_weight(item.kind);
+        let kind = item.kind;
         inventory.items.push(item);
         if let Some(events) = events {
             events.push(GameEvent::ItemPickedUp {
                 entity: player_entity,
-                item,
+                item: kind,
             });
         }
         true
@@ -73,12 +74,13 @@ pub fn take_all_from_container(
     // Add to player inventory
     if let Ok(mut inventory) = world.get::<&mut Inventory>(player_entity) {
         for item in items {
-            inventory.current_weight_kg += item_weight(item);
+            inventory.current_weight_kg += item_weight(item.kind);
+            let kind = item.kind;
             inventory.items.push(item);
             if let Some(ref mut events) = events {
                 events.push(GameEvent::ItemPickedUp {
                     entity: player_entity,
-                    item,
+                    item: kind,
                 });
             }
         }
@@ -141,7 +143,7 @@ pub fn find_container_at_player(world: &World, player_entity: Entity) -> Option<
 
 /// Spawn a ground item pile at a position, or add to existing pile
 /// Returns the entity ID of the pile
-pub fn spawn_ground_item(world: &mut World, x: i32, y: i32, item: ItemType) -> Entity {
+pub fn spawn_ground_item(world: &mut World, x: i32, y: i32, item: ItemInstance) -> Entity {
     // Check for existing ground item pile at this position
     let existing_pile = find_ground_items_at_position(world, x, y);
 
@@ -153,7 +155,7 @@ pub fn spawn_ground_item(world: &mut World, x: i32, y: i32, item: ItemType) -> E
         pile_entity
     } else {
         // Create new ground item pile
-        let sprite_ref = item_defs::get_def(item).sprite;
+        let sprite_ref = item_defs::get_def(item.kind).sprite;
         let pos = Position::new(x, y);
         world.spawn((
             pos,
@@ -199,6 +201,7 @@ pub fn cleanup_empty_ground_piles(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::ItemType;
 
     #[test]
     fn test_take_gold_from_container() {
@@ -234,7 +237,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::chest(vec![ItemType::HealthPotion], 50),
+            Container::chest(vec![ItemInstance::plain(ItemType::HealthPotion)], 50),
         ));
 
         take_all_from_container(&mut world, player, chest, None);
@@ -242,7 +245,7 @@ mod tests {
         let inventory = world.get::<&Inventory>(player).unwrap();
         assert_eq!(inventory.gold, 50);
         assert_eq!(inventory.items.len(), 1);
-        assert_eq!(inventory.items[0], ItemType::HealthPotion);
+        assert_eq!(inventory.items[0].kind, ItemType::HealthPotion);
 
         let container = world.get::<&Container>(chest).unwrap();
         assert!(container.is_empty());
@@ -259,7 +262,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::chest(vec![ItemType::HealthPotion], 0),
+            Container::chest(vec![ItemInstance::plain(ItemType::HealthPotion)], 0),
         ));
 
         let success = take_item_from_container(&mut world, player, chest, 0, None);
@@ -283,7 +286,7 @@ mod tests {
 
         let chest = world.spawn((
             Position::new(1, 1),
-            Container::chest(vec![ItemType::HealthPotion], 0),
+            Container::chest(vec![ItemInstance::plain(ItemType::HealthPotion)], 0),
         ));
 
         let success = take_item_from_container(&mut world, player, chest, 5, None);

@@ -2,7 +2,7 @@
 
 use crate::components::{
     AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ClassAbility,
-    Container, Door, Equipment, Experience, Health, Inventory, ItemType, Name, Player,
+    Container, Door, Equipment, Experience, Health, Inventory, ItemInstance, ItemType, Name, Player,
     PlayerClass, Position, RangerAbilities, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
@@ -19,10 +19,10 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 
 /// Spawn all chests from grid positions with randomized contents.
-fn spawn_chests(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+fn spawn_chests(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
     for (x, y) in &grid.chest_positions {
         let pos = Position::new(*x, *y);
-        let container = generate_chest_contents(rng);
+        let container = generate_chest_contents(floor, rng);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
@@ -62,14 +62,17 @@ fn spawn_braziers(world: &mut World, grid: &Grid) {
 }
 
 /// Spawn all coffins from grid positions with randomized contents.
-fn spawn_coffins(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
     for (x, y) in &grid.coffin_positions {
         let pos = Position::new(*x, *y);
 
         // Generate coffin contents - gold and possibly a scroll/potion
         let gold = rng.gen_range(15..30);
-        let items: Vec<ItemType> = if rng.gen_bool(0.4) {
-            // 40% chance for an item
+        let items: Vec<ItemInstance> = if rng.gen_bool(0.25) {
+            // 25% chance for a rolled gear piece (weapon or armor)
+            vec![roll_gear(*GEAR_POOL.choose(rng).unwrap(), floor, rng)]
+        } else if rng.gen_bool(0.4) {
+            // otherwise 40% chance for a rare consumable
             let rare_items = [
                 ItemType::ScrollOfBlink,
                 ItemType::ScrollOfFear,
@@ -77,7 +80,7 @@ fn spawn_coffins(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
                 ItemType::StrengthPotion,
                 ItemType::ScrollOfProtection,
             ];
-            vec![*rare_items.choose(rng).unwrap()]
+            vec![ItemInstance::plain(*rare_items.choose(rng).unwrap())]
         } else {
             vec![]
         };
@@ -102,9 +105,9 @@ fn spawn_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
 
         // Barrels contain food items
         let food_items = [ItemType::Cheese, ItemType::Bread, ItemType::Apple];
-        let items: Vec<ItemType> = if rng.gen_bool(0.7) {
+        let items: Vec<ItemInstance> = if rng.gen_bool(0.7) {
             // 70% chance for food
-            vec![*food_items.choose(rng).unwrap()]
+            vec![ItemInstance::plain(*food_items.choose(rng).unwrap())]
         } else {
             vec![]
         };
@@ -159,8 +162,65 @@ fn spawn_vendor(world: &mut World, grid: &Grid, floor_num: u32) {
     }
 }
 
+/// Weapons and armor that can drop as rolled gear.
+const GEAR_POOL: [ItemType; 7] = [
+    ItemType::Sword,
+    ItemType::Dagger,
+    ItemType::Staff,
+    ItemType::Bow,
+    ItemType::LeatherArmor,
+    ItemType::ChainMail,
+    ItemType::Helmet,
+];
+
+/// Roll a gear instance (weapon or armor) with floor-scaled rarity and affixes.
+///
+/// Rarity weights shift toward rarer tiers with depth. Affix count is fixed by
+/// rarity (Common 0 / Magic 1 / Rare 2); weapons roll `Damage`, armor rolls
+/// `Defense`.
+fn roll_gear(kind: ItemType, floor: u32, rng: &mut impl Rng) -> ItemInstance {
+    use crate::components::{Affix, Rarity};
+
+    // Rarity weights (out of their sum). Deeper floors push toward Magic/Rare.
+    let common_w = 70u32.saturating_sub(floor * 3).max(25);
+    let magic_w = 25 + floor * 2;
+    let rare_w = 5 + floor * 3;
+    let total = common_w + magic_w + rare_w;
+
+    let roll = rng.gen_range(0..total);
+    let rarity = if roll < common_w {
+        Rarity::Common
+    } else if roll < common_w + magic_w {
+        Rarity::Magic
+    } else {
+        Rarity::Rare
+    };
+
+    let affix_count = match rarity {
+        Rarity::Common => 0,
+        Rarity::Magic => 1,
+        Rarity::Rare => 2,
+    };
+
+    let is_weapon = matches!(
+        kind,
+        ItemType::Sword | ItemType::Bow | ItemType::Dagger | ItemType::Staff
+    );
+
+    let mut affixes = Vec::with_capacity(affix_count);
+    for _ in 0..affix_count {
+        if is_weapon {
+            affixes.push(Affix::Damage(rng.gen_range(1..=3)));
+        } else {
+            affixes.push(Affix::Defense(rng.gen_range(1..=2)));
+        }
+    }
+
+    ItemInstance { kind, rarity, affixes }
+}
+
 /// Generate randomized chest contents.
-fn generate_chest_contents(rng: &mut impl Rng) -> Container {
+fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
     // Common items (higher weight)
     let common_items = [
         ItemType::HealthPotion,
@@ -237,7 +297,15 @@ fn generate_chest_contents(rng: &mut impl Rng) -> Container {
         _ => rng.gen_range(20..50),
     };
 
-    Container::chest(items, gold)
+    let mut instances: Vec<ItemInstance> = items.into_iter().map(ItemInstance::plain).collect();
+
+    // 30% chance to also contain a rolled gear piece (weapon or armor).
+    if rng.gen::<f32>() < 0.30 {
+        let kind = *GEAR_POOL.choose(rng).unwrap();
+        instances.push(roll_gear(kind, floor, rng));
+    }
+
+    Container::chest(instances, gold)
 }
 
 /// Initialize the game world with player, enemies, and objects.
@@ -279,7 +347,7 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
     // Build starting inventory from class definition
     let mut starting_inventory = Inventory::new();
     for item in player_class.starting_inventory() {
-        starting_inventory.current_weight_kg += item_weight(item);
+        starting_inventory.current_weight_kg += item_weight(item.kind);
         starting_inventory.items.push(item);
     }
 
@@ -331,10 +399,11 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
 
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     let mut rng = rand::thread_rng();
-    spawn_chests(&mut world, grid, &mut rng);
+    // init_world always builds the first floor (floor 0).
+    spawn_chests(&mut world, grid, 0, &mut rng);
     spawn_doors(&mut world, grid);
     spawn_braziers(&mut world, grid);
-    spawn_coffins(&mut world, grid, &mut rng);
+    spawn_coffins(&mut world, grid, 0, &mut rng);
     spawn_barrels(&mut world, grid, &mut rng);
     spawn_water_entities(&mut world, grid);
     spawn_shop_decorations(&mut world, grid, &mut rng);
@@ -463,7 +532,7 @@ pub fn spawn_floor_entities(
 
     // Spawn chests, doors, braziers, and shop
     let mut rng = rand::thread_rng();
-    spawn_chests(world, grid, &mut rng);
+    spawn_chests(world, grid, floor_num, &mut rng);
     spawn_doors(world, grid);
     spawn_braziers(world, grid);
     spawn_shop_decorations(world, grid, &mut rng);

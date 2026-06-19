@@ -472,7 +472,7 @@ impl GameEngine {
                 true // Missed arrows always recoverable
             };
             if should_recover {
-                systems::inventory::spawn_ground_item(&mut state.world, x, y, crate::components::ItemType::Arrow);
+                systems::inventory::spawn_ground_item(&mut state.world, x, y, crate::components::ItemInstance::plain(crate::components::ItemType::Arrow));
             }
         }
 
@@ -766,6 +766,14 @@ impl GameEngine {
 
         // UI toggles
         result.toggle_fullscreen = frame.toggle_fullscreen;
+
+        // While a dialogue is open, the dialogue window owns keyboard input
+        // (navigated/confirmed in the egui layer). Swallow movement and other
+        // game input so arrow/WASD keys don't move the player — which would also
+        // auto-close the conversation. `frame` already consumed the key presses.
+        if ui_state.talking_to.is_some() {
+            return result;
+        }
 
         // While resting, the simulation auto-advances (see update_rest); swallow
         // normal input. Any movement, interaction, or fresh click cancels rest.

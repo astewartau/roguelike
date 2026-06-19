@@ -7,7 +7,7 @@ use hecs::{Entity, World};
 
 use crate::components::{
     AbilityType, Attackable, BlocksMovement, ChaseAI, ClassAbility, CompanionAI, Container, ContainerType, Door, EffectType, Equipment,
-    EquippedWeapon, Health, Inventory, ItemType, LifeDrainInProgress, LungeAnimation, PlacedTrap, Player, Position, Projectile,
+    EquippedWeapon, Health, Inventory, ItemInstance, ItemType, LifeDrainInProgress, LungeAnimation, PlacedTrap, Player, Position, Projectile,
     ProjectileMarker, RangedCooldown, SecondaryAbility, Sprite, Stats, StatusEffects, TamedBy, TamingInProgress, TrapType, VisualPosition, Weapon, RangedWeapon,
 };
 use crate::constants::*;
@@ -190,10 +190,9 @@ fn check_fire_trap_trigger(
         }
     }
 
-    // Trap triggered! Apply burst damage and burning effect
-    if let Ok(mut health) = world.get::<&mut Health>(victim) {
-        health.current -= burst_damage;
-    }
+    // Trap triggered! Apply burst damage (handles invulnerability, armor defense,
+    // Protected/Barkskin) and a burning effect.
+    crate::systems::combat::apply_damage(world, victim, burst_damage);
 
     // Interrupt life drain if victim was channeling
     interrupt_life_drain_on_damage(world, victim, events);
@@ -290,11 +289,9 @@ pub fn apply_attack(
         None => return ActionResult::Invalid,
     };
 
-    // Check for status effects
+    // Attacker-side buff (defender-side reductions are handled centrally by
+    // combat::apply_damage).
     let has_strength_boost = queries::has_status_effect(world, attacker, EffectType::Strengthened);
-    let has_protection = queries::has_status_effect(world, target, EffectType::Protected)
-        || queries::has_status_effect(world, target, EffectType::Barkskin);
-    let is_invulnerable = queries::has_status_effect(world, target, EffectType::Invulnerable);
 
     // Calculate damage
     let base_damage = {
@@ -302,45 +299,34 @@ pub fn apply_attack(
             .get::<&Stats>(attacker)
             .map(|s| s.strength)
             .unwrap_or(10);
-        let weapon_damage = world
+        let (weapon_damage, affix_damage) = world
             .get::<&Equipment>(attacker)
             .ok()
-            .and_then(|e| e.get_melee().map(|w| w.base_damage + w.damage_bonus))
-            .unwrap_or(UNARMED_DAMAGE);
+            .map(|e| {
+                (
+                    e.get_melee().map(|w| w.base_damage + w.damage_bonus).unwrap_or(UNARMED_DAMAGE),
+                    e.weapon_source.as_ref().map_or(0, |w| w.damage_bonus()),
+                )
+            })
+            .unwrap_or((UNARMED_DAMAGE, 0));
 
-        weapon_damage + (strength - 10) / 2
+        weapon_damage + affix_damage + (strength - 10) / 2
     };
 
-    // Apply damage variance and crit
+    // Apply damage variance and crit (attacker side)
     let mut rng = rand::thread_rng();
     let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
     let is_crit = rng.gen::<f32>() < COMBAT_CRIT_CHANCE;
-    let mut damage = (base_damage as f32 * damage_mult) as i32;
+    let mut raw = (base_damage as f32 * damage_mult) as i32;
     if is_crit {
-        damage = (damage as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
+        raw = (raw as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
     }
-
-    // Apply Strengthened bonus
     if has_strength_boost {
-        damage = (damage as f32 * STRENGTH_DAMAGE_MULTIPLIER) as i32;
+        raw = (raw as f32 * STRENGTH_DAMAGE_MULTIPLIER) as i32;
     }
 
-    // Apply Protected reduction
-    if has_protection {
-        damage = (damage as f32 * PROTECTION_DAMAGE_REDUCTION) as i32;
-    }
-
-    // Invulnerable negates all damage
-    if is_invulnerable {
-        damage = 0;
-    } else {
-        damage = damage.max(1);
-    }
-
-    // Apply damage to target
-    if let Ok(mut health) = world.get::<&mut Health>(target) {
-        health.current -= damage;
-    }
+    // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
+    let damage = crate::systems::combat::apply_damage(world, target, raw);
 
     // Interrupt life drain if target was channeling
     interrupt_life_drain_on_damage(world, target, events);
@@ -375,7 +361,7 @@ pub fn apply_attack(
         target_pos: (target_pos.0 + 0.5, target_pos.1 + 0.5),
         damage,
         kind: crate::events::DamageKind::Melee,
-        crit: is_crit && !is_invulnerable,
+        crit: is_crit && damage > 0,
     });
 
     ActionResult::Completed
@@ -658,7 +644,7 @@ pub fn apply_shoot_bow(
     // If player, check for and consume arrow from inventory
     if is_player {
         if let Ok(mut inventory) = world.get::<&mut Inventory>(shooter) {
-            if let Some(idx) = inventory.items.iter().position(|i| *i == ItemType::Arrow) {
+            if let Some(idx) = inventory.items.iter().position(|i| i.kind == ItemType::Arrow) {
                 inventory.items.remove(idx);
             } else {
                 // No arrows! Can't shoot
@@ -669,19 +655,26 @@ pub fn apply_shoot_bow(
         }
     }
 
-    // Get bow stats
-    let (base_damage, arrow_speed) = {
+    // Get bow stats (including any weapon affix damage from the equipped bow)
+    let (base_damage, arrow_speed, affix_damage) = {
         let equipment = world.get::<&Equipment>(shooter).ok();
         let bow = equipment.as_ref().and_then(|e| e.get_bow());
         match bow {
-            Some(bow) => (bow.base_damage, bow.arrow_speed),
+            Some(bow) => (
+                bow.base_damage,
+                bow.arrow_speed,
+                equipment
+                    .as_ref()
+                    .and_then(|e| e.weapon_source.as_ref())
+                    .map_or(0, |w| w.damage_bonus()),
+            ),
             None => return ActionResult::Blocked,
         }
     };
 
     // Calculate damage with stats
     let agility = world.get::<&Stats>(shooter).map(|s| s.agility).unwrap_or(10);
-    let base_calc_damage = base_damage + (agility - 10) / 2;
+    let base_calc_damage = base_damage + affix_damage + (agility - 10) / 2;
 
     // Apply range band modifier (only for player)
     let damage = if is_player {
@@ -1027,9 +1020,8 @@ pub fn apply_fireball(
 
     // Apply damage to all
     for (entity, x, y) in damaged {
-        if let Ok(mut health) = world.get::<&mut Health>(entity) {
-            health.current -= FIREBALL_DAMAGE;
-        }
+        // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
+        crate::systems::combat::apply_damage(world, entity, FIREBALL_DAMAGE);
         // Interrupt life drain if entity was channeling
         interrupt_life_drain_on_damage(world, entity, events);
         // Generate threat on fireball targets
@@ -1048,63 +1040,166 @@ pub fn apply_fireball(
     ActionResult::Completed
 }
 
+/// Build the combat `EquippedWeapon` for a weapon item kind.
+/// Returns `None` for non-weapon kinds.
+fn equipped_weapon_for_kind(kind: ItemType) -> Option<EquippedWeapon> {
+    Some(match kind {
+        ItemType::Sword => EquippedWeapon::Melee(Weapon::sword()),
+        ItemType::Dagger => EquippedWeapon::Melee(Weapon::dagger()),
+        ItemType::Staff => EquippedWeapon::Melee(Weapon::staff()),
+        ItemType::Bow => EquippedWeapon::Ranged(RangedWeapon::bow()),
+        _ => return None,
+    })
+}
+
+/// Reconstruct a plain `ItemInstance` from an equipped weapon by its name.
+/// Used as a fallback when no `weapon_source` is recorded (e.g. the player's
+/// starting weapon set directly on `Equipment`). Returns `None` for enemy
+/// weapons like claws, which are not real items.
+fn equipped_weapon_to_instance(weapon: &EquippedWeapon) -> Option<ItemInstance> {
+    let kind = match weapon {
+        EquippedWeapon::Melee(w) => match w.name.as_str() {
+            "Sword" => ItemType::Sword,
+            "Dagger" => ItemType::Dagger,
+            "Staff" => ItemType::Staff,
+            _ => return None,
+        },
+        EquippedWeapon::Ranged(_) => ItemType::Bow,
+    };
+    Some(ItemInstance::plain(kind))
+}
+
 /// Apply equip weapon action - equips a weapon from inventory
 pub fn apply_equip_weapon(
     world: &mut World,
     entity: Entity,
     item_index: usize,
 ) -> ActionResult {
-    // Get the item type from inventory
-    let item_type = {
+    // Get the full instance from inventory (carries rarity/affixes)
+    let new_instance = {
         let Ok(inventory) = world.get::<&Inventory>(entity) else {
             return ActionResult::Invalid;
         };
         if item_index >= inventory.items.len() {
             return ActionResult::Invalid;
         }
-        inventory.items[item_index]
+        inventory.items[item_index].clone()
     };
 
-    // Create the equipped weapon
-    let new_weapon = match item_type {
-        ItemType::Sword => EquippedWeapon::Melee(Weapon::sword()),
-        ItemType::Dagger => EquippedWeapon::Melee(Weapon::dagger()),
-        ItemType::Staff => EquippedWeapon::Melee(Weapon::staff()),
-        ItemType::Bow => EquippedWeapon::Ranged(RangedWeapon::bow()),
-        _ => return ActionResult::Invalid, // Not a weapon
+    // Create the combat weapon for this kind
+    let Some(new_weapon) = equipped_weapon_for_kind(new_instance.kind) else {
+        return ActionResult::Invalid; // Not a weapon
     };
 
-    // Check if there's currently an equipped weapon that needs to go to inventory
-    let old_weapon_item = {
-        if let Ok(equipment) = world.get::<&Equipment>(entity) {
-            match &equipment.weapon {
-                Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
-                    "Dagger" => Some(ItemType::Dagger),
-                    "Staff" => Some(ItemType::Staff),
-                    _ => Some(ItemType::Sword),
-                },
-                Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
-                None => None,
-            }
-        } else {
-            None
+    // Take the previously equipped weapon's source instance to return to inventory
+    // (falling back to a plain reconstruction for the starting weapon).
+    let old_source = {
+        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
+            return ActionResult::Invalid;
+        };
+        match equipment.weapon_source.take() {
+            Some(inst) => Some(inst),
+            None => equipment.weapon.as_ref().and_then(equipped_weapon_to_instance),
         }
     };
 
     // Remove the item we're equipping from inventory
     crate::systems::items::remove_item_from_inventory(world, entity, item_index);
 
-    // Add the old weapon to inventory if there was one
-    if let Some(old_item) = old_weapon_item {
-        crate::systems::inventory::add_item_to_inventory(world, entity, old_item);
+    // Add the old weapon back to inventory if there was one
+    if let Some(old) = old_source {
+        crate::systems::inventory::add_item_to_inventory(world, entity, old);
     }
 
-    // Equip the new weapon
+    // Equip the new weapon, recording its source instance
     if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
         equipment.weapon = Some(new_weapon);
+        equipment.weapon_source = Some(new_instance);
     }
 
     ActionResult::Completed
+}
+
+/// Apply equip armor action - equips an armor piece from inventory into its
+/// body/head slot, returning any previously equipped piece to inventory.
+pub fn apply_equip_armor(
+    world: &mut World,
+    entity: Entity,
+    item_index: usize,
+) -> ActionResult {
+    use crate::systems::item_defs::{armor_slot, ArmorSlot};
+
+    // Get the full instance from inventory (carries rarity/affixes)
+    let new_instance = {
+        let Ok(inventory) = world.get::<&Inventory>(entity) else {
+            return ActionResult::Invalid;
+        };
+        if item_index >= inventory.items.len() {
+            return ActionResult::Invalid;
+        }
+        inventory.items[item_index].clone()
+    };
+
+    // Determine which slot this armor occupies
+    let Some(slot) = armor_slot(new_instance.kind) else {
+        return ActionResult::Invalid; // Not armor
+    };
+
+    // Swap the previously equipped piece (if any) out of the slot
+    let old_piece = {
+        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
+            return ActionResult::Invalid;
+        };
+        match slot {
+            ArmorSlot::Body => equipment.body.take(),
+            ArmorSlot::Head => equipment.head.take(),
+        }
+    };
+
+    // Remove the item we're equipping from inventory
+    crate::systems::items::remove_item_from_inventory(world, entity, item_index);
+
+    // Return the old piece to inventory
+    if let Some(old) = old_piece {
+        crate::systems::inventory::add_item_to_inventory(world, entity, old);
+    }
+
+    // Equip the new piece into its slot
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
+        match slot {
+            ArmorSlot::Body => equipment.body = Some(new_instance),
+            ArmorSlot::Head => equipment.head = Some(new_instance),
+        }
+    }
+
+    ActionResult::Completed
+}
+
+/// Apply unequip armor action - moves the armor in the given slot to inventory.
+pub fn apply_unequip_armor(
+    world: &mut World,
+    entity: Entity,
+    slot: crate::systems::item_defs::ArmorSlot,
+) -> ActionResult {
+    use crate::systems::item_defs::ArmorSlot;
+
+    let piece = {
+        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
+            return ActionResult::Invalid;
+        };
+        match slot {
+            ArmorSlot::Body => equipment.body.take(),
+            ArmorSlot::Head => equipment.head.take(),
+        }
+    };
+
+    match piece {
+        Some(instance) => {
+            crate::systems::inventory::add_item_to_inventory(world, entity, instance);
+            ActionResult::Completed
+        }
+        None => ActionResult::Invalid,
+    }
 }
 
 /// Apply unequip weapon action - moves current weapon to inventory
@@ -1112,26 +1207,26 @@ pub fn apply_unequip_weapon(
     world: &mut World,
     entity: Entity,
 ) -> ActionResult {
-    // Get the currently equipped weapon
+    // Get the currently equipped weapon's source instance (with affixes), or
+    // reconstruct a plain instance for the starting weapon.
     let weapon_item = {
-        let Ok(equipment) = world.get::<&Equipment>(entity) else {
+        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
             return ActionResult::Invalid;
         };
-        match &equipment.weapon {
-            Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
-                "Dagger" => Some(ItemType::Dagger),
-                "Staff" => Some(ItemType::Staff),
-                _ => Some(ItemType::Sword),
+        if equipment.weapon.is_none() {
+            return ActionResult::Invalid; // Nothing to unequip
+        }
+        match equipment.weapon_source.take() {
+            Some(inst) => inst,
+            None => match equipment.weapon.as_ref().and_then(equipped_weapon_to_instance) {
+                Some(inst) => inst,
+                None => return ActionResult::Invalid,
             },
-            Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
-            None => return ActionResult::Invalid, // Nothing to unequip
         }
     };
 
     // Add the weapon to inventory
-    if let Some(item) = weapon_item {
-        crate::systems::inventory::add_item_to_inventory(world, entity, item);
-    }
+    crate::systems::inventory::add_item_to_inventory(world, entity, weapon_item);
 
     // Remove weapon from equipment
     if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
@@ -1154,27 +1249,28 @@ pub fn apply_drop_item(
         None => return ActionResult::Invalid,
     };
 
-    // Get the item type from inventory
-    let item_type = {
+    // Get the full instance from inventory (carries rarity/affixes)
+    let item_instance = {
         let Ok(inventory) = world.get::<&Inventory>(entity) else {
             return ActionResult::Invalid;
         };
         if item_index >= inventory.items.len() {
             return ActionResult::Invalid;
         }
-        inventory.items[item_index]
+        inventory.items[item_index].clone()
     };
+    let item_kind = item_instance.kind;
 
     // Remove from inventory
     crate::systems::items::remove_item_from_inventory(world, entity, item_index);
 
     // Spawn on ground
-    crate::systems::inventory::spawn_ground_item(world, x, y, item_type);
+    crate::systems::inventory::spawn_ground_item(world, x, y, item_instance);
 
     // Emit event
     events.push(GameEvent::ItemDropped {
         entity,
-        item: item_type,
+        item: item_kind,
         position: (x, y),
     });
 
@@ -1193,23 +1289,24 @@ pub fn apply_drop_equipped_weapon(
         None => return ActionResult::Invalid,
     };
 
-    // Get the currently equipped weapon
-    let weapon_item = {
-        let Ok(equipment) = world.get::<&Equipment>(entity) else {
+    // Get the currently equipped weapon's source instance (with affixes), or
+    // reconstruct a plain instance for the starting weapon.
+    let weapon_instance = {
+        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
             return ActionResult::Invalid;
         };
-        match &equipment.weapon {
-            Some(EquippedWeapon::Melee(weapon)) => match weapon.name.as_str() {
-                "Dagger" => Some(ItemType::Dagger),
-                "Staff" => Some(ItemType::Staff),
-                _ => Some(ItemType::Sword),
+        if equipment.weapon.is_none() {
+            return ActionResult::Invalid; // Nothing to drop
+        }
+        match equipment.weapon_source.take() {
+            Some(inst) => inst,
+            None => match equipment.weapon.as_ref().and_then(equipped_weapon_to_instance) {
+                Some(inst) => inst,
+                None => return ActionResult::Invalid,
             },
-            Some(EquippedWeapon::Ranged(_)) => Some(ItemType::Bow),
-            None => return ActionResult::Invalid, // Nothing to drop
         }
     };
-
-    let item_type = weapon_item.unwrap();
+    let item_kind = weapon_instance.kind;
 
     // Remove weapon from equipment
     if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
@@ -1217,12 +1314,12 @@ pub fn apply_drop_equipped_weapon(
     }
 
     // Spawn on ground
-    crate::systems::inventory::spawn_ground_item(world, x, y, item_type);
+    crate::systems::inventory::spawn_ground_item(world, x, y, weapon_instance);
 
     // Emit event
     events.push(GameEvent::ItemDropped {
         entity,
-        item: item_type,
+        item: item_kind,
         position: (x, y),
     });
 
@@ -1257,12 +1354,17 @@ pub fn apply_cleave(
         .get::<&Stats>(attacker)
         .map(|s| s.strength)
         .unwrap_or(10);
-    let weapon_damage = world
+    let (weapon_damage, affix_damage) = world
         .get::<&Equipment>(attacker)
         .ok()
-        .and_then(|e| e.get_melee().map(|w| w.base_damage + w.damage_bonus))
-        .unwrap_or(UNARMED_DAMAGE);
-    let base_damage = weapon_damage + (strength - 10) / 2;
+        .map(|e| {
+            (
+                e.get_melee().map(|w| w.base_damage + w.damage_bonus).unwrap_or(UNARMED_DAMAGE),
+                e.weapon_source.as_ref().map_or(0, |w| w.damage_bonus()),
+            )
+        })
+        .unwrap_or((UNARMED_DAMAGE, 0));
+    let base_damage = weapon_damage + affix_damage + (strength - 10) / 2;
 
     // Check for status effects on attacker
     let has_strength_boost = queries::has_status_effect(world, attacker, EffectType::Strengthened);
@@ -1285,34 +1387,19 @@ pub fn apply_cleave(
     // Apply damage to each target
     let mut rng = rand::thread_rng();
     for (target, tx, ty) in &targets {
-        // Check for protection on target
-        let has_protection = queries::has_status_effect(world, *target, EffectType::Protected)
-            || queries::has_status_effect(world, *target, EffectType::Barkskin);
-
-        // Apply damage variance and crit
+        // Apply damage variance and crit (attacker side)
         let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
         let is_crit = rng.gen::<f32>() < COMBAT_CRIT_CHANCE;
-        let mut damage = (base_damage as f32 * damage_mult) as i32;
+        let mut raw = (base_damage as f32 * damage_mult) as i32;
         if is_crit {
-            damage = (damage as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
+            raw = (raw as f32 * COMBAT_CRIT_MULTIPLIER) as i32;
         }
-
-        // Apply Strengthened bonus
         if has_strength_boost {
-            damage = (damage as f32 * STRENGTH_DAMAGE_MULTIPLIER) as i32;
+            raw = (raw as f32 * STRENGTH_DAMAGE_MULTIPLIER) as i32;
         }
 
-        // Apply Protected reduction
-        if has_protection {
-            damage = (damage as f32 * PROTECTION_DAMAGE_REDUCTION) as i32;
-        }
-
-        damage = damage.max(1);
-
-        // Apply damage to target
-        if let Ok(mut health) = world.get::<&mut Health>(*target) {
-            health.current -= damage;
-        }
+        // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
+        let damage = crate::systems::combat::apply_damage(world, *target, raw);
 
         // Interrupt life drain if target was channeling
         interrupt_life_drain_on_damage(world, *target, events);
@@ -1639,13 +1726,12 @@ fn tick_life_drain(
         // Calculate damage: base + INT bonus
         let damage = LIFE_DRAIN_DAMAGE_PER_TICK + (intelligence - 10) / 3;
 
-        // Apply damage to target
-        let target_died = if let Ok(mut health) = world.get::<&mut Health>(target) {
-            health.current -= damage;
-            health.current <= 0
-        } else {
-            false
-        };
+        // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
+        crate::systems::combat::apply_damage(world, target, damage);
+        let target_died = world
+            .get::<&Health>(target)
+            .map(|h| h.current <= 0)
+            .unwrap_or(false);
 
         // Generate threat on life drain target
         crate::systems::ai::generate_threat(world, target, caster, damage as f32 * THREAT_PER_DAMAGE);
@@ -2029,7 +2115,7 @@ pub fn apply_shoot_crippling_shot(
 
     // Check for and consume arrow from inventory
     if let Ok(mut inventory) = world.get::<&mut Inventory>(shooter) {
-        if let Some(idx) = inventory.items.iter().position(|i| *i == ItemType::Arrow) {
+        if let Some(idx) = inventory.items.iter().position(|i| i.kind == ItemType::Arrow) {
             inventory.items.remove(idx);
         } else {
             // No arrows! Can't shoot

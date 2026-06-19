@@ -584,7 +584,9 @@ pub fn process_ui_actions(
 
     // Dialogue interactions
     if let Some(npc_id) = ui_state.talking_to {
-        if let Some(option_index) = actions.dialogue_option_selected {
+        if actions.close_dialogue {
+            result.close_dialogue = true;
+        } else if let Some(option_index) = actions.dialogue_option_selected {
             // Check if the selected option has a special action before advancing
             let action = get_dialogue_action(world, npc_id, option_index);
 
@@ -667,6 +669,9 @@ pub fn process_ui_actions(
                     weapon_type: item_type,
                 });
             }
+            systems::ItemUseResult::IsArmor { item_type: _, item_index } => {
+                systems::actions::apply_equip_armor(world, player_entity, item_index);
+            }
             systems::ItemUseResult::Used { item_type } => {
                 // Emit PotionDrunk event for potions
                 if matches!(
@@ -689,7 +694,8 @@ pub fn process_ui_actions(
     // Throw item
     if let Some(item_index) = actions.item_to_throw {
         if let Ok(inv) = world.get::<&Inventory>(player_entity) {
-            if let Some(&item_type) = inv.items.get(item_index) {
+            if let Some(item) = inv.items.get(item_index) {
+                let item_type = item.kind;
                 if systems::items::item_is_throwable(item_type) {
                     let params = systems::item_targeting_params(item_type);
                     result.enter_targeting = Some(TargetingMode {
@@ -714,6 +720,11 @@ pub fn process_ui_actions(
     // Unequip weapon (put back in inventory)
     if actions.unequip_weapon {
         systems::actions::apply_unequip_weapon(world, player_entity);
+    }
+
+    // Unequip armor (put back in inventory)
+    if let Some(slot) = actions.unequip_armor {
+        systems::actions::apply_unequip_armor(world, player_entity, slot);
     }
 
     // Drop equipped weapon
@@ -748,7 +759,7 @@ fn buy_item_from_vendor(
     item_idx: usize,
     events: &mut crate::events::EventQueue,
 ) {
-    use crate::components::{Inventory, Vendor};
+    use crate::components::{Inventory, ItemInstance, Vendor};
     use crate::events::GameEvent;
     use crate::systems::item_defs::get_price;
     use crate::systems::items::item_weight;
@@ -770,7 +781,7 @@ fn buy_item_from_vendor(
     // Transfer gold from player to vendor
     if let Ok(mut player_inv) = world.get::<&mut Inventory>(player_entity) {
         player_inv.gold -= price;
-        player_inv.items.push(item_type);
+        player_inv.items.push(ItemInstance::plain(item_type));
         player_inv.current_weight_kg += item_weight(item_type);
     }
 
@@ -805,8 +816,8 @@ fn sell_item_to_vendor(
     // Get item info from player
     let (item_type, sell_price) = {
         let Ok(player_inv) = world.get::<&Inventory>(player_entity) else { return };
-        let Some(&item) = player_inv.items.get(item_idx) else { return };
-        (item, get_sell_price(item))
+        let Some(item) = player_inv.items.get(item_idx) else { return };
+        (item.kind, get_sell_price(item.kind))
     };
 
     // Check vendor can afford it

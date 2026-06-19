@@ -142,6 +142,19 @@ fn draw_stats_column(
         ui.add_space(10.0);
 
         if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
+            // Affix/rarity suffix for the equipped weapon's tooltip
+            let weapon_affix_text: String = equipment
+                .weapon_source
+                .as_ref()
+                .filter(|inst| !inst.affixes.is_empty()
+                    || inst.rarity != crate::components::Rarity::Common)
+                .map(|inst| {
+                    let affixes: String =
+                        inst.affixes.iter().map(|a| format!("\n{}", a.label())).collect();
+                    format!("\n\n{}{}", inst.rarity.label(), affixes)
+                })
+                .unwrap_or_default();
+
             // Single weapon slot
             ui.horizontal(|ui| {
                 ui.label("Weapon:");
@@ -166,11 +179,12 @@ fn draw_stats_column(
                         image.paint_at(ui, rect);
 
                         let response = response.on_hover_text(format!(
-                            "{}\n\nDamage: {} + {} = {}\n\nClick to unequip\nRight-click for options",
+                            "{}\n\nDamage: {} + {} = {}{}\n\nClick to unequip\nRight-click for options",
                             weapon.name,
                             weapon.base_damage,
                             weapon.damage_bonus,
-                            systems::weapon_damage(weapon)
+                            systems::weapon_damage(weapon),
+                            weapon_affix_text
                         ));
 
                         // Left-click unequips
@@ -197,8 +211,8 @@ fn draw_stats_column(
                         image.paint_at(ui, rect);
 
                         let response = response.on_hover_text(format!(
-                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec\n\nClick to unequip\nRight-click for options",
-                            bow.name, bow.base_damage, bow.arrow_speed
+                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec{}\n\nClick to unequip\nRight-click for options",
+                            bow.name, bow.base_damage, bow.arrow_speed, weapon_affix_text
                         ));
 
                         // Left-click unequips
@@ -220,6 +234,55 @@ fn draw_stats_column(
                     }
                 }
             });
+
+            // Armor slots (body / head)
+            use crate::systems::item_defs::{armor_base_defense, ArmorSlot};
+            for (label, slot, piece) in [
+                ("Body:", ArmorSlot::Body, &equipment.body),
+                ("Head:", ArmorSlot::Head, &equipment.head),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    match piece {
+                        Some(instance) => {
+                            let size = egui::vec2(48.0, 48.0);
+                            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+                            ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+                            let image = egui::Image::new(egui::load::SizedTexture::new(
+                                icons.items_texture_id,
+                                size,
+                            ))
+                            .uv(icons.get_item_uv(instance.kind));
+                            image.paint_at(ui, rect);
+
+                            let defense = armor_base_defense(instance.kind) + instance.defense_bonus();
+                            let affixes: String =
+                                instance.affixes.iter().map(|a| format!("\n{}", a.label())).collect();
+                            let response = response.on_hover_text(format!(
+                                "{} ({})\n\nDefense: {}{}\n\nClick to unequip",
+                                systems::item_name(instance.kind),
+                                instance.rarity.label(),
+                                defense,
+                                affixes,
+                            ));
+                            if response.clicked() {
+                                actions.unequip_armor = Some(slot);
+                            }
+                        }
+                        None => {
+                            ui.label(
+                                egui::RichText::new("(none)")
+                                    .italics()
+                                    .color(style::colors::TEXT_MUTED),
+                            );
+                        }
+                    }
+                });
+            }
+
+            // Total defense readout
+            ui.add_space(4.0);
+            ui.label(format!("Defense: {}", equipment.total_defense()));
         }
     });
 }
@@ -298,6 +361,19 @@ fn draw_inventory_column(
                             );
                         }
 
+                        // Rarity + affix lines for gear (looked up from the backing instance)
+                        let gear_text: String = inventory
+                            .items
+                            .get(slot.first_index)
+                            .filter(|inst| !inst.affixes.is_empty()
+                                || inst.rarity != crate::components::Rarity::Common)
+                            .map(|inst| {
+                                let affixes: String =
+                                    inst.affixes.iter().map(|a| format!("\n{}", a.label())).collect();
+                                format!(" ({}){}", inst.rarity.label(), affixes)
+                            })
+                            .unwrap_or_default();
+
                         // Build hover text based on item type
                         let hover_text = if slot.count > 1 {
                             format!(
@@ -307,13 +383,15 @@ fn draw_inventory_column(
                             )
                         } else if is_throwable {
                             format!(
-                                "{}\n\nLeft-click to drink\nRight-click for options",
-                                systems::item_name(slot.item_type)
+                                "{}{}\n\nLeft-click to drink\nRight-click for options",
+                                systems::item_name(slot.item_type),
+                                gear_text
                             )
                         } else {
                             format!(
-                                "{}\n\nLeft-click to use\nRight-click for options",
-                                systems::item_name(slot.item_type)
+                                "{}{}\n\nLeft-click to use\nRight-click for options",
+                                systems::item_name(slot.item_type),
+                                gear_text
                             )
                         };
 
@@ -437,23 +515,24 @@ fn draw_spellbook_column(
 }
 
 /// Build inventory display slots, grouping stackable items together
-fn build_inventory_slots(items: &[crate::components::ItemType]) -> Vec<InventorySlot> {
+fn build_inventory_slots(items: &[crate::components::ItemInstance]) -> Vec<InventorySlot> {
     use std::collections::HashMap;
 
     let mut slots = Vec::new();
     let mut stackable_counts: HashMap<crate::components::ItemType, (u32, usize)> = HashMap::new();
 
-    for (i, item_type) in items.iter().enumerate() {
+    for (i, instance) in items.iter().enumerate() {
+        let item_type = instance.kind;
         if item_type.is_stackable() {
             // Track count and first index for stackable items
             stackable_counts
-                .entry(*item_type)
+                .entry(item_type)
                 .and_modify(|(count, _)| *count += 1)
                 .or_insert((1, i));
         } else {
             // Non-stackable items get their own slot
             slots.push(InventorySlot {
-                item_type: *item_type,
+                item_type,
                 count: 1,
                 first_index: i,
             });
@@ -488,9 +567,10 @@ fn draw_item_context_menu(
             .get::<&Inventory>(player_entity)
             .ok()
             .map(|inv| {
-                if let Some(&item) = inv.items.get(item_idx) {
+                if let Some(instance) = inv.items.get(item_idx) {
+                    let item = instance.kind;
                     let count = if item.is_stackable() {
-                        inv.items.iter().filter(|&&i| i == item).count() as u32
+                        inv.items.iter().filter(|i| i.kind == item).count() as u32
                     } else {
                         1
                     };

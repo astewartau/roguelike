@@ -62,12 +62,16 @@ pub struct UiActions {
     pub drop_equipped_weapon: bool,
     /// Unequip the currently equipped weapon (put back in inventory)
     pub unequip_weapon: bool,
+    /// Unequip an armor slot (put the piece back in inventory)
+    pub unequip_armor: Option<crate::systems::item_defs::ArmorSlot>,
     pub chest_item_to_take: Option<usize>,
     pub chest_take_all: bool,
     pub chest_take_gold: bool,
     pub close_chest: bool,
     /// Index of dialogue option selected by player
     pub dialogue_option_selected: Option<usize>,
+    /// Close the dialogue window without choosing an option (Esc)
+    pub close_dialogue: bool,
     /// Start the game with selected class (from start screen)
     pub start_game: Option<crate::components::PlayerClass>,
     /// Activate an ability (from a hotbar slot)
@@ -105,6 +109,8 @@ pub struct GameUiState {
     pub open_chest: Option<Entity>,
     /// Currently talking to NPC (for dialogue window)
     pub talking_to: Option<Entity>,
+    /// Highlighted dialogue response option (for keyboard navigation)
+    pub dialogue_selected: usize,
     /// Currently shopping at vendor (for shop window)
     pub shopping_at: Option<Entity>,
     /// Show inventory window
@@ -134,6 +140,7 @@ impl GameUiState {
         Self {
             open_chest: None,
             talking_to: None,
+            dialogue_selected: 0,
             shopping_at: None,
             show_inventory: false,
             show_grid_lines: false,
@@ -161,6 +168,7 @@ impl GameUiState {
                 // Open dialogue window if player started the conversation
                 if *player == self.player_entity {
                     self.talking_to = Some(*npc);
+                    self.dialogue_selected = 0;
                 }
             }
             GameEvent::ShopOpened { vendor, player } => {
@@ -348,7 +356,7 @@ pub fn run_ui(
 
         // Dialogue window (if talking to NPC)
         if let Some(ref data) = dialogue_data {
-            draw_dialogue_window(ctx, data, &mut actions);
+            draw_dialogue_window(ctx, data, icons, tileset, &mut ui_state.dialogue_selected, &mut actions);
         }
 
         // Shop window (if shopping at vendor)

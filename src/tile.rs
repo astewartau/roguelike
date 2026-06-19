@@ -155,6 +155,11 @@ pub mod tile_ids {
     pub const AXE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(4, 1, ITEMS_COLS)); // 4.b battle axe
     pub const STAFF: (SpriteSheet, u32) = (SpriteSheet::Items, rc(11, 0, ITEMS_COLS)); // 11.a crystal staff
 
+    // Armor (rows 13 & 16)
+    pub const LEATHER_ARMOR: (SpriteSheet, u32) = (SpriteSheet::Items, rc(13, 1, ITEMS_COLS)); // 13.b leather armor
+    pub const CHAIN_MAIL: (SpriteSheet, u32) = (SpriteSheet::Items, rc(13, 3, ITEMS_COLS)); // 13.d chain mail
+    pub const HELMET: (SpriteSheet, u32) = (SpriteSheet::Items, rc(16, 4, ITEMS_COLS)); // 16.e helm
+
     // Potions
     pub const RED_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(20, 1, ITEMS_COLS)); // 20.b red potion
     pub const BLUE_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(21, 3, ITEMS_COLS)); // 21.d blue potion

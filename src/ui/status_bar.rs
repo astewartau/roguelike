@@ -24,6 +24,8 @@ pub struct StatusBarData {
     pub xp_progress: f32,
     pub xp_level: u32,
     pub gold: u32,
+    /// Total flat defense from equipped armor
+    pub defense: i32,
     /// Active status effects with remaining duration
     pub active_effects: Vec<(StatusEffectType, f32)>,
 }
@@ -38,6 +40,11 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
     let gold = world
         .get::<&Inventory>(player_entity)
         .map(|inv| inv.gold)
+        .unwrap_or(0);
+
+    let defense = world
+        .get::<&crate::components::Equipment>(player_entity)
+        .map(|e| e.total_defense())
         .unwrap_or(0);
 
     let (xp_progress, xp_level) = world
@@ -63,6 +70,7 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity) -> Status
         xp_progress,
         xp_level,
         gold,
+        defense,
         active_effects,
     }
 }
@@ -77,7 +85,8 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
     } else {
         25.0
     };
-    let window_height = base_height + effects_height;
+    let defense_height = if data.defense > 0 { 22.0 } else { 0.0 };
+    let window_height = base_height + effects_height + defense_height;
 
     egui::Window::new("Status")
         .fixed_pos([10.0, 10.0])
@@ -137,6 +146,13 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                 ui.add(coin_img);
                 ui.label(format!("{}", data.gold));
             });
+
+            // Defense (only shown when the player has armor)
+            if data.defense > 0 {
+                ui.horizontal(|ui| {
+                    ui.label(format!("🛡 Defense: {}", data.defense));
+                });
+            }
 
             // Elapsed game time (HH:MM:SS)
             ui.horizontal(|ui| {

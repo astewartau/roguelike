@@ -39,6 +39,21 @@ pub mod colors {
     // Accent colors
     pub const DUNGEON_GOLD: Color32 = Color32::from_rgb(210, 180, 100);
     pub const DUNGEON_GREEN: Color32 = Color32::from_rgb(80, 140, 80);
+
+    // Item rarity tiers
+    pub const RARITY_COMMON: Color32 = TEXT_PRIMARY;
+    pub const RARITY_MAGIC: Color32 = Color32::from_rgb(110, 160, 230);
+    pub const RARITY_RARE: Color32 = Color32::from_rgb(230, 200, 90);
+}
+
+/// Color for an item rarity tier (for tooltips and item names).
+pub fn rarity_color(rarity: crate::components::Rarity) -> Color32 {
+    use crate::components::Rarity;
+    match rarity {
+        Rarity::Common => colors::RARITY_COMMON,
+        Rarity::Magic => colors::RARITY_MAGIC,
+        Rarity::Rare => colors::RARITY_RARE,
+    }
 }
 
 /// Border width for panels and buttons

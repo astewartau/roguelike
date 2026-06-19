@@ -1,8 +1,8 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, CompanionAI, Container, Door, Equipment, Experience, Health,
-    ItemType, Position, Sprite, Stats, Weapon,
+    Actor, Attackable, BlocksMovement, ChaseAI, CompanionAI, Container, Door, EffectType, Equipment, Experience, Health,
+    ItemInstance, ItemType, Position, Sprite, Stats, Weapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -15,6 +15,44 @@ use rand::Rng;
 /// Calculate total damage for a weapon
 pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
+}
+
+/// Apply `raw` incoming damage to `target`, accounting for invulnerability,
+/// equipped armor defense, and Protected/Barkskin reduction. Returns the
+/// damage actually dealt (0 if the target was invulnerable).
+///
+/// This is the single chokepoint for all damage so defense applies uniformly
+/// regardless of the damage source (melee, ranged, traps, spells). Attacker-side
+/// modifiers (crit, variance, Strengthened) are applied by the caller before
+/// passing `raw` in.
+pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
+    // Invulnerable negates all damage.
+    if crate::queries::has_status_effect(world, target, EffectType::Invulnerable) {
+        return 0;
+    }
+
+    let mut dmg = raw;
+
+    // Flat armor reduction (0 for entities without armor).
+    let defense = world
+        .get::<&Equipment>(target)
+        .map(|e| e.total_defense())
+        .unwrap_or(0);
+    dmg -= defense;
+
+    // Multiplicative damage reduction from Protected / Barkskin.
+    if crate::queries::has_status_effect(world, target, EffectType::Protected)
+        || crate::queries::has_status_effect(world, target, EffectType::Barkskin)
+    {
+        dmg = (dmg as f32 * PROTECTION_DAMAGE_REDUCTION) as i32;
+    }
+
+    dmg = dmg.max(1);
+
+    if let Ok(mut health) = world.get::<&mut Health>(target) {
+        health.current -= dmg;
+    }
+    dmg
 }
 
 /// Handle a ContainerOpened event - update sprite for containers
@@ -158,7 +196,7 @@ pub fn remove_dead_entities(
                 if rng.gen::<f32>() < 0.5 {
                     let arrow_count = rng.gen_range(1..=3);
                     for _ in 0..arrow_count {
-                        loot_items.push(ItemType::Arrow);
+                        loot_items.push(ItemInstance::plain(ItemType::Arrow));
                     }
                 }
             }

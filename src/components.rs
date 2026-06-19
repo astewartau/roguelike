@@ -77,8 +77,8 @@ impl PlayerClass {
     }
 
     /// Starting inventory items
-    pub fn starting_inventory(&self) -> Vec<ItemType> {
-        match self {
+    pub fn starting_inventory(&self) -> Vec<ItemInstance> {
+        let kinds: Vec<ItemType> = match self {
             PlayerClass::Fighter => vec![],
             // Ranger gets dagger and starting arrows
             PlayerClass::Ranger => {
@@ -91,7 +91,8 @@ impl PlayerClass {
             },
             PlayerClass::Druid => vec![ItemType::RegenerationPotion],
             PlayerClass::Necromancer => vec![ItemType::HealthPotion],
-        }
+        };
+        kinds.into_iter().map(ItemInstance::plain).collect()
     }
 
     /// Class innate ability
@@ -487,6 +488,10 @@ pub enum ItemType {
     Bow,
     Dagger,
     Staff,
+    // Armor
+    LeatherArmor,
+    ChainMail,
+    Helmet,
     // Potions
     HealthPotion,
     RegenerationPotion,
@@ -516,6 +521,91 @@ impl ItemType {
     /// Returns true if this item type stacks in inventory
     pub fn is_stackable(&self) -> bool {
         matches!(self, ItemType::Arrow)
+    }
+}
+
+// =============================================================================
+// ITEM INSTANCES (rarity + affixes)
+// =============================================================================
+
+/// Rarity tier of a gear instance. Drives affix count, tooltip color, and price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rarity {
+    Common,
+    Magic,
+    Rare,
+    // Legendary reserved for a later pass
+}
+
+impl Rarity {
+    /// Display label used in tooltips.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Rarity::Common => "Common",
+            Rarity::Magic => "Magic",
+            Rarity::Rare => "Rare",
+        }
+    }
+}
+
+/// A rolled modifier on a gear instance. Empty for consumables.
+///
+/// First pass intentionally only covers the two affixes that apply at clean
+/// chokepoints (weapon damage, armor defense). Stat/health/on-hit affixes are a
+/// later addition.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Affix {
+    /// Bonus melee/ranged damage (weapons)
+    Damage(i32),
+    /// Bonus flat defense (armor)
+    Defense(i32),
+}
+
+impl Affix {
+    /// Human-readable label for tooltips, e.g. "+2 Damage".
+    pub fn label(&self) -> String {
+        match self {
+            Affix::Damage(n) => format!("+{} Damage", n),
+            Affix::Defense(n) => format!("+{} Defense", n),
+        }
+    }
+}
+
+/// One concrete item in the world. Consumables are trivial instances (no
+/// affixes, Common); gear can carry rolled rarity and affixes.
+#[derive(Debug, Clone)]
+pub struct ItemInstance {
+    pub kind: ItemType,
+    pub rarity: Rarity,
+    pub affixes: Vec<Affix>,
+}
+
+impl ItemInstance {
+    /// A plain, unmodified item — consumables, vendor stock, arrows, starting gear.
+    pub fn plain(kind: ItemType) -> Self {
+        Self { kind, rarity: Rarity::Common, affixes: Vec::new() }
+    }
+
+    /// Sum of all `Affix::Damage` modifiers on this instance.
+    pub fn damage_bonus(&self) -> i32 {
+        self.affixes
+            .iter()
+            .map(|a| match a {
+                Affix::Damage(n) => *n,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Sum of all `Affix::Defense` modifiers on this instance.
+    pub fn defense_bonus(&self) -> i32 {
+        self.affixes
+            .iter()
+            .map(|a| match a {
+                Affix::Defense(n) => *n,
+                _ => 0,
+            })
+            .sum()
     }
 }
 
@@ -580,7 +670,7 @@ impl StatusEffects {
 /// Inventory component - pure data
 #[derive(Debug, Clone)]
 pub struct Inventory {
-    pub items: Vec<ItemType>,
+    pub items: Vec<ItemInstance>,
     pub current_weight_kg: f32,
     pub gold: u32,
 }
@@ -611,7 +701,7 @@ pub enum ContainerType {
 #[derive(Debug, Clone)]
 pub struct Container {
     pub container_type: ContainerType,
-    pub items: Vec<ItemType>,
+    pub items: Vec<ItemInstance>,
     pub gold: u32,
     pub is_open: bool,
     /// Chance to spawn enemy when opened (for coffins, 0.0-1.0)
@@ -904,7 +994,7 @@ impl VisualPosition {
 
 impl Container {
     /// Create a chest container
-    pub fn chest(items: Vec<ItemType>, gold: u32) -> Self {
+    pub fn chest(items: Vec<ItemInstance>, gold: u32) -> Self {
         Self {
             container_type: ContainerType::Chest,
             items,
@@ -915,7 +1005,7 @@ impl Container {
     }
 
     /// Create a coffin (may spawn enemy when opened)
-    pub fn coffin(items: Vec<ItemType>, gold: u32, spawn_chance: f32) -> Self {
+    pub fn coffin(items: Vec<ItemInstance>, gold: u32, spawn_chance: f32) -> Self {
         Self {
             container_type: ContainerType::Coffin,
             items,
@@ -926,7 +1016,7 @@ impl Container {
     }
 
     /// Create a barrel (contains food)
-    pub fn barrel(items: Vec<ItemType>) -> Self {
+    pub fn barrel(items: Vec<ItemInstance>) -> Self {
         Self {
             container_type: ContainerType::Barrel,
             items,
@@ -937,7 +1027,7 @@ impl Container {
     }
 
     /// Create a corpse/bones container (from dead enemies)
-    pub fn corpse(items: Vec<ItemType>, gold: u32) -> Self {
+    pub fn corpse(items: Vec<ItemInstance>, gold: u32) -> Self {
         Self {
             container_type: ContainerType::Corpse,
             items,
@@ -948,7 +1038,7 @@ impl Container {
     }
 
     /// Create a ground item pile
-    pub fn ground_pile(items: Vec<ItemType>) -> Self {
+    pub fn ground_pile(items: Vec<ItemInstance>) -> Self {
         Self {
             container_type: ContainerType::GroundPile,
             items,
@@ -1092,20 +1182,28 @@ pub struct Equipment {
     pub weapon: Option<EquippedWeapon>,
     /// Additional ranged weapon (used by enemies who have both melee and ranged)
     pub enemy_ranged: Option<RangedWeapon>,
+    /// The inventory instance backing the player's equipped weapon. Carries
+    /// rarity/affixes so they survive equip→unequip and feed the damage formula.
+    /// `None` for enemies (their claws/bows are not item instances).
+    pub weapon_source: Option<ItemInstance>,
+    /// Body armor slot (generic - any entity with Equipment can wear armor)
+    pub body: Option<ItemInstance>,
+    /// Head armor slot
+    pub head: Option<ItemInstance>,
 }
 
 impl Equipment {
     pub fn with_melee(weapon: Weapon) -> Self {
-        Self { weapon: Some(EquippedWeapon::Melee(weapon)), enemy_ranged: None }
+        Self { weapon: Some(EquippedWeapon::Melee(weapon)), ..Self::empty() }
     }
 
     pub fn with_ranged(ranged: RangedWeapon) -> Self {
-        Self { weapon: Some(EquippedWeapon::Ranged(ranged)), enemy_ranged: None }
+        Self { weapon: Some(EquippedWeapon::Ranged(ranged)), ..Self::empty() }
     }
 
     /// Create equipment with an already-constructed EquippedWeapon
     pub fn with_equipped(weapon: EquippedWeapon) -> Self {
-        Self { weapon: Some(weapon), enemy_ranged: None }
+        Self { weapon: Some(weapon), ..Self::empty() }
     }
 
     /// Create equipment for enemies that can use both melee (claws) and ranged (bow)
@@ -1113,12 +1211,35 @@ impl Equipment {
         Self {
             weapon: Some(EquippedWeapon::Melee(melee)),
             enemy_ranged: Some(ranged),
+            ..Self::empty()
         }
     }
 
     /// Create equipment with just a melee weapon (for melee-only enemies)
     pub fn with_weapon(weapon: Weapon) -> Self {
-        Self { weapon: Some(EquippedWeapon::Melee(weapon)), enemy_ranged: None }
+        Self { weapon: Some(EquippedWeapon::Melee(weapon)), ..Self::empty() }
+    }
+
+    /// Empty equipment with all slots unfilled.
+    pub fn empty() -> Self {
+        Self {
+            weapon: None,
+            enemy_ranged: None,
+            weapon_source: None,
+            body: None,
+            head: None,
+        }
+    }
+
+    /// Total flat defense from all armor slots (base by kind + Defense affixes).
+    /// Works for any entity with an Equipment component, so granting an enemy
+    /// armor later is just a matter of filling a slot.
+    pub fn total_defense(&self) -> i32 {
+        [&self.body, &self.head]
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .map(|inst| crate::systems::item_defs::armor_base_defense(inst.kind) + inst.defense_bonus())
+            .sum()
     }
 
     /// Check if a bow is equipped (either in main slot or enemy_ranged)

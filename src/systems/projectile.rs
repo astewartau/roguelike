@@ -9,10 +9,9 @@
 //! 4. Real-time visual lerp animates the arrow to its final position
 //! 5. Once visual catches up, the arrow is despawned
 
-use crate::components::{Attackable, EffectType, Health, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
+use crate::components::{Attackable, EffectType, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
-use crate::queries;
 use crate::systems::actions::apply_potion_splash;
 use crate::systems::effects;
 use hecs::{Entity, World};
@@ -138,17 +137,10 @@ pub fn update_projectiles(
                 projectile.hit_enemy = true;
             }
 
-            // Check for invulnerability
-            let is_invulnerable = queries::has_status_effect(world, target_entity, EffectType::Invulnerable);
-            if is_invulnerable {
-                actual_damage = 0;
-            }
+            // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
+            actual_damage = crate::systems::combat::apply_damage(world, target_entity, actual_damage);
 
-            // Apply damage
             if actual_damage > 0 {
-                if let Ok(mut health) = world.get::<&mut Health>(target_entity) {
-                    health.current -= actual_damage;
-                }
                 // Interrupt life drain if target was channeling
                 crate::systems::actions::interrupt_life_drain_on_damage(world, target_entity, events);
 
