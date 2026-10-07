@@ -641,7 +641,7 @@ pub fn spawn_cave_fauna(
                 }
                 let idx = rng.gen_range(0..free.len());
                 let (x, y) = free.swap_remove(idx);
-                enemy.spawn(world, x, y);
+                enemy.spawn(world, x, y, rng);
             }
         }
     }

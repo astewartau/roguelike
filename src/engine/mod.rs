@@ -2262,7 +2262,7 @@ mod tests {
     /// numbers, check the diff moved the way you meant, then re-record.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        const EXPECTED: &str = "t=359.6000 floor=0 kills=2 hp=0/50 pos=11,10 hunger=83.3344 fatigue=10.0000 n=99 roster=4fa6d09d";
+        const EXPECTED: &str = "t=355.3440 floor=0 kills=18 hp=0/50 pos=12,10 hunger=83.3344 fatigue=10.0000 n=97 roster=d9edb117";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2282,7 +2282,7 @@ mod tests {
     /// Same caveat: expected to fail on intentional balance changes.
     #[test]
     fn test_fixed_seed_replays_identically_across_a_floor() {
-        const EXPECTED: &str = "t=268.4321 floor=1 kills=4 hp=99902/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=79 roster=584e5d13";
+        const EXPECTED: &str = "t=264.7901 floor=1 kills=21 hp=99746/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=87 roster=3c7ba545";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -2317,13 +2317,14 @@ mod tests {
                 .get::<&crate::components::Position>(player)
                 .map(|p| (p.x, p.y))
                 .expect("player has a position");
-            let hostiles: Vec<Entity> = state
+            let mut hostiles: Vec<Entity> = state
                 .world
                 .query::<&crate::components::ChaseAI>()
                 .iter()
                 .map(|(id, _)| id)
                 .collect();
-            for id in hostiles {
+            hostiles.sort_unstable();
+            for &id in &hostiles {
                 let _ = state.world.remove_one::<crate::components::Asleep>(id);
                 if let Ok(mut ai) = state.world.get::<&mut crate::components::ChaseAI>(id) {
                     ai.state = crate::components::AIState::Chasing;
@@ -2331,6 +2332,37 @@ mod tests {
                     ai.update_target_pos(player, player_pos);
                 }
             }
+
+            // Drag a handful of them into melee range. Without this the scenario
+            // depends on where the dungeon generator happened to put enemies
+            // relative to the player's spawn - a cavern-generation change once
+            // left the player untouched for 400 turns, which quietly gutted what
+            // these tests covered. Assignment is in entity-id and then tile
+            // order, so it stays deterministic.
+            let mut ring: Vec<(i32, i32)> = (-2..=2)
+                .flat_map(|dy| (-2..=2).map(move |dx| (dx, dy)))
+                .filter(|&(dx, dy)| (dx, dy) != (0, 0))
+                .map(|(dx, dy)| (player_pos.0 + dx, player_pos.1 + dy))
+                .filter(|&(x, y)| state.grid.is_walkable(x, y))
+                .collect();
+            ring.sort_unstable();
+            for (&id, &(x, y)) in hostiles.iter().zip(ring.iter()) {
+                if let Ok(mut pos) = state.world.get::<&mut crate::components::Position>(id) {
+                    pos.x = x;
+                    pos.y = y;
+                }
+                if let Ok(mut vis) = state
+                    .world
+                    .get::<&mut crate::components::VisualPosition>(id)
+                {
+                    vis.x = x as f32;
+                    vis.y = y as f32;
+                }
+            }
+
+            // Those moves bypassed the incremental cache updates, so rebuild it
+            // wholesale rather than leaving phantom blockers behind.
+            state.spatial_cache.rebuild_in_place(&state.world);
             state
                 .active_ai_tracker
                 .initialize_from_world(&state.world, player_pos);
