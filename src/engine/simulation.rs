@@ -117,7 +117,7 @@ pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExec
 
     advance_until_player_ready(&mut ctx.actors());
 
-    let event_result = process_events_with_audio(ctx);
+    let event_result = process_events(ctx);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
@@ -395,24 +395,10 @@ fn record_player_damage_source(world: &mut World, player_entity: Entity, source:
     let _ = world.insert_one(player_entity, crate::components::LastDamageSource(source));
 }
 
-/// Process all pending events *silently* - no sounds are played.
-///
-/// Ability activation and the alternative turn loop drain events this way.
+/// Drain the event queue, playing each event's sound, updating vfx, the message
+/// log and UI state, and collecting the follow-up work the engine has to do
+/// (floor transitions, deferred spawns, path interruption).
 pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
-    drain_events(ctx, false)
-}
-
-/// Process all pending events, playing their sounds through `ctx.audio`.
-pub fn process_events_with_audio(ctx: &mut SimCtx) -> TurnExecutionResult {
-    drain_events(ctx, true)
-}
-
-/// Drain the event queue, updating vfx, the message log and UI state, and
-/// collecting the follow-up work the engine has to do (floor transitions,
-/// deferred spawns, path interruption).
-///
-/// `play_audio` selects whether queued events also play their sounds.
-fn drain_events(ctx: &mut SimCtx, play_audio: bool) -> TurnExecutionResult {
     let player_entity = ctx.player;
     let mut result = TurnExecutionResult::default();
 
@@ -420,7 +406,7 @@ fn drain_events(ctx: &mut SimCtx, play_audio: bool) -> TurnExecutionResult {
     let event_list: Vec<_> = ctx.events.drain().collect();
 
     // Process audio first (with player position for distance-based volume)
-    if let (true, Some(audio_manager)) = (play_audio, ctx.audio) {
+    if let Some(audio_manager) = ctx.audio {
         let player_pos = ctx
             .world
             .get::<&crate::components::Position>(player_entity)
