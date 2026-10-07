@@ -1989,7 +1989,29 @@ impl LightSource {
             intensity: 0.95,
         }
     }
+
+    /// Glowing cave fungus: a soft, close pool of light.
+    pub fn mushroom() -> Self {
+        Self {
+            radius: 3.5,
+            intensity: 0.55,
+        }
+    }
+
+    /// Cave crystal cluster: colder and a little further-reaching than fungus.
+    pub fn crystal() -> Self {
+        Self {
+            radius: 4.5,
+            intensity: 0.7,
+        }
+    }
 }
+
+/// Marker for a patch of glowing cave fungus. Walkable, sheds light, and
+/// burns: `systems::fire` consumes a patch the fire reaches and leaves a
+/// grass fire in its place.
+#[derive(Debug, Clone, Copy)]
+pub struct GlowMushroom;
 
 /// Marker component for entities that cause burning when stepped on
 #[derive(Debug, Clone, Copy)]

@@ -213,6 +213,9 @@ mod tests {
             furniture_positions: vec![],
             secret_room: None,
             secret_door_pos: None,
+            stalagmite_positions: Vec::new(),
+            mushroom_positions: Vec::new(),
+            crystal_positions: Vec::new(),
         };
         for &(x, y) in walls {
             if let Some(tile) = grid.get_mut(x, y) {
