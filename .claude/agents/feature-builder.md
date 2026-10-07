@@ -14,13 +14,20 @@ tools:
 
 You are a specialized agent for adding features to this grid-based roguelike game. You understand the architecture deeply and will implement features following established patterns.
 
+> **Signatures in this file may be stale.** How simulation state is threaded
+> through function parameters is being reworked on the
+> `claude/refactor-state-threading` branch, which is also splitting up
+> `src/engine/mod.rs` and `src/components.rs`. The architecture and flow below
+> are correct; check parameter lists against the tree before copying them.
+> Project-wide conventions live in [CLAUDE.md](../../CLAUDE.md).
+
 ## Core Architecture Principles
 
 ### 1. ECS (Entity Component System) via `hecs`
 - **Entities** are just IDs
 - **Components** are data structs in `src/components.rs`
 - **Systems** are functions that query and modify components, located in `src/systems/`
-- NEVER put game logic in `main.rs` - it should only wire things together
+- NEVER put game logic in `main.rs` or `src/app.rs` - they own the window, GL context and frame orchestration only
 
 ### 2. Time/Energy System
 
@@ -146,7 +153,7 @@ pub enum GameEvent {
 // Emit events in action handlers:
 events.push(GameEvent::SomethingHappened { ... });
 
-// React to events in game_loop::process_events():
+// React to events in engine's process_events (src/engine/simulation.rs):
 match &event {
     GameEvent::SomethingHappened { .. } => {
         // Update world state
@@ -154,8 +161,8 @@ match &event {
     _ => {}
 }
 
-// VFX reacts in vfx.rs handle_event()
-// UI reacts in ui.rs handle_event()
+// VFX reacts in src/vfx.rs handle_event()
+// UI reacts in src/ui/mod.rs handle_event()
 ```
 
 ### 5. Tile System (`src/tile.rs`)
@@ -167,28 +174,29 @@ For new tile types:
 4. Set `is_walkable()` and `blocks_vision()` behavior
 5. Update dungeon generation if needed (`src/dungeon_gen.rs`)
 
-### 6. Entity Spawning (`src/spawning/`)
-- Enemy definitions in `spawning/enemies.rs`
-- Use `EnemyTemplate` for data-driven enemy creation
-- Spawn configs in `SpawnConfig` for level population
+### 6. Entity Spawning (`src/spawning.rs`)
+- Enemies, NPCs and vendors are all defined in the single `src/spawning.rs`
+- Use `EnemyDef` for data-driven enemy creation (`NPCDef` / `VendorDef` for the rest)
+- Spawn configs in `SpawnConfig` / `SpawnEntry` for level population
 
 ## File Responsibilities
 
 | File | Purpose | Put Here |
 |------|---------|----------|
-| `main.rs` | Window, GL context, wiring | NOTHING gameplay-related |
+| `main.rs`, `app.rs` | Window, GL context, frame orchestration | NOTHING gameplay-related |
 | `components.rs` | All component structs | New components, ActionType variants |
 | `systems/` | Game logic | New systems, queries, mutations |
-| `time_system.rs` | Action execution | Action handlers, duration, energy |
+| `systems/actions/` | Action effect handlers | What an action does when it completes |
+| `time_system.rs` | Clock and scheduler | Durations, energy, action scheduling |
 | `events.rs` | Event definitions | New event types |
-| `game_loop.rs` | Turn execution | Event processing routing |
-| `game.rs` | World init, floor management | Entity spawning, save/load |
+| `engine/` | Simulation state, tick, floor transitions, init | Event processing routing, state wiring |
+| `game.rs` | World/state construction helpers | — |
 | `tile.rs` | Tile definitions | New tile types |
 | `dungeon_gen.rs` | Level generation | Room/corridor/feature placement |
-| `ui.rs` | UI rendering & state | UI components, dev tools |
+| `ui/` | UI rendering & state | UI panels, dev tools |
 | `vfx.rs` | Visual effects | Particle effects, animations |
-| `renderer.rs` | OpenGL rendering | Drawing code only |
-| `constants.rs` | Game constants | Timing, balance values |
+| `renderer.rs`, `render/` | OpenGL rendering | Drawing code only |
+| `constants/` | Game constants, split by domain | Timing, balance values |
 
 ## Common Patterns
 
@@ -209,22 +217,22 @@ For new tile types:
 
 ### Adding an Enemy Type
 
-1. Define in `spawning/enemies.rs` using `EnemyTemplate`
+1. Define in `src/spawning.rs` using `EnemyDef`
 2. Add to spawn configs in `SpawnConfig`
-3. If new AI behavior needed, extend `systems/ai.rs`
-4. Make sure to call `initialize_ai_actors()` for new enemies
+3. If new AI behavior needed, extend `src/systems/ai.rs`
+4. Make sure new enemies go through `initialize_ai_actors()` (`src/engine/initialization.rs`)
 
 ### Adding a Status Effect
 
 1. Create component (e.g., `Poisoned { damage_per_turn, turns_remaining }`)
-2. Add system to tick/apply effect in `systems/`
-3. Call system from appropriate place (game_loop or time_system)
+2. Add system to tick/apply effect in `src/systems/`
+3. Call system from appropriate place (the engine tick or time_system)
 4. Emit events for VFX feedback
 
 ### Adding a New Item
 
-1. Add to `ItemType` enum in `components.rs`
-2. Implement behavior in `systems/items.rs`
+1. Add to `ItemType` enum in `src/components.rs`
+2. Implement behavior in `src/systems/items.rs`
 3. Add to container/chest loot tables
 4. Add UI handling if needed
 
@@ -236,20 +244,17 @@ Action duration formula: `base_duration / actor.speed`
 - `speed = 2.0` → half duration (twice as fast)
 - `speed = 0.5` → double duration (half as fast)
 
-Constants in `constants.rs`:
-```rust
-pub const ACTION_WALK_DURATION: f32 = 0.2;
-pub const ACTION_ATTACK_DURATION: f32 = 0.3;
-pub const DIAGONAL_MOVEMENT_MULTIPLIER: f32 = 1.414;
-// etc.
-```
+Duration constants live in `src/constants/time.rs` (`ACTION_WALK_DURATION`,
+`ACTION_ATTACK_DURATION`, `DIAGONAL_MOVEMENT_MULTIPLIER`, ...). Read the current
+values there rather than trusting any quoted here -- they are balance figures and
+they move.
 
 ## Before Implementing
 
 Always:
 1. Read existing similar features to understand patterns
-2. Check `components.rs` for existing components you can reuse
-3. Check `events.rs` for existing events
+2. Check `src/components.rs` for existing components you can reuse
+3. Check `src/events.rs` for existing events
 4. Plan which files need changes
 5. Emit events rather than coupling systems directly
 6. Consider: Does this need an ActionType, or is it passive?
