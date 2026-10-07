@@ -278,7 +278,7 @@ pub fn advance_until_player_ready(
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    puffin::profile_function!();
+    profile_function!();
 
     loop {
         let player_can_act = world

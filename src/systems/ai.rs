@@ -276,7 +276,7 @@ pub fn decide_action(
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    puffin::profile_function!();
+    profile_function!();
 
     // FIRST: Distance check - cheapest operation, do this before anything else
     let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));

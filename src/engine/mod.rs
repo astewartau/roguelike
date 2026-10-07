@@ -489,7 +489,7 @@ impl GameEngine {
     /// Process a frame tick - advances simulation, returns render data.
     /// Returns empty results if not in playing mode.
     pub fn tick(&mut self, dt: f32, camera: &mut Camera) -> TickResult {
-        puffin::profile_function!();
+        profile_function!();
 
         // Accumulate real time for animations
         self.real_time += dt;
@@ -529,7 +529,7 @@ impl GameEngine {
         // not actively playing (e.g. paused) so the turn-based simulation stays
         // frozen behind the menu.
         let input_result = if self.game_mode == GameMode::Playing {
-            puffin::profile_scope!("process_input");
+            profile_scope!("process_input");
             self.process_input(camera)
         } else {
             InputResult::default()
@@ -541,14 +541,14 @@ impl GameEngine {
 
         // Fast-forward the simulation while resting (a few Wait-steps per frame).
         {
-            puffin::profile_scope!("update_rest");
+            profile_scope!("update_rest");
             self.update_rest(dt);
         }
 
         // Fast-forward the simulation while sleeping (like rest, but recovers
         // fatigue and wakes on damage / nearby enemies).
         {
-            puffin::profile_scope!("update_sleep");
+            profile_scope!("update_sleep");
             self.update_sleep(dt);
         }
 
@@ -558,7 +558,7 @@ impl GameEngine {
 
         // Update animations
         {
-            puffin::profile_scope!("animations");
+            profile_scope!("animations");
             systems::update_lunge_animations(&mut state.world, dt);
             self.vfx.update(dt);
         }
@@ -566,7 +566,7 @@ impl GameEngine {
         // Remove dead entities (loot rolls draw from the seeded game rng);
         // hostile deaths feed the run's kill counter.
         {
-            puffin::profile_scope!("remove_dead");
+            profile_scope!("remove_dead");
             state.kills += systems::remove_dead_entities(
                 &mut state.world,
                 state.player_entity,
@@ -581,7 +581,7 @@ impl GameEngine {
 
         // Process events from remove_dead_entities
         let event_result = {
-            puffin::profile_scope!("process_events");
+            profile_scope!("process_events");
             process_events_with_audio(
                 &mut self.events,
                 &mut state.world,
@@ -667,7 +667,7 @@ impl GameEngine {
 
         // Visual lerping
         {
-            puffin::profile_scope!("visual_lerp");
+            profile_scope!("visual_lerp");
             systems::visual_lerp(&mut state.world, dt);
             systems::lerp_projectiles_realtime(
                 &mut state.world,
@@ -705,7 +705,7 @@ impl GameEngine {
         // the game-time elapsed this frame. May revert burnt grass to floor and
         // set fov_dirty, which the FOV update below then picks up.
         {
-            puffin::profile_scope!("tick_fire");
+            profile_scope!("tick_fire");
             let game_dt = state.game_clock.time - clock_t0;
             systems::fire::tick_fire(
                 &mut state.world,
@@ -772,7 +772,7 @@ impl GameEngine {
         // Update visibility based on LOS and illumination (only when game state changed)
         if state.fov_dirty {
             {
-                puffin::profile_scope!("fov_update");
+                profile_scope!("fov_update");
                 systems::update_fov(
                     &state.world,
                     &mut state.grid,
@@ -784,7 +784,7 @@ impl GameEngine {
 
             // Calculate per-tile illumination (must be after FOV update)
             {
-                puffin::profile_scope!("illumination");
+                profile_scope!("illumination");
                 systems::calculate_illumination(
                     &state.world,
                     &mut state.grid,
@@ -819,7 +819,7 @@ impl GameEngine {
 
         // Collect renderables
         let entities = {
-            puffin::profile_scope!("collect_renderables");
+            profile_scope!("collect_renderables");
             systems::collect_renderables(
                 &state.world,
                 &state.grid,
