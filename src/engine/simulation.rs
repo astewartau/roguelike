@@ -1,6 +1,5 @@
 //! Game simulation - turn execution, time advancement, and event processing.
 
-use crate::active_ai_tracker::ActiveAITracker;
 use crate::components::{
     ActionType, Actor, AIState, ChaseAI, EffectType, Health, Inventory, ItemType, TamedBy,
 };
@@ -9,26 +8,35 @@ use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::grid::Grid;
 use crate::input::TargetingMode;
 use crate::queries;
-use crate::spatial_cache::SpatialCache;
 use crate::systems;
 use crate::systems::action_dispatch;
 use crate::systems::player_input::{self, PlayerIntent};
-use crate::time_system::{self, ActionScheduler, GameClock};
-use crate::ui::{DevMenu, GameUiState, UiActions};
-use crate::vfx::VfxManager;
+use crate::time_system::{self};
+use crate::ui::{DevMenu, UiActions};
 
+use super::{ActorCtx, SimCtx};
 use hecs::{Entity, World};
 use rand::Rng;
 
 /// Result of attempting to start a player action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Started` is the `Default` so that outcomes produced by pure event
+/// processing (where no turn was attempted) carry a neutral value; those
+/// callers never read the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TurnResult {
+    #[default]
     Started,
     Blocked,
     NotReady,
 }
 
-/// Full result of executing a player turn.
+/// Everything the engine needs to know after simulating a slice of game time.
+///
+/// Produced both by executing a player turn (`turn_result` says whether the
+/// action actually started) and by draining the event queue, which only fills
+/// in the event-derived fields.
+#[derive(Default)]
 pub struct TurnExecutionResult {
     pub turn_result: TurnResult,
     pub floor_transition: Option<StairDirection>,
@@ -48,42 +56,12 @@ impl TurnExecutionResult {
     }
 }
 
-/// Result of processing events.
-pub struct EventProcessingResult {
-    pub floor_transition: Option<StairDirection>,
-    pub player_attacked: bool,
-    pub player_took_damage: bool,
-    pub enemy_spotted_player: bool,
-    pub skeleton_spawns: Vec<(i32, i32)>,
-    /// Positions where Raise Dead completed (spawn friendly skeletons here)
-    pub raised_skeletons: Vec<(i32, i32)>,
-    /// Boss minion summons: (boss, position) pairs to spawn hostile spiders at
-    pub boss_minion_spawns: Vec<(Entity, (i32, i32))>,
-}
-
-impl EventProcessingResult {
-    pub fn should_interrupt_path(&self) -> bool {
-        self.player_attacked || self.player_took_damage || self.enemy_spotted_player
-    }
-}
-
 /// Execute a player intent - unified entry point for all player actions.
-pub fn execute_player_intent(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    intent: PlayerIntent,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut ActiveAITracker,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    audio: Option<&crate::audio::AudioManager>,
-    rng: &mut impl Rng,
-) -> TurnExecutionResult {
-    let can_act = world
+pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExecutionResult {
+    let player_entity = ctx.player;
+
+    let can_act = ctx
+        .world
         .get::<&Actor>(player_entity)
         .map(|a| a.can_act())
         .unwrap_or(false);
@@ -91,47 +69,41 @@ pub fn execute_player_intent(
     if !can_act {
         return TurnExecutionResult {
             turn_result: TurnResult::NotReady,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
-    let action_type = match player_input::intent_to_action(world, grid, player_entity, &intent) {
-        Some(action) => action,
-        None => {
-            return TurnExecutionResult {
-                turn_result: TurnResult::Blocked,
-                floor_transition: None,
-                player_attacked: false,
-                player_took_damage: false,
-                enemy_spotted_player: false,
-                skeleton_spawns: Vec::new(),
-                raised_skeletons: Vec::new(),
-                boss_minion_spawns: Vec::new(),
-            };
-        }
-    };
+    let action_type =
+        match player_input::intent_to_action(ctx.world, ctx.grid, player_entity, &intent) {
+            Some(action) => action,
+            None => {
+                return TurnExecutionResult {
+                    turn_result: TurnResult::Blocked,
+                    ..Default::default()
+                };
+            }
+        };
 
-    if time_system::start_action(world, player_entity, action_type.clone(), clock, scheduler).is_err() {
+    if time_system::start_action(
+        ctx.world,
+        player_entity,
+        action_type.clone(),
+        ctx.clock,
+        ctx.scheduler,
+    )
+    .is_err()
+    {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
     // Start cooldown for Ranger abilities
-    if let Ok(mut ra) = world.get::<&mut crate::components::RangerAbilities>(player_entity) {
+    if let Ok(mut ra) = ctx
+        .world
+        .get::<&mut crate::components::RangerAbilities>(player_entity)
+    {
         let ability_index = match &action_type {
             ActionType::Tumble { .. } => Some(1), // Index 1 = Tumble
             ActionType::PlaceSnareTrap { .. } => Some(2), // Index 2 = SnareTrap
@@ -143,22 +115,13 @@ pub fn execute_player_intent(
         }
     }
 
-    advance_until_player_ready(
-        world, grid, player_entity, clock, scheduler,
-        active_tracker, spatial_cache, events, rng,
-    );
+    advance_until_player_ready(&mut ctx.actors());
 
-    let event_result = process_events_with_audio(events, world, grid, spatial_cache, vfx, ui_state, player_entity, audio);
+    let event_result = process_events_with_audio(ctx);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
-        floor_transition: event_result.floor_transition,
-        player_attacked: event_result.player_attacked,
-        player_took_damage: event_result.player_took_damage,
-        enemy_spotted_player: event_result.enemy_spotted_player,
-        skeleton_spawns: event_result.skeleton_spawns,
-        raised_skeletons: event_result.raised_skeletons,
-        boss_minion_spawns: event_result.boss_minion_spawns,
+        ..event_result
     }
 }
 
@@ -187,22 +150,11 @@ pub fn any_enemy_alerted(world: &World, _player: Entity) -> bool {
 
 /// Execute a player turn based on movement input.
 #[allow(dead_code)] // Public API for alternative game loop implementations
-pub fn execute_player_turn(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    dx: i32,
-    dy: i32,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut ActiveAITracker,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    rng: &mut impl Rng,
-) -> TurnExecutionResult {
-    let can_act = world
+pub fn execute_player_turn(ctx: &mut SimCtx, dx: i32, dy: i32) -> TurnExecutionResult {
+    let player_entity = ctx.player;
+
+    let can_act = ctx
+        .world
         .get::<&Actor>(player_entity)
         .map(|a| a.can_act())
         .unwrap_or(false);
@@ -210,47 +162,29 @@ pub fn execute_player_turn(
     if !can_act {
         return TurnExecutionResult {
             turn_result: TurnResult::NotReady,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
-    let action_type = action_dispatch::determine_action_type(world, grid, player_entity, dx, dy);
+    let action_type =
+        action_dispatch::determine_action_type(ctx.world, ctx.grid, player_entity, dx, dy);
 
-    if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
+    if time_system::start_action(ctx.world, player_entity, action_type, ctx.clock, ctx.scheduler)
+        .is_err()
+    {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
-    advance_until_player_ready(
-        world, grid, player_entity, clock, scheduler,
-        active_tracker, spatial_cache, events, rng,
-    );
+    advance_until_player_ready(&mut ctx.actors());
 
-    let event_result = process_events(events, world, grid, spatial_cache, vfx, ui_state, player_entity);
+    let event_result = process_events(ctx);
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
-        floor_transition: event_result.floor_transition,
-        player_attacked: event_result.player_attacked,
-        player_took_damage: event_result.player_took_damage,
-        enemy_spotted_player: event_result.enemy_spotted_player,
-        skeleton_spawns: event_result.skeleton_spawns,
-        raised_skeletons: event_result.raised_skeletons,
-        boss_minion_spawns: event_result.boss_minion_spawns,
+        ..event_result
     }
 }
 
@@ -267,37 +201,30 @@ pub fn peek_action_type(
 }
 
 /// Advance game time until the player can act again.
-pub fn advance_until_player_ready(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut ActiveAITracker,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
+pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
     profile_function!();
 
+    let player_entity = ctx.player;
+
     loop {
-        let player_can_act = world
+        let player_can_act = ctx
+            .world
             .get::<&Actor>(player_entity)
             .map(|a| a.can_act())
             .unwrap_or(false);
 
         if player_can_act {
-            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events, rng);
+            update_projectiles_at_time(ctx, ctx.clock.time);
             return;
         }
 
-        if world.get::<&Actor>(player_entity).is_err() {
+        if ctx.world.get::<&Actor>(player_entity).is_err() {
             return;
         }
 
-        let Some((next_entity, completion_time)) = scheduler.pop_next() else {
+        let Some((next_entity, completion_time)) = ctx.scheduler.pop_next() else {
             // Safety check: if scheduler is empty but player can't act, recover
-            if let Ok(mut actor) = world.get::<&mut Actor>(player_entity) {
+            if let Ok(mut actor) = ctx.world.get::<&mut Actor>(player_entity) {
                 // Case 1: Player has a stuck current_action
                 if actor.current_action.is_some() {
                     eprintln!("[WARNING] Scheduler empty but player has current_action - clearing to prevent soft-lock");
@@ -314,39 +241,38 @@ pub fn advance_until_player_ready(
             return;
         };
 
-        let previous_time = clock.time;
-        clock.advance_to(completion_time);
-        let elapsed = clock.time - previous_time;
+        let previous_time = ctx.clock.time;
+        ctx.clock.advance_to(completion_time);
+        let now = ctx.clock.time;
+        let elapsed = now - previous_time;
 
-        update_projectiles_at_time(world, grid, spatial_cache, clock.time, events, rng);
+        update_projectiles_at_time(ctx, now);
 
-        time_system::tick_health_regen(world, clock.time, Some(events));
-        time_system::tick_energy_regen(world, clock.time, Some(events));
-        time_system::tick_burn_damage(world, clock.time, events);
-        time_system::tick_status_effects(world, elapsed);
-        time_system::tick_ability_cooldowns(world, elapsed);
-        time_system::tick_ranged_cooldowns(world, elapsed);
-        systems::ai::tick_threat_decay(world, grid, &*spatial_cache, elapsed);
-        systems::ai::tick_alarms(world, elapsed);
-        systems::ai::tick_role_cooldowns(world, elapsed);
+        time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
+        time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
+        time_system::tick_burn_damage(ctx.world, now, ctx.events);
+        time_system::tick_status_effects(ctx.world, elapsed);
+        time_system::tick_ability_cooldowns(ctx.world, elapsed);
+        time_system::tick_ranged_cooldowns(ctx.world, elapsed);
+        systems::ai::tick_threat_decay(ctx.world, ctx.grid, ctx.spatial, elapsed);
+        systems::ai::tick_alarms(ctx.world, elapsed);
+        systems::ai::tick_role_cooldowns(ctx.world, elapsed);
 
-        time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler, rng);
+        time_system::complete_action(ctx, next_entity);
 
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
-            if let Some(player_pos) = queries::get_entity_position(world, player_entity) {
-                let newly_active = active_tracker.update_on_player_move(world, player_pos);
+            if let Some(player_pos) = queries::get_entity_position(ctx.world, player_entity) {
+                let newly_active = ctx.tracker.update_on_player_move(ctx.world, player_pos);
                 // Schedule newly awakened entities
+                let wake_at = ctx.clock.time + 0.1;
                 for ai_entity in newly_active {
-                    scheduler.schedule(ai_entity, clock.time + 0.1);
+                    ctx.scheduler.schedule(ai_entity, wake_at);
                 }
             }
         } else {
             // Non-player entity: let AI decide next action
-            systems::ai::decide_action(
-                world, grid, next_entity, player_entity, clock, scheduler,
-                active_tracker, &*spatial_cache, events, rng,
-            );
+            systems::ai::decide_action(ctx, next_entity);
         }
     }
 }
@@ -354,22 +280,13 @@ pub fn advance_until_player_ready(
 /// Advance game time until the player has at least the required energy.
 /// This allows enemies to act while the player "waits" for energy.
 /// Returns true if player now has enough energy, false if player died or error.
-pub fn wait_for_energy(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    required_energy: i32,
-    clock: &mut GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut ActiveAITracker,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) -> bool {
+pub fn wait_for_energy(ctx: &mut ActorCtx, required_energy: i32) -> bool {
+    let player_entity = ctx.player;
+
     loop {
         // Check if player has enough energy
         let (current_energy, max_energy, regen_interval, last_regen_time) = {
-            let Ok(actor) = world.get::<&Actor>(player_entity) else {
+            let Ok(actor) = ctx.world.get::<&Actor>(player_entity) else {
                 return false; // Player doesn't exist
             };
             (actor.energy, actor.max_energy, actor.energy_regen_interval, actor.last_energy_regen_time)
@@ -388,75 +305,76 @@ pub fn wait_for_energy(
         // Calculate when we'll have enough energy
         let energy_needed = required_energy - current_energy;
         let time_to_wait = energy_needed as f32 * regen_interval;
-        let target_time = (last_regen_time + regen_interval).max(clock.time) + (energy_needed - 1) as f32 * regen_interval;
+        let target_time = (last_regen_time + regen_interval).max(ctx.clock.time)
+            + (energy_needed - 1) as f32 * regen_interval;
 
         // Schedule player to "wake up" at that time so the scheduler has something to process
-        scheduler.schedule(player_entity, target_time);
+        ctx.scheduler.schedule(player_entity, target_time);
 
         // Process any pending actions until we reach target time or player has energy
-        while clock.time < target_time {
-            let Some((next_entity, completion_time)) = scheduler.pop_next() else {
+        while ctx.clock.time < target_time {
+            let Some((next_entity, completion_time)) = ctx.scheduler.pop_next() else {
                 // Nothing scheduled, just advance time
-                clock.advance_to(target_time);
+                ctx.clock.advance_to(target_time);
                 break;
             };
 
             // If this is the player's wakeup, we might be done
             if next_entity == player_entity && completion_time >= target_time {
-                clock.advance_to(completion_time);
-                let elapsed = completion_time - clock.time + time_to_wait;
-                time_system::tick_energy_regen(world, clock.time, Some(events));
-                time_system::tick_ability_cooldowns(world, elapsed);
-                time_system::tick_ranged_cooldowns(world, elapsed);
+                ctx.clock.advance_to(completion_time);
+                let now = ctx.clock.time;
+                let elapsed = completion_time - now + time_to_wait;
+                time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
+                time_system::tick_ability_cooldowns(ctx.world, elapsed);
+                time_system::tick_ranged_cooldowns(ctx.world, elapsed);
                 break;
             }
 
-            let previous_time = clock.time;
-            clock.advance_to(completion_time);
-            let elapsed = clock.time - previous_time;
+            let previous_time = ctx.clock.time;
+            ctx.clock.advance_to(completion_time);
+            let now = ctx.clock.time;
+            let elapsed = now - previous_time;
 
-            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events, rng);
-            time_system::tick_health_regen(world, clock.time, Some(events));
-            time_system::tick_energy_regen(world, clock.time, Some(events));
-            time_system::tick_burn_damage(world, clock.time, events);
-            time_system::tick_status_effects(world, elapsed);
-            time_system::tick_ability_cooldowns(world, elapsed);
-            time_system::tick_ranged_cooldowns(world, elapsed);
-            systems::ai::tick_alarms(world, elapsed);
-            systems::ai::tick_role_cooldowns(world, elapsed);
+            update_projectiles_at_time(ctx, now);
+            time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
+            time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
+            time_system::tick_burn_damage(ctx.world, now, ctx.events);
+            time_system::tick_status_effects(ctx.world, elapsed);
+            time_system::tick_ability_cooldowns(ctx.world, elapsed);
+            time_system::tick_ranged_cooldowns(ctx.world, elapsed);
+            systems::ai::tick_alarms(ctx.world, elapsed);
+            systems::ai::tick_role_cooldowns(ctx.world, elapsed);
 
             // Complete the action
-            time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler, rng);
+            time_system::complete_action(ctx, next_entity);
 
             // Let AI decide next action
             if next_entity != player_entity {
-                systems::ai::decide_action(
-                    world, grid, next_entity, player_entity, clock, scheduler,
-                    active_tracker, spatial_cache, events, rng,
-                );
+                systems::ai::decide_action(ctx, next_entity);
             }
 
             // Check if player died
-            if world.get::<&Actor>(player_entity).is_err() {
+            if ctx.world.get::<&Actor>(player_entity).is_err() {
                 return false;
             }
         }
 
         // Final regen tick to ensure energy is updated
-        time_system::tick_energy_regen(world, clock.time, Some(events));
+        let now = ctx.clock.time;
+        time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
     }
 }
 
 /// Update projectiles at current time.
-fn update_projectiles_at_time(
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut SpatialCache,
-    current_time: f32,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
-    systems::update_projectiles(world, grid, spatial_cache, current_time, events, rng);
+fn update_projectiles_at_time(ctx: &mut ActorCtx, current_time: f32) {
+    systems::update_projectiles(
+        ctx.world,
+        ctx.grid,
+        ctx.spatial,
+        current_time,
+        ctx.events,
+        ctx.rng,
+    );
 }
 
 /// Display name of an entity for damage attribution ("Goblin", ...).
@@ -477,51 +395,47 @@ fn record_player_damage_source(world: &mut World, player_entity: Entity, source:
     let _ = world.insert_one(player_entity, crate::components::LastDamageSource(source));
 }
 
-/// Process all pending events.
-pub fn process_events(
-    events: &mut EventQueue,
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    player_entity: Entity,
-) -> EventProcessingResult {
-    process_events_with_audio(events, world, grid, spatial_cache, vfx, ui_state, player_entity, None)
+/// Process all pending events *silently* - no sounds are played.
+///
+/// Ability activation and the alternative turn loop drain events this way.
+pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
+    drain_events(ctx, false)
 }
 
-/// Process all pending events with optional audio manager.
-pub fn process_events_with_audio(
-    events: &mut EventQueue,
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    player_entity: Entity,
-    audio: Option<&crate::audio::AudioManager>,
-) -> EventProcessingResult {
-    let mut result = EventProcessingResult {
-        floor_transition: None,
-        player_attacked: false,
-        player_took_damage: false,
-        enemy_spotted_player: false,
-        skeleton_spawns: Vec::new(),
-        raised_skeletons: Vec::new(),
-        boss_minion_spawns: Vec::new(),
-    };
+/// Process all pending events, playing their sounds through `ctx.audio`.
+pub fn process_events_with_audio(ctx: &mut SimCtx) -> TurnExecutionResult {
+    drain_events(ctx, true)
+}
+
+/// Drain the event queue, updating vfx, the message log and UI state, and
+/// collecting the follow-up work the engine has to do (floor transitions,
+/// deferred spawns, path interruption).
+///
+/// `play_audio` selects whether queued events also play their sounds.
+fn drain_events(ctx: &mut SimCtx, play_audio: bool) -> TurnExecutionResult {
+    let player_entity = ctx.player;
+    let mut result = TurnExecutionResult::default();
 
     // Collect events for audio processing
-    let event_list: Vec<_> = events.drain().collect();
+    let event_list: Vec<_> = ctx.events.drain().collect();
 
     // Process audio first (with player position for distance-based volume)
-    if let Some(audio_manager) = audio {
-        let player_pos = world
+    if let (true, Some(audio_manager)) = (play_audio, ctx.audio) {
+        let player_pos = ctx
+            .world
             .get::<&crate::components::Position>(player_entity)
             .map(|p| (p.x, p.y))
             .unwrap_or((0, 0));
         audio_manager.process_events(&event_list, player_pos);
     }
+
+    let (world, grid, spatial_cache, vfx, ui_state) = (
+        &mut *ctx.world,
+        &*ctx.grid,
+        &mut *ctx.spatial,
+        &mut *ctx.vfx,
+        &mut *ctx.ui,
+    );
 
     for event in event_list {
         vfx.handle_event(&event, grid);
@@ -606,6 +520,7 @@ pub fn process_events_with_audio(
 }
 
 /// Result of processing UI actions.
+#[derive(Default)]
 pub struct UiActionResult {
     pub enter_targeting: Option<TargetingMode>,
     pub close_inventory: bool,
@@ -619,34 +534,23 @@ pub struct UiActionResult {
     pub learned_ability: Option<crate::components::AbilityType>,
 }
 
-impl Default for UiActionResult {
-    fn default() -> Self {
-        Self {
-            enter_targeting: None,
-            close_inventory: false,
-            close_context_menu: false,
-            close_chest: false,
-            close_dialogue: false,
-            close_shop: false,
-            close_altar: false,
-            learned_ability: None,
-        }
-    }
-}
-
-/// Process UI actions and execute game logic. `rng` is the seeded game rng
+/// Process UI actions and execute game logic. `ctx.rng` is the seeded game rng
 /// (altar outcomes draw from it).
 pub fn process_ui_actions(
-    world: &mut World,
-    grid: &mut Grid,
-    player_entity: Entity,
+    ctx: &mut SimCtx,
     actions: &UiActions,
     dev_menu: &mut DevMenu,
-    ui_state: &GameUiState,
-    events: &mut EventQueue,
-    game_time: f32,
-    rng: &mut impl Rng,
 ) -> UiActionResult {
+    let player_entity = ctx.player;
+    let game_time = ctx.clock.time;
+    let (world, grid, events, rng, ui_state) = (
+        &mut *ctx.world,
+        &mut *ctx.grid,
+        &mut *ctx.events,
+        &mut *ctx.rng,
+        &*ctx.ui,
+    );
+
     let mut result = UiActionResult::default();
 
     // Dev menu item giving

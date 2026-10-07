@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use hecs::{Entity, World};
 use rand::Rng;
 
-use crate::active_ai_tracker::ActiveAITracker;
+use crate::engine::ActorCtx;
 use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -21,7 +21,7 @@ use crate::pathfinding::{self, BresenhamLineIter};
 use crate::queries;
 use crate::spatial_cache::SpatialCache;
 use crate::systems::action_dispatch;
-use crate::time_system::{self, ActionScheduler, GameClock};
+use crate::time_system::{self};
 
 // =============================================================================
 // THREAT GENERATION
@@ -264,19 +264,15 @@ pub fn wake_on_attacked(world: &mut World, entity: Entity) {
 // =============================================================================
 
 /// Have an AI entity decide and start its next action.
-pub fn decide_action(
-    world: &mut World,
-    grid: &Grid,
-    entity: Entity,
-    player_entity: Entity,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut ActiveAITracker,
-    spatial_cache: &SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
+pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
     profile_function!();
+
+    // Unpack the context into the locals the decision logic reads. `grid` and
+    // `spatial_cache` are reborrowed immutably: AI only ever reads them.
+    let ActorCtx { world, grid, player, clock, scheduler, tracker, spatial, events, rng } = ctx;
+    let (world, grid, player_entity) = (&mut **world, &**grid, *player);
+    let (clock, scheduler, active_tracker, spatial_cache, events, rng) =
+        (&**clock, &mut **scheduler, &mut **tracker, &**spatial, &mut **events, &mut **rng);
 
     // FIRST: Distance check - cheapest operation, do this before anything else
     let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));

@@ -7,14 +7,13 @@
 use hecs::{Entity, World};
 
 use crate::components::{BlocksMovement, Container, ItemInstance, ItemType, Position, Sprite, VisualPosition};
-use crate::events::EventQueue;
 use crate::engine;
-use crate::grid::Grid;
 use crate::queries;
 use crate::spawning;
 use crate::tile;
-use crate::time_system::{ActionScheduler, GameClock};
 use crate::ui::DevTool;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 
 /// Result of a dev spawn attempt
 #[derive(Debug)]
@@ -37,20 +36,13 @@ pub enum DevSpawnResult {
 /// Returns `DevSpawnResult` indicating what happened. For VFX requests,
 /// the caller is responsible for spawning the effect.
 pub fn execute_dev_spawn(
-    world: &mut World,
-    grid: &mut Grid,
+    ctx: &mut engine::ActorCtx,
     tool: DevTool,
     tile_x: i32,
     tile_y: i32,
-    player_entity: Entity,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
 ) -> DevSpawnResult {
     // Check if the tile is walkable
-    let Some(tile) = grid.get(tile_x, tile_y) else {
+    let Some(tile) = ctx.grid.get(tile_x, tile_y) else {
         return DevSpawnResult::NotWalkable;
     };
     if !tile.tile_type.is_walkable() {
@@ -59,14 +51,14 @@ pub fn execute_dev_spawn(
 
     // Check if something is already blocking this tile (except for stairs/fire)
     let needs_clear_tile = matches!(tool, DevTool::SpawnChest | DevTool::SpawnEnemy);
-    if needs_clear_tile && queries::is_position_blocked(spatial_cache, tile_x, tile_y, None) {
+    if needs_clear_tile && queries::is_position_blocked(ctx.spatial, tile_x, tile_y, None) {
         return DevSpawnResult::Blocked;
     }
 
     match tool {
         DevTool::SpawnChest => {
             let pos = Position::new(tile_x, tile_y);
-            let entity = world.spawn((
+            let entity = ctx.world.spawn((
                 pos,
                 VisualPosition::from_position(&pos),
                 Sprite::from_ref(tile::tile_ids::CHEST_CLOSED),
@@ -76,21 +68,13 @@ pub fn execute_dev_spawn(
             DevSpawnResult::Spawned(entity)
         }
         DevTool::SpawnEnemy => {
-            let enemy = spawning::enemies::SKELETON.spawn(world, tile_x, tile_y);
-            // Initialize the AI actor's first action
-            let mut rng = rand::thread_rng();
-            engine::initialize_single_ai_actor(
-                world,
-                grid,
-                enemy,
-                player_entity,
-                clock,
-                scheduler,
-                active_ai_tracker,
-                spatial_cache,
-                events,
-                &mut rng,
-            );
+            let enemy = spawning::enemies::SKELETON.spawn(ctx.world, tile_x, tile_y);
+            // Initialize the AI actor's first action. Dev spawns roll from a
+            // fresh entropy-seeded rng rather than the run rng, so poking the
+            // dev menu can never shift a seeded run's stream.
+            let mut rng = StdRng::from_entropy();
+            let mut dev_ctx = engine::ActorCtx { rng: &mut rng, ..ctx.reborrow() };
+            engine::initialize_single_ai_actor(&mut dev_ctx, enemy);
             DevSpawnResult::Spawned(enemy)
         }
         DevTool::SpawnFire => {
@@ -98,17 +82,17 @@ pub fn execute_dev_spawn(
             DevSpawnResult::VfxRequested
         }
         DevTool::SpawnStairsDown => {
-            if let Some(tile) = grid.get_mut(tile_x, tile_y) {
+            if let Some(tile) = ctx.grid.get_mut(tile_x, tile_y) {
                 tile.tile_type = tile::TileType::StairsDown;
             }
-            grid.stairs_down_pos = Some((tile_x, tile_y));
+            ctx.grid.stairs_down_pos = Some((tile_x, tile_y));
             DevSpawnResult::TileModified
         }
         DevTool::SpawnStairsUp => {
-            if let Some(tile) = grid.get_mut(tile_x, tile_y) {
+            if let Some(tile) = ctx.grid.get_mut(tile_x, tile_y) {
                 tile.tile_type = tile::TileType::StairsUp;
             }
-            grid.stairs_up_pos = Some((tile_x, tile_y));
+            ctx.grid.stairs_up_pos = Some((tile_x, tile_y));
             DevSpawnResult::TileModified
         }
     }
