@@ -59,7 +59,7 @@ pub fn execute_dev_spawn(
 
     // Check if something is already blocking this tile (except for stairs/fire)
     let needs_clear_tile = matches!(tool, DevTool::SpawnChest | DevTool::SpawnEnemy);
-    if needs_clear_tile && queries::is_position_blocked(world, tile_x, tile_y, None) {
+    if needs_clear_tile && queries::is_position_blocked(spatial_cache, tile_x, tile_y, None) {
         return DevSpawnResult::Blocked;
     }
 

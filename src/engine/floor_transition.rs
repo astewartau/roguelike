@@ -1,5 +1,7 @@
 //! Floor transition and save/load logic for multi-floor dungeons.
 
+use rand::Rng;
+
 use crate::components::{
     BlocksMovement, BlocksVision, ChaseAI, Container, Door, Health, ItemInstance,
     Position, Sprite, VisualPosition,
@@ -243,6 +245,7 @@ pub fn load_floor(
     active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
     spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     // Update player position
     if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
@@ -253,8 +256,6 @@ pub fn load_floor(
         vis_pos.x = player_spawn_pos.0 as f32;
         vis_pos.y = player_spawn_pos.1 as f32;
     }
-
-    let mut rng = rand::thread_rng();
 
     for saved_entity in saved_entities {
         let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
@@ -276,7 +277,7 @@ pub fn load_floor(
                     spawning::apply_boss_role(world, enemy, &b.name, b.ability, b.announced);
                 }
                 crate::systems::ai::decide_action(
-                    world, grid, enemy, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, &mut rng,
+                    world, grid, enemy, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, rng,
                 );
             }
             SavedEntityType::Chest { is_open, gold, items } => {
@@ -397,6 +398,13 @@ pub fn handle_floor_transition(
         };
 
         let grid = saved.grid;
+        // A revisited floor restores its saved entities; AI re-initialization
+        // rolls come from the same per-floor derived rng a fresh floor would
+        // use, so a replayed seed revisits identically.
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut floor_rng =
+            StdRng::seed_from_u64(super::game_state::floor_seed(run_seed, target_floor));
         load_floor(
             world,
             &grid,
@@ -408,6 +416,7 @@ pub fn handle_floor_transition(
             active_ai_tracker,
             spatial_cache,
             events,
+            &mut floor_rng,
         );
         grid
     } else {
@@ -506,6 +515,7 @@ mod tests {
             &mut tracker,
             &cache,
             &mut events,
+            &mut StdRng::seed_from_u64(7),
         );
         grid
     }

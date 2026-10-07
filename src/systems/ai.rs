@@ -7,7 +7,7 @@
 //! operate in defensive mode — they only engage enemies that have attacked
 //! the player or that the player has attacked.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use hecs::{Entity, World};
 use rand::Rng;
@@ -54,16 +54,17 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
         return;
     }
 
-    // Collect entity positions for visibility checks
-    let positions: Vec<(Entity, (i32, i32))> = world
+    // Entity positions for visibility checks. A HashMap, not a Vec: this is
+    // probed once per threat-table entry per entity per tick, and deep floors
+    // carry ~47 enemies with several entries each — a linear scan made the
+    // whole pass quadratic in entity count.
+    let positions: HashMap<Entity, (i32, i32)> = world
         .query::<&Position>()
         .iter()
         .map(|(e, p)| (e, (p.x, p.y)))
         .collect();
 
-    let pos_lookup = |entity: Entity| -> Option<(i32, i32)> {
-        positions.iter().find(|(e, _)| *e == entity).map(|(_, p)| *p)
-    };
+    let pos_lookup = |entity: Entity| -> Option<(i32, i32)> { positions.get(&entity).copied() };
 
     // Decay enemy threat tables
     for (_, (pos, ai)) in world.query_mut::<(&Position, &mut ChaseAI)>() {
@@ -275,7 +276,7 @@ pub fn decide_action(
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    puffin::profile_function!();
+    profile_function!();
 
     // FIRST: Distance check - cheapest operation, do this before anything else
     let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
@@ -1430,6 +1431,138 @@ fn flee_from_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An open floor grid with a wall column at `wall_x` (0 = none), so a test
+    /// can put a target out of line of sight.
+    fn open_grid(width: usize, height: usize, wall_x: Option<usize>) -> Grid {
+        use crate::tile::{Tile, TileType};
+        let mut tiles = Vec::with_capacity(width * height);
+        for _y in 0..height {
+            for x in 0..width {
+                let wall = wall_x == Some(x);
+                tiles.push(Tile::new(if wall { TileType::Wall } else { TileType::Floor }));
+            }
+        }
+        Grid {
+            width,
+            height,
+            tiles,
+            chest_positions: vec![],
+            door_positions: vec![],
+            brazier_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
+            starting_room: None,
+            illumination: vec![0.0; width * height],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
+        }
+    }
+
+    #[test]
+    fn test_threat_decay_resolves_each_target_position_independently() {
+        // tick_threat_decay looks up every threat target's position. That lookup
+        // used a linear scan over a Vec of all entity positions, making the pass
+        // quadratic in entity count; it is a HashMap now. This test pins the
+        // behaviour the lookup has to preserve: each enemy's own threat entries
+        // decay at the visible or hidden rate according to *that* target's
+        // position, not whichever entity the scan happened to reach first.
+        let grid = open_grid(24, 5, None);
+
+        let mut world = World::new();
+
+        // Two visible targets at distinct positions and one far-away target.
+        let near_a = world.spawn((Position::new(2, 2),));
+        let near_b = world.spawn((Position::new(4, 2),));
+        let far = world.spawn((Position::new(22, 2),));
+
+        // Several enemies, each tracking all three targets, so a mixed-up
+        // lookup would show as a wrong decay rate on some entry.
+        let mut enemies = Vec::new();
+        for x in [1, 3, 5, 6] {
+            let mut ai = ChaseAI::new(8);
+            ai.add_threat(near_a, 50.0);
+            ai.add_threat(near_b, 50.0);
+            ai.add_threat(far, 50.0);
+            enemies.push(world.spawn((Position::new(x, 2), ai)));
+        }
+
+        let cache = SpatialCache::rebuild_from_world(&world);
+        let elapsed = 1.0;
+        tick_threat_decay(&mut world, &grid, &cache, elapsed);
+
+        for enemy in enemies {
+            let ai = world.get::<&ChaseAI>(enemy).expect("enemy keeps its AI");
+            let threat_of = |target: Entity| {
+                ai.threat_table
+                    .iter()
+                    .find(|e| e.entity == target)
+                    .map(|e| e.threat)
+                    .expect("entry retained")
+            };
+
+            // The two in-sight targets decay at the slow rate...
+            let expected_visible = 50.0 - THREAT_DECAY_VISIBLE * elapsed;
+            assert!(
+                (threat_of(near_a) - expected_visible).abs() < 1e-5,
+                "visible target near_a should decay slowly, got {}",
+                threat_of(near_a)
+            );
+            assert!(
+                (threat_of(near_b) - expected_visible).abs() < 1e-5,
+                "visible target near_b should decay slowly, got {}",
+                threat_of(near_b)
+            );
+
+            // ...and the out-of-sight one at the fast rate.
+            let expected_hidden = 50.0 - THREAT_DECAY_HIDDEN * elapsed;
+            assert!(
+                (threat_of(far) - expected_hidden).abs() < 1e-5,
+                "far target should decay fast, got {}",
+                threat_of(far)
+            );
+        }
+    }
+
+    #[test]
+    fn test_threat_decay_handles_target_with_no_position() {
+        // A target whose Position is gone (despawned corpse) must simply be
+        // treated as not visible rather than panicking or matching some other
+        // entity — the HashMap lookup returns None exactly like the scan did.
+        let grid = open_grid(12, 5, None);
+        let mut world = World::new();
+
+        let ghost = world.spawn((Position::new(3, 2),));
+        let mut ai = ChaseAI::new(8);
+        ai.add_threat(ghost, 20.0);
+        let enemy = world.spawn((Position::new(2, 2), ai));
+
+        let cache = SpatialCache::rebuild_from_world(&world);
+        let _ = world.despawn(ghost);
+
+        tick_threat_decay(&mut world, &grid, &cache, 1.0);
+
+        let ai = world.get::<&ChaseAI>(enemy).unwrap();
+        let entry = ai.threat_table.iter().find(|e| e.entity == ghost).unwrap();
+        assert!(
+            (entry.threat - (20.0 - THREAT_DECAY_HIDDEN)).abs() < 1e-5,
+            "a target with no position decays at the hidden rate, got {}",
+            entry.threat
+        );
+        assert!(
+            entry.time_at_minimum >= 0.0,
+            "memory timer should be tracked, not skipped"
+        );
+    }
 
     #[test]
     fn test_select_heal_target_prefers_lowest_health_fraction() {

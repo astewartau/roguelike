@@ -95,6 +95,7 @@ pub fn resolve_weapon_on_hit(
     target: Entity,
     damage: i32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     if damage <= 0 {
         return;
@@ -116,7 +117,7 @@ pub fn resolve_weapon_on_hit(
         .map(|h| h.current <= 0)
         .unwrap_or(true);
 
-    let mut rng = rand::thread_rng();
+
     for affix in &affixes {
         match affix {
             Affix::OnHitIgnite(chance) => {
@@ -160,7 +161,7 @@ pub fn resolve_weapon_on_hit(
             }
             Affix::OnHitKnockback => {
                 if !target_died {
-                    try_knockback(world, grid, spatial_cache, attacker, target, events);
+                    try_knockback(world, grid, spatial_cache, attacker, target, events, rng);
                 }
             }
             Affix::KillHeal(amount) => {
@@ -199,6 +200,7 @@ fn try_knockback(
     attacker: Entity,
     target: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     let Some((ax, ay)) = crate::queries::get_entity_position(world, attacker) else {
         return;
@@ -217,7 +219,7 @@ fn try_knockback(
     if !grid.is_walkable(dest.0, dest.1) {
         return;
     }
-    if crate::queries::is_position_blocked(world, dest.0, dest.1, Some(target)) {
+    if crate::queries::is_position_blocked(spatial_cache, dest.0, dest.1, Some(target)) {
         return;
     }
 
@@ -247,7 +249,7 @@ fn try_knockback(
         .find(|(_, (p, b))| b.lit && p.x == dest.0 && p.y == dest.1)
         .map(|(id, _)| id);
     if let Some(brazier) = brazier_hit {
-        crate::systems::fire::topple_brazier(world, grid, brazier, events);
+        crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
     }
 }
 
@@ -313,6 +315,12 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
         && world.get::<&crate::components::FearImmune>(target).is_err()
     {
         let frac = hp_after.0 as f32 / hp_after.1 as f32;
+        // NOTE: deliberately still on thread_rng. apply_damage is the single
+        // chokepoint for every damage source, and none of its 10 callers
+        // (projectiles, all three trap kinds, boss slam, fireball, life drain,
+        // barrel blast) carries an Rng — seeding this roll means threading one
+        // through all of them and their callers in turn. Left unseeded rather
+        // than ballooning the diff; see the Bug 4 notes.
         if frac < MORALE_HP_THRESHOLD && rand::thread_rng().gen_bool(MORALE_FLEE_CHANCE) {
             crate::systems::effects::add_effect_to_entity(
                 world,
@@ -399,6 +407,7 @@ pub fn remove_dead_entities(
     events: &mut EventQueue,
     mut scheduler: Option<&mut ActionScheduler>,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
 ) -> u32 {
     let mut to_convert = Vec::new();
     let mut hostile_kills: u32 = 0;
@@ -480,6 +489,13 @@ pub fn remove_dead_entities(
 
         // Remove from spatial cache before removing components
         spatial_cache.remove_entity(id);
+
+        // Death is where an entity leaves the AI sets: ChaseAI/CompanionAI are
+        // stripped just below, so update_on_player_move will never re-add it.
+        // Without this the id lingers in active_entities/dormant_entities until
+        // the next rebuild — and once the corpse is despawned (bones consumed by
+        // Raise Dead) it is a stale id in both sets.
+        active_ai_tracker.remove_entity(id);
 
         // Remove AI, Actor, Attackable, Stats components - turn into decoration
         let _ = world.remove_one::<Actor>(id);
@@ -571,6 +587,61 @@ mod tests {
             damage_bonus: 2,
         };
         assert_eq!(weapon_damage(&weapon), 7);
+    }
+
+    #[test]
+    fn test_dead_entity_is_removed_from_active_ai_tracker() {
+        // ActiveAITracker::remove_entity was never called, so dead entities
+        // lingered in active_entities/dormant_entities. It self-healed because
+        // update_on_player_move rebuilds both sets from a world query, but the
+        // stale id survives until then — and once the corpse is despawned (bones
+        // consumed by Raise Dead) the id is permanently invalid.
+        use crate::active_ai_tracker::ActiveAITracker;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let mut world = World::new();
+        let player = world.spawn((
+            Position::new(0, 0),
+            crate::components::Player,
+            Health::new(20),
+        ));
+
+        let rat = crate::spawning::enemies::RAT.spawn(&mut world, 3, 3);
+        world.get::<&mut Health>(rat).unwrap().current = 0;
+
+        let mut tracker = ActiveAITracker::new();
+        let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+
+        // An in-range enemy is active; this is the state death must clean up.
+        tracker.update_on_player_move(&world, (3, 3));
+        assert!(tracker.is_tracked(rat), "live enemy should be tracked");
+
+        let mut rng = StdRng::seed_from_u64(11);
+        remove_dead_entities(
+            &mut world,
+            player,
+            0,
+            &mut rng,
+            &mut events,
+            None,
+            &mut cache,
+            &mut tracker,
+        );
+
+        assert!(
+            !tracker.is_tracked(rat),
+            "dead entity must be dropped from the AI tracker at the death site, \
+             not left for the next update_on_player_move rebuild"
+        );
+        assert!(
+            !tracker.get_active_entities().contains(&rat),
+            "specifically not in the active set"
+        );
+
+        // Despawning the corpse (Raise Dead) must not resurrect a stale id.
+        let _ = world.despawn(rat);
+        assert!(!tracker.is_tracked(rat), "still untracked after the corpse is consumed");
     }
 
     #[test]

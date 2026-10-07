@@ -1,6 +1,7 @@
 //! Melee attacks, cleave, and stun.
 
 use hecs::{Entity, World};
+use rand::Rng;
 
 use crate::components::{
     CompanionAI, EffectType, Equipment, Health, LungeAnimation, Player, Position, SecondaryAbility,
@@ -22,9 +23,8 @@ pub fn apply_attack(
     attacker: Entity,
     target: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
-    use rand::Rng;
-
     // Get target position for VFX
     let target_pos = match queries::get_entity_position(world, target) {
         Some(p) => (p.0 as f32, p.1 as f32),
@@ -53,7 +53,6 @@ pub fn apply_attack(
     };
 
     // Apply damage variance and crit (attacker side)
-    let mut rng = rand::thread_rng();
     let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
     let is_crit = rng.gen::<f32>() < COMBAT_CRIT_CHANCE;
     let mut raw = (base_damage as f32 * damage_mult) as i32;
@@ -79,12 +78,12 @@ pub fn apply_attack(
     }
 
     // A burning combatant can set the other alight on a melee hit.
-    crate::systems::fire::try_combat_ignite(world, attacker, target);
-    crate::systems::fire::try_combat_ignite(world, target, attacker);
+    crate::systems::fire::try_combat_ignite(world, attacker, target, rng);
+    crate::systems::fire::try_combat_ignite(world, target, attacker, rng);
 
     // Resolve weapon on-hit affixes (ignite/slow/fear/lifesteal/knockback/kill-heal)
     crate::systems::combat::resolve_weapon_on_hit(
-        world, grid, spatial_cache, attacker, target, damage, events,
+        world, grid, spatial_cache, attacker, target, damage, events, rng,
     );
 
     // Venomous natural attacks (Giant Spider): a connecting bite Slows the
@@ -156,6 +155,7 @@ pub fn apply_attack_direction(
     dx: i32,
     dy: i32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Get attacker position
     let attacker_pos = match queries::get_entity_position(world, attacker) {
@@ -168,7 +168,7 @@ pub fn apply_attack_direction(
 
     // Find any Attackable entity at the target position
     if let Some(target) = queries::get_attackable_at(world, target_x, target_y, Some(attacker)) {
-        apply_attack(world, grid, spatial_cache, attacker, target, events)
+        apply_attack(world, grid, spatial_cache, attacker, target, events, rng)
     } else {
         // No target - whiff (swing at air), but still add lunge animation
         let _ = world.insert_one(
@@ -186,9 +186,8 @@ pub fn apply_cleave(
     spatial_cache: &mut SpatialCache,
     attacker: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
-    use rand::Rng;
-
     // Get attacker position
     let attacker_pos = match queries::get_entity_position(world, attacker) {
         Some(p) => p,
@@ -233,7 +232,6 @@ pub fn apply_cleave(
     }
 
     // Apply damage to each target
-    let mut rng = rand::thread_rng();
     for (target, tx, ty) in &targets {
         // Apply damage variance and crit (attacker side)
         let damage_mult = rng.gen_range(COMBAT_DAMAGE_MIN_MULT..=COMBAT_DAMAGE_MAX_MULT);
@@ -255,7 +253,7 @@ pub fn apply_cleave(
 
         // Resolve weapon on-hit affixes through the shared chokepoint
         crate::systems::combat::resolve_weapon_on_hit(
-            world, grid, spatial_cache, attacker, *target, damage, events,
+            world, grid, spatial_cache, attacker, *target, damage, events, rng,
         );
 
         // Interrupt life drain if target was channeling
@@ -411,17 +409,26 @@ mod tests {
         ));
         let rat = crate::spawning::enemies::RAT.spawn(&mut world, 1, 2);
         // 1 HP: apply_damage always deals at least 1, so the hit is lethal
-        // regardless of the (thread-rng) damage variance roll.
+        // regardless of the damage variance roll.
         world.get::<&mut Health>(rat).unwrap().current = 1;
 
         let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
-        let result = apply_attack(&mut world, &grid, &mut cache, player, rat, &mut events);
+        let mut rng = StdRng::seed_from_u64(7);
+        let result = apply_attack(&mut world, &grid, &mut cache, player, rat, &mut events, &mut rng);
         assert_eq!(result, ActionResult::Completed);
         assert!(world.get::<&Health>(rat).unwrap().current <= 0, "hit is lethal");
 
-        let mut rng = StdRng::seed_from_u64(7);
+        let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+        tracker.register_entity(rat);
         let kills = crate::systems::combat::remove_dead_entities(
-            &mut world, player, 0, &mut rng, &mut events, None, &mut cache,
+            &mut world,
+            player,
+            0,
+            &mut rng,
+            &mut events,
+            None,
+            &mut cache,
+            &mut tracker,
         );
         assert_eq!(kills, 1, "hostile death increments the kill counter");
 

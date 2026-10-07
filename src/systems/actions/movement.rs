@@ -1,6 +1,7 @@
 //! Movement, doors, stairs, and directional interaction.
 
 use hecs::{Entity, World};
+use rand::Rng;
 
 use crate::components::{BlocksMovement, Container, Door, EffectType, Player, Position};
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -20,6 +21,7 @@ pub fn apply_move(
     dy: i32,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Moving breaks any taming channel - the druid must stand still to tame.
     interrupt_taming(world, entity, events);
@@ -96,12 +98,12 @@ pub fn apply_move(
             .find(|(_, (p, _))| p.x == target_x && p.y == target_y)
             .map(|(id, _)| id);
         if let Some(furniture_id) = furniture {
-            return crate::systems::furniture::use_furniture(world, entity, furniture_id, events);
+            return crate::systems::furniture::use_furniture(world, entity, furniture_id, events, rng);
         }
     }
 
     // Check for any other blocking entity
-    if queries::is_position_blocked(world, target_x, target_y, Some(entity)) {
+    if queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity)) {
         return ActionResult::Blocked;
     }
 
@@ -155,7 +157,7 @@ pub fn apply_move(
     // After a player step: roll passive detection for hidden traps and secret
     // doors within one tile (Agility-scaled).
     if world.get::<&Player>(entity).is_ok() {
-        crate::systems::discovery::roll_player_discovery(world, entity, events);
+        crate::systems::discovery::roll_player_discovery(world, entity, events, rng);
     }
 
     ActionResult::Completed
@@ -245,6 +247,7 @@ pub fn apply_interact_direction(
     dy: i32,
     _spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Get entity position
     let pos = match world.get::<&Position>(entity) {
@@ -278,7 +281,7 @@ pub fn apply_interact_direction(
         .find(|(_, (p, b))| b.lit && p.x == target_x && p.y == target_y)
         .map(|(id, _)| id);
     if let Some(brazier_id) = brazier {
-        if crate::systems::fire::topple_brazier(world, grid, brazier_id, events) {
+        if crate::systems::fire::topple_brazier(world, grid, brazier_id, events, rng) {
             return ActionResult::Completed;
         }
     }
@@ -291,7 +294,7 @@ pub fn apply_interact_direction(
         .map(|(id, _)| id);
     if let Some(furniture_id) = furniture {
         if world.get::<&Player>(entity).is_ok() {
-            return crate::systems::furniture::use_furniture(world, entity, furniture_id, events);
+            return crate::systems::furniture::use_furniture(world, entity, furniture_id, events, rng);
         }
     }
 

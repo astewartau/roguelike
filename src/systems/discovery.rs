@@ -38,12 +38,16 @@ pub fn trap_tint(kind: DungeonTrapKind) -> (f32, f32, f32) {
 
 /// After a player step: roll detection for each hidden trap and secret door
 /// within one tile (Chebyshev), scaled by the player's effective Agility.
-pub fn roll_player_discovery(world: &mut World, player: Entity, events: &mut EventQueue) {
+pub fn roll_player_discovery(
+    world: &mut World,
+    player: Entity,
+    events: &mut EventQueue,
+    rng: &mut impl Rng,
+) {
     let Some((px, py)) = crate::queries::get_entity_position(world, player) else {
         return;
     };
     let chance = detection_chance(crate::queries::effective_stats(world, player).agility);
-    let mut rng = rand::thread_rng();
 
     // Hidden traps within one tile.
     let hidden_traps: Vec<(Entity, DungeonTrapKind, (i32, i32))> = world

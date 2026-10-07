@@ -10,6 +10,7 @@ use hecs::{Entity, World};
 use crate::components::{
     Actor, Attackable, BlocksMovement, BlocksVision, EffectType, Equipment, Position, Stats,
 };
+use crate::spatial_cache::SpatialCache;
 use crate::systems::effects;
 
 /// Get all positions blocked by entities (for pathfinding/collision).
@@ -100,13 +101,18 @@ pub fn int_power(world: &World, entity: Entity) -> f32 {
 }
 
 /// Check if a position is blocked by any entity (excluding a specific one).
-pub fn is_position_blocked(world: &World, x: i32, y: i32, exclude: Option<Entity>) -> bool {
-    world
-        .query::<(&Position, &BlocksMovement)>()
-        .iter()
-        .any(|(id, (pos, _))| {
-            pos.x == x && pos.y == y && exclude.map_or(true, |ex| id != ex)
-        })
+///
+/// Answered from the `SpatialCache` rather than by scanning the world, so this
+/// and AI pathfinding read the same source of truth. The engine tick holds a
+/// `debug_assert` that the cache still agrees with a rebuild, so drift between
+/// the two surfaces as a test/debug failure instead of as phantom blockers.
+pub fn is_position_blocked(
+    spatial_cache: &SpatialCache,
+    x: i32,
+    y: i32,
+    exclude: Option<Entity>,
+) -> bool {
+    spatial_cache.is_blocked_excluding((x, y), exclude)
 }
 
 #[cfg(test)]

@@ -1,3 +1,6 @@
+#[macro_use]
+mod profiling;
+
 mod active_ai_tracker;
 mod app;
 mod audio;
@@ -40,15 +43,10 @@ use winit::window::{Fullscreen, Window, WindowId};
 use egui_glow::EguiGlow;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize puffin profiler
-    puffin::set_scopes_on(true);
-
-    // Start puffin HTTP server for viewing profiler in browser
-    // Open http://localhost:8585 in your browser to view the profiler
-    let server_addr = format!("127.0.0.1:{}", puffin_http::DEFAULT_PORT);
-    let _puffin_server = puffin_http::Server::new(&server_addr).ok();
-    eprintln!("Profiler server running at http://{}", server_addr);
-    eprintln!("Run `puffin_viewer` or open in browser to view profiler");
+    // Profiling is opt-in (cargo feature `profiling`); without it this does
+    // nothing and no local port is opened. Held for the process lifetime: the
+    // server stops when the handle drops.
+    let _puffin_server = profiling::start();
 
     let event_loop = EventLoop::new()?;
     let mut app = App::new();
@@ -175,8 +173,8 @@ impl AppState {
     /// Runs one frame. Returns true if the app should exit (e.g. the player
     /// chose Exit in the pause menu).
     fn update_and_render(&mut self) -> bool {
-        puffin::GlobalProfiler::lock().new_frame();
-        puffin::profile_function!();
+        profiling::new_frame();
+        profile_function!();
 
         let current_time = Instant::now();
         let raw_dt = (current_time - self.last_frame_time).as_secs_f32();
@@ -186,7 +184,7 @@ impl AppState {
 
         // Tick game engine
         let tick_result = {
-            puffin::profile_scope!("engine_tick");
+            profile_scope!("engine_tick");
             self.engine.tick(dt, &mut self.render_ctx.camera)
         };
 
@@ -202,7 +200,7 @@ impl AppState {
 
         // Run UI
         let ui_actions = {
-            puffin::profile_scope!("run_ui");
+            profile_scope!("run_ui");
             self.engine.run_ui(
                 &mut self.egui_glow,
                 &self.window,
@@ -245,7 +243,7 @@ impl AppState {
 
         // Render game world (only when playing)
         if let Some(grid) = self.engine.grid() {
-            puffin::profile_scope!("render_frame");
+            profile_scope!("render_frame");
             let light_sources = self.engine.light_sources();
             self.render_ctx.render_frame(
                 &self.gl,
@@ -262,7 +260,7 @@ impl AppState {
 
         // Render egui
         {
-            puffin::profile_scope!("egui_paint");
+            profile_scope!("egui_paint");
             self.egui_glow.paint(&self.window);
         }
 

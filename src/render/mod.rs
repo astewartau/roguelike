@@ -73,7 +73,7 @@ impl RenderContext {
         light_sources: &[(f32, f32, f32, f32)],
         show_grid_lines: bool,
     ) {
-        puffin::profile_function!();
+        profile_function!();
 
         unsafe {
             use glow::HasContext;
@@ -82,7 +82,7 @@ impl RenderContext {
         }
 
         {
-            puffin::profile_scope!("render_tiles");
+            profile_scope!("render_tiles");
             self.renderer
                 .render(
                     &self.camera,
@@ -96,26 +96,26 @@ impl RenderContext {
                 .unwrap();
         }
         {
-            puffin::profile_scope!("render_decals");
+            profile_scope!("render_decals");
             self.renderer
                 .render_decals(&self.camera, grid, &self.tileset)
                 .unwrap();
         }
         {
-            puffin::profile_scope!("render_entities");
+            profile_scope!("render_entities");
             self.renderer
                 .render_entities(&self.camera, entities, &self.tileset)
                 .unwrap();
         }
         {
             // Tall-grass blades drawn above entities so characters look concealed.
-            puffin::profile_scope!("render_grass_canopy");
+            profile_scope!("render_grass_canopy");
             self.renderer
                 .render_grass_canopy(&self.camera, grid, &self.tileset)
                 .unwrap();
         }
         {
-            puffin::profile_scope!("render_vfx");
+            profile_scope!("render_vfx");
             self.renderer.render_vfx(&self.camera, vfx_effects);
             self.renderer.render_fire(&self.camera, fires);
         }

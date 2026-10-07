@@ -9,6 +9,8 @@
 //! 4. Real-time visual lerp animates the arrow to its final position
 //! 5. Once visual catches up, the arrow is despawned
 
+use rand::Rng;
+
 use crate::components::{Attackable, EffectType, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -25,6 +27,7 @@ pub fn update_projectiles(
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     current_time: f32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity, potion_type)
     type Hit = (Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity, Option<ItemType>);
@@ -187,6 +190,7 @@ pub fn update_projectiles(
                     target_entity,
                     actual_damage,
                     events,
+                    rng,
                 );
             }
         }

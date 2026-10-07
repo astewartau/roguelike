@@ -31,12 +31,13 @@ pub fn use_furniture(
     user: Entity,
     furniture: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     let Ok(kind) = world.get::<&Furniture>(furniture).map(|f| f.kind) else {
         return ActionResult::Invalid;
     };
     match kind {
-        FurnitureKind::Fountain => use_fountain(world, user, furniture, events),
+        FurnitureKind::Fountain => use_fountain(world, user, furniture, events, rng),
         FurnitureKind::Shrine => use_shrine(world, user, furniture, events),
         FurnitureKind::Altar => {
             // The altar interaction is a UI prompt: pick an inventory item to
@@ -64,6 +65,7 @@ fn use_fountain(
     user: Entity,
     fountain: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     let used = world.get::<&Furniture>(fountain).map(|f| f.used).unwrap_or(true);
     if used {
@@ -71,7 +73,7 @@ fn use_fountain(
         return ActionResult::Completed;
     }
 
-    let mut rng = rand::thread_rng();
+
     let roll: f64 = rng.gen();
     let outcome = if roll < FOUNTAIN_HEAL_CHANCE {
         if let Ok(mut health) = world.get::<&mut Health>(user) {
@@ -244,6 +246,103 @@ pub fn perform_altar_sacrifice(
 mod tests {
     use super::*;
     use crate::components::{Affix, ItemType};
+
+    /// Build a player with an inventory of sacrificeable items plus one
+    /// fountain and one altar, then drive a fixed sequence of furniture
+    /// interactions through `rng` and return the resulting event stream.
+    fn furniture_outcome_sequence(seed: u64) -> Vec<String> {
+        use crate::components::{Health, Hunger, Player, Position, StatusEffects};
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let mut world = World::new();
+        let mut inv = Inventory::new();
+        for _ in 0..6 {
+            inv.items.push(ItemInstance::plain(ItemType::Sword));
+        }
+        let player = world.spawn((
+            Position::new(1, 1),
+            Player,
+            Health::new(40),
+            Hunger::new(),
+            Stats::new(10, 10, 10),
+            StatusEffects::new(),
+            inv,
+            Equipment::empty(),
+        ));
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut events = EventQueue::new();
+        let mut log: Vec<String> = Vec::new();
+
+        // Six altar sacrifices: each consumes inventory slot 0.
+        for _ in 0..6 {
+            perform_altar_sacrifice(&mut world, player, 0, &mut events, &mut rng);
+        }
+
+        // A run of fountains. Each is a fresh, unused one so every drink rolls.
+        for i in 0..12 {
+            let fountain =
+                crate::spawning::spawn_furniture(&mut world, 2 + i, 2, FurnitureKind::Fountain);
+            // Damage and starve the player so Heal/Food outcomes are visible.
+            if let Ok(mut h) = world.get::<&mut Health>(player) {
+                h.current = 1;
+            }
+            use_furniture(&mut world, player, fountain, &mut events, &mut rng);
+        }
+
+        for event in events.drain() {
+            match event {
+                GameEvent::FountainUsed { outcome, .. } => {
+                    log.push(format!("fountain:{outcome:?}"));
+                }
+                GameEvent::AltarSacrificed { blessed, detail, .. } => {
+                    log.push(format!("altar:{blessed}:{detail}"));
+                }
+                _ => {}
+            }
+        }
+        log
+    }
+
+    #[test]
+    fn test_same_seed_same_furniture_outcomes() {
+        // Fountains and altars can swing an entire run, and the game-over
+        // screen presents the seed as "retry it by entering this". These rolls
+        // must therefore come from the run seed, not thread_rng.
+        let a = furniture_outcome_sequence(4242);
+        assert!(
+            a.iter().any(|e| e.starts_with("fountain:")),
+            "expected fountain outcomes in the sequence"
+        );
+        assert!(
+            a.iter().any(|e| e.starts_with("altar:")),
+            "expected altar outcomes in the sequence"
+        );
+        assert_eq!(
+            a,
+            furniture_outcome_sequence(4242),
+            "same seed must produce an identical furniture outcome sequence"
+        );
+    }
+
+    #[test]
+    fn test_different_seed_different_furniture_outcomes() {
+        // Guards against the sequence being seed-independent for a trivial
+        // reason (e.g. every roll landing on the same branch regardless).
+        let mut differs = false;
+        let baseline = furniture_outcome_sequence(1);
+        for seed in 2..12u64 {
+            if furniture_outcome_sequence(seed) != baseline {
+                differs = true;
+                break;
+            }
+        }
+        assert!(
+            differs,
+            "some other seed should produce a different outcome sequence"
+        );
+    }
 
     #[test]
     fn test_altar_blessing_chance_clamps() {
