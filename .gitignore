@@ -7,3 +7,7 @@ assets/
 # Puffin profiler captures, saved by hand out of puffin_viewer into the repo
 # root. Large binary blobs with no reason to be versioned.
 /RESULTS
+
+# Run history, written to the process working directory at runtime
+# (RUN_HISTORY_FILE in src/run_history.rs).
+/runs_history.jsonl
