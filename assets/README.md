@@ -115,9 +115,7 @@ Present in the author's tree but **not read by any code** — safe to omit:
   file travels with it in this tree, so its terms are unrecorded; check before
   using it for anything.
 - `minirogue-all.{png,tsj,tsx}`, `water-example.tmx`, `watertiles-auto.tsx` —
-  Tiled scratch files, provenance unrecorded. The three `minirogue-all.*` files
-  are the one hole in the ignore rule: they were committed before `assets/` was
-  ignored and are **still tracked**, so a clone does get those three.
+  Tiled scratch files, provenance unrecorded.
 - `32rogues/animals.png`, `autotiles.png`, `items-palette-swaps.png`,
   `32rogues-palette.png` — part of the 32rogues pack, but not in
   `SHEET_SPECS`.
@@ -128,7 +126,7 @@ Only the **bold** entries are required.
 
 ```
 assets/
-├── README.md                     (this file — tracked, via a .gitignore exception)
+├── README.md                     (this file — the only tracked file here)
 ├── 32rogues/
 │   ├── tiles.png                 ** 544×832
 │   ├── rogues.png                ** 224×224
