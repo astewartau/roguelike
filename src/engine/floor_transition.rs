@@ -1,22 +1,20 @@
 //! Floor transition and save/load logic for multi-floor dungeons.
 
-use rand::Rng;
-
 use crate::components::{
     BlocksMovement, BlocksVision, ChaseAI, Container, Door, Health, ItemInstance,
     Position, Sprite, VisualPosition,
 };
 use crate::constants::*;
-use crate::events::EventQueue;
 use crate::grid::Grid;
 use crate::spawning;
 use crate::tile::tile_ids;
-use crate::time_system::{ActionScheduler, GameClock};
+use crate::time_system::ActionScheduler;
 
 use hecs::{Entity, World};
 use std::collections::HashMap;
 
 use super::initialization::spawn_floor_entities;
+use super::ActorCtx;
 
 /// Saved state of a floor for when the player leaves and returns.
 pub struct SavedFloor {
@@ -77,10 +75,10 @@ pub enum SavedEntityType {
     },
 }
 
-/// Result of a floor transition.
+/// Result of a floor transition. The new grid is written straight into the
+/// context's `grid`, so it is not returned here.
 pub struct FloorTransitionResult {
     pub new_floor: u32,
-    pub new_grid: Grid,
     pub player_visual_pos: (f32, f32),
 }
 
@@ -235,24 +233,18 @@ pub fn clear_floor_entities(world: &mut World, player_entity: Entity, scheduler:
 
 /// Load a saved floor, spawning entities.
 pub fn load_floor(
-    world: &mut World,
-    grid: &Grid,
+    ctx: &mut ActorCtx,
     saved_entities: &[SavedEntity],
-    player_entity: Entity,
     player_spawn_pos: (i32, i32),
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) {
+    let player_entity = ctx.player;
+
     // Update player position
-    if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
+    if let Ok(mut pos) = ctx.world.get::<&mut Position>(player_entity) {
         pos.x = player_spawn_pos.0;
         pos.y = player_spawn_pos.1;
     }
-    if let Ok(mut vis_pos) = world.get::<&mut VisualPosition>(player_entity) {
+    if let Ok(mut vis_pos) = ctx.world.get::<&mut VisualPosition>(player_entity) {
         vis_pos.x = player_spawn_pos.0 as f32;
         vis_pos.y = player_spawn_pos.1 as f32;
     }
@@ -261,24 +253,22 @@ pub fn load_floor(
         let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
         match &saved_entity.entity_type {
             SavedEntityType::Enemy { def, health_current, health_max, asleep, boss } => {
-                let enemy = def.spawn(world, pos.x, pos.y);
-                if let Ok(mut health) = world.get::<&mut Health>(enemy) {
+                let enemy = def.spawn(ctx.world, pos.x, pos.y, ctx.rng);
+                if let Ok(mut health) = ctx.world.get::<&mut Health>(enemy) {
                     health.current = *health_current;
                     health.max = *health_max;
                 }
                 // spawn() re-rolls the sleep chance; restore the state the
                 // enemy was actually left in.
                 if *asleep {
-                    let _ = world.insert_one(enemy, crate::components::Asleep);
+                    let _ = ctx.world.insert_one(enemy, crate::components::Asleep);
                 } else {
-                    let _ = world.remove_one::<crate::components::Asleep>(enemy);
+                    let _ = ctx.world.remove_one::<crate::components::Asleep>(enemy);
                 }
                 if let Some(b) = boss {
-                    spawning::apply_boss_role(world, enemy, &b.name, b.ability, b.announced);
+                    spawning::apply_boss_role(ctx.world, enemy, &b.name, b.ability, b.announced);
                 }
-                crate::systems::ai::decide_action(
-                    world, grid, enemy, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, rng,
-                );
+                crate::systems::ai::decide_action(ctx, enemy);
             }
             SavedEntityType::Chest { is_open, gold, items } => {
                 let sprite_ref = if *is_open { tile_ids::CHEST_OPEN } else { tile_ids::CHEST_CLOSED };
@@ -286,14 +276,14 @@ pub fn load_floor(
                 container.is_open = *is_open;
 
                 if *is_open && container.is_empty() {
-                    world.spawn((
+                    ctx.world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
                         Sprite::from_ref(sprite_ref),
                         container,
                     ));
                 } else {
-                    world.spawn((
+                    ctx.world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
                         Sprite::from_ref(sprite_ref),
@@ -306,14 +296,14 @@ pub fn load_floor(
                 if *is_open {
                     let mut door = Door::new();
                     door.is_open = true;
-                    world.spawn((
+                    ctx.world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
                         Sprite::from_ref(tile_ids::DOOR),
                         door,
                     ));
                 } else {
-                    world.spawn((
+                    ctx.world.spawn((
                         pos,
                         VisualPosition::from_position(&pos),
                         Sprite::from_ref(tile_ids::DOOR),
@@ -326,7 +316,7 @@ pub fn load_floor(
             SavedEntityType::Bones { gold, items } => {
                 let mut container = Container::corpse(items.clone(), *gold);
                 container.is_open = true;
-                world.spawn((
+                ctx.world.spawn((
                     pos,
                     VisualPosition::from_position(&pos),
                     Sprite::from_ref(tile_ids::BONES_4),
@@ -334,19 +324,20 @@ pub fn load_floor(
                 ));
             }
             SavedEntityType::SecretDoor => {
-                let wall_sprite = super::initialization::secret_door_wall_sprite(grid, pos.x, pos.y);
-                spawning::spawn_secret_door(world, pos.x, pos.y, wall_sprite);
+                let wall_sprite =
+                    super::initialization::secret_door_wall_sprite(ctx.grid, pos.x, pos.y);
+                spawning::spawn_secret_door(ctx.world, pos.x, pos.y, wall_sprite);
             }
             SavedEntityType::Trap { kind, revealed } => {
-                let trap = spawning::spawn_dungeon_trap(world, pos.x, pos.y, *kind);
+                let trap = spawning::spawn_dungeon_trap(ctx.world, pos.x, pos.y, *kind);
                 if *revealed {
-                    crate::systems::discovery::reveal_trap(world, trap, *kind);
+                    crate::systems::discovery::reveal_trap(ctx.world, trap, *kind);
                 }
             }
             SavedEntityType::Furniture { kind, used } => {
-                let piece = spawning::spawn_furniture(world, pos.x, pos.y, *kind);
+                let piece = spawning::spawn_furniture(ctx.world, pos.x, pos.y, *kind);
                 if *used {
-                    crate::systems::furniture::mark_spent(world, piece);
+                    crate::systems::furniture::mark_spent(ctx.world, piece);
                 }
             }
         }
@@ -360,20 +351,17 @@ pub fn load_floor(
 /// same floors regardless of visit order. Revisited floors are restored from
 /// their saved state instead.
 pub fn handle_floor_transition(
-    world: &mut World,
-    current_grid: Grid,
+    ctx: &mut ActorCtx,
     floors: &mut HashMap<u32, SavedFloor>,
     current_floor: u32,
     run_seed: u64,
     direction: crate::events::StairDirection,
-    player_entity: Entity,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
 ) -> FloorTransitionResult {
     use crate::events::StairDirection;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    let player_entity = ctx.player;
 
     let target_floor = match direction {
         StairDirection::Down => current_floor + 1,
@@ -383,95 +371,69 @@ pub fn handle_floor_transition(
         }
     };
 
-    // Save current floor
-    let saved_floor = save_floor(world, current_grid, player_entity);
-    floors.insert(current_floor, saved_floor);
+    // The target floor's layout, loot and AI-initialization rolls all come from
+    // a per-floor rng derived from the run seed, so the same seed produces the
+    // same floor regardless of visit order.
+    let mut floor_rng =
+        StdRng::seed_from_u64(super::game_state::floor_seed(run_seed, target_floor));
 
-    // Clear current floor entities
-    clear_floor_entities(world, player_entity, scheduler);
-
-    // Load or generate target floor
-    let new_grid = if let Some(saved) = floors.remove(&target_floor) {
-        let spawn_pos = match direction {
-            StairDirection::Down => saved.grid.stairs_up_pos.unwrap_or((1, 1)),
-            StairDirection::Up => saved.grid.stairs_down_pos.unwrap_or((1, 1)),
-        };
-
-        let grid = saved.grid;
-        // A revisited floor restores its saved entities; AI re-initialization
-        // rolls come from the same per-floor derived rng a fresh floor would
-        // use, so a replayed seed revisits identically.
-        use rand::rngs::StdRng;
-        use rand::SeedableRng;
-        let mut floor_rng =
-            StdRng::seed_from_u64(super::game_state::floor_seed(run_seed, target_floor));
-        load_floor(
-            world,
-            &grid,
-            &saved.entities,
-            player_entity,
-            spawn_pos,
-            clock,
-            scheduler,
-            active_ai_tracker,
-            spatial_cache,
-            events,
-            &mut floor_rng,
-        );
-        grid
-    } else {
-        // A floor never visited before: layout + loot come from a fresh rng
-        // derived from the run seed and floor number only.
-        use rand::rngs::StdRng;
-        use rand::SeedableRng;
-        let mut floor_rng =
-            StdRng::seed_from_u64(super::game_state::floor_seed(run_seed, target_floor));
-
-        let grid = Grid::new_floor(
-            DUNGEON_DEFAULT_WIDTH,
-            DUNGEON_DEFAULT_HEIGHT,
-            target_floor,
-            &mut floor_rng,
-        );
-
-        let spawn_pos = match direction {
-            StairDirection::Down => grid.stairs_up_pos.unwrap_or((1, 1)),
-            StairDirection::Up => grid.stairs_down_pos.unwrap_or((1, 1)),
-        };
-
-        spawn_floor_entities(
-            world,
-            &grid,
-            player_entity,
-            spawn_pos,
-            target_floor,
-            clock,
-            scheduler,
-            active_ai_tracker,
-            spatial_cache,
-            events,
-            &mut floor_rng,
-        );
-        grid
+    // Resolve the target floor first - a revisit restores its saved grid and
+    // entities, a first visit generates a fresh grid. `target_floor` is never
+    // `current_floor`, so taking it out before saving below is independent of
+    // the insert. Doing this up front means the grid we are leaving can be
+    // swapped straight out of the context, with no placeholder grid.
+    let (new_grid, saved_entities) = match floors.remove(&target_floor) {
+        Some(saved) => (saved.grid, Some(saved.entities)),
+        None => (
+            Grid::new_floor(
+                DUNGEON_DEFAULT_WIDTH,
+                DUNGEON_DEFAULT_HEIGHT,
+                target_floor,
+                &mut floor_rng,
+            ),
+            None,
+        ),
+    };
+    let spawn_pos = match direction {
+        StairDirection::Down => new_grid.stairs_up_pos.unwrap_or((1, 1)),
+        StairDirection::Up => new_grid.stairs_down_pos.unwrap_or((1, 1)),
     };
 
-    // Rebuild caches for the new floor
-    spatial_cache.rebuild_in_place(world);
-    active_ai_tracker.initialize_from_world(
-        world,
-        world.get::<&Position>(player_entity)
-            .map(|p| (p.x, p.y))
-            .unwrap_or((0, 0)),
-    );
+    // Save the floor we are leaving, then clear its entities.
+    let current_grid = std::mem::replace(ctx.grid, new_grid);
+    let saved_floor = save_floor(ctx.world, current_grid, player_entity);
+    floors.insert(current_floor, saved_floor);
+    clear_floor_entities(ctx.world, player_entity, ctx.scheduler);
 
-    let player_visual_pos = world
+    // Populate the new floor from the per-floor rng rather than the run rng.
+    {
+        let mut floor_ctx = ActorCtx {
+            rng: &mut floor_rng,
+            ..ctx.reborrow()
+        };
+        match &saved_entities {
+            Some(entities) => load_floor(&mut floor_ctx, entities, spawn_pos),
+            None => spawn_floor_entities(&mut floor_ctx, spawn_pos, target_floor),
+        }
+    }
+
+    // Rebuild caches for the new floor
+    ctx.spatial.rebuild_in_place(ctx.world);
+    let player_pos = ctx
+        .world
+        .get::<&Position>(player_entity)
+        .map(|p| (p.x, p.y))
+        .unwrap_or((0, 0));
+    ctx.tracker.initialize_from_world(ctx.world, player_pos);
+
+    let player_visual_pos = ctx
+        .world
         .get::<&VisualPosition>(player_entity)
         .map(|vp| (vp.x, vp.y))
         .unwrap_or((1.0, 1.0));
 
     FloorTransitionResult {
         new_floor: target_floor,
-        new_grid,
         player_visual_pos,
     }
 }
@@ -480,6 +442,8 @@ pub fn handle_floor_transition(
 mod tests {
     use super::*;
     use crate::components::{Asleep, Boss, BossAbility, FearImmune, SupportAI, Venomous};
+    use crate::events::EventQueue;
+    use crate::time_system::GameClock;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -499,23 +463,26 @@ mod tests {
         let mut scheduler = ActionScheduler::new();
         clear_floor_entities(world, player, &mut scheduler);
 
-        let clock = GameClock::new();
+        let mut clock = GameClock::new();
         let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
-        let cache = crate::spatial_cache::SpatialCache::rebuild_from_world(world);
+        let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(world);
         let mut events = EventQueue::new();
-        let grid = saved.grid;
+        let mut grid = saved.grid;
+        let mut rng = StdRng::seed_from_u64(7);
         load_floor(
-            world,
-            &grid,
+            &mut ActorCtx {
+                world,
+                grid: &mut grid,
+                player,
+                clock: &mut clock,
+                scheduler: &mut scheduler,
+                tracker: &mut tracker,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
             &saved.entities,
-            player,
             (1, 1),
-            &clock,
-            &mut scheduler,
-            &mut tracker,
-            &cache,
-            &mut events,
-            &mut StdRng::seed_from_u64(7),
         );
         grid
     }
@@ -538,9 +505,10 @@ mod tests {
 
         // A venomous spider, a support shaman, and an archer — the enemy
         // kinds the old save path used to downgrade to plain skeletons.
-        let spider = spawning::enemies::GIANT_SPIDER.spawn(&mut world, 5, 5);
-        let shaman = spawning::enemies::GOBLIN_SHAMAN.spawn(&mut world, 7, 5);
-        let archer = spawning::enemies::SKELETON_ARCHER.spawn(&mut world, 9, 5);
+        let mut rng = StdRng::seed_from_u64(5);
+        let spider = spawning::enemies::GIANT_SPIDER.spawn(&mut world, 5, 5, &mut rng);
+        let shaman = spawning::enemies::GOBLIN_SHAMAN.spawn(&mut world, 7, 5, &mut rng);
+        let archer = spawning::enemies::SKELETON_ARCHER.spawn(&mut world, 9, 5, &mut rng);
 
         // Deterministic health + sleep state to verify restoration.
         world.get::<&mut Health>(spider).unwrap().current = 3;
@@ -572,7 +540,8 @@ mod tests {
     fn test_revisited_floor_preserves_boss() {
         let (mut world, grid, player) = setup();
 
-        let boss = spawning::spawn_boss(&mut world, 3, 6, 6).expect("floor 3 boss");
+        let boss = spawning::spawn_boss(&mut world, 3, 6, 6, &mut StdRng::seed_from_u64(6))
+            .expect("floor 3 boss");
         let scaled_max = world.get::<&Health>(boss).unwrap().max;
         world.get::<&mut Health>(boss).unwrap().current = scaled_max - 7;
         world.get::<&mut Boss>(boss).unwrap().announced = true;

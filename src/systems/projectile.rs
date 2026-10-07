@@ -161,7 +161,8 @@ pub fn update_projectiles(
             }
 
             // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
-            actual_damage = crate::systems::combat::apply_damage(world, target_entity, actual_damage);
+            actual_damage =
+                crate::systems::combat::apply_damage(world, target_entity, actual_damage, rng);
 
             if actual_damage > 0 {
                 // Interrupt life drain if target was channeling

@@ -53,10 +53,6 @@ pub struct Grid {
 }
 
 impl Grid {
-    pub fn new(width: usize, height: usize) -> Self {
-        Self::new_floor(width, height, 0, &mut rand::thread_rng())
-    }
-
     /// Generate a dungeon floor from the given rng (the same rng state always
     /// produces the same layout). floor_num 0 is the first floor (no stairs up).
     pub fn new_floor(

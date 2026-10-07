@@ -7,13 +7,12 @@ use crate::components::{
 };
 use crate::constants::*;
 use crate::dungeon_gen::RoomTheme;
-use crate::events::EventQueue;
 use crate::grid::Grid;
 use crate::spawning;
 use crate::systems::items::item_weight;
 use crate::tile::tile_ids;
-use crate::time_system::{ActionScheduler, GameClock};
 
+use super::ActorCtx;
 use hecs::{Entity, World};
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -390,7 +389,7 @@ fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut im
     let Some(&(bx, by)) = interior.iter().find(|&&(x, y)| free(x, y)) else {
         return;
     };
-    if spawning::spawn_boss(world, floor, bx, by).is_none() {
+    if spawning::spawn_boss(world, floor, bx, by, rng).is_none() {
         return;
     }
 
@@ -710,71 +709,47 @@ pub fn init_world(
 
 /// Initialize all AI actors with their first action in the time system.
 /// Only schedules entities that are currently active (within range of player).
-pub fn initialize_ai_actors(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
-    // Only initialize AI for entities that are active (within range)
-    let active_entities: Vec<Entity> = active_tracker
+pub fn initialize_ai_actors(ctx: &mut ActorCtx) {
+    // Only initialize AI for entities that are active (within range).
+    //
+    // Sorted because the tracker stores them in a `HashSet`, whose iteration
+    // order is randomized per process. Each `decide_action` draws from the run
+    // rng, so an unsorted order would scramble the draw sequence and make a
+    // seeded run unreproducible between launches.
+    let mut active_entities: Vec<Entity> = ctx
+        .tracker
         .get_active_entities()
         .iter()
         .copied()
         .collect();
+    active_entities.sort_unstable();
 
     for entity in active_entities {
-        crate::systems::ai::decide_action(
-            world, grid, entity, player_entity, clock, scheduler,
-            active_tracker, spatial_cache, events, rng,
-        );
+        crate::systems::ai::decide_action(ctx, entity);
     }
 }
 
 /// Initialize a single AI actor (used when spawning new enemies mid-game).
 /// Only schedules the entity if it's within active range of the player.
-pub fn initialize_single_ai_actor(
-    world: &mut World,
-    grid: &Grid,
-    entity: Entity,
-    player_entity: Entity,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
+pub fn initialize_single_ai_actor(ctx: &mut ActorCtx, entity: Entity) {
     // Register the entity with the tracker (starts as dormant)
-    active_tracker.register_entity(entity);
+    ctx.tracker.register_entity(entity);
 
     // decide_action will check distance and either process or mark dormant
-    crate::systems::ai::decide_action(
-        world, grid, entity, player_entity, clock, scheduler,
-        active_tracker, spatial_cache, events, rng,
-    );
+    crate::systems::ai::decide_action(ctx, entity);
 }
 
-/// Spawn floor entities for a new (unsaved) floor. `rng` drives all loot and
-/// spawn rolls; pass a per-floor seeded rng for reproducible floors.
+/// Spawn floor entities for a new (unsaved) floor. `ctx.rng` drives all loot
+/// and spawn rolls; pass a context holding a per-floor seeded rng for
+/// reproducible floors.
 pub fn spawn_floor_entities(
-    world: &mut World,
-    grid: &Grid,
-    player_entity: Entity,
+    ctx: &mut ActorCtx,
     player_spawn_pos: (i32, i32),
     floor_num: u32,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) {
+    let ActorCtx { world, grid, rng, player, .. } = ctx;
+    let (world, grid, rng, player_entity) = (&mut **world, &**grid, &mut **rng, *player);
+
     // Update player position
     if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
         pos.x = player_spawn_pos.0;
@@ -822,5 +797,5 @@ pub fn spawn_floor_entities(
     spawn_boss_encounter(world, grid, floor_num, rng);
 
     // Initialize AI
-    initialize_ai_actors(world, grid, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, rng);
+    initialize_ai_actors(ctx);
 }

@@ -145,14 +145,14 @@ pub fn apply_move(
     crate::systems::webs::trigger_web_at(world, entity, target_x, target_y, events);
 
     // Check if entity stepped on a fire trap
-    check_fire_trap_trigger(world, entity, target_x, target_y, events);
+    check_fire_trap_trigger(world, entity, target_x, target_y, events, rng);
 
     // Check if entity stepped on a snare trap
     check_snare_trap_trigger(world, entity, target_x, target_y, events);
 
     // Check if entity stepped on a dungeon-generated floor trap (no owner
     // exemption — enemies set these off too)
-    check_dungeon_trap_trigger(world, grid, entity, target_x, target_y, events);
+    check_dungeon_trap_trigger(world, grid, entity, target_x, target_y, events, rng);
 
     // After a player step: roll passive detection for hidden traps and secret
     // doors within one tile (Agility-scaled).

@@ -261,7 +261,12 @@ fn try_knockback(
 /// regardless of the damage source (melee, ranged, traps, spells). Attacker-side
 /// modifiers (crit, variance, Strengthened) are applied by the caller before
 /// passing `raw` in.
-pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
+pub fn apply_damage(
+    world: &mut World,
+    target: Entity,
+    raw: i32,
+    rng: &mut impl Rng,
+) -> i32 {
     // Invulnerable negates all damage.
     if crate::queries::has_status_effect(world, target, EffectType::Invulnerable) {
         return 0;
@@ -315,13 +320,7 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
         && world.get::<&crate::components::FearImmune>(target).is_err()
     {
         let frac = hp_after.0 as f32 / hp_after.1 as f32;
-        // NOTE: deliberately still on thread_rng. apply_damage is the single
-        // chokepoint for every damage source, and none of its 10 callers
-        // (projectiles, all three trap kinds, boss slam, fireball, life drain,
-        // barrel blast) carries an Rng — seeding this roll means threading one
-        // through all of them and their callers in turn. Left unseeded rather
-        // than ballooning the diff; see the Bug 4 notes.
-        if frac < MORALE_HP_THRESHOLD && rand::thread_rng().gen_bool(MORALE_FLEE_CHANCE) {
+        if frac < MORALE_HP_THRESHOLD && rng.gen_bool(MORALE_FLEE_CHANCE) {
             crate::systems::effects::add_effect_to_entity(
                 world,
                 target,
@@ -606,7 +605,8 @@ mod tests {
             Health::new(20),
         ));
 
-        let rat = crate::spawning::enemies::RAT.spawn(&mut world, 3, 3);
+        let mut rng = StdRng::seed_from_u64(11);
+        let rat = crate::spawning::enemies::RAT.spawn(&mut world, 3, 3, &mut rng);
         world.get::<&mut Health>(rat).unwrap().current = 0;
 
         let mut tracker = ActiveAITracker::new();
@@ -617,7 +617,6 @@ mod tests {
         tracker.update_on_player_move(&world, (3, 3));
         assert!(tracker.is_tracked(rat), "live enemy should be tracked");
 
-        let mut rng = StdRng::seed_from_u64(11);
         remove_dead_entities(
             &mut world,
             player,

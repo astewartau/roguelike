@@ -67,7 +67,7 @@ pub fn apply_attack(
         as i32;
 
     // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-    let damage = crate::systems::combat::apply_damage(world, target, raw);
+    let damage = crate::systems::combat::apply_damage(world, target, raw, rng);
 
     // CursedLoud gear rings out: wake enemies in a doubled radius on top of
     // the standard melee-noise wake inside apply_damage.
@@ -249,7 +249,7 @@ pub fn apply_cleave(
             as i32;
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        let damage = crate::systems::combat::apply_damage(world, *target, raw);
+        let damage = crate::systems::combat::apply_damage(world, *target, raw, rng);
 
         // Resolve weapon on-hit affixes through the shared chokepoint
         crate::systems::combat::resolve_weapon_on_hit(
@@ -410,13 +410,13 @@ mod tests {
             Experience::new(),
             StatusEffects::new(),
         ));
-        let rat = crate::spawning::enemies::RAT.spawn(&mut world, 1, 2);
+        let mut rng = StdRng::seed_from_u64(7);
+        let rat = crate::spawning::enemies::RAT.spawn(&mut world, 1, 2, &mut rng);
         // 1 HP: apply_damage always deals at least 1, so the hit is lethal
         // regardless of the damage variance roll.
         world.get::<&mut Health>(rat).unwrap().current = 1;
 
         let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
-        let mut rng = StdRng::seed_from_u64(7);
         let result = apply_attack(&mut world, &grid, &mut cache, player, rat, &mut events, &mut rng);
         assert_eq!(result, ActionResult::Completed);
         assert!(world.get::<&Health>(rat).unwrap().current <= 0, "hit is lethal");

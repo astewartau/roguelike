@@ -178,8 +178,10 @@ pub fn dungeon_window_frame() -> Frame {
 
 /// Create the dungeon-themed style with immediate tooltips
 pub fn dungeon_style() -> Style {
-    let mut style = Style::default();
-    style.visuals = dungeon_visuals();
+    let mut style = Style {
+        visuals: dungeon_visuals(),
+        ..Default::default()
+    };
     // Show tooltips immediately on hover, even while mouse is moving
     style.interaction.tooltip_delay = 0.0;
     style.interaction.show_tooltips_only_when_still = false;

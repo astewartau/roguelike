@@ -9,6 +9,7 @@ use crate::components::{
     ActionInProgress, ActionType, Actor, EffectType, Health, RangedCooldown, StatusEffects,
 };
 use crate::constants::*;
+use crate::engine::ActorCtx;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
@@ -260,21 +261,12 @@ pub fn start_action_with_events(
 // ACTION COMPLETION
 // =============================================================================
 
-/// Complete an action for an entity, applying its effects
-pub fn complete_action(
-    world: &mut World,
-    grid: &Grid,
-    entity: Entity,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
-    current_time: f32,
-    clock: &GameClock,
-    scheduler: &mut ActionScheduler,
-    rng: &mut impl Rng,
-) -> ActionResult {
+/// Complete an action for an entity, applying its effects. Effects are applied
+/// at `ctx.clock.time`, which is the completion time the caller just advanced to.
+pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
     // Get the action to complete
     let action = {
-        let Ok(actor) = world.get::<&Actor>(entity) else {
+        let Ok(actor) = ctx.world.get::<&Actor>(entity) else {
             return ActionResult::Invalid;
         };
         match actor.current_action {
@@ -290,16 +282,25 @@ pub fn complete_action(
     );
 
     // Apply action effects
-    let result = apply_action_effects(world, grid, entity, &action.action_type, spatial_cache, events, current_time, rng);
+    let result = apply_action_effects(
+        ctx.world,
+        ctx.grid,
+        entity,
+        &action.action_type,
+        ctx.spatial,
+        ctx.events,
+        ctx.clock.time,
+        ctx.rng,
+    );
 
     // Clear action (energy regen is now time-based, not action-based)
-    if let Ok(mut actor) = world.get::<&mut Actor>(entity) {
+    if let Ok(mut actor) = ctx.world.get::<&mut Actor>(entity) {
         actor.current_action = None;
     }
 
     // Auto-queue recovery action after bow shots
     if needs_recovery && matches!(result, ActionResult::Completed) {
-        let _ = start_action(world, entity, ActionType::Recover, clock, scheduler);
+        let _ = start_action(ctx.world, entity, ActionType::Recover, ctx.clock, ctx.scheduler);
     }
 
     result
@@ -331,7 +332,7 @@ fn apply_action_effects(
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
         ActionType::Wait => {
-            actions::apply_wait(world, entity, events)
+            actions::apply_wait(world, entity, events, rng)
         }
         ActionType::ShootBow { target_x, target_y } => {
             actions::apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
@@ -347,7 +348,7 @@ fn apply_action_effects(
             actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events)
         }
         ActionType::CastFireball { target_x, target_y } => {
-            actions::apply_fireball(world, entity, *target_x, *target_y, events)
+            actions::apply_fireball(world, entity, *target_x, *target_y, events, rng)
         }
         ActionType::EquipWeapon { item_index } => {
             actions::apply_equip_weapon(world, entity, *item_index)
@@ -398,7 +399,9 @@ fn apply_action_effects(
             actions::apply_shoot_crippling_shot(world, grid, entity, *target_x, *target_y, events, current_time)
         }
         ActionType::CastLearnedSpell { ability, target_x, target_y } => {
-            actions::apply_cast_learned_spell(world, grid, entity, *ability, *target_x, *target_y, spatial_cache, events)
+            actions::apply_cast_learned_spell(
+                world, grid, entity, *ability, *target_x, *target_y, spatial_cache, events, rng,
+            )
         }
         ActionType::StartRaiseDead { target } => {
             actions::apply_start_raise_dead(world, entity, *target, events)
