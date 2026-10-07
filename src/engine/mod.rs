@@ -25,6 +25,8 @@ pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
 
 
+use rand::Rng;
+
 use crate::audio::AudioManager;
 use crate::components::{
     AbilityType, ActionType, Actor, ClassAbility, Health, PlayerClass, RangerAbilities,
@@ -617,7 +619,7 @@ impl GameEngine {
         // Missed arrows are always recovered; arrows that hit have 50% chance
         for ((x, y), hit_enemy) in arrow_recovery_info {
             let should_recover = if hit_enemy {
-                rand::random::<f32>() < 0.5
+                state.rng.gen::<f32>() < crate::constants::ARROW_RECOVERY_CHANCE_ON_HIT
             } else {
                 true // Missed arrows always recoverable
             };
@@ -1050,7 +1052,7 @@ impl GameEngine {
 
         // Skeletons from opened coffins
         for &(x, y) in &result.skeleton_spawns {
-            let skeleton = spawning::enemies::SKELETON.spawn(ctx.world, x, y);
+            let skeleton = spawning::enemies::SKELETON.spawn(ctx.world, x, y, ctx.rng);
             ctx.spatial.register_entity(skeleton, (x, y), true, false);
             initialization::initialize_single_ai_actor(&mut ctx.actors(), skeleton);
         }
@@ -1767,10 +1769,12 @@ fn player_too_hungry_to_recover(world: &hecs::World, player: Entity) -> bool {
 /// `CompanionAI` for defensive follow behavior, plus the `RaisedUndead`
 /// marker that counts against the caster's INT-scaled control cap.
 fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
-    let ActorCtx { world, player: owner, clock, scheduler, tracker: active_ai_tracker, spatial: spatial_cache, .. } = ctx;
+    let ActorCtx { world, player: owner, clock, scheduler, tracker: active_ai_tracker, spatial: spatial_cache, rng, .. } = ctx;
     let (world, owner) = (&mut **world, *owner);
 
-    let skeleton = spawning::enemies::SKELETON.spawn(world, x, y);
+    // The sleep roll is discarded right below (companions are never asleep) but
+    // still draws, so it stays on the run's seeded stream like every other spawn.
+    let skeleton = spawning::enemies::SKELETON.spawn(world, x, y, rng);
 
     // Convert the hostile stat block into an ally (same path as taming).
     let _ = world.remove_one::<crate::components::ChaseAI>(skeleton);
@@ -1805,7 +1809,7 @@ fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
 /// alerted to the player, and counted against the boss's minion cap.
 fn spawn_boss_minion(ctx: &mut ActorCtx, boss: Entity, x: i32, y: i32) {
     let player_entity = ctx.player;
-    let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(ctx.world, x, y);
+    let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(ctx.world, x, y, ctx.rng);
     let _ = ctx
         .world
         .insert_one(spider, crate::components::BossMinion { boss });
@@ -2233,6 +2237,265 @@ mod tests {
             lines.iter().any(|l| l == "You don't feel tired."),
             "refusal should be reported; got {lines:?}"
         );
+    }
+
+    /// One determinism scenario.
+    struct Scenario {
+        /// Player turns to run.
+        turns: usize,
+        /// Give the player a huge HP pool so the whole script runs instead of
+        /// ending early in a death.
+        tough_player: bool,
+        /// Descend at this turn, exercising floor save/load and AI re-init.
+        descend_at: Option<usize>,
+    }
+
+    /// Golden-value determinism test: the player under pressure.
+    ///
+    /// No HP boost, so the swarm eventually kills them. Deaths and the AI
+    /// decisions leading up to them amplify tiny divergences, which makes this
+    /// the scenario that catches unordered iteration over the active-AI
+    /// `HashSet` (see `initialize_ai_actors`).
+    ///
+    /// **Expected to fail when you change game balance.** It asserts
+    /// reproducibility, not correctness: when an intentional change moves these
+    /// numbers, check the diff moved the way you meant, then re-record.
+    #[test]
+    fn test_fixed_seed_replays_identically_under_pressure() {
+        const EXPECTED: &str = "t=355.3440 floor=0 kills=18 hp=0/50 pos=12,10 hunger=83.3344 fatigue=10.0000 n=97 roster=d9edb117";
+        assert_eq!(
+            run_fixed_script(&Scenario {
+                turns: 400,
+                tough_player: false,
+                descend_at: None,
+            }),
+            EXPECTED
+        );
+    }
+
+    /// Golden-value determinism test: a long run across a floor boundary.
+    ///
+    /// The player survives the whole script, so this covers far more simulation
+    /// than the scenario above - sustained combat, kills and loot, the survival
+    /// clock, fire, and a descent through floor save/load and the per-floor rng.
+    ///
+    /// Same caveat: expected to fail on intentional balance changes.
+    #[test]
+    fn test_fixed_seed_replays_identically_across_a_floor() {
+        const EXPECTED: &str = "t=264.7901 floor=1 kills=21 hp=99746/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=87 roster=3c7ba545";
+        assert_eq!(
+            run_fixed_script(&Scenario {
+                turns: 300,
+                tough_player: true,
+                descend_at: Some(150),
+            }),
+            EXPECTED
+        );
+    }
+
+    /// Drive a fixed script of player turns and return a digest of the world.
+    fn run_fixed_script(scenario: &Scenario) -> String {
+        use crate::systems::player_input::PlayerIntent;
+
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_game(PlayerClass::Fighter, 1234, &mut camera);
+
+        // Wake every hostile onto the player so AI, pathfinding, combat and the
+        // spatial cache all actually run during the turns below.
+        {
+            let state = engine.state.as_mut().expect("run started");
+            let player = state.player_entity;
+            if scenario.tough_player {
+                if let Ok(mut health) = state.world.get::<&mut Health>(player) {
+                    health.max = 100_000;
+                    health.current = 100_000;
+                }
+            }
+            let player_pos = state
+                .world
+                .get::<&crate::components::Position>(player)
+                .map(|p| (p.x, p.y))
+                .expect("player has a position");
+            let mut hostiles: Vec<Entity> = state
+                .world
+                .query::<&crate::components::ChaseAI>()
+                .iter()
+                .map(|(id, _)| id)
+                .collect();
+            hostiles.sort_unstable();
+            for &id in &hostiles {
+                let _ = state.world.remove_one::<crate::components::Asleep>(id);
+                if let Ok(mut ai) = state.world.get::<&mut crate::components::ChaseAI>(id) {
+                    ai.state = crate::components::AIState::Chasing;
+                    ai.add_threat(player, crate::constants::WAKE_THREAT);
+                    ai.update_target_pos(player, player_pos);
+                }
+            }
+
+            // Drag a handful of them into melee range. Without this the scenario
+            // depends on where the dungeon generator happened to put enemies
+            // relative to the player's spawn - a cavern-generation change once
+            // left the player untouched for 400 turns, which quietly gutted what
+            // these tests covered. Assignment is in entity-id and then tile
+            // order, so it stays deterministic.
+            let mut ring: Vec<(i32, i32)> = (-2..=2)
+                .flat_map(|dy| (-2..=2).map(move |dx| (dx, dy)))
+                .filter(|&(dx, dy)| (dx, dy) != (0, 0))
+                .map(|(dx, dy)| (player_pos.0 + dx, player_pos.1 + dy))
+                .filter(|&(x, y)| state.grid.is_walkable(x, y))
+                .collect();
+            ring.sort_unstable();
+            for (&id, &(x, y)) in hostiles.iter().zip(ring.iter()) {
+                if let Ok(mut pos) = state.world.get::<&mut crate::components::Position>(id) {
+                    pos.x = x;
+                    pos.y = y;
+                }
+                if let Ok(mut vis) = state
+                    .world
+                    .get::<&mut crate::components::VisualPosition>(id)
+                {
+                    vis.x = x as f32;
+                    vis.y = y as f32;
+                }
+            }
+
+            // Those moves bypassed the incremental cache updates, so rebuild it
+            // wholesale rather than leaving phantom blockers behind.
+            state.spatial_cache.rebuild_in_place(&state.world);
+            state
+                .active_ai_tracker
+                .initialize_from_world(&state.world, player_pos);
+        }
+
+        let script = [
+            PlayerIntent::Move { dx: 1, dy: 0 },
+            PlayerIntent::Move { dx: 0, dy: 1 },
+            PlayerIntent::Wait,
+            PlayerIntent::Move { dx: 1, dy: 1 },
+            PlayerIntent::AttackDirection { dx: 1, dy: 0 },
+            PlayerIntent::Move { dx: 0, dy: -1 },
+            PlayerIntent::Move { dx: -1, dy: 0 },
+            PlayerIntent::Wait,
+        ];
+
+        for turn in 0..scenario.turns {
+            if Some(turn) == scenario.descend_at {
+                engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+            }
+
+            let result = {
+                let Some(mut ctx) = engine.sim_ctx() else { break };
+                execute_player_intent(&mut ctx, script[turn % script.len()].clone())
+            };
+            engine.apply_deferred_spawns(&result);
+
+            // Fire, identification and the survival clock are paced by the
+            // game-time the turns generate; drive them the way `tick` does.
+            let state = engine.state.as_mut().expect("run started");
+            crate::systems::fire::tick_fire(
+                &mut state.world,
+                &mut state.grid,
+                &mut state.spatial_cache,
+                &mut engine.events,
+                crate::constants::ACTION_WAIT_DURATION,
+                &mut state.fire_accumulator,
+                &mut state.fov_dirty,
+                &mut state.rng,
+            );
+            let _ = crate::systems::survival::tick_survival(
+                &mut state.world,
+                state.player_entity,
+                crate::constants::ACTION_WAIT_DURATION,
+                &mut state.survival_accumulator,
+                crate::systems::survival::SurvivalContext {
+                    resting: false,
+                    sleeping: false,
+                },
+                &mut engine.events,
+            );
+            let kills = systems::remove_dead_entities(
+                &mut state.world,
+                state.player_entity,
+                state.current_floor,
+                &mut state.rng,
+                &mut engine.events,
+                Some(&mut state.action_scheduler),
+                &mut state.spatial_cache,
+                &mut state.active_ai_tracker,
+            );
+            state.kills += kills;
+        }
+
+        world_digest(&engine)
+    }
+
+    /// A compact, stable summary of the whole world. Named scalars stay readable
+    /// in a failure message; the roster of every positioned entity is folded
+    /// into one FNV-1a hash so the expected value stays a single line.
+    fn world_digest(engine: &GameEngine) -> String {
+        let state = engine.state.as_ref().expect("run started");
+
+        let mut rows: Vec<String> = state
+            .world
+            .query::<&crate::components::Position>()
+            .iter()
+            .map(|(id, pos)| {
+                let name = state
+                    .world
+                    .get::<&crate::components::Name>(id)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_else(|_| "?".into());
+                let hp = state
+                    .world
+                    .get::<&Health>(id)
+                    .map(|h| format!("{}/{}", h.current, h.max))
+                    .unwrap_or_else(|_| "-".into());
+                let ai = state
+                    .world
+                    .get::<&crate::components::ChaseAI>(id)
+                    .map(|a| format!("{:?}", a.state))
+                    .unwrap_or_else(|_| "-".into());
+                format!("{name}@{},{} {hp} {ai}", pos.x, pos.y)
+            })
+            .collect();
+        rows.sort();
+
+        let mut hash: u32 = 0x811c_9dc5;
+        for byte in rows.join(";").bytes() {
+            hash ^= byte as u32;
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+
+        let player = state.player_entity;
+        let hp = state
+            .world
+            .get::<&Health>(player)
+            .map(|h| format!("{}/{}", h.current, h.max))
+            .unwrap_or_else(|_| "dead".into());
+        let pos = state
+            .world
+            .get::<&crate::components::Position>(player)
+            .map(|p| format!("{},{}", p.x, p.y))
+            .unwrap_or_else(|_| "-".into());
+        let hunger = state
+            .world
+            .get::<&crate::components::Hunger>(player)
+            .map(|h| format!("{:.4}", h.value))
+            .unwrap_or_else(|_| "-".into());
+        let fatigue = state
+            .world
+            .get::<&crate::components::Fatigue>(player)
+            .map(|f| format!("{:.4}", f.value))
+            .unwrap_or_else(|_| "-".into());
+
+        format!(
+            "t={:.4} floor={} kills={} hp={hp} pos={pos} hunger={hunger} fatigue={fatigue} n={} roster={hash:08x}",
+            state.game_clock.time,
+            state.current_floor,
+            state.kills,
+            rows.len(),
+        )
     }
 
     /// Mark one hostile as actively chasing, which both rest and sleep treat

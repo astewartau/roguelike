@@ -10,6 +10,7 @@ use crate::components::{
 };
 use crate::tile::{tile_ids, SpriteSheet};
 use hecs::World;
+use rand::Rng;
 
 /// Ranged attack configuration for enemies
 #[derive(Clone, Copy)]
@@ -62,8 +63,16 @@ pub struct EnemyDef {
 }
 
 impl EnemyDef {
-    /// Spawn this enemy type at the given position
-    pub fn spawn(&self, world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    /// Spawn this enemy type at the given position. `rng` rolls the starting
+    /// sleep state, so it must come from the run's seeded stream for a seed to
+    /// replay identically.
+    pub fn spawn(
+        &self,
+        world: &mut World,
+        x: i32,
+        y: i32,
+        rng: &mut impl Rng,
+    ) -> hecs::Entity {
         let pos = Position::new(x, y);
 
         // Build base components
@@ -136,7 +145,7 @@ impl EnemyDef {
         }
 
         // Most enemies start asleep; the rest are awake but unaware (patrolling).
-        if rand::random::<f64>() < crate::constants::SLEEP_CHANCE {
+        if rng.gen::<f64>() < crate::constants::SLEEP_CHANCE {
             let _ = world.insert_one(entity, crate::components::Asleep);
         }
 
@@ -558,7 +567,7 @@ impl SpawnConfig {
                 }
 
                 let &(x, y) = available[rng.gen_range(0..available.len())];
-                entry.enemy.spawn(world, x, y);
+                entry.enemy.spawn(world, x, y, rng);
                 used_positions.push((x, y));
                 spawned += 1;
             }
@@ -632,7 +641,7 @@ pub fn spawn_cave_fauna(
                 }
                 let idx = rng.gen_range(0..free.len());
                 let (x, y) = free.swap_remove(idx);
-                enemy.spawn(world, x, y);
+                enemy.spawn(world, x, y, rng);
             }
         }
     }
@@ -1121,9 +1130,15 @@ fn boss_cooldown(ability: crate::components::BossAbility) -> f32 {
 /// `Boss` role, its unique name, and fear immunity. Bosses start awake
 /// (never asleep) but unaware, prowling their lair. Returns None on
 /// non-boss floors.
-pub fn spawn_boss(world: &mut World, floor: u32, x: i32, y: i32) -> Option<hecs::Entity> {
+pub fn spawn_boss(
+    world: &mut World,
+    floor: u32,
+    x: i32,
+    y: i32,
+    rng: &mut impl Rng,
+) -> Option<hecs::Entity> {
     let (def, name, ability) = boss_def_for_floor(floor)?;
-    let boss = def.spawn(world, x, y);
+    let boss = def.spawn(world, x, y, rng);
     apply_boss_role(world, boss, name, ability, false);
     Some(boss)
 }
@@ -1188,6 +1203,15 @@ pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    /// `EnemyDef::spawn` only rolls the starting sleep state; a fixed seed keeps
+    /// these tests deterministic.
+    fn test_rng() -> StdRng {
+        StdRng::seed_from_u64(1)
+    }
+
     use super::*;
     use crate::components::BossAbility;
 
@@ -1241,7 +1265,8 @@ mod tests {
     #[test]
     fn test_spawned_boss_has_role_components() {
         let mut world = World::new();
-        let boss = spawn_boss(&mut world, 3, 5, 5).expect("boss spawns on floor 3");
+        let boss = spawn_boss(&mut world, 3, 5, 5, &mut test_rng())
+            .expect("boss spawns on floor 3");
         assert!(world.get::<&crate::components::Boss>(boss).is_ok());
         assert!(world.get::<&crate::components::FearImmune>(boss).is_ok());
         // Awake (never asleep), per spec.
@@ -1250,7 +1275,7 @@ mod tests {
         assert_eq!(name.ok().as_deref(), Some("Gnash, Orc Warlord"));
 
         // Non-boss floors spawn nothing.
-        assert!(spawn_boss(&mut world, 4, 5, 5).is_none());
+        assert!(spawn_boss(&mut world, 4, 5, 5, &mut test_rng()).is_none());
     }
 
     #[test]

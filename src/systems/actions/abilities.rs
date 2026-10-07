@@ -2,6 +2,7 @@
 //! barkskin, disengage, tumble, and crippling shot.
 
 use hecs::{Entity, World};
+use rand::Rng;
 
 use crate::components::{
     AbilityType, Attackable, BlocksMovement, ChaseAI, ClassAbility, Container, ContainerType,
@@ -86,6 +87,7 @@ pub fn apply_fireball(
     target_x: i32,
     target_y: i32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     let caster_pos = match queries::get_entity_position(world, caster) {
         Some(p) => p,
@@ -124,7 +126,7 @@ pub fn apply_fireball(
     // Apply damage to all
     for (entity, x, y) in damaged {
         // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, entity, damage);
+        crate::systems::combat::apply_damage(world, entity, damage, rng);
         // Interrupt life drain if entity was channeling
         interrupt_life_drain_on_damage(world, entity, events);
         // Generate threat on fireball targets
@@ -283,6 +285,7 @@ pub fn apply_wait(
     world: &mut World,
     entity: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Check if entity is taming something
     let taming_info = world.get::<&TamingInProgress>(entity)
@@ -372,7 +375,7 @@ pub fn apply_wait(
         .map(|d| (d.target, d.tick_timer));
 
     if let Some((target, tick_timer)) = drain_info {
-        tick_life_drain(world, entity, target, tick_timer, events);
+        tick_life_drain(world, entity, target, tick_timer, events, rng);
     }
 
     ActionResult::Completed
@@ -396,6 +399,7 @@ pub fn apply_cast_learned_spell(
     target_y: i32,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     use crate::systems::effects::{add_effect_to_entity, apply_effect_to_visible_enemies};
 
@@ -406,7 +410,7 @@ pub fn apply_cast_learned_spell(
             apply_blink(world, grid, caster, target_x, target_y, spatial_cache, events)
         }
         AbilityType::LearnedFireball => {
-            apply_fireball(world, caster, target_x, target_y, events)
+            apply_fireball(world, caster, target_x, target_y, events, rng)
         }
         AbilityType::LearnedFear => match queries::get_entity_position(world, caster) {
             Some(pos) => {
@@ -579,6 +583,7 @@ fn tick_life_drain(
     target: Entity,
     tick_timer: f32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     // Check if target still exists and is alive
     let target_alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(false);
@@ -618,7 +623,7 @@ fn tick_life_drain(
             .max(1);
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, target, damage);
+        crate::systems::combat::apply_damage(world, target, damage, rng);
         let target_died = world
             .get::<&Health>(target)
             .map(|h| h.current <= 0)

@@ -253,7 +253,7 @@ pub fn load_floor(
         let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
         match &saved_entity.entity_type {
             SavedEntityType::Enemy { def, health_current, health_max, asleep, boss } => {
-                let enemy = def.spawn(ctx.world, pos.x, pos.y);
+                let enemy = def.spawn(ctx.world, pos.x, pos.y, ctx.rng);
                 if let Ok(mut health) = ctx.world.get::<&mut Health>(enemy) {
                     health.current = *health_current;
                     health.max = *health_max;
@@ -505,9 +505,10 @@ mod tests {
 
         // A venomous spider, a support shaman, and an archer — the enemy
         // kinds the old save path used to downgrade to plain skeletons.
-        let spider = spawning::enemies::GIANT_SPIDER.spawn(&mut world, 5, 5);
-        let shaman = spawning::enemies::GOBLIN_SHAMAN.spawn(&mut world, 7, 5);
-        let archer = spawning::enemies::SKELETON_ARCHER.spawn(&mut world, 9, 5);
+        let mut rng = StdRng::seed_from_u64(5);
+        let spider = spawning::enemies::GIANT_SPIDER.spawn(&mut world, 5, 5, &mut rng);
+        let shaman = spawning::enemies::GOBLIN_SHAMAN.spawn(&mut world, 7, 5, &mut rng);
+        let archer = spawning::enemies::SKELETON_ARCHER.spawn(&mut world, 9, 5, &mut rng);
 
         // Deterministic health + sleep state to verify restoration.
         world.get::<&mut Health>(spider).unwrap().current = 3;
@@ -539,7 +540,8 @@ mod tests {
     fn test_revisited_floor_preserves_boss() {
         let (mut world, grid, player) = setup();
 
-        let boss = spawning::spawn_boss(&mut world, 3, 6, 6).expect("floor 3 boss");
+        let boss = spawning::spawn_boss(&mut world, 3, 6, 6, &mut StdRng::seed_from_u64(6))
+            .expect("floor 3 boss");
         let scaled_max = world.get::<&Health>(boss).unwrap().max;
         world.get::<&mut Health>(boss).unwrap().current = scaled_max - 7;
         world.get::<&mut Boss>(boss).unwrap().announced = true;
