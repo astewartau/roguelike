@@ -1012,9 +1012,10 @@ impl GameEngine {
                 );
 
                 // Return start_game action if player clicked Start
-                let mut actions = crate::ui::UiActions::default();
-                actions.start_game = start_result;
-                actions
+                crate::ui::UiActions {
+                    start_game: start_result,
+                    ..Default::default()
+                }
             }
             GameMode::GameOver => {
                 let stats = self
@@ -1115,10 +1116,10 @@ impl GameEngine {
             state.player_entity,
         );
 
-        let mut result = InputResult::default();
-
         // UI toggles
-        result.toggle_fullscreen = frame.toggle_fullscreen;
+        let result = InputResult {
+            toggle_fullscreen: frame.toggle_fullscreen,
+        };
 
         // While a dialogue is open, the dialogue window owns keyboard input
         // (navigated/confirmed in the egui layer). Swallow movement and other

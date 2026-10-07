@@ -21,14 +21,24 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 /// Result of attempting to start a player action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Started` is the `Default` so that outcomes produced by pure event
+/// processing (where no turn was attempted) carry a neutral value; those
+/// callers never read the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TurnResult {
+    #[default]
     Started,
     Blocked,
     NotReady,
 }
 
-/// Full result of executing a player turn.
+/// Everything the engine needs to know after simulating a slice of game time.
+///
+/// Produced both by executing a player turn (`turn_result` says whether the
+/// action actually started) and by draining the event queue, which only fills
+/// in the event-derived fields.
+#[derive(Default)]
 pub struct TurnExecutionResult {
     pub turn_result: TurnResult,
     pub floor_transition: Option<StairDirection>,
@@ -43,25 +53,6 @@ pub struct TurnExecutionResult {
 }
 
 impl TurnExecutionResult {
-    pub fn should_interrupt_path(&self) -> bool {
-        self.player_attacked || self.player_took_damage || self.enemy_spotted_player
-    }
-}
-
-/// Result of processing events.
-pub struct EventProcessingResult {
-    pub floor_transition: Option<StairDirection>,
-    pub player_attacked: bool,
-    pub player_took_damage: bool,
-    pub enemy_spotted_player: bool,
-    pub skeleton_spawns: Vec<(i32, i32)>,
-    /// Positions where Raise Dead completed (spawn friendly skeletons here)
-    pub raised_skeletons: Vec<(i32, i32)>,
-    /// Boss minion summons: (boss, position) pairs to spawn hostile spiders at
-    pub boss_minion_spawns: Vec<(Entity, (i32, i32))>,
-}
-
-impl EventProcessingResult {
     pub fn should_interrupt_path(&self) -> bool {
         self.player_attacked || self.player_took_damage || self.enemy_spotted_player
     }
@@ -91,13 +82,7 @@ pub fn execute_player_intent(
     if !can_act {
         return TurnExecutionResult {
             turn_result: TurnResult::NotReady,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
@@ -106,13 +91,7 @@ pub fn execute_player_intent(
         None => {
             return TurnExecutionResult {
                 turn_result: TurnResult::Blocked,
-                floor_transition: None,
-                player_attacked: false,
-                player_took_damage: false,
-                enemy_spotted_player: false,
-                skeleton_spawns: Vec::new(),
-                raised_skeletons: Vec::new(),
-                boss_minion_spawns: Vec::new(),
+                ..Default::default()
             };
         }
     };
@@ -120,13 +99,7 @@ pub fn execute_player_intent(
     if time_system::start_action(world, player_entity, action_type.clone(), clock, scheduler).is_err() {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
@@ -152,13 +125,7 @@ pub fn execute_player_intent(
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
-        floor_transition: event_result.floor_transition,
-        player_attacked: event_result.player_attacked,
-        player_took_damage: event_result.player_took_damage,
-        enemy_spotted_player: event_result.enemy_spotted_player,
-        skeleton_spawns: event_result.skeleton_spawns,
-        raised_skeletons: event_result.raised_skeletons,
-        boss_minion_spawns: event_result.boss_minion_spawns,
+        ..event_result
     }
 }
 
@@ -210,13 +177,7 @@ pub fn execute_player_turn(
     if !can_act {
         return TurnExecutionResult {
             turn_result: TurnResult::NotReady,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
@@ -225,13 +186,7 @@ pub fn execute_player_turn(
     if time_system::start_action(world, player_entity, action_type, clock, scheduler).is_err() {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
-            floor_transition: None,
-            player_attacked: false,
-            player_took_damage: false,
-            enemy_spotted_player: false,
-            skeleton_spawns: Vec::new(),
-            raised_skeletons: Vec::new(),
-            boss_minion_spawns: Vec::new(),
+            ..Default::default()
         };
     }
 
@@ -244,13 +199,7 @@ pub fn execute_player_turn(
 
     TurnExecutionResult {
         turn_result: TurnResult::Started,
-        floor_transition: event_result.floor_transition,
-        player_attacked: event_result.player_attacked,
-        player_took_damage: event_result.player_took_damage,
-        enemy_spotted_player: event_result.enemy_spotted_player,
-        skeleton_spawns: event_result.skeleton_spawns,
-        raised_skeletons: event_result.raised_skeletons,
-        boss_minion_spawns: event_result.boss_minion_spawns,
+        ..event_result
     }
 }
 
@@ -486,7 +435,7 @@ pub fn process_events(
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     player_entity: Entity,
-) -> EventProcessingResult {
+) -> TurnExecutionResult {
     process_events_with_audio(events, world, grid, spatial_cache, vfx, ui_state, player_entity, None)
 }
 
@@ -500,16 +449,8 @@ pub fn process_events_with_audio(
     ui_state: &mut GameUiState,
     player_entity: Entity,
     audio: Option<&crate::audio::AudioManager>,
-) -> EventProcessingResult {
-    let mut result = EventProcessingResult {
-        floor_transition: None,
-        player_attacked: false,
-        player_took_damage: false,
-        enemy_spotted_player: false,
-        skeleton_spawns: Vec::new(),
-        raised_skeletons: Vec::new(),
-        boss_minion_spawns: Vec::new(),
-    };
+) -> TurnExecutionResult {
+    let mut result = TurnExecutionResult::default();
 
     // Collect events for audio processing
     let event_list: Vec<_> = events.drain().collect();
@@ -606,6 +547,7 @@ pub fn process_events_with_audio(
 }
 
 /// Result of processing UI actions.
+#[derive(Default)]
 pub struct UiActionResult {
     pub enter_targeting: Option<TargetingMode>,
     pub close_inventory: bool,
@@ -617,21 +559,6 @@ pub struct UiActionResult {
     /// A spell was just learned by studying a scroll; the engine auto-assigns
     /// it to the first free hotbar slot so it's immediately usable.
     pub learned_ability: Option<crate::components::AbilityType>,
-}
-
-impl Default for UiActionResult {
-    fn default() -> Self {
-        Self {
-            enter_targeting: None,
-            close_inventory: false,
-            close_context_menu: false,
-            close_chest: false,
-            close_dialogue: false,
-            close_shop: false,
-            close_altar: false,
-            learned_ability: None,
-        }
-    }
 }
 
 /// Process UI actions and execute game logic. `rng` is the seeded game rng
