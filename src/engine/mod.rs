@@ -1960,9 +1960,10 @@ impl AbilitySlot {
 
     /// Put this slot on cooldown after its action started.
     ///
-    /// `Secondary` and `Learned` are deliberately no-ops: learned spells start
-    /// their cooldown in `apply_cast_learned_spell` / `apply_start_raise_dead`
-    /// instead, and the secondary slot never started one here.
+    /// `Secondary` and `Learned` are no-ops here because both start their
+    /// cooldown inside the action they fire instead: `apply_activate_barkskin`
+    /// / `apply_activate_fear` / `apply_activate_stun` for the secondary slot,
+    /// `apply_cast_learned_spell` / `apply_start_raise_dead` for spells.
     fn start_cooldown(self, world: &mut hecs::World, player: Entity) {
         match self {
             AbilitySlot::Class => {
