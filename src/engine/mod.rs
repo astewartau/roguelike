@@ -1460,82 +1460,6 @@ impl GameEngine {
         }
     }
 
-    /// Advance the rest fast-forward by one frame's worth of game-time, stepping
-    /// the simulation in small Wait increments so motion stays animated. Stops
-    /// when the player is fully healed or an enemy becomes alerted.
-    fn update_rest(&mut self, dt: f32) {
-        if !self.resting {
-            return;
-        }
-
-        // How many discrete Wait-steps to run this frame, paced by real time.
-        self.rest_accumulator += dt * REST_TIME_SCALE;
-        let mut steps =
-            (self.rest_accumulator / crate::constants::ACTION_WAIT_DURATION) as i32;
-        if steps <= 0 {
-            return;
-        }
-        steps = steps.min(REST_MAX_STEPS_PER_FRAME);
-        self.rest_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
-
-        for _ in 0..steps {
-            let Some(ref state) = self.state else {
-                self.resting = false;
-                return;
-            };
-
-            // Stop conditions checked before each step.
-            if simulation::player_at_full_health(&state.world, state.player_entity) {
-                self.stop_rest("You finish resting, fully recovered.");
-                return;
-            }
-            if simulation::any_enemy_alerted(&state.world, state.player_entity) {
-                self.stop_rest("Your rest is interrupted!");
-                return;
-            }
-            // Hunger dropped below the threshold mid-rest: healing has
-            // stopped, so don't spin (and starve) forever.
-            if player_too_hungry_to_recover(&state.world, state.player_entity) {
-                self.stop_rest("You are too hungry to keep resting.");
-                return;
-            }
-
-            let result = {
-                let Some(mut ctx) = self.sim_ctx() else {
-                    self.resting = false;
-                    return;
-                };
-                let result = execute_player_intent(
-                    &mut ctx,
-                    crate::systems::player_input::PlayerIntent::Wait,
-                );
-
-                // A Raise Dead channel can tick over during rest's auto-Waits;
-                // don't drop the skeleton on the floor.
-                for &(x, y) in &result.raised_skeletons {
-                    spawn_raised_skeleton(&mut ctx.actors(), x, y);
-                }
-                result
-            };
-            self.state.as_mut().expect("state checked above").fov_dirty = true;
-
-            if result.turn_result != simulation::TurnResult::Started
-                || result.enemy_spotted_player
-                || result.player_took_damage
-            {
-                self.stop_rest("Your rest is interrupted!");
-                return;
-            }
-        }
-
-        // Keep the bubble pinned above the (stationary) player.
-        if let Some(ref state) = self.state {
-            if let Ok(pos) = state.world.get::<&crate::components::Position>(state.player_entity) {
-                self.vfx.set_resting_bubble(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
-            }
-        }
-    }
-
     /// Toggle sleeping. Activating Sleep while already asleep wakes up;
     /// otherwise it begins sleeping if it's safe and the player is tired at
     /// all. While asleep the player carries the `Asleep` marker: enemies get
@@ -1636,81 +1560,125 @@ impl GameEngine {
         }
     }
 
-    /// Advance the sleep fast-forward by one frame's worth of game-time,
-    /// stepping the simulation in small Wait increments (same pacing as
-    /// rest). Fatigue itself recovers in the survival tick, which is paced by
-    /// the game-time these steps generate. Stops when fatigue reaches zero or
-    /// the sleeper is interrupted: by taking any damage (attacks, burning —
-    /// detected as an HP drop), or by an enemy waking/spotting them.
+
+    /// Advance the rest fast-forward by one frame's worth of game-time. Stops
+    /// when the player is fully healed, an enemy becomes alerted, or hunger has
+    /// shut natural regen off (so resting could never finish).
+    fn update_rest(&mut self, dt: f32) {
+        self.fast_forward(TimeSkip::Rest, dt, |world, player| {
+            if simulation::player_at_full_health(world, player) {
+                return Some("You finish resting, fully recovered.");
+            }
+            if simulation::any_enemy_alerted(world, player) {
+                return Some("Your rest is interrupted!");
+            }
+            // Hunger dropped below the threshold mid-rest: healing has
+            // stopped, so don't spin (and starve) forever.
+            if player_too_hungry_to_recover(world, player) {
+                return Some("You are too hungry to keep resting.");
+            }
+            None
+        });
+    }
+
+    /// Advance the sleep fast-forward by one frame's worth of game-time.
+    /// Fatigue itself recovers in the survival tick, which is paced by the
+    /// game-time these steps generate. Stops when fatigue reaches zero or an
+    /// enemy wakes/spots the sleeper; `fast_forward` adds sleep's wake-on-damage
+    /// check.
     fn update_sleep(&mut self, dt: f32) {
-        if !self.sleeping {
+        self.fast_forward(TimeSkip::Sleep, dt, |world, player| {
+            // Fully recovered?
+            let fatigue = world
+                .get::<&crate::components::Fatigue>(player)
+                .map(|f| f.value)
+                .unwrap_or(0.0);
+            if fatigue <= 0.0 {
+                return Some("You wake up feeling refreshed.");
+            }
+            if simulation::any_enemy_alerted(world, player) {
+                return Some("You are jolted awake — something has noticed you!");
+            }
+            None
+        });
+    }
+
+    /// Fast-forward the simulation one frame's worth of game-time, in small
+    /// Wait increments so motion stays animated. Shared by rest and sleep:
+    /// same real-time pacing against `REST_TIME_SCALE`, same Wait-step loop,
+    /// same Raise-Dead spawn handling, same bubble repin.
+    ///
+    /// `stop_reason` is checked before each step and returns the message to end
+    /// on, or `None` to keep going. Sleep additionally waits for a point of
+    /// energy before each step and wakes on any HP drop.
+    fn fast_forward(
+        &mut self,
+        mode: TimeSkip,
+        dt: f32,
+        stop_reason: impl Fn(&hecs::World, Entity) -> Option<&'static str>,
+    ) {
+        if !mode.active(self) {
             return;
         }
 
         // How many discrete Wait-steps to run this frame, paced by real time.
-        self.sleep_accumulator += dt * REST_TIME_SCALE;
-        let mut steps =
-            (self.sleep_accumulator / crate::constants::ACTION_WAIT_DURATION) as i32;
+        let accumulator = mode.accumulator_mut(self);
+        *accumulator += dt * REST_TIME_SCALE;
+        let mut steps = (*accumulator / crate::constants::ACTION_WAIT_DURATION) as i32;
         if steps <= 0 {
             return;
         }
         steps = steps.min(REST_MAX_STEPS_PER_FRAME);
-        self.sleep_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
+        *accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
 
         for _ in 0..steps {
             let Some(ref state) = self.state else {
-                self.sleeping = false;
+                mode.clear_flag(self);
                 return;
             };
 
-            // Fully recovered?
-            let fatigue = state
-                .world
-                .get::<&crate::components::Fatigue>(state.player_entity)
-                .map(|f| f.value)
-                .unwrap_or(0.0);
-            if fatigue <= 0.0 {
-                self.stop_sleep("You wake up feeling refreshed.");
-                return;
-            }
-            if simulation::any_enemy_alerted(&state.world, state.player_entity) {
-                self.stop_sleep("You are jolted awake — something has noticed you!");
+            // Stop conditions checked before each step.
+            if let Some(message) = stop_reason(&state.world, state.player_entity) {
+                mode.stop(self, message);
                 return;
             }
 
-            // Exhaustion can leave the player at 0 energy (no regen while
-            // awake); Wait needs the actor able to act, so wait for a point
-            // first (regen works while asleep).
-            let energy = state
-                .world
-                .get::<&Actor>(state.player_entity)
-                .map(|a| a.energy)
-                .unwrap_or(0);
-            if energy <= 0 {
-                let got = {
-                    let Some(mut ctx) = self.sim_ctx() else {
-                        self.sleeping = false;
-                        return;
+            // Sleep only: exhaustion can leave the player at 0 energy (no regen
+            // while awake); Wait needs the actor able to act, so wait for a
+            // point first (regen works while asleep).
+            if mode == TimeSkip::Sleep {
+                let energy = self
+                    .state
+                    .as_ref()
+                    .and_then(|s| s.world.get::<&Actor>(s.player_entity).ok().map(|a| a.energy))
+                    .unwrap_or(0);
+                if energy <= 0 {
+                    let got = {
+                        let Some(mut ctx) = self.sim_ctx() else {
+                            mode.clear_flag(self);
+                            return;
+                        };
+                        simulation::wait_for_energy(&mut ctx.actors(), 1)
                     };
-                    simulation::wait_for_energy(&mut ctx.actors(), 1)
-                };
-                if !got {
-                    self.stop_sleep("You wake up.");
-                    return;
+                    if !got {
+                        mode.stop(self, "You wake up.");
+                        return;
+                    }
                 }
             }
 
-            // Any HP drop while asleep wakes the player (attacks, burning,
-            // traps — starvation is handled separately in the survival tick).
-            let hp_before = self
-                .state
-                .as_ref()
-                .and_then(|s| s.world.get::<&Health>(s.player_entity).ok().map(|h| h.current))
-                .unwrap_or(0);
+            // Sleep only: any HP drop while asleep wakes the player (attacks,
+            // burning, traps — starvation is handled separately in the survival
+            // tick).
+            let hp_before = if mode == TimeSkip::Sleep {
+                self.player_hp()
+            } else {
+                0
+            };
 
             let result = {
                 let Some(mut ctx) = self.sim_ctx() else {
-                    self.sleeping = false;
+                    mode.clear_flag(self);
                     return;
                 };
                 let result = execute_player_intent(
@@ -1718,8 +1686,8 @@ impl GameEngine {
                     crate::systems::player_input::PlayerIntent::Wait,
                 );
 
-                // As with rest: a Raise Dead channel completing during sleep's
-                // auto-Waits still spawns the skeleton.
+                // A Raise Dead channel can tick over during the auto-Waits;
+                // don't drop the skeleton on the floor.
                 for &(x, y) in &result.raised_skeletons {
                     spawn_raised_skeleton(&mut ctx.actors(), x, y);
                 }
@@ -1727,18 +1695,14 @@ impl GameEngine {
             };
             self.state.as_mut().expect("state checked above").fov_dirty = true;
 
-            let hp_after = self
-                .state
-                .as_ref()
-                .and_then(|s| s.world.get::<&Health>(s.player_entity).ok().map(|h| h.current))
-                .unwrap_or(0);
+            let hp_dropped = mode == TimeSkip::Sleep && self.player_hp() < hp_before;
 
             if result.turn_result != simulation::TurnResult::Started
                 || result.enemy_spotted_player
                 || result.player_took_damage
-                || hp_after < hp_before
+                || hp_dropped
             {
-                self.stop_sleep("You are rudely awakened!");
+                mode.stop(self, mode.interrupt_message());
                 return;
             }
         }
@@ -1749,6 +1713,14 @@ impl GameEngine {
                 self.vfx.set_resting_bubble(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
             }
         }
+    }
+
+    /// The player's current HP, or 0 if there is no live player.
+    fn player_hp(&self) -> i32 {
+        self.state
+            .as_ref()
+            .and_then(|s| s.world.get::<&Health>(s.player_entity).ok().map(|h| h.current))
+            .unwrap_or(0)
     }
 
     fn handle_floor_transition(
@@ -2276,6 +2248,61 @@ fn activate_ranger_ability(ctx: &mut SimCtx, ability_index: usize) -> bool {
     }
 }
 
+/// The two time-skip modes [`GameEngine::fast_forward`] drives. They share
+/// their pacing, Wait-step loop, Raise-Dead spawn handling and bubble repin;
+/// they differ in their stop conditions and in sleep's extra bookkeeping
+/// (fatigue recovery, the `Asleep` marker, waiting for energy, waking on
+/// damage).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimeSkip {
+    Rest,
+    Sleep,
+}
+
+impl TimeSkip {
+    /// Whether this mode is currently running.
+    fn active(self, engine: &GameEngine) -> bool {
+        match self {
+            TimeSkip::Rest => engine.resting,
+            TimeSkip::Sleep => engine.sleeping,
+        }
+    }
+
+    /// This mode's accumulator of fast-forwarded game-time.
+    fn accumulator_mut(self, engine: &mut GameEngine) -> &mut f32 {
+        match self {
+            TimeSkip::Rest => &mut engine.rest_accumulator,
+            TimeSkip::Sleep => &mut engine.sleep_accumulator,
+        }
+    }
+
+    /// End the skip cleanly, logging `message`.
+    fn stop(self, engine: &mut GameEngine, message: &str) {
+        match self {
+            TimeSkip::Rest => engine.stop_rest(message),
+            TimeSkip::Sleep => engine.stop_sleep(message),
+        }
+    }
+
+    /// Drop out of the skip without the usual teardown. Only for the
+    /// "state vanished mid-frame" paths, which have nothing left to tear down.
+    fn clear_flag(self, engine: &mut GameEngine) {
+        match self {
+            TimeSkip::Rest => engine.resting = false,
+            TimeSkip::Sleep => engine.sleeping = false,
+        }
+    }
+
+    /// What to log when a step is cut short (a blocked Wait, an enemy spotting
+    /// the player, or damage taken).
+    fn interrupt_message(self) -> &'static str {
+        match self {
+            TimeSkip::Rest => "Your rest is interrupted!",
+            TimeSkip::Sleep => "You are rudely awakened!",
+        }
+    }
+}
+
 /// Result of input processing (internal)
 #[derive(Default)]
 struct InputResult {
@@ -2404,6 +2431,192 @@ mod tests {
         assert!(
             lines.iter().any(|l| l == "You don't feel tired."),
             "refusal should be reported; got {lines:?}"
+        );
+    }
+
+    /// Mark one hostile as actively chasing, which both rest and sleep treat
+    /// as a reason to stop.
+    fn alert_an_enemy(engine: &mut GameEngine) {
+        let state = engine.state.as_mut().expect("run started");
+        let hostile = state
+            .world
+            .query::<&crate::components::ChaseAI>()
+            .iter()
+            .map(|(id, _)| id)
+            .find(|id| state.world.get::<&crate::components::TamedBy>(*id).is_err())
+            .expect("a fresh floor has hostiles");
+        if let Ok(mut ai) = state.world.get::<&mut crate::components::ChaseAI>(hostile) {
+            ai.state = crate::components::AIState::Chasing;
+        }
+    }
+
+    fn hurt_player(engine: &mut GameEngine, to: i32) {
+        let state = engine.state.as_mut().expect("run started");
+        let player = state.player_entity;
+        if let Ok(mut health) = state.world.get::<&mut Health>(player) {
+            health.current = to;
+        }
+    }
+
+    fn log_lines(engine: &GameEngine) -> Vec<String> {
+        engine
+            .ui_state
+            .as_ref()
+            .expect("ui state")
+            .message_log
+            .lines()
+    }
+
+    /// One frame's dt large enough to generate at least one Wait-step, so the
+    /// fast-forward loop actually reaches its stop checks.
+    const ONE_STEP_DT: f32 = crate::constants::ACTION_WAIT_DURATION / REST_TIME_SCALE + 0.001;
+
+    #[test]
+    fn test_rest_stops_at_full_health() {
+        let mut engine = engine_with_run();
+        engine.resting = true;
+
+        engine.update_rest(ONE_STEP_DT);
+
+        assert!(!engine.resting, "a full-health player should stop resting");
+        let lines = log_lines(&engine);
+        assert!(
+            lines.iter().any(|l| l == "You finish resting, fully recovered."),
+            "got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_rest_stops_when_too_hungry() {
+        let mut engine = engine_with_run();
+        hurt_player(&mut engine, 1); // not full health, so that check doesn't fire first
+        {
+            let state = engine.state.as_mut().expect("run started");
+            let player = state.player_entity;
+            let mut hunger = state
+                .world
+                .get::<&mut crate::components::Hunger>(player)
+                .expect("player has a hunger meter");
+            hunger.value = crate::constants::HUNGER_HUNGRY_THRESHOLD - 1.0;
+        }
+        engine.resting = true;
+
+        engine.update_rest(ONE_STEP_DT);
+
+        assert!(!engine.resting, "hunger stops natural regen, so rest must end");
+        let lines = log_lines(&engine);
+        assert!(
+            lines.iter().any(|l| l == "You are too hungry to keep resting."),
+            "got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_rest_stops_when_an_enemy_is_alerted() {
+        let mut engine = engine_with_run();
+        hurt_player(&mut engine, 1);
+        alert_an_enemy(&mut engine);
+        engine.resting = true;
+
+        engine.update_rest(ONE_STEP_DT);
+
+        assert!(!engine.resting, "an alerted enemy must interrupt rest");
+        let lines = log_lines(&engine);
+        assert!(
+            lines.iter().any(|l| l == "Your rest is interrupted!"),
+            "got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_sleep_stops_once_fatigue_is_recovered() {
+        let mut engine = engine_with_run();
+        engine.sleeping = true; // fresh run starts at zero fatigue
+
+        engine.update_sleep(ONE_STEP_DT);
+
+        assert!(!engine.sleeping, "zero fatigue means sleep is done");
+        let lines = log_lines(&engine);
+        assert!(
+            lines.iter().any(|l| l == "You wake up feeling refreshed."),
+            "got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_sleep_stops_when_an_enemy_is_alerted() {
+        let mut engine = engine_with_run();
+        {
+            let state = engine.state.as_mut().expect("run started");
+            let player = state.player_entity;
+            // Still tired, so the fatigue check doesn't fire first.
+            if let Ok(mut fatigue) = state.world.get::<&mut crate::components::Fatigue>(player) {
+                fatigue.value = 50.0;
+            }
+        }
+        alert_an_enemy(&mut engine);
+        engine.sleeping = true;
+
+        engine.update_sleep(ONE_STEP_DT);
+
+        assert!(!engine.sleeping, "an alerted enemy must wake the sleeper");
+        let lines = log_lines(&engine);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "You are jolted awake — something has noticed you!"),
+            "got {lines:?}"
+        );
+    }
+
+    /// Sleep's distinct wake condition: any HP drop. Burning damage lands
+    /// during the Wait step's time advancement and raises no AttackHit event,
+    /// so only the HP comparison can catch it.
+    #[test]
+    fn test_sleep_wakes_on_hp_drop_from_burning() {
+        let mut engine = engine_with_run();
+        {
+            let state = engine.state.as_mut().expect("run started");
+            let player = state.player_entity;
+            // Still tired, so the fatigue check doesn't fire first.
+            if let Ok(mut fatigue) = state.world.get::<&mut crate::components::Fatigue>(player) {
+                fatigue.value = 50.0;
+            }
+            crate::systems::effects::add_effect_to_entity(
+                &mut state.world,
+                player,
+                crate::components::EffectType::Burning,
+                60.0,
+            );
+        }
+        engine.sleeping = true;
+
+        // Enough fast-forward for at least one burn tick to land.
+        engine.update_sleep(ONE_STEP_DT * 8.0);
+
+        assert!(!engine.sleeping, "burning damage must wake the sleeper");
+        let lines = log_lines(&engine);
+        assert!(
+            lines.iter().any(|l| l == "You are rudely awakened!"),
+            "got {lines:?}"
+        );
+    }
+
+    /// The mirror of the stop-condition tests: with nothing to stop for, the
+    /// fast-forward keeps running (so the tests above are not just asserting
+    /// that the loop never starts).
+    #[test]
+    fn test_rest_continues_while_hurt_and_unthreatened() {
+        let mut engine = engine_with_run();
+        hurt_player(&mut engine, 1);
+        engine.resting = true;
+
+        engine.update_rest(ONE_STEP_DT);
+
+        assert!(engine.resting, "nothing should have stopped the rest");
+        assert!(
+            engine.vfx.resting_bubble.is_some(),
+            "the bubble stays pinned while resting continues"
         );
     }
 
