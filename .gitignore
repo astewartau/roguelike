@@ -4,3 +4,7 @@ Cargo.lock
 *.pdb
 .DS_Store
 assets/
+
+# Puffin profiler captures, saved by hand out of puffin_viewer into the repo
+# root. Large binary blobs with no reason to be versioned.
+/RESULTS
