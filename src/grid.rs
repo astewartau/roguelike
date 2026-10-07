@@ -44,6 +44,12 @@ pub struct Grid {
     pub secret_room: Option<Rect>,
     /// The sealed doorway of the hidden room (spawns a SecretDoor entity)
     pub secret_door_pos: Option<(i32, i32)>,
+    /// Blocking stalagmite clusters in Cavern rooms
+    pub stalagmite_positions: Vec<(i32, i32)>,
+    /// Glowing mushroom patches in Cavern rooms (light sources, flammable)
+    pub mushroom_positions: Vec<(i32, i32)>,
+    /// Crystal clusters in Cavern rooms (light sources)
+    pub crystal_positions: Vec<(i32, i32)>,
 }
 
 impl Grid {
@@ -80,6 +86,9 @@ impl Grid {
             furniture_positions: result.furniture_positions,
             secret_room: result.secret_room,
             secret_door_pos: result.secret_door_pos,
+            stalagmite_positions: result.stalagmite_positions,
+            mushroom_positions: result.mushroom_positions,
+            crystal_positions: result.crystal_positions,
         }
     }
 

@@ -17,7 +17,8 @@ use rand::Rng;
 
 use crate::components::{
     AnimatedSprite, BarrelFuse, Brazier, BurningGrass, BurningOil, BurningWeb, CausesBurning,
-    Combustible, EffectType, Health, LightSource, OilBarrel, OilPuddle, Position, Sprite,
+    Combustible, EffectType, GlowMushroom, Health, LightSource, OilBarrel, OilPuddle, Position,
+    Sprite,
     StatusEffects, Web, WetGrass,
 };
 use crate::constants::*;
@@ -288,6 +289,21 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         }
     }
 
+    // Fire -> glowing fungus it is on or next to. Fungus is damp and catches
+    // less readily than a web, but a cave strung with it carries the blaze.
+    let mut mushrooms_to_ignite: Vec<Entity> = Vec::new();
+    for (id, (pos, _)) in world.query::<(&Position, &GlowMushroom)>().iter() {
+        if wet.contains(&(pos.x, pos.y)) {
+            continue;
+        }
+        let near = all_sources
+            .iter()
+            .any(|&(sx, sy)| (pos.x - sx).abs() <= 1 && (pos.y - sy).abs() <= 1);
+        if near && rng.gen_bool(MUSHROOM_IGNITE_CHANCE) {
+            mushrooms_to_ignite.push(id);
+        }
+    }
+
     // Fire -> oil puddles it is on or next to (oil catches almost instantly).
     let mut oil_to_ignite: Vec<Entity> = Vec::new();
     for (id, (pos, _)) in world
@@ -353,6 +369,9 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
     for id in webs_to_ignite {
         ignite_web(world, id);
     }
+    for id in mushrooms_to_ignite {
+        ignite_glow_mushrooms(world, id);
+    }
     for (id, pos) in creatures_to_ignite {
         crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION);
         events.push(GameEvent::CaughtFire { entity: id, position: pos });
@@ -398,6 +417,24 @@ pub fn ignite_web(world: &mut World, web: Entity) {
             LightSource::brazier(),
         ),
     );
+}
+
+/// Burn away a patch of glowing cave fungus, leaving a fire on its tile.
+///
+/// Unlike a web or an oil puddle, a mushroom patch has nothing left once it
+/// catches -- so instead of gaining a burning-state component it is consumed
+/// outright and replaced by the standard grass fire, which sheds light,
+/// ignites what walks into it, spreads, and burns itself out. A cave strung
+/// with fungus carries a fire the way a field of grass does.
+pub fn ignite_glow_mushrooms(world: &mut World, mushrooms: Entity) {
+    let Ok(pos) = world.get::<&Position>(mushrooms).map(|p| (p.x, p.y)) else {
+        return;
+    };
+    if world.get::<&GlowMushroom>(mushrooms).is_err() {
+        return;
+    }
+    let _ = world.despawn(mushrooms);
+    crate::spawning::spawn_burning_grass(world, pos.0, pos.1);
 }
 
 /// Splash of water centered at (cx, cy) with the given Chebyshev radius:
@@ -568,6 +605,17 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
         .collect();
     for id in webs {
         ignite_web(world, id);
+    }
+
+    // Glowing fungus catches.
+    let mushrooms: Vec<Entity> = world
+        .query::<(&Position, &GlowMushroom)>()
+        .iter()
+        .filter(|(_, (p, _))| p.x == x && p.y == y)
+        .map(|(id, _)| id)
+        .collect();
+    for id in mushrooms {
+        ignite_glow_mushrooms(world, id);
     }
 
     // Anything standing there catches fire.
@@ -745,12 +793,35 @@ mod tests {
             furniture_positions: vec![],
             secret_room: None,
             secret_door_pos: None,
+            stalagmite_positions: Vec::new(),
+            mushroom_positions: Vec::new(),
+            crystal_positions: Vec::new(),
         }
     }
 
     fn run_fire(world: &mut World, grid: &mut Grid, seconds: f32) {
         let mut cache = SpatialCache::rebuild_from_world(world);
         run_fire_cached(world, grid, &mut cache, seconds);
+    }
+
+    /// As `run_fire`, but from a seeded rng, for tests that assert on a chain
+    /// of per-step ignition rolls rather than on a near-certain outcome.
+    fn run_fire_seeded(world: &mut World, grid: &mut Grid, seconds: f32, seed: u64) {
+        use rand::SeedableRng;
+
+        let mut cache = SpatialCache::rebuild_from_world(world);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut events = EventQueue::new();
+        let mut acc = 0.0;
+        let mut fov_dirty = false;
+        let mut remaining = seconds;
+        while remaining > 0.0 {
+            let dt = remaining.min(FIRE_STEP_INTERVAL);
+            tick_fire(
+                world, grid, &mut cache, &mut events, dt, &mut acc, &mut fov_dirty, &mut rng,
+            );
+            remaining -= dt;
+        }
     }
 
     /// As `run_fire`, but against a caller-owned spatial cache so a test can
@@ -992,6 +1063,46 @@ mod tests {
             .iter()
             .any(|(_, (p, _))| p.x == 3 && p.y == 4);
         assert!(wet, "splashed grass is wet");
+    }
+
+    #[test]
+    fn test_glow_mushrooms_burn_away_and_carry_the_fire() {
+        let mut world = World::new();
+        let mut grid = make_grid(9, 9, TileType::Floor);
+
+        // A fire on a grass tile, with a run of fungus leading away from it.
+        if let Some(t) = grid.get_mut(2, 2) {
+            t.tile_type = TileType::TallGrass;
+        }
+        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        let patch_a = crate::spawning::spawn_glow_mushrooms(&mut world, 3, 2);
+        let patch_b = crate::spawning::spawn_glow_mushrooms(&mut world, 4, 2);
+
+        // Seeded: the chain is a run of 35% rolls, so an unseeded run is a
+        // coin toss rather than a test.
+        run_fire_seeded(&mut world, &mut grid, 6.0, 7);
+
+        assert!(!world.contains(patch_a), "fungus next to fire burns away");
+        assert!(
+            !world.contains(patch_b),
+            "the fire carries along the run of fungus"
+        );
+        // Each patch leaves a fire behind on its own tile, so the blaze keeps
+        // going -- and the light the fungus was shedding goes with it.
+        let fires: Vec<(i32, i32)> = world
+            .query::<(&Position, &BurningGrass)>()
+            .iter()
+            .map(|(_, (p, _))| (p.x, p.y))
+            .collect();
+        assert!(
+            fires.contains(&(3, 2)) || fires.contains(&(4, 2)),
+            "a burnt patch leaves fire on its tile, got {fires:?}"
+        );
+        assert_eq!(
+            world.query::<&GlowMushroom>().iter().count(),
+            0,
+            "no fungus survives the fire"
+        );
     }
 
     #[test]

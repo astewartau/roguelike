@@ -271,6 +271,9 @@ mod tests {
             furniture_positions: vec![],
             secret_room: None,
             secret_door_pos: None,
+            stalagmite_positions: Vec::new(),
+            mushroom_positions: Vec::new(),
+            crystal_positions: Vec::new(),
         }
     }
 
@@ -304,6 +307,9 @@ mod tests {
             furniture_positions: vec![],
             secret_room: None,
             secret_door_pos: None,
+            stalagmite_positions: Vec::new(),
+            mushroom_positions: Vec::new(),
+            crystal_positions: Vec::new(),
         }
     }
 
@@ -411,6 +417,9 @@ mod tests {
             furniture_positions: vec![],
             secret_room: None,
             secret_door_pos: None,
+            stalagmite_positions: Vec::new(),
+            mushroom_positions: Vec::new(),
+            crystal_positions: Vec::new(),
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
@@ -443,6 +452,9 @@ mod tests {
             furniture_positions: vec![],
             secret_room: None,
             secret_door_pos: None,
+            stalagmite_positions: Vec::new(),
+            mushroom_positions: Vec::new(),
+            crystal_positions: Vec::new(),
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());

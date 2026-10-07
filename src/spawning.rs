@@ -577,6 +577,78 @@ impl SpawnConfig {
     }
 }
 
+/// Cave ecology: caverns are home to bats and spiders rather than the
+/// skeletons and orcs of the built dungeon.
+///
+/// Rather than reworking `SpawnConfig::for_floor` (the floor roster has no
+/// notion of where on the floor it is spawning), this is a per-room bias:
+/// cave fauna go in first, and the caller then keeps the floor roster out of
+/// the cavern tiles this returns.
+///
+/// Returns every walkable cavern tile, occupied or not.
+pub fn spawn_cave_fauna(
+    world: &mut World,
+    grid: &crate::grid::Grid,
+    floor: u32,
+    rng: &mut impl rand::Rng,
+) -> Vec<(i32, i32)> {
+    use crate::constants::{
+        CAVERN_BATS_MAX, CAVERN_BATS_MIN, CAVERN_GIANT_SPIDER_FLOOR, CAVERN_SPIDERS_MAX,
+        CAVERN_SPIDERS_MIN,
+    };
+    use crate::dungeon_gen::RoomTheme;
+
+    // Stalagmites and the like already stand on some cave tiles.
+    let blocked: Vec<(i32, i32)> = world
+        .query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .map(|(_, (p, _))| (p.x, p.y))
+        .collect();
+
+    let mut cavern_tiles: Vec<(i32, i32)> = Vec::new();
+
+    for room in grid.themed_rooms.iter().filter(|r| r.theme == RoomTheme::Cavern) {
+        let rect = room.rect;
+        let tiles: Vec<(i32, i32)> = (rect.y..rect.y + rect.height)
+            .flat_map(|y| (rect.x..rect.x + rect.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| grid.is_walkable(x, y))
+            .collect();
+        cavern_tiles.extend(tiles.iter().copied());
+
+        let mut free: Vec<(i32, i32)> = tiles
+            .into_iter()
+            .filter(|p| !blocked.contains(p))
+            .collect();
+
+        let mut roster: Vec<(EnemyDef, usize)> = vec![
+            (
+                enemies::BAT.clone(),
+                rng.gen_range(CAVERN_BATS_MIN..=CAVERN_BATS_MAX),
+            ),
+            (
+                enemies::LESSER_GIANT_SPIDER.clone(),
+                rng.gen_range(CAVERN_SPIDERS_MIN..=CAVERN_SPIDERS_MAX),
+            ),
+        ];
+        if floor >= CAVERN_GIANT_SPIDER_FLOOR {
+            roster.push((enemies::GIANT_SPIDER.clone(), 1));
+        }
+
+        for (enemy, count) in roster {
+            for _ in 0..count {
+                if free.is_empty() {
+                    break;
+                }
+                let idx = rng.gen_range(0..free.len());
+                let (x, y) = free.swap_remove(idx);
+                enemy.spawn(world, x, y);
+            }
+        }
+    }
+
+    cavern_tiles
+}
+
 // =============================================================================
 // NPC SPAWNING
 // =============================================================================
@@ -831,6 +903,53 @@ pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         LightSource::brazier(),
         CausesBurning,
         Brazier { lit: true },
+    ))
+}
+
+/// Spawn a stalagmite cluster: blocks movement but NOT vision, so it is cover
+/// you can shoot over and cast past but not walk through. Inert otherwise --
+/// nothing destroys one, so it never needs clearing out of the SpatialCache
+/// (which is rebuilt from the world after every floor is populated anyway).
+pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{BlocksMovement, Name};
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::CAVE_STALAGMITES),
+        Name::new("Stalagmites"),
+        BlocksMovement,
+    ))
+}
+
+/// Spawn a patch of glowing cave fungus: walkable, sheds a small soft light,
+/// and catches fire (see `systems::fire::ignite_glow_mushrooms`).
+pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{GlowMushroom, Name};
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::CAVE_GLOW_MUSHROOMS),
+        Name::new("Glowing Mushrooms"),
+        LightSource::mushroom(),
+        GlowMushroom,
+    ))
+}
+
+/// Spawn a crystal cluster: walkable, sheds a cold light, inert.
+pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::Name;
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::CAVE_CRYSTAL_CLUSTER),
+        Name::new("Crystal Cluster"),
+        LightSource::crystal(),
     ))
 }
 
