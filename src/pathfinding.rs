@@ -386,15 +386,16 @@ mod tests {
     fn test_find_path_no_path() {
         // Create a grid where the goal is completely surrounded by walls
         let mut tiles = vec![Tile::new(TileType::Floor); 25];
-        // Wall around (2,2)
-        tiles[1 * 5 + 1] = Tile::new(TileType::Wall);
-        tiles[1 * 5 + 2] = Tile::new(TileType::Wall);
-        tiles[1 * 5 + 3] = Tile::new(TileType::Wall);
-        tiles[2 * 5 + 1] = Tile::new(TileType::Wall);
-        tiles[2 * 5 + 3] = Tile::new(TileType::Wall);
-        tiles[3 * 5 + 1] = Tile::new(TileType::Wall);
-        tiles[3 * 5 + 2] = Tile::new(TileType::Wall);
-        tiles[3 * 5 + 3] = Tile::new(TileType::Wall);
+        // A closed wall ring around (2,2) on a 5-wide grid, laid out as the
+        // grid itself indexes: y * width + x.
+        let at = |x: usize, y: usize| y * 5 + x;
+        for (x, y) in [
+            (1, 1), (2, 1), (3, 1),
+            (1, 2),         (3, 2),
+            (1, 3), (2, 3), (3, 3),
+        ] {
+            tiles[at(x, y)] = Tile::new(TileType::Wall);
+        }
         let grid = Grid {
             width: 5,
             height: 5,
@@ -466,11 +467,15 @@ mod tests {
         let grid = make_floor_grid(10, 10);
         let blocked = HashSet::new();
 
-        let next = next_step_toward(&grid, (0, 0), (5, 0), &blocked);
+        let start = (0, 0);
+        let next = next_step_toward(&grid, start, (5, 0), &blocked);
         assert!(next.is_some());
         let (nx, ny) = next.unwrap();
-        // First step should be adjacent to start
-        assert!(((nx - 0).abs() + (ny - 0).abs()) == 1);
+        assert_eq!(
+            (nx - start.0).abs() + (ny - start.1).abs(),
+            1,
+            "the first step must be adjacent to the start"
+        );
     }
 
     #[test]
