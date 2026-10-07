@@ -1183,16 +1183,13 @@ impl DungeonGenerator {
         let main = regions.remove(0);
 
         for region in regions {
-            let mut best: Option<((i32, i32), (i32, i32), i32)> = None;
-            for &a in &region {
-                for &b in &main {
-                    let d = (a.0 - b.0).abs() + (a.1 - b.1).abs();
-                    if best.map(|(_, _, bd)| d < bd).unwrap_or(true) {
-                        best = Some((a, b, d));
-                    }
-                }
-            }
-            if let Some((from, to, _)) = best {
+            // Closest pair between this pocket and the main body; ties go to
+            // the first in scan order, so the choice stays reproducible.
+            let nearest = region
+                .iter()
+                .flat_map(|&a| main.iter().map(move |&b| (a, b)))
+                .min_by_key(|&(a, b)| (a.0 - b.0).abs() + (a.1 - b.1).abs());
+            if let Some((from, to)) = nearest {
                 self.carve_cave_channel(from, to, rect, rng);
             }
         }
@@ -2237,6 +2234,7 @@ impl DungeonGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{HashSet, VecDeque};
 
     #[test]
     fn test_rect_center() {
@@ -2425,6 +2423,358 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- Caverns --------------------------------------------------------
+
+    /// Generate a floor from a fixed seed, so cavern assertions are stable.
+    fn seeded_floor(seed: u64, floor: u32) -> DungeonResult {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(seed);
+        DungeonGenerator::generate_with_rng(40, 40, floor, &mut rng)
+    }
+
+    fn caverns(result: &DungeonResult) -> Vec<Rect> {
+        result
+            .themed_rooms
+            .iter()
+            .filter(|r| r.theme == RoomTheme::Cavern)
+            .map(|r| r.rect)
+            .collect()
+    }
+
+    fn walkable_at(result: &DungeonResult, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= 40 || y >= 40 {
+            return false;
+        }
+        result.tiles[y as usize * 40 + x as usize].tile_type.is_walkable()
+    }
+
+    /// Tiles reachable from `start` over walkable terrain, optionally treating
+    /// some tiles as solid.
+    fn flood(result: &DungeonResult, start: (i32, i32), blocked: &[(i32, i32)]) -> HashSet<(i32, i32)> {
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        seen.insert(start);
+        while let Some((x, y)) = queue.pop_front() {
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let next = (x + dx, y + dy);
+                if seen.contains(&next) || blocked.contains(&next) {
+                    continue;
+                }
+                if walkable_at(result, next.0, next.1) {
+                    seen.insert(next);
+                    queue.push_back(next);
+                }
+            }
+        }
+        seen
+    }
+
+    fn cavern_tiles(result: &DungeonResult, rect: &Rect) -> Vec<(i32, i32)> {
+        (rect.y..rect.y + rect.height)
+            .flat_map(|y| (rect.x..rect.x + rect.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| walkable_at(result, x, y))
+            .collect()
+    }
+
+    #[test]
+    fn test_cavern_is_carved_not_rectangular() {
+        // A cavern is the one theme whose rect isn't carved wholesale, so it
+        // must come out with rock inside it -- and still with room to move.
+        let mut irregular = 0;
+        let mut checked = 0;
+        for seed in 0..100u64 {
+            let result = seeded_floor(seed, 1);
+            for rect in caverns(&result) {
+                checked += 1;
+                let area = (rect.width * rect.height) as usize;
+                let open = cavern_tiles(&result, &rect).len();
+                assert!(open * 4 >= area, "cavern {rect:?} is barely open: {open}/{area}");
+                if open < area {
+                    irregular += 1;
+                }
+            }
+        }
+        assert!(checked >= 100, "every floor should have a cavern, got {checked}");
+        assert!(
+            irregular * 10 >= checked * 9,
+            "caverns should almost always have interior rock, got {irregular}/{checked}"
+        );
+    }
+
+    #[test]
+    fn test_every_cavern_entrance_leads_into_the_cave() {
+        // The gotcha this guards: `find_door_positions` scans the band just
+        // outside a room's rect for corridor entrances and assumes the tile
+        // inside is floor. Cellular-automata carving routinely leaves that
+        // tile solid, so a corridor dead-ends in rock -- and opening it can
+        // leave a stub detached from the cave body. Both happen on roughly
+        // one floor in twelve, so this needs a good spread of seeds.
+        let mut entrances = 0;
+        for seed in 0..200u64 {
+            let result = seeded_floor(seed, 1);
+            for rect in caverns(&result) {
+                let tiles = cavern_tiles(&result, &rect);
+                let main = *tiles.first().expect("cavern is solid rock");
+                let body = flood(&result, main, &[]);
+
+                let mut ring: Vec<(i32, i32)> = Vec::new();
+                for x in rect.x..rect.x + rect.width {
+                    ring.push((x, rect.y - 1));
+                    ring.push((x, rect.y + rect.height));
+                }
+                for y in rect.y..rect.y + rect.height {
+                    ring.push((rect.x - 1, y));
+                    ring.push((rect.x + rect.width, y));
+                }
+
+                for (rx, ry) in ring {
+                    if !walkable_at(&result, rx, ry) {
+                        continue;
+                    }
+                    entrances += 1;
+                    let inside = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                        .iter()
+                        .map(|(dx, dy)| (rx + dx, ry + dy))
+                        .filter(|&(x, y)| rect.contains(x, y))
+                        .collect::<Vec<_>>();
+                    assert!(
+                        inside.iter().any(|p| walkable_at(&result, p.0, p.1) && body.contains(p)),
+                        "seed {seed}: corridor entrance at ({rx}, {ry}) on cavern {rect:?} \
+                         does not open into the cave"
+                    );
+                }
+            }
+        }
+        assert!(entrances >= 200, "expected plenty of cavern entrances, got {entrances}");
+    }
+
+    #[test]
+    fn test_cavern_is_fully_reachable_from_the_stairs() {
+        for seed in 0..200u64 {
+            let result = seeded_floor(seed, 1);
+            let start = result.stairs_down_pos.expect("floor has stairs down");
+            let reachable = flood(&result, start, &[]);
+            for rect in caverns(&result) {
+                let tiles = cavern_tiles(&result, &rect);
+                assert!(!tiles.is_empty(), "seed {seed}: cavern {rect:?} is solid rock");
+                let orphans: Vec<_> =
+                    tiles.iter().filter(|p| !reachable.contains(p)).collect();
+                assert!(
+                    orphans.is_empty(),
+                    "seed {seed}: cavern {rect:?} has tiles unreachable from the stairs: {orphans:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cavern_stalagmites_never_seal_the_floor() {
+        // Stalagmites block movement, and a cave is full of pinch points.
+        for seed in 0..200u64 {
+            let result = seeded_floor(seed, 1);
+            let down = result.stairs_down_pos.expect("floor has stairs down");
+            let up = result.stairs_up_pos.expect("floor 1 has stairs up");
+            let reachable = flood(&result, down, &result.stalagmite_positions);
+            assert!(
+                reachable.contains(&up),
+                "seed {seed}: stalagmites cut the floor in two"
+            );
+        }
+    }
+
+    #[test]
+    fn test_nothing_spawns_on_a_non_walkable_cavern_tile() {
+        // chest_positions used the room centre with no walkability check at
+        // all, which is solid rock in most caverns; the other placement
+        // functions are checked here too.
+        for seed in 0..200u64 {
+            let result = seeded_floor(seed, 1);
+            let placements: Vec<(&str, &Vec<(i32, i32)>)> = vec![
+                ("chest", &result.chest_positions),
+                ("stalagmite", &result.stalagmite_positions),
+                ("mushroom", &result.mushroom_positions),
+                ("crystal", &result.crystal_positions),
+                ("brazier", &result.brazier_positions),
+                ("coffin", &result.coffin_positions),
+                ("barrel", &result.barrel_positions),
+                ("shop decor", &result.shop_decor_positions),
+                ("trap", &result.trap_positions),
+                ("furniture", &result.furniture_positions),
+            ];
+            for (what, positions) in placements {
+                for &(x, y) in positions {
+                    assert!(
+                        walkable_at(&result, x, y),
+                        "seed {seed}: {what} at ({x}, {y}) is inside a wall"
+                    );
+                }
+            }
+            for decal in &result.decals {
+                // Stalactites are the deliberate exception: they hang off the
+                // cave ceiling, so they go over wall tiles.
+                if (decal.sheet, decal.tile_id) == tile_ids::CAVE_STALACTITES {
+                    continue;
+                }
+                assert!(
+                    walkable_at(&result, decal.x, decal.y),
+                    "seed {seed}: decal at ({}, {}) is inside a wall",
+                    decal.x,
+                    decal.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_chest_spot_snaps_out_of_solid_rock() {
+        // `chest_positions` used `room.rect.center()` with no walkability
+        // check at all. On the current corridor scheme a cavern's centre
+        // happens to be open -- corridors are aimed at room centres, and
+        // `roughen_cavern_intrusions` relays that channel as cave floor -- so
+        // this exercises the guard on the geometry it exists for rather than
+        // waiting for a seed to produce it.
+        let mut gen = DungeonGenerator::new(20, 20);
+        let rect = Rect::new(4, 4, 9, 9);
+        // A ring of cave with solid rock through the middle.
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                let on_edge = x == rect.x
+                    || y == rect.y
+                    || x == rect.x + rect.width - 1
+                    || y == rect.y + rect.height - 1;
+                if on_edge {
+                    gen.set_cave_floor(x, y);
+                }
+            }
+        }
+
+        let centre = rect.center();
+        assert!(
+            !gen.get_tile(centre.0, centre.1).map(|t| t.is_walkable()).unwrap_or(false),
+            "the test fixture should have a solid centre"
+        );
+
+        let spot = gen.nearest_walkable_in(&rect, centre).expect("ring has open tiles");
+        assert!(
+            gen.get_tile(spot.0, spot.1).map(|t| t.is_walkable()).unwrap_or(false),
+            "snapped chest spot must be walkable"
+        );
+        assert!(rect.contains(spot.0, spot.1), "snapped spot must stay in the room");
+
+        // And a room with nothing open at all yields no chest rather than one
+        // buried in the wall.
+        let solid = DungeonGenerator::new(20, 20);
+        assert_eq!(solid.nearest_walkable_in(&rect, centre), None);
+    }
+
+    #[test]
+    fn test_cavern_features_are_on_cave_floor_and_distinct() {
+        let result = seeded_floor(12345, 2);
+        let rects = caverns(&result);
+        assert!(!rects.is_empty(), "expected a cavern");
+
+        let features: Vec<(i32, i32)> = result
+            .stalagmite_positions
+            .iter()
+            .chain(result.mushroom_positions.iter())
+            .chain(result.crystal_positions.iter())
+            .copied()
+            .collect();
+        assert!(!features.is_empty(), "a cavern should be dressed");
+
+        let unique: HashSet<(i32, i32)> = features.iter().copied().collect();
+        assert_eq!(unique.len(), features.len(), "cave features share a tile");
+
+        for &(x, y) in &features {
+            assert!(
+                rects.iter().any(|r| r.contains(x, y)),
+                "cave feature at ({x}, {y}) is outside every cavern"
+            );
+            assert_eq!(
+                result.tiles[y as usize * 40 + x as usize].sprite_override,
+                Some(tile_ids::CAVE_RUBBLE_FLOOR),
+                "cave feature at ({x}, {y}) is not on cave floor"
+            );
+        }
+    }
+
+    #[test]
+    fn test_same_seed_same_cavern() {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let build = || {
+            let mut rng = StdRng::seed_from_u64(90210);
+            let result = DungeonGenerator::generate_with_rng(40, 40, 2, &mut rng);
+            let shape: Vec<(i32, i32)> = caverns(&result)
+                .iter()
+                .flat_map(|rect| cavern_tiles(&result, rect))
+                .collect();
+            (
+                caverns(&result),
+                shape,
+                result.stalagmite_positions.clone(),
+                result.mushroom_positions.clone(),
+                result.crystal_positions.clone(),
+            )
+        };
+
+        let (rects, shape, stalagmites, mushrooms, crystals) = build();
+        assert!(!rects.is_empty(), "expected a cavern");
+        assert!(!shape.is_empty(), "cavern should have open tiles");
+        let (rects2, shape2, stalagmites2, mushrooms2, crystals2) = build();
+
+        assert_eq!(
+            rects.iter().map(|r| (r.x, r.y, r.width, r.height)).collect::<Vec<_>>(),
+            rects2.iter().map(|r| (r.x, r.y, r.width, r.height)).collect::<Vec<_>>(),
+        );
+        assert_eq!(shape, shape2, "same seed must carve the same cave");
+        assert_eq!(stalagmites, stalagmites2);
+        assert_eq!(mushrooms, mushrooms2);
+        assert_eq!(crystals, crystals2);
+    }
+
+    #[test]
+    fn test_cavern_walls_use_the_dirt_sprites() {
+        let result = seeded_floor(2024, 1);
+        let rects = caverns(&result);
+        assert!(!rects.is_empty(), "expected a cavern");
+
+        let cave_wall_sprites = [
+            tile_ids::WALL_DIRT,
+            tile_ids::WALL_DIRT_TOP,
+            tile_ids::CAVE_ORE_WALL,
+        ];
+        let mut seen = 0;
+        for rect in &rects {
+            for y in rect.y..rect.y + rect.height {
+                for x in rect.x..rect.x + rect.width {
+                    let tile = &result.tiles[y as usize * 40 + x as usize];
+                    if tile.tile_type != TileType::Wall {
+                        continue;
+                    }
+                    // Only walls facing into the cave get a themed sprite;
+                    // rock with no open neighbour keeps the default.
+                    let touches_cave = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                        .iter()
+                        .any(|(dx, dy)| walkable_at(&result, x + dx, y + dy));
+                    if !touches_cave {
+                        continue;
+                    }
+                    let sprite = tile.sprite_override.expect("cave wall needs a sprite");
+                    assert!(
+                        cave_wall_sprites.contains(&sprite),
+                        "wall at ({x}, {y}) inside a cavern uses {sprite:?}, not a dirt wall"
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 0, "a cavern should have walls facing into it");
     }
 
     #[test]

@@ -803,6 +803,26 @@ mod tests {
         run_fire_cached(world, grid, &mut cache, seconds);
     }
 
+    /// As `run_fire`, but from a seeded rng, for tests that assert on a chain
+    /// of per-step ignition rolls rather than on a near-certain outcome.
+    fn run_fire_seeded(world: &mut World, grid: &mut Grid, seconds: f32, seed: u64) {
+        use rand::SeedableRng;
+
+        let mut cache = SpatialCache::rebuild_from_world(world);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut events = EventQueue::new();
+        let mut acc = 0.0;
+        let mut fov_dirty = false;
+        let mut remaining = seconds;
+        while remaining > 0.0 {
+            let dt = remaining.min(FIRE_STEP_INTERVAL);
+            tick_fire(
+                world, grid, &mut cache, &mut events, dt, &mut acc, &mut fov_dirty, &mut rng,
+            );
+            remaining -= dt;
+        }
+    }
+
     /// As `run_fire`, but against a caller-owned spatial cache so a test can
     /// assert the cache stayed coherent across the fire tick.
     fn run_fire_cached(
@@ -1057,7 +1077,9 @@ mod tests {
         let patch_a = crate::spawning::spawn_glow_mushrooms(&mut world, 3, 2);
         let patch_b = crate::spawning::spawn_glow_mushrooms(&mut world, 4, 2);
 
-        run_fire(&mut world, &mut grid, 4.0);
+        // Seeded: the chain is a run of 35% rolls, so an unseeded run is a
+        // coin toss rather than a test.
+        run_fire_seeded(&mut world, &mut grid, 6.0, 7);
 
         assert!(!world.contains(patch_a), "fungus next to fire burns away");
         assert!(
