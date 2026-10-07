@@ -18,7 +18,7 @@ const fn rc(row: u32, col: u32, columns: u32) -> u32 {
 /// Format: (SpriteSheet, tile_id)
 ///
 /// Sheet dimensions (32x32 tiles):
-/// - Tiles: 17 columns (tiles.png 544x832)
+/// - Tiles: 17 columns (tiles.png 544x864)
 /// - Rogues: 7 columns (rogues.png 224x224)
 /// - Monsters: 12 columns (monsters.png 384x416)
 /// - Items: 11 columns (items.png 352x832)
@@ -51,6 +51,11 @@ pub mod tile_ids {
     // Catacombs/skull walls for Crypt rooms
     pub const WALL_CRYPT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(6, 1, TILES_COLS)); // 6.b skull wall (side)
     pub const WALL_CRYPT_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(6, 0, TILES_COLS)); // 6.a skull wall (top)
+
+    // Dirt walls for Cavern rooms. Warm brown, so a cave reads as clearly
+    // different from the cold blue-grey brick of the built dungeon.
+    pub const WALL_DIRT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(1, 1, TILES_COLS)); // 1.b dirt wall (side)
+    pub const WALL_DIRT_TOP: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(1, 0, TILES_COLS)); // 1.a dirt wall (top)
     pub const WATER: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(7, 1, TILES_COLS)); // Use floor, tinted blue
     // Grass floor variants (row 8)
     pub const GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(8, 1, TILES_COLS)); // 8.b grass 1
@@ -109,6 +114,23 @@ pub mod tile_ids {
 
     // Barrel (row 18)
     pub const BARREL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(18, 4, TILES_COLS)); // 18.e barrel
+
+    // Cavern tiles (row 27, drawn by assets/custom/make_cave_tiles.py).
+    /// Stalagmites: a transparent decal sprite. Spawned as a blocking entity --
+    /// cover you can shoot over but not walk through.
+    pub const CAVE_STALAGMITES: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(27, 0, TILES_COLS)); // 27.a
+    /// Stalactites: drawn hanging from the top of the tile, so it is used as a
+    /// decal laid over a cave wall rather than as a wall sprite of its own.
+    pub const CAVE_STALACTITES: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(27, 1, TILES_COLS)); // 27.b
+    /// Glowing mushrooms: a walkable decal entity that sheds light (and burns).
+    pub const CAVE_GLOW_MUSHROOMS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(27, 2, TILES_COLS)); // 27.c
+    /// Crystal cluster: a walkable decal entity that sheds a cold light.
+    pub const CAVE_CRYSTAL_CLUSTER: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(27, 3, TILES_COLS)); // 27.d
+    /// Ore-veined cave wall: full-bleed, used as a wall sprite override.
+    /// Decoration for now -- there is no mining action.
+    pub const CAVE_ORE_WALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(27, 4, TILES_COLS)); // 27.e
+    /// Rubble cave floor: full-bleed, used as the Cavern floor sprite override.
+    pub const CAVE_RUBBLE_FLOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(27, 5, TILES_COLS)); // 27.f
 
     // Shop room tiles
     // Red stone floor variants (row 12)
