@@ -1730,6 +1730,53 @@ impl GameEngine {
             return;
         }
 
+        // Decide whether sleep can start while the state borrow is confined to
+        // this block: stop_rest below takes &mut self.
+        let refusal: Option<&'static str> = {
+            let Some(ref state) = self.state else {
+                return;
+            };
+            if self.ui_state.is_none() {
+                return;
+            }
+
+            // Only start sleeping while idle (not mid-action).
+            let is_idle = state
+                .world
+                .get::<&Actor>(state.player_entity)
+                .map(|a| a.current_action.is_none())
+                .unwrap_or(false);
+            if !is_idle {
+                return;
+            }
+
+            let fatigue = state
+                .world
+                .get::<&crate::components::Fatigue>(state.player_entity)
+                .map(|f| f.value)
+                .unwrap_or(0.0);
+            if fatigue <= 0.0 {
+                Some("You don't feel tired.")
+            } else if simulation::any_enemy_alerted(&state.world, state.player_entity) {
+                Some("You can't sleep with enemies nearby.")
+            } else {
+                None
+            }
+        };
+
+        if let Some(message) = refusal {
+            if let Some(ref mut ui_state) = self.ui_state {
+                ui_state.message_log.system(message);
+            }
+            return;
+        }
+
+        // Sleep supersedes rest. Go through stop_rest rather than clearing the
+        // flags here: the direct assignment skipped the "You stop resting." log
+        // line and the clear_resting_bubble() call, and would skip anything
+        // either path grows later. It no-ops when not resting.
+        self.stop_rest("You stop resting.");
+
         let Some(ref mut state) = self.state else {
             return;
         };
@@ -1737,33 +1784,7 @@ impl GameEngine {
             return;
         };
 
-        // Only start sleeping while idle (not mid-action).
-        let is_idle = state
-            .world
-            .get::<&Actor>(state.player_entity)
-            .map(|a| a.current_action.is_none())
-            .unwrap_or(false);
-        if !is_idle {
-            return;
-        }
-
-        let fatigue = state
-            .world
-            .get::<&crate::components::Fatigue>(state.player_entity)
-            .map(|f| f.value)
-            .unwrap_or(0.0);
-        if fatigue <= 0.0 {
-            ui_state.message_log.system("You don't feel tired.");
-            return;
-        }
-        if simulation::any_enemy_alerted(&state.world, state.player_entity) {
-            ui_state.message_log.system("You can't sleep with enemies nearby.");
-            return;
-        }
-
-        // Sleep supersedes rest, and you can't stay crouched while unconscious.
-        self.resting = false;
-        self.rest_accumulator = 0.0;
+        // You can't stay crouched while unconscious.
         let _ = state
             .world
             .remove_one::<crate::components::Sneaking>(state.player_entity);
@@ -2610,6 +2631,127 @@ struct InputResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Start a real run so the rest/sleep paths have live state and ui_state.
+    fn engine_with_run() -> GameEngine {
+        let mut engine = GameEngine::new();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        engine.start_game(PlayerClass::Fighter, 1234, &mut camera);
+        engine
+    }
+
+    #[test]
+    fn test_sleeping_while_resting_goes_through_stop_rest() {
+        // try_sleep used to clear self.resting / self.rest_accumulator directly
+        // instead of calling stop_rest, which skipped the "You stop resting."
+        // log line and the clear_resting_bubble() call. The bubble was masked
+        // because sleep immediately sets its own, so the missing message was
+        // the only visible symptom — but the bypass breaks the moment either
+        // path grows.
+        let mut engine = engine_with_run();
+        let state = engine.state.as_mut().expect("run started");
+        let player = state.player_entity;
+
+        // Tired enough to sleep, and no enemy alerted (fresh run, so quiet).
+        if let Ok(mut fatigue) = state.world.get::<&mut crate::components::Fatigue>(player) {
+            fatigue.value = 50.0;
+        }
+
+        // Enter the resting state the way toggle_rest would.
+        engine.resting = true;
+        engine.rest_accumulator = 3.5;
+        if let Some(ui) = engine.ui_state.as_mut() {
+            ui.message_log.system("You settle down to rest.");
+        }
+
+        engine.try_sleep();
+
+        assert!(engine.sleeping, "sleep should have started");
+        assert!(!engine.resting, "resting must be cleared");
+        assert_eq!(
+            engine.rest_accumulator, 0.0,
+            "rest accumulator must be reset"
+        );
+
+        let lines = engine
+            .ui_state
+            .as_ref()
+            .expect("ui state")
+            .message_log
+            .lines();
+        assert!(
+            lines.iter().any(|l| l == "You stop resting."),
+            "stop_rest's log line must not be skipped; got {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "You lie down and drift off to sleep..."),
+            "sleep should still announce itself; got {lines:?}"
+        );
+        assert!(
+            engine.vfx.resting_bubble.is_some(),
+            "sleep sets its own bubble after stop_rest clears the rest one"
+        );
+    }
+
+    #[test]
+    fn test_sleeping_when_not_resting_logs_no_stop_rest_line() {
+        // stop_rest no-ops when not resting, so going straight to sleep must
+        // not produce a spurious "You stop resting." line.
+        let mut engine = engine_with_run();
+        let state = engine.state.as_mut().expect("run started");
+        let player = state.player_entity;
+        if let Ok(mut fatigue) = state.world.get::<&mut crate::components::Fatigue>(player) {
+            fatigue.value = 50.0;
+        }
+
+        assert!(!engine.resting);
+        engine.try_sleep();
+
+        assert!(engine.sleeping, "sleep should have started");
+        let lines = engine
+            .ui_state
+            .as_ref()
+            .expect("ui state")
+            .message_log
+            .lines();
+        assert!(
+            !lines.iter().any(|l| l == "You stop resting."),
+            "no stop-resting line when the player was not resting; got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_refused_sleep_leaves_resting_untouched() {
+        // A refused sleep (not tired) must not disturb an in-progress rest:
+        // the refusal check happens before stop_rest.
+        let mut engine = engine_with_run();
+        let state = engine.state.as_mut().expect("run started");
+        let player = state.player_entity;
+        if let Ok(mut fatigue) = state.world.get::<&mut crate::components::Fatigue>(player) {
+            fatigue.value = 0.0;
+        }
+
+        engine.resting = true;
+        engine.rest_accumulator = 2.0;
+
+        engine.try_sleep();
+
+        assert!(!engine.sleeping, "sleep must be refused when not tired");
+        assert!(engine.resting, "a refused sleep must not cancel the rest");
+        assert_eq!(engine.rest_accumulator, 2.0, "accumulator preserved");
+        let lines = engine
+            .ui_state
+            .as_ref()
+            .expect("ui state")
+            .message_log
+            .lines();
+        assert!(
+            lines.iter().any(|l| l == "You don't feel tired."),
+            "refusal should be reported; got {lines:?}"
+        );
+    }
 
     /// A raised skeleton is a true companion: standard skeleton stat block
     /// wired into the tamed-ally infrastructure (CompanionAI + TamedBy +

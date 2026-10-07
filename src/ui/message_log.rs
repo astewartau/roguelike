@@ -66,6 +66,13 @@ impl MessageLog {
         self.push(text.into(), log_colors::INFO);
     }
 
+    /// Test-only: the log lines in order, for asserting that a code path
+    /// actually reported what it was supposed to.
+    #[cfg(test)]
+    pub fn lines(&self) -> Vec<String> {
+        self.messages.iter().map(|m| m.text.clone()).collect()
+    }
+
     /// Push a line. Consecutive identical lines collapse into a "(x2)" counter.
     fn push(&mut self, text: String, color: Color32) {
         if let Some(last) = self.messages.back_mut() {
