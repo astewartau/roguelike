@@ -399,6 +399,7 @@ pub fn remove_dead_entities(
     events: &mut EventQueue,
     mut scheduler: Option<&mut ActionScheduler>,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
 ) -> u32 {
     let mut to_convert = Vec::new();
     let mut hostile_kills: u32 = 0;
@@ -480,6 +481,13 @@ pub fn remove_dead_entities(
 
         // Remove from spatial cache before removing components
         spatial_cache.remove_entity(id);
+
+        // Death is where an entity leaves the AI sets: ChaseAI/CompanionAI are
+        // stripped just below, so update_on_player_move will never re-add it.
+        // Without this the id lingers in active_entities/dormant_entities until
+        // the next rebuild — and once the corpse is despawned (bones consumed by
+        // Raise Dead) it is a stale id in both sets.
+        active_ai_tracker.remove_entity(id);
 
         // Remove AI, Actor, Attackable, Stats components - turn into decoration
         let _ = world.remove_one::<Actor>(id);
@@ -571,6 +579,61 @@ mod tests {
             damage_bonus: 2,
         };
         assert_eq!(weapon_damage(&weapon), 7);
+    }
+
+    #[test]
+    fn test_dead_entity_is_removed_from_active_ai_tracker() {
+        // ActiveAITracker::remove_entity was never called, so dead entities
+        // lingered in active_entities/dormant_entities. It self-healed because
+        // update_on_player_move rebuilds both sets from a world query, but the
+        // stale id survives until then — and once the corpse is despawned (bones
+        // consumed by Raise Dead) the id is permanently invalid.
+        use crate::active_ai_tracker::ActiveAITracker;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let mut world = World::new();
+        let player = world.spawn((
+            Position::new(0, 0),
+            crate::components::Player,
+            Health::new(20),
+        ));
+
+        let rat = crate::spawning::enemies::RAT.spawn(&mut world, 3, 3);
+        world.get::<&mut Health>(rat).unwrap().current = 0;
+
+        let mut tracker = ActiveAITracker::new();
+        let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+
+        // An in-range enemy is active; this is the state death must clean up.
+        tracker.update_on_player_move(&world, (3, 3));
+        assert!(tracker.is_tracked(rat), "live enemy should be tracked");
+
+        let mut rng = StdRng::seed_from_u64(11);
+        remove_dead_entities(
+            &mut world,
+            player,
+            0,
+            &mut rng,
+            &mut events,
+            None,
+            &mut cache,
+            &mut tracker,
+        );
+
+        assert!(
+            !tracker.is_tracked(rat),
+            "dead entity must be dropped from the AI tracker at the death site, \
+             not left for the next update_on_player_move rebuild"
+        );
+        assert!(
+            !tracker.get_active_entities().contains(&rat),
+            "specifically not in the active set"
+        );
+
+        // Despawning the corpse (Raise Dead) must not resurrect a stale id.
+        let _ = world.despawn(rat);
+        assert!(!tracker.is_tracked(rat), "still untracked after the corpse is consumed");
     }
 
     #[test]

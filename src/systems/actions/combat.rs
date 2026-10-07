@@ -420,8 +420,17 @@ mod tests {
         assert!(world.get::<&Health>(rat).unwrap().current <= 0, "hit is lethal");
 
         let mut rng = StdRng::seed_from_u64(7);
+        let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+        tracker.register_entity(rat);
         let kills = crate::systems::combat::remove_dead_entities(
-            &mut world, player, 0, &mut rng, &mut events, None, &mut cache,
+            &mut world,
+            player,
+            0,
+            &mut rng,
+            &mut events,
+            None,
+            &mut cache,
+            &mut tracker,
         );
         assert_eq!(kills, 1, "hostile death increments the kill counter");
 

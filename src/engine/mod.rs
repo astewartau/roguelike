@@ -573,6 +573,7 @@ impl GameEngine {
                 &mut self.events,
                 Some(&mut state.action_scheduler),
                 &mut state.spatial_cache,
+                &mut state.active_ai_tracker,
             );
         }
 

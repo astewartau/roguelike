@@ -56,18 +56,6 @@ impl ActiveAITracker {
         self.dormant_entities.remove(&entity);
     }
 
-    /// Check if an entity is currently active.
-    #[inline]
-    pub fn is_active(&self, entity: Entity) -> bool {
-        self.active_entities.contains(&entity)
-    }
-
-    /// Check if an entity is dormant.
-    #[inline]
-    pub fn is_dormant(&self, entity: Entity) -> bool {
-        self.dormant_entities.contains(&entity)
-    }
-
     /// Clear all tracking (for floor transitions).
     pub fn clear(&mut self) {
         self.active_entities.clear();
@@ -163,9 +151,11 @@ impl ActiveAITracker {
         &self.active_entities
     }
 
-    /// Get all currently dormant entities.
-    pub fn get_dormant_entities(&self) -> &HashSet<Entity> {
-        &self.dormant_entities
+    /// Test-only: is this entity held in either set? A despawned or dead entity
+    /// must not be, or its stale id leaks until the next rebuild.
+    #[cfg(test)]
+    pub fn is_tracked(&self, entity: Entity) -> bool {
+        self.active_entities.contains(&entity) || self.dormant_entities.contains(&entity)
     }
 }
 
