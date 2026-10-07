@@ -212,6 +212,58 @@ impl SpatialCache {
     pub fn blocks_vision(&self, pos: (i32, i32)) -> bool {
         self.vision_blocking.contains(&pos)
     }
+
+    /// Test-only coherence check: the incrementally-maintained blocking sets
+    /// must match what a fresh rebuild from the world would produce. Any
+    /// divergence means some mutation path (spawn, move, despawn, flag change)
+    /// failed to update the cache.
+    ///
+    /// Only the two position sets are compared, since those are what consumers
+    /// read. `entity_positions` / `entity_flags` may legitimately hold entities
+    /// a rebuild would drop — an opened door keeps its tracking entry with both
+    /// flags cleared so `set_blocking_flags` can restore it when it shuts.
+    #[cfg(test)]
+    pub fn assert_coherent_with_world(&self, world: &World, context: &str) {
+        let fresh = Self::rebuild_from_world(world);
+
+        let mut stale: Vec<_> = self
+            .blocking_positions
+            .difference(&fresh.blocking_positions)
+            .copied()
+            .collect();
+        let mut missing: Vec<_> = fresh
+            .blocking_positions
+            .difference(&self.blocking_positions)
+            .copied()
+            .collect();
+        stale.sort_unstable();
+        missing.sort_unstable();
+        assert!(
+            stale.is_empty() && missing.is_empty(),
+            "{context}: blocking_positions drifted from a fresh rebuild\n  \
+             phantom (cached but not in world): {stale:?}\n  \
+             missing (in world but not cached): {missing:?}"
+        );
+
+        let mut stale: Vec<_> = self
+            .vision_blocking
+            .difference(&fresh.vision_blocking)
+            .copied()
+            .collect();
+        let mut missing: Vec<_> = fresh
+            .vision_blocking
+            .difference(&self.vision_blocking)
+            .copied()
+            .collect();
+        stale.sort_unstable();
+        missing.sort_unstable();
+        assert!(
+            stale.is_empty() && missing.is_empty(),
+            "{context}: vision_blocking drifted from a fresh rebuild\n  \
+             phantom (cached but not in world): {stale:?}\n  \
+             missing (in world but not cached): {missing:?}"
+        );
+    }
 }
 
 impl Default for SpatialCache {

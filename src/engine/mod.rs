@@ -707,6 +707,7 @@ impl GameEngine {
             systems::fire::tick_fire(
                 &mut state.world,
                 &mut state.grid,
+                &mut state.spatial_cache,
                 &mut self.events,
                 game_dt,
                 &mut state.fire_accumulator,

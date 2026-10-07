@@ -23,6 +23,7 @@ use crate::components::{
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
+use crate::spatial_cache::SpatialCache;
 use crate::tile::{tile_ids, TileType};
 
 const NEIGHBORS: [(i32, i32); 8] = [
@@ -36,6 +37,7 @@ const NEIGHBORS: [(i32, i32); 8] = [
 pub fn tick_fire(
     world: &mut World,
     grid: &mut Grid,
+    spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     game_dt: f32,
     accumulator: &mut f32,
@@ -141,7 +143,7 @@ pub fn tick_fire(
     }
     let mut rng = rand::thread_rng();
     for id in to_explode {
-        explode_barrel(world, grid, id, events, &mut rng);
+        explode_barrel(world, grid, spatial_cache, id, events, &mut rng);
     }
 
     // 5. Spread in fixed game-time steps so behaviour is frame-rate independent.
@@ -588,14 +590,20 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
 fn explode_barrel(
     world: &mut World,
     grid: &Grid,
+    spatial_cache: &mut SpatialCache,
     barrel: Entity,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
+    // The barrel carries BlocksMovement: drop it from the spatial cache in the
+    // same breath as the despawn, or its tile stays blocked for AI pathfinding
+    // until the next full rebuild on floor transition.
     let Some((bx, by)) = crate::queries::get_entity_position(world, barrel) else {
+        spatial_cache.remove_entity(barrel);
         let _ = world.despawn(barrel);
         return;
     };
+    spatial_cache.remove_entity(barrel);
     let _ = world.despawn(barrel);
 
     events.push(GameEvent::BarrelExploded { position: (bx, by) });
@@ -740,6 +748,18 @@ mod tests {
     }
 
     fn run_fire(world: &mut World, grid: &mut Grid, seconds: f32) {
+        let mut cache = SpatialCache::rebuild_from_world(world);
+        run_fire_cached(world, grid, &mut cache, seconds);
+    }
+
+    /// As `run_fire`, but against a caller-owned spatial cache so a test can
+    /// assert the cache stayed coherent across the fire tick.
+    fn run_fire_cached(
+        world: &mut World,
+        grid: &mut Grid,
+        cache: &mut SpatialCache,
+        seconds: f32,
+    ) {
         let mut events = EventQueue::new();
         let mut acc = 0.0;
         let mut fov_dirty = false;
@@ -747,9 +767,86 @@ mod tests {
         let mut remaining = seconds;
         while remaining > 0.0 {
             let dt = remaining.min(FIRE_STEP_INTERVAL);
-            tick_fire(world, grid, &mut events, dt, &mut acc, &mut fov_dirty);
+            tick_fire(world, grid, cache, &mut events, dt, &mut acc, &mut fov_dirty);
             remaining -= dt;
         }
+    }
+
+    #[test]
+    fn test_exploded_barrel_leaves_no_phantom_blocking_tile() {
+        // An oil barrel carries BlocksMovement. When it detonates it is
+        // despawned, so its tile must drop out of the spatial cache too —
+        // otherwise AI pathfinding routes around empty floor until the next
+        // full rebuild on floor transition.
+        let mut world = World::new();
+        let mut grid = make_grid(9, 9, TileType::Floor);
+
+        let barrel = crate::spawning::spawn_oil_barrel(&mut world, 4, 4);
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        assert!(cache.is_blocked((4, 4)), "intact barrel should block its tile");
+
+        crate::systems::effects::add_effect_to_entity(
+            &mut world,
+            barrel,
+            EffectType::Burning,
+            BURNING_DURATION,
+        );
+
+        run_fire_cached(&mut world, &mut grid, &mut cache, 0.5);
+        assert!(world.contains(barrel), "barrel must survive the fuse period");
+        cache.assert_coherent_with_world(&world, "barrel fuse lit");
+
+        run_fire_cached(
+            &mut world,
+            &mut grid,
+            &mut cache,
+            OIL_BARREL_FUSE_SECONDS + 0.5,
+        );
+        assert!(!world.contains(barrel), "barrel should have exploded");
+
+        assert!(
+            !cache.is_blocked((4, 4)),
+            "exploded barrel's tile must no longer be blocked — \
+             this is the phantom blocker regression"
+        );
+        cache.assert_coherent_with_world(&world, "after barrel explosion");
+    }
+
+    #[test]
+    fn test_fire_tick_keeps_spatial_cache_coherent() {
+        // Broader coherence guard over the whole fire tick: grass burnout, oil
+        // burnout, web burnout and a chained barrel detonation all despawn
+        // entities. None of them may leave the cache disagreeing with a fresh
+        // rebuild.
+        let mut world = World::new();
+        let mut grid = make_grid(13, 13, TileType::Floor);
+
+        // Two adjacent barrels so the first detonation chains into the second.
+        let barrel_a = crate::spawning::spawn_oil_barrel(&mut world, 6, 6);
+        crate::spawning::spawn_oil_barrel(&mut world, 8, 6);
+        // Non-blocking fire furniture that also gets despawned during the tick.
+        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        crate::spawning::spawn_oil_puddle(&mut world, 3, 9);
+        crate::spawning::spawn_web(&mut world, 10, 10, None);
+
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        cache.assert_coherent_with_world(&world, "initial build");
+
+        crate::systems::effects::add_effect_to_entity(
+            &mut world,
+            barrel_a,
+            EffectType::Burning,
+            BURNING_DURATION,
+        );
+
+        // Step through in small slices, checking coherence at every step so a
+        // failure points at the tick that broke it.
+        for step in 0..40 {
+            run_fire_cached(&mut world, &mut grid, &mut cache, FIRE_STEP_INTERVAL);
+            cache.assert_coherent_with_world(&world, &format!("fire step {step}"));
+        }
+
+        assert!(!world.contains(barrel_a), "the lit barrel should be gone");
     }
 
     #[test]
