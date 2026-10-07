@@ -1308,10 +1308,12 @@ impl DungeonGenerator {
     /// (cover you can shoot over but not walk through) plus the glowing
     /// mushrooms and crystal clusters that light the place.
     ///
-    /// Stalagmites block movement, so each one is only accepted if the two
-    /// staircases are still reachable from each other with every stalagmite
-    /// placed so far treated as solid -- a cave full of pinch points is easy
-    /// to wall off by accident.
+    /// Stalagmites block movement and nothing can ever clear one, so each is
+    /// only accepted if it leaves every tile that was reachable before any of
+    /// them went in still reachable. Checking only that the two staircases
+    /// stay connected is far too weak: a cave is full of one-tile chokepoints
+    /// off the critical path, and plugging one strands whole rooms (and their
+    /// chests) behind it.
     fn generate_cavern_features(
         &self,
         themed_rooms: &[ThemedRoom],
@@ -1328,6 +1330,8 @@ impl DungeonGenerator {
 
         // Floor 0 has no up staircase; the player starts in the first room.
         let start = stairs_up.or_else(|| themed_rooms.first().map(|r| r.rect.center()));
+        // Everything the player could walk to before any stalagmite went in.
+        let open_before = start.map(|s| self.reachable_from(s, &[]));
 
         for room in themed_rooms.iter().filter(|r| r.theme == RoomTheme::Cavern) {
             let mut pool: Vec<(i32, i32)> = (room.rect.y..room.rect.y + room.rect.height)
@@ -1349,8 +1353,13 @@ impl DungeonGenerator {
                 let candidate = pool[idx];
                 let mut blocked = features.stalagmites.clone();
                 blocked.push(candidate);
-                let safe = match (start, stairs_down) {
-                    (Some(a), Some(b)) => self.is_reachable_excluding(a, b, &blocked),
+                let safe = match (start, &open_before) {
+                    (Some(s), Some(before)) => {
+                        let after = self.reachable_from(s, &blocked);
+                        before
+                            .iter()
+                            .all(|tile| after.contains(tile) || blocked.contains(tile))
+                    }
                     _ => true,
                 };
                 pool.swap_remove(idx);
@@ -2110,21 +2119,18 @@ impl DungeonGenerator {
 
     /// BFS reachability over walkable tiles with one tile treated as blocked.
     fn is_reachable_without(&self, start: (i32, i32), goal: (i32, i32), blocked: (i32, i32)) -> bool {
-        self.is_reachable_excluding(start, goal, &[blocked])
+        start == goal || self.reachable_from(start, &[blocked]).contains(&goal)
     }
 
-    /// BFS reachability over walkable tiles with a set of tiles treated as
-    /// blocked (entities standing on them, say).
-    fn is_reachable_excluding(
+    /// Every walkable tile reachable from `start`, treating `blocked` as
+    /// solid. 4-connected, matching the game's pathfinding.
+    fn reachable_from(
         &self,
         start: (i32, i32),
-        goal: (i32, i32),
         blocked: &[(i32, i32)],
-    ) -> bool {
+    ) -> std::collections::HashSet<(i32, i32)> {
         use std::collections::{HashSet, VecDeque};
-        if start == goal {
-            return true;
-        }
+
         let mut visited: HashSet<(i32, i32)> = HashSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(start);
@@ -2132,9 +2138,6 @@ impl DungeonGenerator {
         while let Some((x, y)) = queue.pop_front() {
             for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
                 let next = (x + dx, y + dy);
-                if next == goal {
-                    return true;
-                }
                 if blocked.contains(&next) || visited.contains(&next) {
                     continue;
                 }
@@ -2144,7 +2147,7 @@ impl DungeonGenerator {
                 }
             }
         }
-        false
+        visited
     }
 
     /// Occasionally (35% of floors) seal one small side-room behind a secret
@@ -2572,17 +2575,37 @@ mod tests {
     }
 
     #[test]
-    fn test_cavern_stalagmites_never_seal_the_floor() {
-        // Stalagmites block movement, and a cave is full of pinch points.
+    fn test_cavern_stalagmites_strand_nothing() {
+        // Stalagmites block movement and nothing can clear one, so they must
+        // not cut anything off -- not just the path between the staircases.
+        // A cave is full of one-tile chokepoints off the critical path:
+        // guarding only stairs-to-stairs stranded walkable tiles on a third
+        // of floors and a chest on a sixth of them.
         for seed in 0..200u64 {
             let result = seeded_floor(seed, 1);
             let down = result.stairs_down_pos.expect("floor has stairs down");
-            let up = result.stairs_up_pos.expect("floor 1 has stairs up");
-            let reachable = flood(&result, down, &result.stalagmite_positions);
+            let stalagmites: HashSet<(i32, i32)> =
+                result.stalagmite_positions.iter().copied().collect();
+
+            let before = flood(&result, down, &[]);
+            let after = flood(&result, down, &result.stalagmite_positions);
+
+            let stranded: Vec<_> = before
+                .iter()
+                .filter(|t| !after.contains(t) && !stalagmites.contains(t))
+                .collect();
             assert!(
-                reachable.contains(&up),
-                "seed {seed}: stalagmites cut the floor in two"
+                stranded.is_empty(),
+                "seed {seed}: stalagmites stranded {} tiles, e.g. {:?}",
+                stranded.len(),
+                stranded.first()
             );
+
+            let up = result.stairs_up_pos.expect("floor 1 has stairs up");
+            assert!(after.contains(&up), "seed {seed}: stairs cut off");
+            for chest in &result.chest_positions {
+                assert!(after.contains(chest), "seed {seed}: chest {chest:?} walled in");
+            }
         }
     }
 
