@@ -146,7 +146,6 @@ impl GameState {
         self.active_ai_tracker
             .initialize_from_world(&self.world, player_pos);
 
-        let mut rng = rand::thread_rng();
         initialization::initialize_ai_actors(
             &mut self.world,
             &self.grid,
@@ -156,7 +155,7 @@ impl GameState {
             &mut self.active_ai_tracker,
             &self.spatial_cache,
             events,
-            &mut rng,
+            &mut self.rng,
         );
     }
 

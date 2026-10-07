@@ -81,6 +81,7 @@ pub fn execute_player_intent(
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     audio: Option<&crate::audio::AudioManager>,
+    rng: &mut impl Rng,
 ) -> TurnExecutionResult {
     let can_act = world
         .get::<&Actor>(player_entity)
@@ -142,10 +143,9 @@ pub fn execute_player_intent(
         }
     }
 
-    let mut rng = rand::thread_rng();
     advance_until_player_ready(
         world, grid, player_entity, clock, scheduler,
-        active_tracker, spatial_cache, events, &mut rng,
+        active_tracker, spatial_cache, events, rng,
     );
 
     let event_result = process_events_with_audio(events, world, grid, spatial_cache, vfx, ui_state, player_entity, audio);
@@ -200,6 +200,7 @@ pub fn execute_player_turn(
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
+    rng: &mut impl Rng,
 ) -> TurnExecutionResult {
     let can_act = world
         .get::<&Actor>(player_entity)
@@ -234,10 +235,9 @@ pub fn execute_player_turn(
         };
     }
 
-    let mut rng = rand::thread_rng();
     advance_until_player_ready(
         world, grid, player_entity, clock, scheduler,
-        active_tracker, spatial_cache, events, &mut rng,
+        active_tracker, spatial_cache, events, rng,
     );
 
     let event_result = process_events(events, world, grid, spatial_cache, vfx, ui_state, player_entity);
@@ -287,7 +287,7 @@ pub fn advance_until_player_ready(
             .unwrap_or(false);
 
         if player_can_act {
-            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events);
+            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events, rng);
             return;
         }
 
@@ -318,7 +318,7 @@ pub fn advance_until_player_ready(
         clock.advance_to(completion_time);
         let elapsed = clock.time - previous_time;
 
-        update_projectiles_at_time(world, grid, spatial_cache, clock.time, events);
+        update_projectiles_at_time(world, grid, spatial_cache, clock.time, events, rng);
 
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
@@ -330,7 +330,7 @@ pub fn advance_until_player_ready(
         systems::ai::tick_alarms(world, elapsed);
         systems::ai::tick_role_cooldowns(world, elapsed);
 
-        time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
+        time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler, rng);
 
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
@@ -415,7 +415,7 @@ pub fn wait_for_energy(
             clock.advance_to(completion_time);
             let elapsed = clock.time - previous_time;
 
-            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events);
+            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events, rng);
             time_system::tick_health_regen(world, clock.time, Some(events));
             time_system::tick_energy_regen(world, clock.time, Some(events));
             time_system::tick_burn_damage(world, clock.time, events);
@@ -426,7 +426,7 @@ pub fn wait_for_energy(
             systems::ai::tick_role_cooldowns(world, elapsed);
 
             // Complete the action
-            time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
+            time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler, rng);
 
             // Let AI decide next action
             if next_entity != player_entity {
@@ -454,8 +454,9 @@ fn update_projectiles_at_time(
     spatial_cache: &mut SpatialCache,
     current_time: f32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
-    systems::update_projectiles(world, grid, spatial_cache, current_time, events);
+    systems::update_projectiles(world, grid, spatial_cache, current_time, events, rng);
 }
 
 /// Display name of an entity for damage attribution ("Goblin", ...).
@@ -701,7 +702,7 @@ pub fn process_ui_actions(
     // Shop interactions
     if let Some(vendor_id) = ui_state.shopping_at {
         if let Some(item_idx) = actions.buy_item {
-            buy_item_from_vendor(world, player_entity, vendor_id, item_idx, events);
+            buy_item_from_vendor(world, player_entity, vendor_id, item_idx, events, rng);
         }
         if let Some(item_idx) = actions.sell_item {
             sell_item_to_vendor(world, player_entity, vendor_id, item_idx, events);
@@ -1063,6 +1064,7 @@ fn buy_item_from_vendor(
     vendor_id: hecs::Entity,
     item_idx: usize,
     events: &mut crate::events::EventQueue,
+    rng: &mut impl Rng,
 ) {
     use crate::components::{Inventory, ItemInstance, Vendor};
     use crate::events::GameEvent;
@@ -1087,11 +1089,10 @@ fn buy_item_from_vendor(
     // so shop stock is rolled on purchase (Magic tier) and sold identified:
     // the merchant vouches for the wares.
     let instance = if crate::systems::item_defs::is_accessory_kind(item_type) {
-        let mut rng = rand::thread_rng();
         let mut inst = crate::systems::item_defs::roll_gear_with_rarity(
             item_type,
             crate::components::Rarity::Magic,
-            &mut rng,
+            rng,
         );
         inst.identified = true;
         inst

@@ -42,6 +42,7 @@ pub fn tick_fire(
     game_dt: f32,
     accumulator: &mut f32,
     fov_dirty: &mut bool,
+    rng: &mut impl Rng,
 ) {
     if game_dt <= 0.0 {
         return;
@@ -141,23 +142,22 @@ pub fn tick_fire(
             to_explode.push(id);
         }
     }
-    let mut rng = rand::thread_rng();
     for id in to_explode {
-        explode_barrel(world, grid, spatial_cache, id, events, &mut rng);
+        explode_barrel(world, grid, spatial_cache, id, events, rng);
     }
 
     // 5. Spread in fixed game-time steps so behaviour is frame-rate independent.
     *accumulator += game_dt;
     while *accumulator >= FIRE_STEP_INTERVAL {
         *accumulator -= FIRE_STEP_INTERVAL;
-        spread_step(world, grid, events, &mut rng);
+        spread_step(world, grid, events, rng);
     }
 }
 
 /// On a melee hit, a burning combatant may set the other alight (medium chance
 /// scaled by the target's flammability). No-op unless `from` is burning and `to`
 /// is combustible and not already burning.
-pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity) {
+pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut impl Rng) {
     let from_burning = world
         .get::<&StatusEffects>(from)
         .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
@@ -177,7 +177,7 @@ pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity) {
         return;
     }
     let chance = (FIRE_COMBAT_IGNITE_CHANCE * flammability as f64).clamp(0.0, 1.0);
-    if rand::thread_rng().gen_bool(chance) {
+    if rng.gen_bool(chance) {
         crate::systems::effects::add_effect_to_entity(world, to, EffectType::Burning, BURNING_DURATION);
     }
 }
@@ -491,6 +491,7 @@ pub fn topple_brazier(
     grid: &Grid,
     brazier: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> bool {
     let lit = world.get::<&Brazier>(brazier).map(|b| b.lit).unwrap_or(false);
     if !lit {
@@ -510,7 +511,6 @@ pub fn topple_brazier(
     events.push(GameEvent::BrazierToppled { position: (bx, by) });
 
     // Spill fire on the brazier's own tile plus one random adjacent walkable tile.
-    let mut rng = rand::thread_rng();
     let mut spill_tiles = vec![(bx, by)];
     let adjacent: Vec<(i32, i32)> = NEIGHBORS
         .iter()
@@ -767,7 +767,16 @@ mod tests {
         let mut remaining = seconds;
         while remaining > 0.0 {
             let dt = remaining.min(FIRE_STEP_INTERVAL);
-            tick_fire(world, grid, cache, &mut events, dt, &mut acc, &mut fov_dirty);
+            tick_fire(
+                world,
+                grid,
+                cache,
+                &mut events,
+                dt,
+                &mut acc,
+                &mut fov_dirty,
+                &mut rand::thread_rng(),
+            );
             remaining -= dt;
         }
     }
@@ -1079,12 +1088,12 @@ mod tests {
         let brazier = crate::spawning::spawn_brazier(&mut world, 2, 2);
         let victim = world.spawn((Position::new(2, 2), StatusEffects::new()));
 
-        assert!(topple_brazier(&mut world, &grid, brazier, &mut events));
+        assert!(topple_brazier(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
 
         // Unlit: no more light or contact hazard, and a second topple is a no-op.
         assert!(world.get::<&LightSource>(brazier).is_err());
         assert!(world.get::<&CausesBurning>(brazier).is_err());
-        assert!(!topple_brazier(&mut world, &grid, brazier, &mut events));
+        assert!(!topple_brazier(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
 
         // Whatever stood on the brazier tile is now burning.
         let burning = world

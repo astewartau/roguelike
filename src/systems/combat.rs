@@ -95,6 +95,7 @@ pub fn resolve_weapon_on_hit(
     target: Entity,
     damage: i32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     if damage <= 0 {
         return;
@@ -116,7 +117,7 @@ pub fn resolve_weapon_on_hit(
         .map(|h| h.current <= 0)
         .unwrap_or(true);
 
-    let mut rng = rand::thread_rng();
+
     for affix in &affixes {
         match affix {
             Affix::OnHitIgnite(chance) => {
@@ -160,7 +161,7 @@ pub fn resolve_weapon_on_hit(
             }
             Affix::OnHitKnockback => {
                 if !target_died {
-                    try_knockback(world, grid, spatial_cache, attacker, target, events);
+                    try_knockback(world, grid, spatial_cache, attacker, target, events, rng);
                 }
             }
             Affix::KillHeal(amount) => {
@@ -199,6 +200,7 @@ fn try_knockback(
     attacker: Entity,
     target: Entity,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     let Some((ax, ay)) = crate::queries::get_entity_position(world, attacker) else {
         return;
@@ -247,7 +249,7 @@ fn try_knockback(
         .find(|(_, (p, b))| b.lit && p.x == dest.0 && p.y == dest.1)
         .map(|(id, _)| id);
     if let Some(brazier) = brazier_hit {
-        crate::systems::fire::topple_brazier(world, grid, brazier, events);
+        crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
     }
 }
 
@@ -313,6 +315,12 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
         && world.get::<&crate::components::FearImmune>(target).is_err()
     {
         let frac = hp_after.0 as f32 / hp_after.1 as f32;
+        // NOTE: deliberately still on thread_rng. apply_damage is the single
+        // chokepoint for every damage source, and none of its 10 callers
+        // (projectiles, all three trap kinds, boss slam, fireball, life drain,
+        // barrel blast) carries an Rng — seeding this roll means threading one
+        // through all of them and their callers in turn. Left unseeded rather
+        // than ballooning the diff; see the Bug 4 notes.
         if frac < MORALE_HP_THRESHOLD && rand::thread_rng().gen_bool(MORALE_FLEE_CHANCE) {
             crate::systems::effects::add_effect_to_entity(
                 world,

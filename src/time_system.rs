@@ -3,6 +3,8 @@
 //! Manages game time progression through an event-driven loop where time
 //! jumps forward to the next action completion rather than ticking.
 
+use rand::Rng;
+
 use crate::components::{
     ActionInProgress, ActionType, Actor, EffectType, Health, RangedCooldown, StatusEffects,
 };
@@ -268,6 +270,7 @@ pub fn complete_action(
     current_time: f32,
     clock: &GameClock,
     scheduler: &mut ActionScheduler,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Get the action to complete
     let action = {
@@ -287,7 +290,7 @@ pub fn complete_action(
     );
 
     // Apply action effects
-    let result = apply_action_effects(world, grid, entity, &action.action_type, spatial_cache, events, current_time);
+    let result = apply_action_effects(world, grid, entity, &action.action_type, spatial_cache, events, current_time, rng);
 
     // Clear action (energy regen is now time-based, not action-based)
     if let Ok(mut actor) = world.get::<&mut Actor>(entity) {
@@ -312,17 +315,18 @@ fn apply_action_effects(
     spatial_cache: &mut SpatialCache,
     events: &mut EventQueue,
     current_time: f32,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     match action_type {
-        ActionType::Move { dx, dy, .. } => actions::apply_move(world, grid, entity, *dx, *dy, spatial_cache, events),
+        ActionType::Move { dx, dy, .. } => actions::apply_move(world, grid, entity, *dx, *dy, spatial_cache, events, rng),
         ActionType::Attack { target } => {
-            actions::apply_attack(world, grid, spatial_cache, entity, *target, events)
+            actions::apply_attack(world, grid, spatial_cache, entity, *target, events, rng)
         }
         ActionType::AttackDirection { dx, dy } => {
-            actions::apply_attack_direction(world, grid, spatial_cache, entity, *dx, *dy, events)
+            actions::apply_attack_direction(world, grid, spatial_cache, entity, *dx, *dy, events, rng)
         }
         ActionType::InteractDirection { dx, dy } => {
-            actions::apply_interact_direction(world, grid, entity, *dx, *dy, spatial_cache, events)
+            actions::apply_interact_direction(world, grid, entity, *dx, *dy, spatial_cache, events, rng)
         }
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
@@ -358,7 +362,7 @@ fn apply_action_effects(
             actions::apply_drop_equipped_weapon(world, entity, events)
         }
         ActionType::Cleave => {
-            actions::apply_cleave(world, grid, spatial_cache, entity, events)
+            actions::apply_cleave(world, grid, spatial_cache, entity, events, rng)
         }
         ActionType::ActivateSprint => {
             actions::apply_activate_sprint(world, entity, events)

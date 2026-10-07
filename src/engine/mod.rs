@@ -22,6 +22,8 @@ pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
 
+use rand::Rng;
+
 use crate::audio::AudioManager;
 use crate::components::{
     AbilityType, ActionType, Actor, ClassAbility, Health, PlayerClass, RangerAbilities,
@@ -612,7 +614,6 @@ impl GameEngine {
             for (x, y) in &skeleton_spawns {
                 let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
                 state.spatial_cache.register_entity(skeleton, (*x, *y), true, false);
-                let mut rng = rand::thread_rng();
                 initialization::initialize_single_ai_actor(
                     &mut state.world,
                     &state.grid,
@@ -623,7 +624,7 @@ impl GameEngine {
                     &mut state.active_ai_tracker,
                     &state.spatial_cache,
                     &mut self.events,
-                    &mut rng,
+                    &mut state.rng,
                 );
             }
             // Close loot UI - player must deal with skeleton first
@@ -660,6 +661,7 @@ impl GameEngine {
                 &mut state.active_ai_tracker,
                 &mut state.spatial_cache,
                 &mut self.events,
+                &mut state.rng,
             );
         }
 
@@ -713,6 +715,7 @@ impl GameEngine {
                 game_dt,
                 &mut state.fire_accumulator,
                 &mut state.fov_dirty,
+                &mut state.rng,
             );
 
             // Passive identification of carried/equipped items, paced by the
@@ -1244,6 +1247,7 @@ impl GameEngine {
                 &mut self.vfx,
                 ui_state,
                 self.audio.as_ref(),
+                &mut state.rng,
             );
 
             // Collect skeleton spawn positions before floor transition might invalidate state
@@ -1300,7 +1304,6 @@ impl GameEngine {
                 for (x, y) in &skeleton_spawns {
                     let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
                     state.spatial_cache.register_entity(skeleton, (*x, *y), true, false);
-                    let mut rng = rand::thread_rng();
                     initialization::initialize_single_ai_actor(
                         &mut state.world,
                         &state.grid,
@@ -1311,7 +1314,7 @@ impl GameEngine {
                         &mut state.active_ai_tracker,
                         &state.spatial_cache,
                         &mut self.events,
-                        &mut rng,
+                        &mut state.rng,
                     );
                 }
                 // Close loot UI - player must deal with skeleton first
@@ -1353,6 +1356,7 @@ impl GameEngine {
                         &mut state.active_ai_tracker,
                         &mut state.spatial_cache,
                         &mut self.events,
+                        &mut state.rng,
                     );
                 }
             }
@@ -1482,6 +1486,7 @@ impl GameEngine {
             &mut self.vfx,
             ui_state,
             &mut self.input,
+            &mut state.rng,
         );
     }
 
@@ -1505,6 +1510,7 @@ impl GameEngine {
             &mut self.vfx,
             ui_state,
             &mut self.input,
+            &mut state.rng,
         );
     }
 
@@ -1527,6 +1533,7 @@ impl GameEngine {
             &mut self.events,
             &mut self.vfx,
             ui_state,
+            &mut state.rng,
         );
     }
 
@@ -1551,6 +1558,7 @@ impl GameEngine {
             &mut self.vfx,
             ui_state,
             &mut self.input,
+            &mut state.rng,
         );
     }
 
@@ -1676,6 +1684,7 @@ impl GameEngine {
                 &mut self.vfx,
                 ui_state,
                 self.audio.as_ref(),
+                &mut state.rng,
             );
             state.fov_dirty = true;
 
@@ -1811,7 +1820,6 @@ impl GameEngine {
         steps = steps.min(REST_MAX_STEPS_PER_FRAME);
         self.sleep_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
 
-        let mut rng = rand::thread_rng();
         for _ in 0..steps {
             let Some(ref mut state) = self.state else {
                 self.sleeping = false;
@@ -1856,7 +1864,7 @@ impl GameEngine {
                     &mut state.active_ai_tracker,
                     &mut state.spatial_cache,
                     &mut self.events,
-                    &mut rng,
+                    &mut state.rng,
                 );
                 if !got {
                     self.stop_sleep("You wake up.");
@@ -1885,6 +1893,7 @@ impl GameEngine {
                 &mut self.vfx,
                 ui_state,
                 self.audio.as_ref(),
+                &mut state.rng,
             );
             state.fov_dirty = true;
 
@@ -2052,6 +2061,7 @@ fn spawn_boss_minion(
     active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(world, x, y);
     let _ = world.insert_one(spider, crate::components::BossMinion { boss });
@@ -2071,10 +2081,9 @@ fn spawn_boss_minion(
     }
 
     spatial_cache.register_entity(spider, (x, y), true, false);
-    let mut rng = rand::thread_rng();
     initialization::initialize_single_ai_actor(
         world, grid, spider, player_entity, clock, scheduler,
-        active_ai_tracker, spatial_cache, events, &mut rng,
+        active_ai_tracker, spatial_cache, events, rng,
     );
 }
 
@@ -2092,6 +2101,7 @@ fn activate_class_ability(
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     input_state: &mut InputState,
+    rng: &mut impl Rng,
 ) -> bool {
     // Check if player is idle
     let is_idle = world
@@ -2145,7 +2155,6 @@ fn activate_class_ability(
     }
 
     // Wait for enough energy (this advances time, enemies may act)
-    let mut rng = rand::thread_rng();
     let got_energy = simulation::wait_for_energy(
         world,
         grid,
@@ -2156,7 +2165,7 @@ fn activate_class_ability(
         active_ai_tracker,
         spatial_cache,
         events,
-        &mut rng,
+        rng,
     );
 
     if !got_energy {
@@ -2214,7 +2223,7 @@ fn activate_class_ability(
             active_ai_tracker,
             spatial_cache,
             events,
-            &mut rng,
+            rng,
         );
     }
 
@@ -2235,6 +2244,7 @@ fn activate_secondary_ability(
     events: &mut EventQueue,
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
+    rng: &mut impl Rng,
 ) -> bool {
     use crate::components::SecondaryAbility;
 
@@ -2273,7 +2283,6 @@ fn activate_secondary_ability(
     }
 
     // Wait for enough energy (this advances time, enemies may act)
-    let mut rng = rand::thread_rng();
     let got_energy = simulation::wait_for_energy(
         world,
         grid,
@@ -2284,7 +2293,7 @@ fn activate_secondary_ability(
         active_ai_tracker,
         spatial_cache,
         events,
-        &mut rng,
+        rng,
     );
 
     if !got_energy {
@@ -2321,7 +2330,7 @@ fn activate_secondary_ability(
             active_ai_tracker,
             spatial_cache,
             events,
-            &mut rng,
+            rng,
         );
     }
 
@@ -2350,6 +2359,7 @@ fn activate_learned_ability(
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     input_state: &mut InputState,
+    rng: &mut impl Rng,
 ) -> bool {
     use crate::components::LearnedAbilities;
 
@@ -2424,7 +2434,6 @@ fn activate_learned_ability(
     }
 
     // Untargeted learned cast: wait for energy, then start the action.
-    let mut rng = rand::thread_rng();
     let got_energy = simulation::wait_for_energy(
         world,
         grid,
@@ -2435,7 +2444,7 @@ fn activate_learned_ability(
         active_ai_tracker,
         spatial_cache,
         events,
-        &mut rng,
+        rng,
     );
     if !got_energy {
         let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
@@ -2464,7 +2473,7 @@ fn activate_learned_ability(
             active_ai_tracker,
             spatial_cache,
             events,
-            &mut rng,
+            rng,
         );
     }
 
@@ -2487,6 +2496,7 @@ fn activate_ranger_ability(
     vfx: &mut VfxManager,
     ui_state: &mut GameUiState,
     input_state: &mut InputState,
+    rng: &mut impl Rng,
 ) -> bool {
     use crate::components::RangerAbilities;
     use crate::constants::*;
@@ -2533,10 +2543,9 @@ fn activate_ranger_ability(
     match ability_type {
         AbilityType::Disengage => {
             // Disengage is immediate - no targeting needed
-            let mut rng = rand::thread_rng();
             let got_energy = simulation::wait_for_energy(
                 world, grid, player, energy_cost, game_clock, action_scheduler,
-                active_ai_tracker, spatial_cache, events, &mut rng,
+                active_ai_tracker, spatial_cache, events, rng,
             );
 
             if !got_energy {
@@ -2557,7 +2566,7 @@ fn activate_ranger_ability(
 
                 simulation::advance_until_player_ready(
                     world, grid, player, game_clock, action_scheduler,
-                    active_ai_tracker, spatial_cache, events, &mut rng,
+                    active_ai_tracker, spatial_cache, events, rng,
                 );
             }
 
