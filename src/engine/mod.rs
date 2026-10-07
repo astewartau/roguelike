@@ -583,7 +583,7 @@ impl GameEngine {
         // Process events from remove_dead_entities
         let event_result = {
             profile_scope!("process_events");
-            process_events_with_audio(&mut self.sim_ctx().expect("State checked above"))
+            process_events(&mut self.sim_ctx().expect("State checked above"))
         };
 
         if let Some(direction) = event_result.floor_transition {
@@ -1195,7 +1195,7 @@ impl GameEngine {
                 crate::game::ContainerAction::Opened(_) => {
                     // Takes the whole of `self`, so the borrows above must end
                     // here; they are re-taken below.
-                    let _ = process_events_with_audio(
+                    let _ = process_events(
                         &mut self.sim_ctx().expect("process_input called with state"),
                     );
                 }
