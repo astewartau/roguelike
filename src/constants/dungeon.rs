@@ -52,16 +52,32 @@ pub const SECRET_CHEST_FLOOR_BONUS: u32 = 2;
 /// out noticeably too open and blobby, 47% gives usable pinch points and
 /// free-standing pillars.
 pub const CAVERN_FILL_CHANCE: f64 = 0.47;
-/// Smoothing passes over the seeded grid. Each pass turns a cell to wall when
-/// at least `CAVERN_WALL_NEIGHBOURS` of its 8 neighbours are wall. Five passes
-/// smoothed the pinch points away; four keeps them.
+/// Smoothing passes over the seeded grid. Five passes smoothed the pinch
+/// points away; four keeps them.
 pub const CAVERN_SMOOTH_PASSES: u32 = 4;
-/// Wall neighbours (of 8) needed for a cell to become wall during smoothing.
+/// Wall cells needed in a cell's 3x3 neighbourhood -- the cell itself included,
+/// which is the standard "4-5 rule" -- for it to become wall during smoothing.
+///
+/// Counting only the 8 surrounding cells instead erodes the cave away: at a
+/// 47% seed only ~30% of cells survive the first pass, ~6% the second, and
+/// four passes leave a room that is ~80% open, with none of the pinch points
+/// or pillars the fill/pass tuning is aiming for.
 pub const CAVERN_WALL_NEIGHBOURS: u32 = 5;
+/// How many times to roll a cave before giving up and carving the room plain.
+/// A single roll at room scale can come out anywhere from sealed solid to
+/// fully open, so the carve re-rolls until the open fraction is usable; ten
+/// attempts fail on far less than 1% of rooms.
+pub const CAVERN_CARVE_ATTEMPTS: u32 = 10;
+/// Reject a rolled cave whose main open region is smaller than this fraction
+/// of the room -- anything less is a crawlspace, not a cave.
+pub const CAVERN_MIN_OPEN_FRACTION: f32 = 0.35;
+/// Reject a rolled cave that is more open than this: with nothing left inside
+/// it, it just reads as a rectangular room with soft corners.
+pub const CAVERN_MAX_OPEN_FRACTION: f32 = 0.75;
 /// Rooms smaller than this on either axis fall back to a plain rectangular
 /// carve (with cave floor): cellular automata on a tiny rect just produces
 /// rubble.
-pub const CAVERN_MIN_DIM: i32 = 7;
+pub const CAVERN_MIN_DIM: i32 = 6;
 /// Chance per step that a connector channel wanders perpendicular instead of
 /// heading straight for its target -- straight 1-tile channels read as
 /// obviously artificial against organic cave walls.
@@ -79,8 +95,11 @@ pub const CAVERN_ORE_WALL_CHANCE: f64 = 0.08;
 pub const CAVERN_STALACTITE_CHANCE: f64 = 0.18;
 
 /// Blocking stalagmite clusters per cavern (cover you can shoot over).
-pub const CAVERN_STALAGMITES_MIN: usize = 3;
+/// The count scales with the cave's open area, within these bounds.
+pub const CAVERN_STALAGMITES_MIN: usize = 2;
 pub const CAVERN_STALAGMITES_MAX: usize = 7;
+/// One stalagmite per this many open cave tiles.
+pub const CAVERN_TILES_PER_STALAGMITE: usize = 9;
 /// Glowing mushroom patches per cavern (light sources, flammable).
 pub const CAVERN_MUSHROOMS_MIN: usize = 2;
 pub const CAVERN_MUSHROOMS_MAX: usize = 4;
