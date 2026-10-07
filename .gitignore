@@ -2,7 +2,10 @@
 **/*.rs.bk
 *.pdb
 .DS_Store
-assets/
+# Art and audio packs are licensed and must not be redistributed; see
+# assets/README.md for what goes here and where to get it.
+assets/*
+!assets/README.md
 
 # Puffin profiler captures, saved by hand out of puffin_viewer into the repo
 # root. Large binary blobs with no reason to be versioned.
