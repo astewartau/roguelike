@@ -11,18 +11,19 @@
 //! - Forwarding events to the engine
 //! - Rendering what the engine returns
 
+mod context;
 mod dev_spawning;
 pub mod floor_transition;
 mod game_state;
 pub mod initialization;
 mod simulation;
 
+pub use context::{ActorCtx, SimCtx};
 pub use floor_transition::{can_transition_floor, handle_floor_transition};
 pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
 
-use rand::Rng;
 
 use crate::audio::AudioManager;
 use crate::components::{
@@ -554,7 +555,7 @@ impl GameEngine {
 
         // Now extract state references for the rest
         let state = self.state.as_mut().expect("State checked above");
-        let ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
+        let _ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
 
         // Update animations
         {
@@ -582,22 +583,8 @@ impl GameEngine {
         // Process events from remove_dead_entities
         let event_result = {
             profile_scope!("process_events");
-            process_events_with_audio(
-                &mut self.events,
-                &mut state.world,
-                &state.grid,
-                &mut state.spatial_cache,
-                &mut self.vfx,
-                ui_state,
-                state.player_entity,
-                self.audio.as_ref(),
-            )
+            process_events_with_audio(&mut self.sim_ctx().expect("State checked above"))
         };
-
-        // Collect skeleton spawn positions before floor transition might invalidate state
-        let skeleton_spawns = event_result.skeleton_spawns.clone();
-        let raised_skeletons = event_result.raised_skeletons.clone();
-        let boss_minion_spawns = event_result.boss_minion_spawns.clone();
 
         if let Some(direction) = event_result.floor_transition {
             self.handle_floor_transition(direction, camera);
@@ -606,64 +593,10 @@ impl GameEngine {
             self.input.clear_path();
         }
 
-        // Re-borrow state after floor transition (which may have modified it)
+        self.apply_deferred_spawns(&event_result);
+
+        // Re-borrow state after the floor transition (which may have replaced it)
         let state = self.state.as_mut().expect("State should still exist after floor transition");
-
-        // Spawn skeletons from opened coffins
-        if !skeleton_spawns.is_empty() {
-            for (x, y) in &skeleton_spawns {
-                let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
-                state.spatial_cache.register_entity(skeleton, (*x, *y), true, false);
-                initialization::initialize_single_ai_actor(
-                    &mut state.world,
-                    &state.grid,
-                    skeleton,
-                    state.player_entity,
-                    &state.game_clock,
-                    &mut state.action_scheduler,
-                    &mut state.active_ai_tracker,
-                    &state.spatial_cache,
-                    &mut self.events,
-                    &mut state.rng,
-                );
-            }
-            // Close loot UI - player must deal with skeleton first
-            if let Some(ui_state) = self.ui_state.as_mut() {
-                ui_state.close_chest();
-            }
-        }
-
-        // Spawn friendly skeletons from completed Raise Dead channels
-        for (x, y) in &raised_skeletons {
-            spawn_raised_skeleton(
-                &mut state.world,
-                state.player_entity,
-                *x,
-                *y,
-                &state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-            );
-        }
-
-        // Spawn boss-summoned spiderlings (Mother Silkrot's brood)
-        for (boss, (x, y)) in &boss_minion_spawns {
-            spawn_boss_minion(
-                &mut state.world,
-                &state.grid,
-                *boss,
-                *x,
-                *y,
-                state.player_entity,
-                &state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut state.rng,
-            );
-        }
 
         // Visual lerping
         {
@@ -837,20 +770,10 @@ impl GameEngine {
     /// Process UI actions from the UI layer.
     /// Does nothing if not playing.
     pub fn process_ui_actions(&mut self, actions: &UiActions) {
-        let Some(ref mut state) = self.state else { return };
-        let ui_state = self.ui_state.as_ref().expect("UI state should exist when state exists");
-
-        let ui_result = process_ui_actions(
-            &mut state.world,
-            &mut state.grid,
-            state.player_entity,
-            actions,
-            &mut self.dev_menu,
-            ui_state,
-            &mut self.events,
-            state.game_clock.time,
-            &mut state.rng,
-        );
+        let ui_result = {
+            let Some((mut ctx, dev_menu)) = self.sim_ctx_and_dev_menu() else { return };
+            process_ui_actions(&mut ctx, actions, dev_menu)
+        };
 
         // Handle ability activation from a hotbar slot
         if let Some(ability_type) = actions.ability_to_use {
@@ -1103,6 +1026,74 @@ impl GameEngine {
 
     // --- Private methods ---
 
+    /// Bundle the engine- and state-owned simulation fields into a [`SimCtx`].
+    ///
+    /// `None` on the start screen, where there is no `GameState`. The returned
+    /// context borrows all of `self`, so build it in the narrowest scope that
+    /// covers the simulation call and let it drop before touching `self` again.
+    fn sim_ctx(&mut self) -> Option<SimCtx<'_>> {
+        self.sim_ctx_and_dev_menu().map(|(ctx, _)| ctx)
+    }
+
+    /// Apply the spawns an event pass deferred to the engine: skeletons from
+    /// opened coffins, companions from completed Raise Dead channels, and
+    /// boss-summoned minions. Deferred because spawning needs `&mut` access to
+    /// state the event loop is still reading.
+    fn apply_deferred_spawns(&mut self, result: &TurnExecutionResult) {
+        if result.skeleton_spawns.is_empty()
+            && result.raised_skeletons.is_empty()
+            && result.boss_minion_spawns.is_empty()
+        {
+            return;
+        }
+        let Some(mut ctx) = self.sim_ctx() else { return };
+
+        // Skeletons from opened coffins
+        for &(x, y) in &result.skeleton_spawns {
+            let skeleton = spawning::enemies::SKELETON.spawn(ctx.world, x, y);
+            ctx.spatial.register_entity(skeleton, (x, y), true, false);
+            initialization::initialize_single_ai_actor(&mut ctx.actors(), skeleton);
+        }
+        if !result.skeleton_spawns.is_empty() {
+            // Close loot UI - player must deal with skeleton first
+            ctx.ui.close_chest();
+        }
+
+        // Friendly skeletons from completed Raise Dead channels
+        for &(x, y) in &result.raised_skeletons {
+            spawn_raised_skeleton(&mut ctx.actors(), x, y);
+        }
+
+        // Boss-summoned spiderlings (Mother Silkrot's brood)
+        for &(boss, (x, y)) in &result.boss_minion_spawns {
+            spawn_boss_minion(&mut ctx.actors(), boss, x, y);
+        }
+    }
+
+    /// [`Self::sim_ctx`] paired with the dev menu. The dev menu is engine-owned
+    /// but isn't simulation state, so it stays out of `SimCtx`; this hands out
+    /// both halves of the split borrow at once.
+    fn sim_ctx_and_dev_menu(&mut self) -> Option<(SimCtx<'_>, &mut DevMenu)> {
+        let state = self.state.as_mut()?;
+        let ui = self.ui_state.as_mut()?;
+        let ctx = SimCtx {
+            world: &mut state.world,
+            grid: &mut state.grid,
+            player: state.player_entity,
+            clock: &mut state.game_clock,
+            scheduler: &mut state.action_scheduler,
+            tracker: &mut state.active_ai_tracker,
+            spatial: &mut state.spatial_cache,
+            events: &mut self.events,
+            rng: &mut state.rng,
+            vfx: &mut self.vfx,
+            ui,
+            input: &mut self.input,
+            audio: self.audio.as_ref(),
+        };
+        Some((ctx, &mut self.dev_menu))
+    }
+
     /// Process input. Only called when playing (state must exist).
     fn process_input(&mut self, camera: &mut Camera) -> InputResult {
         let state = self.state.as_mut().expect("process_input called without state");
@@ -1189,32 +1180,31 @@ impl GameEngine {
 
         // Enter key: container interaction (chests, bones, ground items)
         if frame.enter_pressed {
-            match crate::game::handle_enter_key_container(
+            let container_action = crate::game::handle_enter_key_container(
                 &mut state.world,
                 state.player_entity,
                 ui_state.open_chest,
                 &mut self.events,
-            ) {
+            );
+            match container_action {
                 crate::game::ContainerAction::TookAll(_) => {
                     ui_state.close_chest();
                     // Clean up empty ground item piles
                     systems::cleanup_empty_ground_piles(&mut state.world);
                 }
                 crate::game::ContainerAction::Opened(_) => {
+                    // Takes the whole of `self`, so the borrows above must end
+                    // here; they are re-taken below.
                     let _ = process_events_with_audio(
-                        &mut self.events,
-                        &mut state.world,
-                        &state.grid,
-                        &mut state.spatial_cache,
-                        &mut self.vfx,
-                        ui_state,
-                        state.player_entity,
-                        self.audio.as_ref(),
+                        &mut self.sim_ctx().expect("process_input called with state"),
                     );
                 }
                 crate::game::ContainerAction::None => {}
             }
         }
+
+        let state = self.state.as_mut().expect("process_input called without state");
+        let ui_state = self.ui_state.as_mut().expect("process_input called without ui_state");
 
         // Player dead - just handle drag
         if frame.player_dead {
@@ -1236,25 +1226,11 @@ impl GameEngine {
             }
 
             let turn_result = execute_player_intent(
-                &mut state.world,
-                &state.grid,
-                state.player_entity,
+                &mut self.sim_ctx().expect("process_input called with state"),
                 intent,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut self.vfx,
-                ui_state,
-                self.audio.as_ref(),
-                &mut state.rng,
             );
 
-            // Collect skeleton spawn positions before floor transition might invalidate state
-            let skeleton_spawns = turn_result.skeleton_spawns.clone();
-            let raised_skeletons = turn_result.raised_skeletons.clone();
-            let boss_minion_spawns = turn_result.boss_minion_spawns.clone();
+            let state = self.state.as_mut().expect("State should exist");
 
             match turn_result.turn_result {
                 TurnResult::Started => {
@@ -1299,68 +1275,7 @@ impl GameEngine {
                 self.input.clear_path();
             }
 
-            // Spawn skeletons from opened coffins
-            if !skeleton_spawns.is_empty() {
-                let state = self.state.as_mut().expect("State should exist");
-                for (x, y) in &skeleton_spawns {
-                    let skeleton = spawning::enemies::SKELETON.spawn(&mut state.world, *x, *y);
-                    state.spatial_cache.register_entity(skeleton, (*x, *y), true, false);
-                    initialization::initialize_single_ai_actor(
-                        &mut state.world,
-                        &state.grid,
-                        skeleton,
-                        state.player_entity,
-                        &state.game_clock,
-                        &mut state.action_scheduler,
-                        &mut state.active_ai_tracker,
-                        &state.spatial_cache,
-                        &mut self.events,
-                        &mut state.rng,
-                    );
-                }
-                // Close loot UI - player must deal with skeleton first
-                if let Some(ui_state) = self.ui_state.as_mut() {
-                    ui_state.close_chest();
-                }
-            }
-
-            // Spawn friendly skeletons from completed Raise Dead channels
-            if !raised_skeletons.is_empty() {
-                let state = self.state.as_mut().expect("State should exist");
-                for (x, y) in &raised_skeletons {
-                    spawn_raised_skeleton(
-                        &mut state.world,
-                        state.player_entity,
-                        *x,
-                        *y,
-                        &state.game_clock,
-                        &mut state.action_scheduler,
-                        &mut state.active_ai_tracker,
-                        &mut state.spatial_cache,
-                    );
-                }
-            }
-
-            // Spawn boss-summoned spiderlings
-            if !boss_minion_spawns.is_empty() {
-                let state = self.state.as_mut().expect("State should exist");
-                for (boss, (x, y)) in &boss_minion_spawns {
-                    spawn_boss_minion(
-                        &mut state.world,
-                        &state.grid,
-                        *boss,
-                        *x,
-                        *y,
-                        state.player_entity,
-                        &state.game_clock,
-                        &mut state.action_scheduler,
-                        &mut state.active_ai_tracker,
-                        &mut state.spatial_cache,
-                        &mut self.events,
-                        &mut state.rng,
-                    );
-                }
-            }
+            self.apply_deferred_spawns(&turn_result);
         }
 
         // Mouse drag for camera
@@ -1378,18 +1293,12 @@ impl GameEngine {
             return;
         };
 
+        let mouse_pos = self.input.mouse_pos;
         let needs_vfx = dev_spawning::spawn_at_cursor(
+            &mut state.actor_ctx(&mut self.events),
             tool,
-            self.input.mouse_pos,
+            mouse_pos,
             camera,
-            &mut state.world,
-            &mut state.grid,
-            state.player_entity,
-            &state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &state.spatial_cache,
-            &mut self.events,
         );
 
         if needs_vfx {
@@ -1467,100 +1376,23 @@ impl GameEngine {
 
     /// Activate a learned spell (studied scroll) or Raise Dead.
     fn try_use_learned_ability(&mut self, ability_type: AbilityType) {
-        let Some(ref mut state) = self.state else {
-            return;
-        };
-        let Some(ref mut ui_state) = self.ui_state else {
-            return;
-        };
-
-        activate_learned_ability(
-            &mut state.world,
-            &state.grid,
-            state.player_entity,
-            ability_type,
-            &mut state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &mut state.spatial_cache,
-            &mut self.events,
-            &mut self.vfx,
-            ui_state,
-            &mut self.input,
-            &mut state.rng,
-        );
+        let Some(mut ctx) = self.sim_ctx() else { return };
+        activate_learned_ability(&mut ctx, ability_type);
     }
 
     fn try_use_class_ability(&mut self) {
-        let Some(ref mut state) = self.state else {
-            return;
-        };
-        let Some(ref mut ui_state) = self.ui_state else {
-            return;
-        };
-
-        activate_class_ability(
-            &mut state.world,
-            &state.grid,
-            state.player_entity,
-            &mut state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &mut state.spatial_cache,
-            &mut self.events,
-            &mut self.vfx,
-            ui_state,
-            &mut self.input,
-            &mut state.rng,
-        );
+        let Some(mut ctx) = self.sim_ctx() else { return };
+        activate_class_ability(&mut ctx);
     }
 
     fn try_use_secondary_ability(&mut self) {
-        let Some(ref mut state) = self.state else {
-            return;
-        };
-        let Some(ref mut ui_state) = self.ui_state else {
-            return;
-        };
-
-        activate_secondary_ability(
-            &mut state.world,
-            &state.grid,
-            state.player_entity,
-            &mut state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &mut state.spatial_cache,
-            &mut self.events,
-            &mut self.vfx,
-            ui_state,
-            &mut state.rng,
-        );
+        let Some(mut ctx) = self.sim_ctx() else { return };
+        activate_secondary_ability(&mut ctx);
     }
 
     fn try_use_ranger_ability(&mut self, ability_index: usize) {
-        let Some(ref mut state) = self.state else {
-            return;
-        };
-        let Some(ref mut ui_state) = self.ui_state else {
-            return;
-        };
-
-        activate_ranger_ability(
-            &mut state.world,
-            &state.grid,
-            state.player_entity,
-            ability_index,
-            &mut state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &mut state.spatial_cache,
-            &mut self.events,
-            &mut self.vfx,
-            ui_state,
-            &mut self.input,
-            &mut state.rng,
-        );
+        let Some(mut ctx) = self.sim_ctx() else { return };
+        activate_ranger_ability(&mut ctx, ability_index);
     }
 
     /// Toggle resting. Pressing Rest while already resting cancels it; otherwise
@@ -1647,11 +1479,7 @@ impl GameEngine {
         self.rest_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
 
         for _ in 0..steps {
-            let Some(ref mut state) = self.state else {
-                self.resting = false;
-                return;
-            };
-            let Some(ref mut ui_state) = self.ui_state else {
+            let Some(ref state) = self.state else {
                 self.resting = false;
                 return;
             };
@@ -1672,37 +1500,24 @@ impl GameEngine {
                 return;
             }
 
-            let result = execute_player_intent(
-                &mut state.world,
-                &state.grid,
-                state.player_entity,
-                crate::systems::player_input::PlayerIntent::Wait,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut self.vfx,
-                ui_state,
-                self.audio.as_ref(),
-                &mut state.rng,
-            );
-            state.fov_dirty = true;
-
-            // A Raise Dead channel can tick over during rest's auto-Waits;
-            // don't drop the skeleton on the floor.
-            for (x, y) in &result.raised_skeletons {
-                spawn_raised_skeleton(
-                    &mut state.world,
-                    state.player_entity,
-                    *x,
-                    *y,
-                    &state.game_clock,
-                    &mut state.action_scheduler,
-                    &mut state.active_ai_tracker,
-                    &mut state.spatial_cache,
+            let result = {
+                let Some(mut ctx) = self.sim_ctx() else {
+                    self.resting = false;
+                    return;
+                };
+                let result = execute_player_intent(
+                    &mut ctx,
+                    crate::systems::player_input::PlayerIntent::Wait,
                 );
-            }
+
+                // A Raise Dead channel can tick over during rest's auto-Waits;
+                // don't drop the skeleton on the floor.
+                for &(x, y) in &result.raised_skeletons {
+                    spawn_raised_skeleton(&mut ctx.actors(), x, y);
+                }
+                result
+            };
+            self.state.as_mut().expect("state checked above").fov_dirty = true;
 
             if result.turn_result != simulation::TurnResult::Started
                 || result.enemy_spotted_player
@@ -1843,11 +1658,7 @@ impl GameEngine {
         self.sleep_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
 
         for _ in 0..steps {
-            let Some(ref mut state) = self.state else {
-                self.sleeping = false;
-                return;
-            };
-            let Some(ref mut ui_state) = self.ui_state else {
+            let Some(ref state) = self.state else {
                 self.sleeping = false;
                 return;
             };
@@ -1876,18 +1687,13 @@ impl GameEngine {
                 .map(|a| a.energy)
                 .unwrap_or(0);
             if energy <= 0 {
-                let got = simulation::wait_for_energy(
-                    &mut state.world,
-                    &state.grid,
-                    state.player_entity,
-                    1,
-                    &mut state.game_clock,
-                    &mut state.action_scheduler,
-                    &mut state.active_ai_tracker,
-                    &mut state.spatial_cache,
-                    &mut self.events,
-                    &mut state.rng,
-                );
+                let got = {
+                    let Some(mut ctx) = self.sim_ctx() else {
+                        self.sleeping = false;
+                        return;
+                    };
+                    simulation::wait_for_energy(&mut ctx.actors(), 1)
+                };
                 if !got {
                     self.stop_sleep("You wake up.");
                     return;
@@ -1896,43 +1702,30 @@ impl GameEngine {
 
             // Any HP drop while asleep wakes the player (attacks, burning,
             // traps — starvation is handled separately in the survival tick).
-            let hp_before = state
-                .world
-                .get::<&Health>(state.player_entity)
-                .map(|h| h.current)
+            let hp_before = self
+                .state
+                .as_ref()
+                .and_then(|s| s.world.get::<&Health>(s.player_entity).ok().map(|h| h.current))
                 .unwrap_or(0);
 
-            let result = execute_player_intent(
-                &mut state.world,
-                &state.grid,
-                state.player_entity,
-                crate::systems::player_input::PlayerIntent::Wait,
-                &mut state.game_clock,
-                &mut state.action_scheduler,
-                &mut state.active_ai_tracker,
-                &mut state.spatial_cache,
-                &mut self.events,
-                &mut self.vfx,
-                ui_state,
-                self.audio.as_ref(),
-                &mut state.rng,
-            );
-            state.fov_dirty = true;
-
-            // As with rest: a Raise Dead channel completing during sleep's
-            // auto-Waits still spawns the skeleton.
-            for (x, y) in &result.raised_skeletons {
-                spawn_raised_skeleton(
-                    &mut state.world,
-                    state.player_entity,
-                    *x,
-                    *y,
-                    &state.game_clock,
-                    &mut state.action_scheduler,
-                    &mut state.active_ai_tracker,
-                    &mut state.spatial_cache,
+            let result = {
+                let Some(mut ctx) = self.sim_ctx() else {
+                    self.sleeping = false;
+                    return;
+                };
+                let result = execute_player_intent(
+                    &mut ctx,
+                    crate::systems::player_input::PlayerIntent::Wait,
                 );
-            }
+
+                // As with rest: a Raise Dead channel completing during sleep's
+                // auto-Waits still spawns the skeleton.
+                for &(x, y) in &result.raised_skeletons {
+                    spawn_raised_skeleton(&mut ctx.actors(), x, y);
+                }
+                result
+            };
+            self.state.as_mut().expect("state checked above").fov_dirty = true;
 
             let hp_after = self
                 .state
@@ -1971,28 +1764,18 @@ impl GameEngine {
             return;
         }
 
-        // Take ownership of grid for transition
-        let current_grid = std::mem::replace(
-            &mut state.grid,
-            crate::grid::Grid::new(1, 1),
-        );
-
+        // `handle_floor_transition` swaps the new grid into `state.grid` itself.
+        let (current_floor, seed) = (state.current_floor, state.seed);
+        let mut floors = std::mem::take(&mut state.floors);
         let result = handle_floor_transition(
-            &mut state.world,
-            current_grid,
-            &mut state.floors,
-            state.current_floor,
-            state.seed,
+            &mut state.actor_ctx(&mut self.events),
+            &mut floors,
+            current_floor,
+            seed,
             direction,
-            state.player_entity,
-            &state.game_clock,
-            &mut state.action_scheduler,
-            &mut state.active_ai_tracker,
-            &mut state.spatial_cache,
-            &mut self.events,
         );
+        state.floors = floors;
 
-        state.grid = result.new_grid;
         state.current_floor = result.new_floor;
         state.fov_dirty = true; // New floor needs FOV calculation
 
@@ -2026,17 +1809,10 @@ fn player_too_hungry_to_recover(world: &hecs::World, player: Entity) -> bool {
 /// infrastructure: no hostile AI, walkable (no BlocksMovement), `TamedBy` +
 /// `CompanionAI` for defensive follow behavior, plus the `RaisedUndead`
 /// marker that counts against the caster's INT-scaled control cap.
-#[allow(clippy::too_many_arguments)]
-fn spawn_raised_skeleton(
-    world: &mut hecs::World,
-    owner: Entity,
-    x: i32,
-    y: i32,
-    clock: &crate::time_system::GameClock,
-    scheduler: &mut crate::time_system::ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-) {
+fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
+    let ActorCtx { world, player: owner, clock, scheduler, tracker: active_ai_tracker, spatial: spatial_cache, .. } = ctx;
+    let (world, owner) = (&mut **world, *owner);
+
     let skeleton = spawning::enemies::SKELETON.spawn(world, x, y);
 
     // Convert the hostile stat block into an ally (same path as taming).
@@ -2070,31 +1846,24 @@ fn spawn_raised_skeleton(
 
 /// Spawn a boss-summoned Lesser Giant Spider at (x, y): hostile, already
 /// alerted to the player, and counted against the boss's minion cap.
-#[allow(clippy::too_many_arguments)]
-fn spawn_boss_minion(
-    world: &mut hecs::World,
-    grid: &crate::grid::Grid,
-    boss: Entity,
-    x: i32,
-    y: i32,
-    player_entity: Entity,
-    clock: &crate::time_system::GameClock,
-    scheduler: &mut crate::time_system::ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
-    let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(world, x, y);
-    let _ = world.insert_one(spider, crate::components::BossMinion { boss });
+fn spawn_boss_minion(ctx: &mut ActorCtx, boss: Entity, x: i32, y: i32) {
+    let player_entity = ctx.player;
+    let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(ctx.world, x, y);
+    let _ = ctx
+        .world
+        .insert_one(spider, crate::components::BossMinion { boss });
 
     // Summoned mid-fight: wide awake and already hunting the summoner's prey.
-    let _ = world.remove_one::<crate::components::Asleep>(spider);
-    let player_pos = world
+    let _ = ctx.world.remove_one::<crate::components::Asleep>(spider);
+    let player_pos = ctx
+        .world
         .get::<&crate::components::Position>(player_entity)
         .map(|p| (p.x, p.y))
         .ok();
-    if let Ok(mut ai) = world.get::<&mut crate::components::ChaseAI>(spider) {
+    if let Ok(mut ai) = ctx
+        .world
+        .get::<&mut crate::components::ChaseAI>(spider)
+    {
         ai.state = crate::components::AIState::Chasing;
         ai.add_threat(player_entity, crate::constants::WAKE_THREAT);
         if let Some(pos) = player_pos {
@@ -2102,31 +1871,17 @@ fn spawn_boss_minion(
         }
     }
 
-    spatial_cache.register_entity(spider, (x, y), true, false);
-    initialization::initialize_single_ai_actor(
-        world, grid, spider, player_entity, clock, scheduler,
-        active_ai_tracker, spatial_cache, events, rng,
-    );
+    ctx.spatial.register_entity(spider, (x, y), true, false);
+    initialization::initialize_single_ai_actor(ctx, spider);
 }
 
 /// Try to activate the player's class ability.
 /// Returns true if the ability was successfully activated.
-fn activate_class_ability(
-    world: &mut hecs::World,
-    grid: &crate::grid::Grid,
-    player: Entity,
-    game_clock: &mut crate::time_system::GameClock,
-    action_scheduler: &mut crate::time_system::ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    input_state: &mut InputState,
-    rng: &mut impl Rng,
-) -> bool {
+fn activate_class_ability(ctx: &mut SimCtx) -> bool {
+    let player = ctx.player;
     // Check if player is idle
-    let is_idle = world
+    let is_idle = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.current_action.is_none())
         .unwrap_or(false);
@@ -2136,7 +1891,8 @@ fn activate_class_ability(
     }
 
     // Get ability info
-    let ability_info = world
+    let ability_info = ctx
+        .world
         .get::<&ClassAbility>(player)
         .ok()
         .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
@@ -2150,7 +1906,8 @@ fn activate_class_ability(
     }
 
     // Check if player can ever afford this (max_energy >= cost)
-    let can_afford = world
+    let can_afford = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.max_energy >= energy_cost)
         .unwrap_or(false);
@@ -2161,7 +1918,7 @@ fn activate_class_ability(
 
     // Tame and LifeDrain abilities enter targeting mode instead of executing immediately
     if ability_type == AbilityType::Tame {
-        input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+        ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
             ability_type: AbilityType::Tame,
             max_range: crate::constants::TAME_RANGE,
         });
@@ -2169,7 +1926,7 @@ fn activate_class_ability(
     }
 
     if ability_type == AbilityType::LifeDrain {
-        input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+        ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
             ability_type: AbilityType::LifeDrain,
             max_range: crate::constants::LIFE_DRAIN_RANGE,
         });
@@ -2177,22 +1934,11 @@ fn activate_class_ability(
     }
 
     // Wait for enough energy (this advances time, enemies may act)
-    let got_energy = simulation::wait_for_energy(
-        world,
-        grid,
-        player,
-        energy_cost,
-        game_clock,
-        action_scheduler,
-        active_ai_tracker,
-        spatial_cache,
-        events,
-        rng,
-    );
+    let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
 
     if !got_energy {
         // Player died or something went wrong during wait
-        let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+        let _ = process_events(ctx);
         return false;
     }
 
@@ -2221,57 +1967,32 @@ fn activate_class_ability(
     };
 
     // Start the action
-    let start_result = time_system::start_action(
-        world,
-        player,
-        action_type,
-        game_clock,
-        action_scheduler,
-    );
+    let start_result =
+        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
 
     if start_result.is_ok() {
         // Start cooldown
-        if let Ok(mut ability) = world.get::<&mut ClassAbility>(player) {
+        if let Ok(mut ability) = ctx.world.get::<&mut ClassAbility>(player) {
             ability.start_cooldown();
         }
 
         // Advance time and process events
-        simulation::advance_until_player_ready(
-            world,
-            grid,
-            player,
-            game_clock,
-            action_scheduler,
-            active_ai_tracker,
-            spatial_cache,
-            events,
-            rng,
-        );
+        simulation::advance_until_player_ready(&mut ctx.actors());
     }
 
-    let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+    let _ = process_events(ctx);
 
     start_result.is_ok()
 }
 
 /// Activate Druid's secondary ability (Barkskin) when E is pressed.
-fn activate_secondary_ability(
-    world: &mut hecs::World,
-    grid: &crate::grid::Grid,
-    player: Entity,
-    game_clock: &mut crate::time_system::GameClock,
-    action_scheduler: &mut crate::time_system::ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    rng: &mut impl Rng,
-) -> bool {
+fn activate_secondary_ability(ctx: &mut SimCtx) -> bool {
+    let player = ctx.player;
     use crate::components::SecondaryAbility;
 
     // Check if player is idle
-    let is_idle = world
+    let is_idle = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.current_action.is_none())
         .unwrap_or(false);
@@ -2281,7 +2002,8 @@ fn activate_secondary_ability(
     }
 
     // Get secondary ability info (only Druid has this)
-    let ability_info = world
+    let ability_info = ctx
+        .world
         .get::<&SecondaryAbility>(player)
         .ok()
         .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
@@ -2295,7 +2017,8 @@ fn activate_secondary_ability(
     }
 
     // Check if player can ever afford this (max_energy >= cost)
-    let can_afford = world
+    let can_afford = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.max_energy >= energy_cost)
         .unwrap_or(false);
@@ -2305,22 +2028,11 @@ fn activate_secondary_ability(
     }
 
     // Wait for enough energy (this advances time, enemies may act)
-    let got_energy = simulation::wait_for_energy(
-        world,
-        grid,
-        player,
-        energy_cost,
-        game_clock,
-        action_scheduler,
-        active_ai_tracker,
-        spatial_cache,
-        events,
-        rng,
-    );
+    let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
 
     if !got_energy {
         // Player died or something went wrong during wait
-        let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+        let _ = process_events(ctx);
         return false;
     }
 
@@ -2333,30 +2045,15 @@ fn activate_secondary_ability(
     };
 
     // Start the action
-    let start_result = time_system::start_action(
-        world,
-        player,
-        action_type,
-        game_clock,
-        action_scheduler,
-    );
+    let start_result =
+        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
 
     if start_result.is_ok() {
         // Advance time and process events
-        simulation::advance_until_player_ready(
-            world,
-            grid,
-            player,
-            game_clock,
-            action_scheduler,
-            active_ai_tracker,
-            spatial_cache,
-            events,
-            rng,
-        );
+        simulation::advance_until_player_ready(&mut ctx.actors());
     }
 
-    let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+    let _ = process_events(ctx);
 
     start_result.is_ok()
 }
@@ -2367,26 +2064,13 @@ fn activate_secondary_ability(
 /// mode; the click then flows through the normal intent path. Untargeted
 /// spells start a `CastLearnedSpell` action immediately. Cooldowns start in
 /// `apply_cast_learned_spell` / `apply_start_raise_dead` on success.
-#[allow(clippy::too_many_arguments)]
-fn activate_learned_ability(
-    world: &mut hecs::World,
-    grid: &crate::grid::Grid,
-    player: Entity,
-    ability_type: AbilityType,
-    game_clock: &mut crate::time_system::GameClock,
-    action_scheduler: &mut crate::time_system::ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    input_state: &mut InputState,
-    rng: &mut impl Rng,
-) -> bool {
+fn activate_learned_ability(ctx: &mut SimCtx, ability_type: AbilityType) -> bool {
+    let player = ctx.player;
     use crate::components::LearnedAbilities;
 
     // Check if player is idle
-    let is_idle = world
+    let is_idle = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.current_action.is_none())
         .unwrap_or(false);
@@ -2395,7 +2079,8 @@ fn activate_learned_ability(
     }
 
     // Look up the spell entry (must be known and off cooldown)
-    let is_ready = world
+    let is_ready = ctx
+        .world
         .get::<&LearnedAbilities>(player)
         .ok()
         .and_then(|la| la.get(ability_type).map(|s| s.cooldown_remaining <= 0.0));
@@ -2408,7 +2093,8 @@ fn activate_learned_ability(
 
     // Check if player can ever afford this (max_energy >= cost)
     let energy_cost = ability_type.energy_cost();
-    let can_afford = world
+    let can_afford = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.max_energy >= energy_cost)
         .unwrap_or(false);
@@ -2420,11 +2106,11 @@ fn activate_learned_ability(
     match ability_type {
         AbilityType::RaiseDead => {
             // Enforce the INT-scaled control cap up front, with feedback.
-            let int = crate::queries::effective_stats(world, player).intelligence;
+            let int = crate::queries::effective_stats(ctx.world, player).intelligence;
             let cap = crate::constants::raise_dead_cap(int);
-            let active = systems::actions::raised_undead_count(world);
+            let active = systems::actions::raised_undead_count(ctx.world);
             if active >= cap {
-                ui_state.message_log.system(format!(
+                ctx.ui.message_log.system(format!(
                     "You cannot control more than {} raised skeleton{} (1 + 1 per {} INT above 10).",
                     cap,
                     if cap == 1 { "" } else { "s" },
@@ -2432,21 +2118,21 @@ fn activate_learned_ability(
                 ));
                 return false;
             }
-            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
                 ability_type: AbilityType::RaiseDead,
                 max_range: crate::constants::RAISE_DEAD_RANGE,
             });
             return true;
         }
         AbilityType::LearnedBlink => {
-            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
                 ability_type: AbilityType::LearnedBlink,
-                max_range: systems::actions::scaled_blink_range(world, player),
+                max_range: systems::actions::scaled_blink_range(ctx.world, player),
             });
             return true;
         }
         AbilityType::LearnedFireball => {
-            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
                 ability_type: AbilityType::LearnedFireball,
                 max_range: crate::constants::FIREBALL_RANGE,
             });
@@ -2456,75 +2142,42 @@ fn activate_learned_ability(
     }
 
     // Untargeted learned cast: wait for energy, then start the action.
-    let got_energy = simulation::wait_for_energy(
-        world,
-        grid,
-        player,
-        energy_cost,
-        game_clock,
-        action_scheduler,
-        active_ai_tracker,
-        spatial_cache,
-        events,
-        rng,
-    );
+    let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
     if !got_energy {
-        let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+        let _ = process_events(ctx);
         return false;
     }
 
     let start_result = time_system::start_action(
-        world,
+        ctx.world,
         player,
         ActionType::CastLearnedSpell {
             ability: ability_type,
             target_x: 0,
             target_y: 0,
         },
-        game_clock,
-        action_scheduler,
+        ctx.clock,
+        ctx.scheduler,
     );
 
     if start_result.is_ok() {
-        simulation::advance_until_player_ready(
-            world,
-            grid,
-            player,
-            game_clock,
-            action_scheduler,
-            active_ai_tracker,
-            spatial_cache,
-            events,
-            rng,
-        );
+        simulation::advance_until_player_ready(&mut ctx.actors());
     }
 
-    let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+    let _ = process_events(ctx);
 
     start_result.is_ok()
 }
 
 /// Activate a Ranger ability by index (0-3 for keys 1-4).
-fn activate_ranger_ability(
-    world: &mut hecs::World,
-    grid: &crate::grid::Grid,
-    player: Entity,
-    ability_index: usize,
-    game_clock: &mut crate::time_system::GameClock,
-    action_scheduler: &mut crate::time_system::ActionScheduler,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    vfx: &mut VfxManager,
-    ui_state: &mut GameUiState,
-    input_state: &mut InputState,
-    rng: &mut impl Rng,
-) -> bool {
+fn activate_ranger_ability(ctx: &mut SimCtx, ability_index: usize) -> bool {
+    let player = ctx.player;
     use crate::components::RangerAbilities;
     use crate::constants::*;
 
     // Check if player is idle
-    let is_idle = world
+    let is_idle = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.current_action.is_none())
         .unwrap_or(false);
@@ -2534,7 +2187,8 @@ fn activate_ranger_ability(
     }
 
     // Get Ranger abilities component
-    let ability_info = world
+    let ability_info = ctx
+        .world
         .get::<&RangerAbilities>(player)
         .ok()
         .and_then(|ra| ra.get(ability_index).cloned());
@@ -2552,7 +2206,8 @@ fn activate_ranger_ability(
     let energy_cost = ability_type.energy_cost();
 
     // Check if player can afford this
-    let can_afford = world
+    let can_afford = ctx
+        .world
         .get::<&Actor>(player)
         .map(|a| a.max_energy >= energy_cost)
         .unwrap_or(false);
@@ -2565,39 +2220,37 @@ fn activate_ranger_ability(
     match ability_type {
         AbilityType::Disengage => {
             // Disengage is immediate - no targeting needed
-            let got_energy = simulation::wait_for_energy(
-                world, grid, player, energy_cost, game_clock, action_scheduler,
-                active_ai_tracker, spatial_cache, events, rng,
-            );
+            let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
 
             if !got_energy {
-                let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+                let _ = process_events(ctx);
                 return false;
             }
 
             // Start the action
             let start_result = time_system::start_action(
-                world, player, ActionType::Disengage, game_clock, action_scheduler,
+                ctx.world,
+                player,
+                ActionType::Disengage,
+                ctx.clock,
+                ctx.scheduler,
             );
 
             if start_result.is_ok() {
                 // Start cooldown
-                if let Ok(mut ra) = world.get::<&mut RangerAbilities>(player) {
+                if let Ok(mut ra) = ctx.world.get::<&mut RangerAbilities>(player) {
                     ra.start_cooldown(ability_index);
                 }
 
-                simulation::advance_until_player_ready(
-                    world, grid, player, game_clock, action_scheduler,
-                    active_ai_tracker, spatial_cache, events, rng,
-                );
+                simulation::advance_until_player_ready(&mut ctx.actors());
             }
 
-            let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+            let _ = process_events(ctx);
             start_result.is_ok()
         }
         AbilityType::Tumble => {
             // Enter targeting mode
-            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
                 ability_type: AbilityType::Tumble,
                 max_range: TUMBLE_DISTANCE,
             });
@@ -2605,7 +2258,7 @@ fn activate_ranger_ability(
         }
         AbilityType::SnareTrap => {
             // Enter targeting mode (adjacent only)
-            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
                 ability_type: AbilityType::SnareTrap,
                 max_range: SNARE_TRAP_RANGE,
             });
@@ -2613,7 +2266,7 @@ fn activate_ranger_ability(
         }
         AbilityType::CripplingShot => {
             // Enter targeting mode (bow range)
-            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
                 ability_type: AbilityType::CripplingShot,
                 max_range: BOW_RANGE,
             });
@@ -2762,13 +2415,31 @@ mod tests {
         let mut world = hecs::World::new();
         let owner = world.spawn((crate::components::Position::new(1, 1),));
 
-        let clock = crate::time_system::GameClock::new();
+        let mut clock = crate::time_system::GameClock::new();
         let mut scheduler = crate::time_system::ActionScheduler::new();
         let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
         let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+        let mut rng = {
+            use rand::SeedableRng;
+            rand::rngs::StdRng::seed_from_u64(1)
+        };
+        let mut grid = crate::grid::Grid::new_floor(20, 20, 0, &mut rng);
 
         spawn_raised_skeleton(
-            &mut world, owner, 2, 1, &clock, &mut scheduler, &mut tracker, &mut cache,
+            &mut ActorCtx {
+                world: &mut world,
+                grid: &mut grid,
+                player: owner,
+                clock: &mut clock,
+                scheduler: &mut scheduler,
+                tracker: &mut tracker,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
+            2,
+            1,
         );
 
         let (skeleton, _) = world

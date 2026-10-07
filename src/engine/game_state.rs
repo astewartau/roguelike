@@ -132,6 +132,22 @@ impl GameState {
         }
     }
 
+    /// Bundle this state's simulation fields with the engine-owned event queue
+    /// into an [`ActorCtx`], so callers don't have to spell the split out.
+    pub fn actor_ctx<'a>(&'a mut self, events: &'a mut EventQueue) -> super::ActorCtx<'a> {
+        super::ActorCtx {
+            world: &mut self.world,
+            grid: &mut self.grid,
+            player: self.player_entity,
+            clock: &mut self.game_clock,
+            scheduler: &mut self.action_scheduler,
+            tracker: &mut self.active_ai_tracker,
+            spatial: &mut self.spatial_cache,
+            events,
+            rng: &mut self.rng,
+        }
+    }
+
     /// Initialize AI actors after world creation.
     /// Must be called separately because it needs mutable access to events.
     pub fn initialize_ai(&mut self, events: &mut EventQueue) {
@@ -146,17 +162,7 @@ impl GameState {
         self.active_ai_tracker
             .initialize_from_world(&self.world, player_pos);
 
-        initialization::initialize_ai_actors(
-            &mut self.world,
-            &self.grid,
-            self.player_entity,
-            &self.game_clock,
-            &mut self.action_scheduler,
-            &mut self.active_ai_tracker,
-            &self.spatial_cache,
-            events,
-            &mut self.rng,
-        );
+        initialization::initialize_ai_actors(&mut self.actor_ctx(events));
     }
 
     /// Get the player's starting position for camera setup.
@@ -283,14 +289,26 @@ mod tests {
                 crate::components::VisualPosition::from_position(&pos),
             ));
 
-            let clock = GameClock::new();
+            let mut clock = GameClock::new();
             let mut scheduler = ActionScheduler::new();
             let mut tracker = ActiveAITracker::new();
-            let cache = SpatialCache::rebuild_from_world(&world);
+            let mut cache = SpatialCache::rebuild_from_world(&world);
             let mut events = EventQueue::new();
+            let mut grid = grid;
             initialization::spawn_floor_entities(
-                &mut world, &grid, player, (1, 1), 3,
-                &clock, &mut scheduler, &mut tracker, &cache, &mut events, &mut rng,
+                &mut crate::engine::ActorCtx {
+                    world: &mut world,
+                    grid: &mut grid,
+                    player,
+                    clock: &mut clock,
+                    scheduler: &mut scheduler,
+                    tracker: &mut tracker,
+                    spatial: &mut cache,
+                    events: &mut events,
+                    rng: &mut rng,
+                },
+                (1, 1),
+                3,
             );
 
             // Snapshot every hostile: name + position; and the boss by name.
