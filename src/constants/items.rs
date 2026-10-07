@@ -51,6 +51,10 @@ pub const BOW_BASE_DAMAGE: i32 = 8;
 /// Arrow speed in tiles per second
 pub const ARROW_SPEED: f32 = 15.0;
 
+/// Chance an arrow that hit its target is recoverable from the ground.
+/// Arrows that missed are always recoverable.
+pub const ARROW_RECOVERY_CHANCE_ON_HIT: f32 = 0.5;
+
 /// Speed of thrown potions (tiles per second)
 pub const POTION_THROW_SPEED: f32 = 12.0;
 /// Range for throwing potions

@@ -68,11 +68,11 @@ pub fn execute_dev_spawn(
             DevSpawnResult::Spawned(entity)
         }
         DevTool::SpawnEnemy => {
-            let enemy = spawning::enemies::SKELETON.spawn(ctx.world, tile_x, tile_y);
-            // Initialize the AI actor's first action. Dev spawns roll from a
-            // fresh entropy-seeded rng rather than the run rng, so poking the
-            // dev menu can never shift a seeded run's stream.
+            // Dev spawns roll from a fresh entropy-seeded rng rather than the
+            // run rng, so poking the dev menu can never shift a seeded run's
+            // stream. Covers both the sleep roll and the AI's first action.
             let mut rng = StdRng::from_entropy();
+            let enemy = spawning::enemies::SKELETON.spawn(ctx.world, tile_x, tile_y, &mut rng);
             let mut dev_ctx = engine::ActorCtx { rng: &mut rng, ..ctx.reborrow() };
             engine::initialize_single_ai_actor(&mut dev_ctx, enemy);
             DevSpawnResult::Spawned(enemy)

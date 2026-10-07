@@ -373,7 +373,7 @@ fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut im
     let Some(&(bx, by)) = interior.iter().find(|&&(x, y)| free(x, y)) else {
         return;
     };
-    if spawning::spawn_boss(world, floor, bx, by).is_none() {
+    if spawning::spawn_boss(world, floor, bx, by, rng).is_none() {
         return;
     }
 
@@ -689,13 +689,19 @@ pub fn init_world(
 /// Initialize all AI actors with their first action in the time system.
 /// Only schedules entities that are currently active (within range of player).
 pub fn initialize_ai_actors(ctx: &mut ActorCtx) {
-    // Only initialize AI for entities that are active (within range)
-    let active_entities: Vec<Entity> = ctx
+    // Only initialize AI for entities that are active (within range).
+    //
+    // Sorted because the tracker stores them in a `HashSet`, whose iteration
+    // order is randomized per process. Each `decide_action` draws from the run
+    // rng, so an unsorted order would scramble the draw sequence and make a
+    // seeded run unreproducible between launches.
+    let mut active_entities: Vec<Entity> = ctx
         .tracker
         .get_active_entities()
         .iter()
         .copied()
         .collect();
+    active_entities.sort_unstable();
 
     for entity in active_entities {
         crate::systems::ai::decide_action(ctx, entity);

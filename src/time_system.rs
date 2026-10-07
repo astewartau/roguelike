@@ -332,7 +332,7 @@ fn apply_action_effects(
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
         ActionType::Wait => {
-            actions::apply_wait(world, entity, events)
+            actions::apply_wait(world, entity, events, rng)
         }
         ActionType::ShootBow { target_x, target_y } => {
             actions::apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
@@ -348,7 +348,7 @@ fn apply_action_effects(
             actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events)
         }
         ActionType::CastFireball { target_x, target_y } => {
-            actions::apply_fireball(world, entity, *target_x, *target_y, events)
+            actions::apply_fireball(world, entity, *target_x, *target_y, events, rng)
         }
         ActionType::EquipWeapon { item_index } => {
             actions::apply_equip_weapon(world, entity, *item_index)
@@ -399,7 +399,9 @@ fn apply_action_effects(
             actions::apply_shoot_crippling_shot(world, grid, entity, *target_x, *target_y, events, current_time)
         }
         ActionType::CastLearnedSpell { ability, target_x, target_y } => {
-            actions::apply_cast_learned_spell(world, grid, entity, *ability, *target_x, *target_y, spatial_cache, events)
+            actions::apply_cast_learned_spell(
+                world, grid, entity, *ability, *target_x, *target_y, spatial_cache, events, rng,
+            )
         }
         ActionType::StartRaiseDead { target } => {
             actions::apply_start_raise_dead(world, entity, *target, events)

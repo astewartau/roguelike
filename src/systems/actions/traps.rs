@@ -2,6 +2,8 @@
 
 use hecs::{Entity, World};
 
+use rand::Rng;
+
 use crate::components::{
     AbilityType, Container, ContainerType, EffectType, PlacedTrap, Position, Sprite, TrapType,
     VisualPosition,
@@ -21,6 +23,7 @@ pub(super) fn check_fire_trap_trigger(
     target_x: i32,
     target_y: i32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     use crate::components::{PlacedFireTrap, TamedBy};
     use crate::constants::BURNING_DURATION;
@@ -55,7 +58,7 @@ pub(super) fn check_fire_trap_trigger(
 
     // Trap triggered! Apply burst damage (handles invulnerability, armor defense,
     // Protected/Barkskin) and a burning effect.
-    crate::systems::combat::apply_damage(world, victim, burst_damage);
+    crate::systems::combat::apply_damage(world, victim, burst_damage, rng);
 
     // Interrupt life drain if victim was channeling
     interrupt_life_drain_on_damage(world, victim, events);
@@ -148,6 +151,7 @@ pub(super) fn check_dungeon_trap_trigger(
     target_x: i32,
     target_y: i32,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     use crate::components::{DungeonTrap, DungeonTrapKind};
 
@@ -169,12 +173,16 @@ pub(super) fn check_dungeon_trap_trigger(
     let mut damage = 0;
     match kind {
         DungeonTrapKind::Spike => {
-            damage = crate::systems::combat::apply_damage(world, victim, DUNGEON_SPIKE_TRAP_DAMAGE);
+            damage = crate::systems::combat::apply_damage(
+                world, victim, DUNGEON_SPIKE_TRAP_DAMAGE, rng,
+            );
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);
         }
         DungeonTrapKind::Fire => {
-            damage = crate::systems::combat::apply_damage(world, victim, DUNGEON_FIRE_TRAP_DAMAGE);
+            damage = crate::systems::combat::apply_damage(
+                world, victim, DUNGEON_FIRE_TRAP_DAMAGE, rng,
+            );
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);
             // Hook into the fire ecosystem: sets the victim Burning (it is
@@ -340,6 +348,14 @@ mod tests {
     use crate::components::{Attackable, DungeonTrapKind, Health, StatusEffects};
     use crate::grid::Grid;
     use crate::tile::{Tile, TileType};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    /// Traps roll only for the morale check inside `apply_damage`; a fixed seed
+    /// keeps these tests deterministic.
+    fn test_rng() -> StdRng {
+        StdRng::seed_from_u64(1)
+    }
 
     fn make_grid(width: usize, height: usize) -> Grid {
         Grid {
@@ -382,7 +398,9 @@ mod tests {
         let trap =
             crate::spawning::spawn_dungeon_trap(&mut world, 3, 3, DungeonTrapKind::Spike);
 
-        check_dungeon_trap_trigger(&mut world, &grid, victim, 3, 3, &mut events);
+        check_dungeon_trap_trigger(
+            &mut world, &grid, victim, 3, 3, &mut events, &mut test_rng(),
+        );
 
         let hp = world.get::<&Health>(victim).expect("victim alive").current;
         assert_eq!(hp, 30 - crate::constants::DUNGEON_SPIKE_TRAP_DAMAGE);
@@ -403,7 +421,9 @@ mod tests {
         let trap =
             crate::spawning::spawn_dungeon_trap(&mut world, 2, 2, DungeonTrapKind::Snare);
 
-        check_dungeon_trap_trigger(&mut world, &grid, victim, 2, 2, &mut events);
+        check_dungeon_trap_trigger(
+            &mut world, &grid, victim, 2, 2, &mut events, &mut test_rng(),
+        );
 
         let rooted = world
             .get::<&StatusEffects>(victim)
@@ -420,7 +440,9 @@ mod tests {
         let mut events = EventQueue::new();
 
         let victim = world.spawn((Position::new(1, 1), StatusEffects::new()));
-        check_dungeon_trap_trigger(&mut world, &grid, victim, 1, 1, &mut events);
+        check_dungeon_trap_trigger(
+            &mut world, &grid, victim, 1, 1, &mut events, &mut test_rng(),
+        );
         assert_eq!(events.drain().count(), 0);
     }
 }
