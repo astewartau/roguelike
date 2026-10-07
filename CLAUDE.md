@@ -122,9 +122,11 @@ In order of preference:
    really a sprite (the sneaking indicator in [src/ui/vfx.rs](src/ui/vfx.rs)).
 
 Custom pixel art is a real cost: it has to be hand-drawn into
-`assets/custom/make_tiles.py` and pasted into `items.png`, and because
-`assets/` is not in git, every new custom sprite is a thing every checkout has
-to reproduce by hand. Exhaust options 1 and 2 first.
+[tools/make_tiles.py](tools/make_tiles.py) and then pasted into `items.png` by
+hand, and since `items.png` itself cannot be committed, every checkout has to
+redo the paste. The script is tracked so the pixels are at least reproducible —
+keep new custom art in it rather than editing a PNG directly, or the next clone
+loses the sprite. Exhaust options 1 and 2 first.
 
 ### Assets are not in the repository
 

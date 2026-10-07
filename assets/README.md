@@ -52,14 +52,19 @@ where **`row` is 1-based** and `col` is 0-based:
 - row 27, columns a–i — `tame`, `rest`, `sleep`, `barkskin`, `sprint`,
   `disengage`, `tumble`, `crippling shot`, `stun`
 
-[`assets/custom/make_tiles.py`](custom/make_tiles.py) draws these eleven icons
-in the 32rogues palette. It writes individual 32×32 PNGs to `$OUTDIR`
-(default `/tmp`) plus a magnified contact sheet at `/tmp/contact.png`; it does
-**not** patch `items.png` for you. Run it, then paste the icons into the sheet
-at the positions above, growing the canvas to 27 rows:
+[`tools/make_tiles.py`](../tools/make_tiles.py) draws these eleven icons in the
+32rogues palette. It is **tracked in the repository** — unlike everything else
+under `assets/` — and needs nothing but Pillow, so the icons are reproducible
+from a fresh clone rather than something you have to obtain from the author.
+
+It writes individual 32×32 PNGs to `$OUTDIR` (default `/tmp`) plus a magnified
+contact sheet at `/tmp/contact.png`. It does **not** patch `items.png` for you:
+run it, then paste the icons into the sheet at the positions above, growing the
+canvas to 27 rows.
 
 ```bash
-OUTDIR=assets/custom python3 assets/custom/make_tiles.py
+pip install pillow
+OUTDIR=assets/custom python3 tools/make_tiles.py
 ```
 
 If you skip this, the UV lookup runs off the bottom of the texture. Because the
@@ -133,8 +138,7 @@ assets/
 │   ├── *.txt                     (sheet documentation, unread)
 │   └── LICENSE.txt
 ├── custom/
-│   ├── make_tiles.py             (draws the 11 custom ability icons)
-│   └── *.png                     (its output)
+│   └── *.png                     (output of tools/make_tiles.py)
 ├── sounds/
 │   ├── battle/                   ** see table above
 │   ├── enemies/                  **
