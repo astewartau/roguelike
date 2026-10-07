@@ -1366,33 +1366,18 @@ impl GameEngine {
             }
         };
 
-        match route {
-            Route::Class => self.try_use_class_ability(),
-            Route::Secondary => self.try_use_secondary_ability(),
-            Route::Ranger(index) => self.try_use_ranger_ability(index),
-            Route::Learned => self.try_use_learned_ability(ability_type),
-        }
+        self.try_use_slot(match route {
+            Route::Class => AbilitySlot::Class,
+            Route::Secondary => AbilitySlot::Secondary,
+            Route::Ranger(index) => AbilitySlot::Ranger(index),
+            Route::Learned => AbilitySlot::Learned(ability_type),
+        });
     }
 
-    /// Activate a learned spell (studied scroll) or Raise Dead.
-    fn try_use_learned_ability(&mut self, ability_type: AbilityType) {
+    /// Activate the ability in one of the player's four ability slots.
+    fn try_use_slot(&mut self, slot: AbilitySlot) {
         let Some(mut ctx) = self.sim_ctx() else { return };
-        activate_learned_ability(&mut ctx, ability_type);
-    }
-
-    fn try_use_class_ability(&mut self) {
-        let Some(mut ctx) = self.sim_ctx() else { return };
-        activate_class_ability(&mut ctx);
-    }
-
-    fn try_use_secondary_ability(&mut self) {
-        let Some(mut ctx) = self.sim_ctx() else { return };
-        activate_secondary_ability(&mut ctx);
-    }
-
-    fn try_use_ranger_ability(&mut self, ability_index: usize) {
-        let Some(mut ctx) = self.sim_ctx() else { return };
-        activate_ranger_ability(&mut ctx, ability_index);
+        activate_ability(&mut ctx, slot);
     }
 
     /// Toggle resting. Pressing Rest while already resting cancels it; otherwise
@@ -1847,200 +1832,160 @@ fn spawn_boss_minion(ctx: &mut ActorCtx, boss: Entity, x: i32, y: i32) {
     initialization::initialize_single_ai_actor(ctx, spider);
 }
 
-/// Try to activate the player's class ability.
-/// Returns true if the ability was successfully activated.
-fn activate_class_ability(ctx: &mut SimCtx) -> bool {
-    let player = ctx.player;
-    // Check if player is idle
-    let is_idle = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.current_action.is_none())
-        .unwrap_or(false);
-
-    if !is_idle {
-        return false;
-    }
-
-    // Get ability info
-    let ability_info = ctx
-        .world
-        .get::<&ClassAbility>(player)
-        .ok()
-        .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
-
-    let Some((ability_type, is_ready, energy_cost)) = ability_info else {
-        return false;
-    };
-
-    if !is_ready {
-        return false;
-    }
-
-    // Check if player can ever afford this (max_energy >= cost)
-    let can_afford = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.max_energy >= energy_cost)
-        .unwrap_or(false);
-
-    if !can_afford {
-        return false;
-    }
-
-    // Tame and LifeDrain abilities enter targeting mode instead of executing immediately
-    if ability_type == AbilityType::Tame {
-        ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-            ability_type: AbilityType::Tame,
-            max_range: crate::constants::TAME_RANGE,
-        });
-        return true;
-    }
-
-    if ability_type == AbilityType::LifeDrain {
-        ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-            ability_type: AbilityType::LifeDrain,
-            max_range: crate::constants::LIFE_DRAIN_RANGE,
-        });
-        return true;
-    }
-
-    // Wait for enough energy (this advances time, enemies may act)
-    let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
-
-    if !got_energy {
-        // Player died or something went wrong during wait
-        let _ = process_events(ctx);
-        return false;
-    }
-
-    // Determine action type based on ability
-    let action_type = match ability_type {
-        AbilityType::Cleave => ActionType::Cleave,
-        AbilityType::Sprint => ActionType::ActivateSprint,
-        AbilityType::Tame => unreachable!("Tame ability handled above with targeting mode"),
-        AbilityType::LifeDrain => unreachable!("LifeDrain ability handled above with targeting mode"),
-        AbilityType::Barkskin => return false, // Barkskin is a secondary ability, not primary
-        AbilityType::Fear => return false,     // Fear is a secondary ability, not primary
-        AbilityType::Stun => return false,     // Stun is a secondary ability, not primary
-        // Ranger abilities are handled via RangerAbilities component and number keys
-        AbilityType::Disengage | AbilityType::Tumble | AbilityType::SnareTrap | AbilityType::CripplingShot => return false,
-        AbilityType::Rest => return false, // Rest is handled in try_use_ability, never routed here
-        AbilityType::Sleep => return false, // Sleep is handled in try_use_ability, never routed here
-        // Learned spells + Raise Dead route through activate_learned_ability
-        AbilityType::LearnedBlink
-        | AbilityType::LearnedFireball
-        | AbilityType::LearnedFear
-        | AbilityType::LearnedSlow
-        | AbilityType::LearnedProtection
-        | AbilityType::LearnedSpeed
-        | AbilityType::LearnedInvisibility
-        | AbilityType::RaiseDead => return false,
-    };
-
-    // Start the action
-    let start_result =
-        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
-
-    if start_result.is_ok() {
-        // Start cooldown
-        if let Ok(mut ability) = ctx.world.get::<&mut ClassAbility>(player) {
-            ability.start_cooldown();
-        }
-
-        // Advance time and process events
-        simulation::advance_until_player_ready(&mut ctx.actors());
-    }
-
-    let _ = process_events(ctx);
-
-    start_result.is_ok()
-}
-
-/// Activate Druid's secondary ability (Barkskin) when E is pressed.
-fn activate_secondary_ability(ctx: &mut SimCtx) -> bool {
-    let player = ctx.player;
-    use crate::components::SecondaryAbility;
-
-    // Check if player is idle
-    let is_idle = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.current_action.is_none())
-        .unwrap_or(false);
-
-    if !is_idle {
-        return false;
-    }
-
-    // Get secondary ability info (only Druid has this)
-    let ability_info = ctx
-        .world
-        .get::<&SecondaryAbility>(player)
-        .ok()
-        .map(|a| (a.ability_type, a.is_ready(), a.ability_type.energy_cost()));
-
-    let Some((ability_type, is_ready, energy_cost)) = ability_info else {
-        return false;
-    };
-
-    if !is_ready {
-        return false;
-    }
-
-    // Check if player can ever afford this (max_energy >= cost)
-    let can_afford = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.max_energy >= energy_cost)
-        .unwrap_or(false);
-
-    if !can_afford {
-        return false;
-    }
-
-    // Wait for enough energy (this advances time, enemies may act)
-    let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
-
-    if !got_energy {
-        // Player died or something went wrong during wait
-        let _ = process_events(ctx);
-        return false;
-    }
-
-    // Determine action type based on ability
-    let action_type = match ability_type {
-        AbilityType::Barkskin => ActionType::ActivateBarkskin,
-        AbilityType::Fear => ActionType::ActivateFear,
-        AbilityType::Stun => ActionType::ActivateStun,
-        _ => return false, // Only Barkskin, Fear and Stun are secondary abilities
-    };
-
-    // Start the action
-    let start_result =
-        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
-
-    if start_result.is_ok() {
-        // Advance time and process events
-        simulation::advance_until_player_ready(&mut ctx.actors());
-    }
-
-    let _ = process_events(ctx);
-
-    start_result.is_ok()
-}
-
-/// Activate a learned spell (studied from a scroll) or Raise Dead.
+/// Which slot an ability activation came from.
 ///
-/// Targeted spells (Blink / Fireball / Raise Dead) enter ability-targeting
-/// mode; the click then flows through the normal intent path. Untargeted
-/// spells start a `CastLearnedSpell` action immediately. Cooldowns start in
-/// `apply_cast_learned_spell` / `apply_start_raise_dead` on success.
-fn activate_learned_ability(ctx: &mut SimCtx, ability_type: AbilityType) -> bool {
-    let player = ctx.player;
-    use crate::components::LearnedAbilities;
+/// The four slots resolve their ability and their cooldown differently, but the
+/// activation spine around them - idle check, readiness, affordability,
+/// targeting, wait for energy, start the action, advance time, process events -
+/// is the same. [`activate_ability`] holds that spine; the slot supplies the
+/// differences.
+#[derive(Clone, Copy)]
+enum AbilitySlot {
+    /// The class ability (Cleave / Sprint / Tame / Life Drain).
+    Class,
+    /// The Druid/Necromancer-style second ability (Barkskin / Fear / Stun).
+    Secondary,
+    /// A spell studied from a scroll, plus the Necromancer's Raise Dead.
+    Learned(AbilityType),
+    /// One of the Ranger's four indexed abilities.
+    Ranger(usize),
+}
 
-    // Check if player is idle
+/// What the targeting check decided about an ability that is about to activate.
+enum Targeting {
+    /// No target needed - act now.
+    Immediate,
+    /// Enter targeting mode at this range; the click then flows through the
+    /// normal intent path, and no game time passes here.
+    Enter(i32),
+    /// Cannot be used right now; feedback has already been logged.
+    Refused,
+}
+
+impl AbilitySlot {
+    /// The ability this slot holds and its energy cost, or `None` if the slot is
+    /// empty, holds something else, or is still on cooldown.
+    fn ready_ability(self, world: &hecs::World, player: Entity) -> Option<(AbilityType, i32)> {
+        match self {
+            AbilitySlot::Class => {
+                let a = world.get::<&ClassAbility>(player).ok()?;
+                a.is_ready()
+                    .then(|| (a.ability_type, a.ability_type.energy_cost()))
+            }
+            AbilitySlot::Secondary => {
+                let a = world.get::<&SecondaryAbility>(player).ok()?;
+                a.is_ready()
+                    .then(|| (a.ability_type, a.ability_type.energy_cost()))
+            }
+            AbilitySlot::Learned(ability_type) => {
+                let la = world
+                    .get::<&crate::components::LearnedAbilities>(player)
+                    .ok()?;
+                let spell = la.get(ability_type)?;
+                (spell.cooldown_remaining <= 0.0)
+                    .then(|| (ability_type, ability_type.energy_cost()))
+            }
+            AbilitySlot::Ranger(index) => {
+                let ra = world.get::<&RangerAbilities>(player).ok()?;
+                let &(ability_type, cooldown_remaining, _) = ra.get(index)?;
+                (cooldown_remaining <= 0.0)
+                    .then(|| (ability_type, ability_type.energy_cost()))
+            }
+        }
+    }
+
+    /// Whether this slot's `ability_type` needs a target picked first.
+    ///
+    /// Matched on the (slot, ability) pair rather than the ability alone, so a
+    /// slot can only ever target the abilities it actually grants.
+    fn targeting(self, ctx: &mut SimCtx, ability_type: AbilityType) -> Targeting {
+        use crate::constants::*;
+        let player = ctx.player;
+
+        match (self, ability_type) {
+            (AbilitySlot::Class, AbilityType::Tame) => Targeting::Enter(TAME_RANGE),
+            (AbilitySlot::Class, AbilityType::LifeDrain) => Targeting::Enter(LIFE_DRAIN_RANGE),
+            (AbilitySlot::Learned(_), AbilityType::RaiseDead) => {
+                // Enforce the INT-scaled control cap up front, with feedback.
+                let int = crate::queries::effective_stats(ctx.world, player).intelligence;
+                let cap = raise_dead_cap(int);
+                let active = systems::actions::raised_undead_count(ctx.world);
+                if active >= cap {
+                    ctx.ui.message_log.system(format!(
+                        "You cannot control more than {} raised skeleton{} (1 + 1 per {} INT above 10).",
+                        cap,
+                        if cap == 1 { "" } else { "s" },
+                        RAISE_DEAD_INT_PER_EXTRA,
+                    ));
+                    return Targeting::Refused;
+                }
+                Targeting::Enter(RAISE_DEAD_RANGE)
+            }
+            // Blink range is a spell magnitude: it scales with the caster's INT.
+            (AbilitySlot::Learned(_), AbilityType::LearnedBlink) => {
+                Targeting::Enter(systems::actions::scaled_blink_range(ctx.world, player))
+            }
+            (AbilitySlot::Learned(_), AbilityType::LearnedFireball) => {
+                Targeting::Enter(FIREBALL_RANGE)
+            }
+            (AbilitySlot::Ranger(_), AbilityType::Tumble) => Targeting::Enter(TUMBLE_DISTANCE),
+            (AbilitySlot::Ranger(_), AbilityType::SnareTrap) => Targeting::Enter(SNARE_TRAP_RANGE),
+            (AbilitySlot::Ranger(_), AbilityType::CripplingShot) => Targeting::Enter(BOW_RANGE),
+            _ => Targeting::Immediate,
+        }
+    }
+
+    /// The action an untargeted activation of `ability_type` starts, or `None`
+    /// if this slot can't use that ability (unreachable for every ability the
+    /// slots actually grant - see `PlayerClass::ability`, the `SecondaryAbility`
+    /// inserts in `initialization`, and `RangerAbilities::new`).
+    fn action_for(self, ability_type: AbilityType) -> Option<ActionType> {
+        match (self, ability_type) {
+            (AbilitySlot::Class, AbilityType::Cleave) => Some(ActionType::Cleave),
+            (AbilitySlot::Class, AbilityType::Sprint) => Some(ActionType::ActivateSprint),
+            (AbilitySlot::Secondary, AbilityType::Barkskin) => {
+                Some(ActionType::ActivateBarkskin)
+            }
+            (AbilitySlot::Secondary, AbilityType::Fear) => Some(ActionType::ActivateFear),
+            (AbilitySlot::Secondary, AbilityType::Stun) => Some(ActionType::ActivateStun),
+            (AbilitySlot::Ranger(_), AbilityType::Disengage) => Some(ActionType::Disengage),
+            (AbilitySlot::Learned(_), _) => Some(ActionType::CastLearnedSpell {
+                ability: ability_type,
+                target_x: 0,
+                target_y: 0,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Put this slot on cooldown after its action started.
+    ///
+    /// `Secondary` and `Learned` are deliberately no-ops: learned spells start
+    /// their cooldown in `apply_cast_learned_spell` / `apply_start_raise_dead`
+    /// instead, and the secondary slot never started one here.
+    fn start_cooldown(self, world: &mut hecs::World, player: Entity) {
+        match self {
+            AbilitySlot::Class => {
+                if let Ok(mut ability) = world.get::<&mut ClassAbility>(player) {
+                    ability.start_cooldown();
+                }
+            }
+            AbilitySlot::Ranger(index) => {
+                if let Ok(mut ra) = world.get::<&mut RangerAbilities>(player) {
+                    ra.start_cooldown(index);
+                }
+            }
+            AbilitySlot::Secondary | AbilitySlot::Learned(_) => {}
+        }
+    }
+}
+
+/// Activate the ability in `slot`. Returns true if it was activated (which
+/// includes entering targeting mode - the ability is then spent on the click).
+fn activate_ability(ctx: &mut SimCtx, slot: AbilitySlot) -> bool {
+    let player = ctx.player;
+
+    // Only from idle, never mid-action.
     let is_idle = ctx
         .world
         .get::<&Actor>(player)
@@ -2050,21 +1995,12 @@ fn activate_learned_ability(ctx: &mut SimCtx, ability_type: AbilityType) -> bool
         return false;
     }
 
-    // Look up the spell entry (must be known and off cooldown)
-    let is_ready = ctx
-        .world
-        .get::<&LearnedAbilities>(player)
-        .ok()
-        .and_then(|la| la.get(ability_type).map(|s| s.cooldown_remaining <= 0.0));
-    let Some(is_ready) = is_ready else {
+    // The slot must hold a known ability that is off cooldown...
+    let Some((ability_type, energy_cost)) = slot.ready_ability(ctx.world, player) else {
         return false;
     };
-    if !is_ready {
-        return false;
-    }
 
-    // Check if player can ever afford this (max_energy >= cost)
-    let energy_cost = ability_type.energy_cost();
+    // ...and the player must be able to afford it at all (max_energy >= cost).
     let can_afford = ctx
         .world
         .get::<&Actor>(player)
@@ -2074,178 +2010,42 @@ fn activate_learned_ability(ctx: &mut SimCtx, ability_type: AbilityType) -> bool
         return false;
     }
 
-    // Targeted spells enter targeting mode instead of executing immediately.
-    match ability_type {
-        AbilityType::RaiseDead => {
-            // Enforce the INT-scaled control cap up front, with feedback.
-            let int = crate::queries::effective_stats(ctx.world, player).intelligence;
-            let cap = crate::constants::raise_dead_cap(int);
-            let active = systems::actions::raised_undead_count(ctx.world);
-            if active >= cap {
-                ctx.ui.message_log.system(format!(
-                    "You cannot control more than {} raised skeleton{} (1 + 1 per {} INT above 10).",
-                    cap,
-                    if cap == 1 { "" } else { "s" },
-                    crate::constants::RAISE_DEAD_INT_PER_EXTRA,
-                ));
-                return false;
-            }
+    // Targeted abilities enter targeting mode and spend no time.
+    match slot.targeting(ctx, ability_type) {
+        Targeting::Refused => return false,
+        Targeting::Enter(max_range) => {
             ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-                ability_type: AbilityType::RaiseDead,
-                max_range: crate::constants::RAISE_DEAD_RANGE,
+                ability_type,
+                max_range,
             });
             return true;
         }
-        AbilityType::LearnedBlink => {
-            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-                ability_type: AbilityType::LearnedBlink,
-                max_range: systems::actions::scaled_blink_range(ctx.world, player),
-            });
-            return true;
-        }
-        AbilityType::LearnedFireball => {
-            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-                ability_type: AbilityType::LearnedFireball,
-                max_range: crate::constants::FIREBALL_RANGE,
-            });
-            return true;
-        }
-        _ => {}
+        Targeting::Immediate => {}
     }
 
-    // Untargeted learned cast: wait for energy, then start the action.
-    let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
-    if !got_energy {
+    let Some(action_type) = slot.action_for(ability_type) else {
+        return false;
+    };
+
+    // Wait for enough energy (this advances time, enemies may act).
+    if !simulation::wait_for_energy(&mut ctx.actors(), energy_cost) {
+        // Player died or something went wrong during wait
         let _ = process_events(ctx);
         return false;
     }
 
-    let start_result = time_system::start_action(
-        ctx.world,
-        player,
-        ActionType::CastLearnedSpell {
-            ability: ability_type,
-            target_x: 0,
-            target_y: 0,
-        },
-        ctx.clock,
-        ctx.scheduler,
-    );
+    let start_result =
+        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
 
     if start_result.is_ok() {
+        slot.start_cooldown(ctx.world, player);
+        // Advance time and process events
         simulation::advance_until_player_ready(&mut ctx.actors());
     }
 
     let _ = process_events(ctx);
 
     start_result.is_ok()
-}
-
-/// Activate a Ranger ability by index (0-3 for keys 1-4).
-fn activate_ranger_ability(ctx: &mut SimCtx, ability_index: usize) -> bool {
-    let player = ctx.player;
-    use crate::components::RangerAbilities;
-    use crate::constants::*;
-
-    // Check if player is idle
-    let is_idle = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.current_action.is_none())
-        .unwrap_or(false);
-
-    if !is_idle {
-        return false;
-    }
-
-    // Get Ranger abilities component
-    let ability_info = ctx
-        .world
-        .get::<&RangerAbilities>(player)
-        .ok()
-        .and_then(|ra| ra.get(ability_index).cloned());
-
-    let Some((ability_type, cooldown_remaining, _)) = ability_info else {
-        return false; // Not a Ranger or invalid index
-    };
-
-    // Check if ability is ready
-    if cooldown_remaining > 0.0 {
-        return false;
-    }
-
-    // Get energy cost
-    let energy_cost = ability_type.energy_cost();
-
-    // Check if player can afford this
-    let can_afford = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.max_energy >= energy_cost)
-        .unwrap_or(false);
-
-    if !can_afford {
-        return false;
-    }
-
-    // Handle ability based on type
-    match ability_type {
-        AbilityType::Disengage => {
-            // Disengage is immediate - no targeting needed
-            let got_energy = simulation::wait_for_energy(&mut ctx.actors(), energy_cost);
-
-            if !got_energy {
-                let _ = process_events(ctx);
-                return false;
-            }
-
-            // Start the action
-            let start_result = time_system::start_action(
-                ctx.world,
-                player,
-                ActionType::Disengage,
-                ctx.clock,
-                ctx.scheduler,
-            );
-
-            if start_result.is_ok() {
-                // Start cooldown
-                if let Ok(mut ra) = ctx.world.get::<&mut RangerAbilities>(player) {
-                    ra.start_cooldown(ability_index);
-                }
-
-                simulation::advance_until_player_ready(&mut ctx.actors());
-            }
-
-            let _ = process_events(ctx);
-            start_result.is_ok()
-        }
-        AbilityType::Tumble => {
-            // Enter targeting mode
-            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-                ability_type: AbilityType::Tumble,
-                max_range: TUMBLE_DISTANCE,
-            });
-            true
-        }
-        AbilityType::SnareTrap => {
-            // Enter targeting mode (adjacent only)
-            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-                ability_type: AbilityType::SnareTrap,
-                max_range: SNARE_TRAP_RANGE,
-            });
-            true
-        }
-        AbilityType::CripplingShot => {
-            // Enter targeting mode (bow range)
-            ctx.input.ability_targeting_mode = Some(input::AbilityTargetingMode {
-                ability_type: AbilityType::CripplingShot,
-                max_range: BOW_RANGE,
-            });
-            true
-        }
-        _ => false, // Not a Ranger ability
-    }
 }
 
 /// The two time-skip modes [`GameEngine::fast_forward`] drives. They share
