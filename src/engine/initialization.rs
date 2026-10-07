@@ -187,6 +187,22 @@ fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng)
     }
 }
 
+/// Spawn the cave dressing of every Cavern room: stalagmites (blocking cover
+/// you can still shoot over), glowing fungus and crystal clusters (walkable
+/// light sources). All three come straight from generation, which has already
+/// checked they sit on open cave floor.
+fn spawn_cave_features(world: &mut World, grid: &Grid) {
+    for &(x, y) in &grid.stalagmite_positions {
+        spawning::spawn_stalagmites(world, x, y);
+    }
+    for &(x, y) in &grid.mushroom_positions {
+        spawning::spawn_glow_mushrooms(world, x, y);
+    }
+    for &(x, y) in &grid.crystal_positions {
+        spawning::spawn_crystal_cluster(world, x, y);
+    }
+}
+
 /// Spawn explosive oil barrels: 1-2 hide among the Storage-room food barrels
 /// (their positions are returned so `spawn_barrels` can skip them), and some
 /// floors also get 1-2 out in the corridors.
@@ -639,6 +655,7 @@ pub fn init_world(
     spawn_shop_decorations(&mut world, grid, rng);
     spawn_dungeon_traps(&mut world, grid, rng);
     spawn_furniture_pieces(&mut world, grid, rng);
+    spawn_cave_features(&mut world, grid);
     spawn_vendor(&mut world, grid, 0); // Floor 0 for initial world
 
     // Spawn wizard NPC
@@ -668,13 +685,17 @@ pub fn init_world(
         }
     }
 
+    // Cave ecology: caverns get bats and spiders, and the floor roster stays
+    // out of them. init_world always builds the first floor (floor 0).
+    let cavern_tiles = spawning::spawn_cave_fauna(&mut world, grid, 0, rng);
+
     // Spawn enemies
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
         .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| grid.is_walkable(x, y))
+        .filter(|p| !cavern_tiles.contains(p))
         .collect();
 
-    // init_world always builds the first floor (floor 0)
     let spawn_config = spawning::SpawnConfig::for_floor(0);
     spawn_config.spawn_all(
         &mut world,
@@ -774,12 +795,18 @@ pub fn spawn_floor_entities(
     spawn_shop_decorations(world, grid, rng);
     spawn_dungeon_traps(world, grid, rng);
     spawn_furniture_pieces(world, grid, rng);
+    spawn_cave_features(world, grid);
     spawn_vendor(world, grid, floor_num);
+
+    // Cave ecology: caverns get bats and spiders, and the floor roster stays
+    // out of them.
+    let cavern_tiles = spawning::spawn_cave_fauna(world, grid, floor_num, rng);
 
     // Spawn enemies
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
         .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| grid.is_walkable(x, y))
+        .filter(|p| !cavern_tiles.contains(p))
         .collect();
 
     let spawn_config = spawning::SpawnConfig::for_floor(floor_num);
