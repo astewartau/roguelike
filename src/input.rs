@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{AbilityType, Attackable, BlocksMovement, Container, Door, Health, ItemType, Player, Position, TamedBy, Tameable};
+use crate::components::{AbilityType, Attackable, BlocksMovement, Container, ContainerType, Door, Health, ItemType, Player, Position, TamedBy, Tameable};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -822,6 +822,64 @@ pub fn process_frame(
                                     result.from_keyboard = false;
                                     return result;
                                 }
+                            }
+                        }
+                        AbilityType::LearnedBlink => {
+                            // Learned Blink: same validation as the scroll -
+                            // walkable, unblocked destination.
+                            let walkable = grid
+                                .get(target_x, target_y)
+                                .map(|t| t.tile_type.is_walkable())
+                                .unwrap_or(false);
+                            if walkable {
+                                let blocked = world
+                                    .query::<(&Position, &BlocksMovement)>()
+                                    .iter()
+                                    .any(|(_, (epos, _))| epos.x == target_x && epos.y == target_y);
+                                if !blocked {
+                                    input.cancel_targeting();
+                                    result.player_intent = Some(PlayerIntent::CastLearnedSpell {
+                                        ability: AbilityType::LearnedBlink,
+                                        target_x,
+                                        target_y,
+                                    });
+                                    result.from_keyboard = false;
+                                    return result;
+                                }
+                            }
+                        }
+                        AbilityType::LearnedFireball => {
+                            // Learned Fireball: anywhere in range, like the scroll.
+                            input.cancel_targeting();
+                            result.player_intent = Some(PlayerIntent::CastLearnedSpell {
+                                ability: AbilityType::LearnedFireball,
+                                target_x,
+                                target_y,
+                            });
+                            result.from_keyboard = false;
+                            return result;
+                        }
+                        AbilityType::RaiseDead => {
+                            // Raise Dead: needs a bones/corpse container at the tile.
+                            let mut bones_target = None;
+                            for (entity, (cpos, container)) in
+                                world.query::<(&Position, &Container)>().iter()
+                            {
+                                if cpos.x == target_x
+                                    && cpos.y == target_y
+                                    && matches!(container.container_type, ContainerType::Corpse)
+                                {
+                                    bones_target = Some(entity);
+                                    break;
+                                }
+                            }
+
+                            if let Some(target_entity) = bones_target {
+                                input.cancel_targeting();
+                                result.player_intent =
+                                    Some(PlayerIntent::StartRaiseDead { target: target_entity });
+                                result.from_keyboard = false;
+                                return result;
                             }
                         }
                         AbilityType::CripplingShot => {

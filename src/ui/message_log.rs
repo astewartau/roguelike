@@ -174,6 +174,21 @@ impl MessageLog {
                     );
                 }
             }
+            DamageKind::Slam => {
+                // Boss ground slam; the attacker is never the player.
+                if target == me {
+                    self.push(
+                        format!("The ground slam crushes you for {damage}!"),
+                        log_colors::HARM,
+                    );
+                } else {
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("The ground slam crushes {obj} for {damage}!"),
+                        log_colors::INFO,
+                    );
+                }
+            }
             // Projectile kinds never arrive here.
             DamageKind::Arrow | DamageKind::CripplingShot | DamageKind::Potion => {}
         }
@@ -265,6 +280,24 @@ impl MessageLog {
                     self.push(format!("{who} catches fire!"), log_colors::INFO);
                 }
             }
+            GameEvent::BarrelExploded { .. } => {
+                self.push("An oil barrel explodes!".to_string(), log_colors::HARM);
+            }
+            GameEvent::BrazierToppled { .. } => {
+                self.push(
+                    "The brazier topples, spilling burning coals!".to_string(),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::FlaskFilled { entity } if *entity == me => {
+                self.push("You fill the flask.".to_string(), log_colors::INFO);
+            }
+            GameEvent::FlaskFillFailed { entity } if *entity == me => {
+                self.push(
+                    "There is no water within reach to fill the flask.".to_string(),
+                    log_colors::INFO,
+                );
+            }
             GameEvent::SnareTrapTriggered { victim, .. } => {
                 if *victim == me {
                     self.push("You are caught in a snare!".to_string(), log_colors::HARM);
@@ -281,15 +314,163 @@ impl MessageLog {
                     self.push(format!("{who} triggers a fire trap!"), log_colors::INFO);
                 }
             }
+            GameEvent::TrapSpotted { .. } => {
+                self.push("You spot a trap!".to_string(), log_colors::KILL);
+            }
+            GameEvent::DungeonTrapTriggered { kind, victim, damage, .. } => {
+                use crate::components::DungeonTrapKind;
+                let (text, color) = match (kind, *victim == me) {
+                    (DungeonTrapKind::Spike, true) => (
+                        format!("Hidden spikes stab you for {damage}!"),
+                        log_colors::HARM,
+                    ),
+                    (DungeonTrapKind::Spike, false) => (
+                        format!("Hidden spikes stab {}!", self.object(world, *victim)),
+                        log_colors::INFO,
+                    ),
+                    (DungeonTrapKind::Fire, true) => (
+                        format!("A fire trap erupts beneath you for {damage}!"),
+                        log_colors::HARM,
+                    ),
+                    (DungeonTrapKind::Fire, false) => (
+                        format!("A fire trap erupts beneath {}!", self.object(world, *victim)),
+                        log_colors::INFO,
+                    ),
+                    (DungeonTrapKind::Snare, true) => (
+                        "You are caught in a hidden snare!".to_string(),
+                        log_colors::HARM,
+                    ),
+                    (DungeonTrapKind::Snare, false) => (
+                        format!("{} is caught in a hidden snare!", self.subject(world, *victim)),
+                        log_colors::INFO,
+                    ),
+                    (DungeonTrapKind::Alarm, true) => (
+                        "You step on an alarm plate — a shrill ringing echoes through the dungeon!"
+                            .to_string(),
+                        log_colors::HARM,
+                    ),
+                    (DungeonTrapKind::Alarm, false) => (
+                        format!("{} sets off an alarm!", self.subject(world, *victim)),
+                        log_colors::INFO,
+                    ),
+                };
+                self.push(text, color);
+            }
+            GameEvent::SecretDoorFound { .. } => {
+                self.push("You notice a hidden passage!".to_string(), log_colors::GOOD);
+            }
+            GameEvent::FountainUsed { entity, outcome } if *entity == me => {
+                use crate::events::FountainOutcome;
+                let (text, color) = match outcome {
+                    FountainOutcome::Heal => (
+                        "You drink from the fountain. Cool relief washes over you — fully healed!",
+                        log_colors::GOOD,
+                    ),
+                    FountainOutcome::Food => (
+                        "You drink deep from the fountain. Your hunger fades.",
+                        log_colors::GOOD,
+                    ),
+                    FountainOutcome::Buff(effect) => {
+                        let text = match effect {
+                            crate::components::EffectType::Regenerating => {
+                                "The water tingles with magic — your wounds begin to knit."
+                            }
+                            crate::components::EffectType::Protected => {
+                                "The water tingles with magic — a ward settles over you."
+                            }
+                            _ => "The water tingles with magic — strength floods your limbs.",
+                        };
+                        (text, log_colors::GOOD)
+                    }
+                    FountainOutcome::Bad(effect) => {
+                        let text = match effect {
+                            crate::components::EffectType::Confused => {
+                                "The water tastes foul — your head swims!"
+                            }
+                            _ => "The water tastes foul — your limbs grow sluggish!",
+                        };
+                        (text, log_colors::HARM)
+                    }
+                    FountainOutcome::Dry => ("The fountain is dry.", log_colors::SYSTEM),
+                };
+                self.push(text.to_string(), color);
+            }
+            GameEvent::AltarSacrificed { item_name, blessed, detail } => {
+                let color = if *blessed { log_colors::GOOD } else { log_colors::HARM };
+                self.push(format!("You sacrifice {item_name}. {detail}"), color);
+            }
+            GameEvent::ShrineUsed { entity, fresh } if *entity == me => {
+                if *fresh {
+                    self.push(
+                        "The shrine hums — your possessions are revealed and a ward surrounds you."
+                            .to_string(),
+                        log_colors::GOOD,
+                    );
+                } else {
+                    self.push("The shrine is cold and inert.".to_string(), log_colors::SYSTEM);
+                }
+            }
             GameEvent::AbilityActivated { entity, ability } if *entity == me => {
                 let text = match ability {
                     AbilityType::Sprint => "You break into a sprint.",
                     AbilityType::Disengage => "You disengage to safety.",
                     AbilityType::Tumble => "You tumble away.",
                     AbilityType::SnareTrap => "You set a snare trap.",
+                    AbilityType::LearnedBlink
+                    | AbilityType::LearnedFireball
+                    | AbilityType::LearnedFear
+                    | AbilityType::LearnedSlow
+                    | AbilityType::LearnedProtection
+                    | AbilityType::LearnedSpeed
+                    | AbilityType::LearnedInvisibility => {
+                        self.push(format!("You cast {}.", ability.name()), log_colors::INFO);
+                        return;
+                    }
                     _ => return,
                 };
                 self.push(text.to_string(), log_colors::INFO);
+            }
+            GameEvent::SpellLearned { ability } => {
+                self.push(
+                    format!("You study the scroll and learn {}!", ability.name()),
+                    log_colors::GOOD,
+                );
+            }
+            GameEvent::SpellStudyFailed {
+                scroll,
+                required_int,
+                current_int,
+            } => {
+                self.push(
+                    format!(
+                        "The {} eludes you — studying it requires {} Intelligence (you have {}).",
+                        crate::systems::item_name(*scroll),
+                        required_int,
+                        current_int
+                    ),
+                    log_colors::SYSTEM,
+                );
+            }
+            GameEvent::SpellAlreadyKnown { ability } => {
+                self.push(
+                    format!("You already know {}.", ability.name()),
+                    log_colors::SYSTEM,
+                );
+            }
+            GameEvent::RaiseDeadStarted { caster, .. } if *caster == me => {
+                self.push(
+                    "You begin chanting over the bones...".to_string(),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::RaiseDeadFailed { caster } if *caster == me => {
+                self.push("The ritual fizzles.".to_string(), log_colors::SYSTEM);
+            }
+            GameEvent::SkeletonRaised { owner, .. } if *owner == me => {
+                self.push(
+                    "A skeleton claws free of the bones and rises to serve you!".to_string(),
+                    log_colors::GOOD,
+                );
             }
             GameEvent::ItemPickedUp { entity, item } if *entity == me => {
                 self.push(
@@ -330,6 +511,12 @@ impl MessageLog {
                     log_colors::GOOD,
                 );
             }
+            GameEvent::ItemIdentified { name, cursed } => {
+                self.push(format!("You recognize: {name}."), log_colors::GOOD);
+                if *cursed {
+                    self.push("It bears a curse!".to_string(), log_colors::HARM);
+                }
+            }
             GameEvent::LevelUp { new_level } => {
                 self.push(format!("You reach level {new_level}!"), log_colors::GOOD);
             }
@@ -348,6 +535,94 @@ impl MessageLog {
             }
             GameEvent::FearActivated { entity, .. } if *entity == me => {
                 self.push("You let out a terrifying shriek.".to_string(), log_colors::INFO);
+            }
+            GameEvent::HungerStateChanged { state } => {
+                let (text, color) = match state {
+                    crate::components::HungerState::Hungry => {
+                        ("You are getting hungry.", log_colors::SYSTEM)
+                    }
+                    crate::components::HungerState::Starving => {
+                        ("You are starving!", log_colors::HARM)
+                    }
+                    crate::components::HungerState::Fed => {
+                        ("You no longer feel hungry.", log_colors::GOOD)
+                    }
+                };
+                self.push(text.to_string(), color);
+            }
+            GameEvent::FatigueStateChanged { state } => {
+                let (text, color) = match state {
+                    crate::components::FatigueState::Tired => {
+                        ("You feel tired.", log_colors::SYSTEM)
+                    }
+                    crate::components::FatigueState::Exhausted => {
+                        ("You are exhausted.", log_colors::HARM)
+                    }
+                    crate::components::FatigueState::Rested => {
+                        ("You feel rested.", log_colors::GOOD)
+                    }
+                };
+                self.push(text.to_string(), color);
+            }
+            GameEvent::StarvationDamage { entity, damage, .. } if *entity == me => {
+                // Consecutive identical lines collapse into "(xN)", so this
+                // won't flood the log during fast-forwarded rest.
+                self.push(
+                    format!("You are wasting away from hunger ({damage})."),
+                    log_colors::HARM,
+                );
+            }
+            GameEvent::EnemyHealed { healer, target, amount, .. } => {
+                let who = self.subject(world, *healer);
+                let obj = self.object(world, *target);
+                self.push(
+                    format!("{who} chants — a green glow mends {obj} (+{amount})."),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::EnemyHasted { healer, target, .. } => {
+                let who = self.subject(world, *healer);
+                let obj = self.object(world, *target);
+                self.push(format!("{who} shrieks — {obj} speeds up!"), log_colors::INFO);
+            }
+            GameEvent::WebTouched { victim, .. } => {
+                if *victim == me {
+                    self.push(
+                        "You are tangled in a sticky web!".to_string(),
+                        log_colors::HARM,
+                    );
+                } else {
+                    let who = self.subject(world, *victim);
+                    self.push(format!("{who} is tangled in a web."), log_colors::INFO);
+                }
+            }
+            GameEvent::BossSighted { name, .. } => {
+                self.push(format!("{name} glares at you!"), log_colors::HARM);
+            }
+            GameEvent::BossDefeated { name } => {
+                self.push(format!("{name} is defeated!"), log_colors::KILL);
+                self.push(
+                    "The dungeon falls silent. A great evil has been vanquished."
+                        .to_string(),
+                    log_colors::GOOD,
+                );
+            }
+            GameEvent::BossAbilityUsed { boss, ability, .. } => {
+                let name = self.name(world, *boss);
+                let (text, color) = match ability {
+                    crate::components::BossAbility::GroundSlam => {
+                        (format!("{name} slams the ground!"), log_colors::HARM)
+                    }
+                    crate::components::BossAbility::SummonSpiders => (
+                        format!("{name} shrieks — spiderlings skitter from the shadows!"),
+                        log_colors::HARM,
+                    ),
+                    crate::components::BossAbility::RaiseDead => (
+                        format!("{name} drags a skeleton up from old bones!"),
+                        log_colors::HARM,
+                    ),
+                };
+                self.push(text, color);
             }
             GameEvent::FloorTransition {
                 direction,

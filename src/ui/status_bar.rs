@@ -4,7 +4,11 @@
 
 use super::icons::UiIcons;
 use super::style;
-use crate::components::{EffectType as StatusEffectType, Health, Inventory, Position, StatusEffects};
+use crate::components::{
+    EffectType as StatusEffectType, Fatigue, FatigueState, Health, Hunger, HungerState,
+    Inventory, Position, StatusEffects,
+};
+use crate::constants::{FATIGUE_MAX, HUNGER_MAX};
 use crate::grid::Grid;
 use crate::systems;
 use crate::tile::TileType;
@@ -32,6 +36,14 @@ pub struct StatusBarData {
     pub is_concealed: bool,
     /// Whether the player is currently sneaking (crouch toggle)
     pub is_sneaking: bool,
+    /// Hunger meter value (0 = starving, HUNGER_MAX = fully fed)
+    pub hunger: f32,
+    /// Coarse hunger state for the warning label
+    pub hunger_state: HungerState,
+    /// Fatigue meter value (0 = rested, FATIGUE_MAX = exhausted)
+    pub fatigue: f32,
+    /// Coarse fatigue state for the warning label
+    pub fatigue_state: FatigueState,
     /// Active status effects with remaining duration
     pub active_effects: Vec<(StatusEffectType, f32)>,
 }
@@ -63,6 +75,16 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
     // Sneaking is a derived state from the crouch toggle (Sneaking marker).
     let is_sneaking = world.get::<&crate::components::Sneaking>(player_entity).is_ok();
 
+    // Survival meters (player-only; default to "fine" if missing).
+    let (hunger, hunger_state) = world
+        .get::<&Hunger>(player_entity)
+        .map(|h| (h.value, h.state()))
+        .unwrap_or((HUNGER_MAX, HungerState::Fed));
+    let (fatigue, fatigue_state) = world
+        .get::<&Fatigue>(player_entity)
+        .map(|f| (f.value, f.state()))
+        .unwrap_or((0.0, FatigueState::Rested));
+
     let (xp_progress, xp_level) = world
         .get::<&crate::components::Experience>(player_entity)
         .map(|exp| (systems::xp_progress(&exp), exp.level))
@@ -89,6 +111,10 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
         defense,
         is_concealed,
         is_sneaking,
+        hunger,
+        hunger_state,
+        fatigue,
+        fatigue_state,
         active_effects,
     }
 }
@@ -96,8 +122,8 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
 /// Render the status bar (health, XP, gold, game clock, status effects)
 pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcons, game_time: f32) {
     // Calculate window height based on number of status effects
-    // (base includes the HP, XP, gold and game-clock rows)
-    let base_height = 112.0;
+    // (base includes the HP, XP, hunger, fatigue, gold and game-clock rows)
+    let base_height = 156.0;
     let effects_height = if data.active_effects.is_empty() {
         0.0
     } else {
@@ -106,7 +132,15 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
     let defense_height = if data.defense > 0 { 22.0 } else { 0.0 };
     let concealed_height = if data.is_concealed { 22.0 } else { 0.0 };
     let sneaking_height = if data.is_sneaking { 22.0 } else { 0.0 };
-    let window_height = base_height + effects_height + defense_height + concealed_height + sneaking_height;
+    let hunger_label_height = if data.hunger_state != HungerState::Fed { 22.0 } else { 0.0 };
+    let fatigue_label_height = if data.fatigue_state != FatigueState::Rested { 22.0 } else { 0.0 };
+    let window_height = base_height
+        + effects_height
+        + defense_height
+        + concealed_height
+        + sneaking_height
+        + hunger_label_height
+        + fatigue_label_height;
 
     egui::Window::new("Status")
         .fixed_pos([10.0, 10.0])
@@ -156,6 +190,42 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                 );
             });
 
+            // Hunger bar with cheese icon (drains over time; food refills it)
+            ui.horizontal(|ui| {
+                let food_img = egui::Image::new(egui::load::SizedTexture::new(
+                    icons.items_texture_id,
+                    egui::vec2(16.0, 16.0),
+                ))
+                .uv(icons.cheese_uv);
+                ui.add(food_img);
+                let hunger_frac = (data.hunger / HUNGER_MAX).clamp(0.0, 1.0);
+                ui.add_sized(
+                    [180.0, 18.0],
+                    egui::ProgressBar::new(hunger_frac)
+                        .fill(egui::Color32::from_rgb(190, 130, 55))
+                        .text(format!("{:.0}/{:.0}", data.hunger, HUNGER_MAX)),
+                );
+            });
+
+            // Fatigue bar ("Zz") — fills up as the player gets more tired.
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [16.0, 16.0],
+                    egui::Label::new(
+                        egui::RichText::new("Zz")
+                            .strong()
+                            .color(egui::Color32::from_rgb(150, 140, 210)),
+                    ),
+                );
+                let fatigue_frac = (data.fatigue / FATIGUE_MAX).clamp(0.0, 1.0);
+                ui.add_sized(
+                    [180.0, 18.0],
+                    egui::ProgressBar::new(fatigue_frac)
+                        .fill(egui::Color32::from_rgb(110, 100, 185))
+                        .text(format!("{:.0}/{:.0}", data.fatigue, FATIGUE_MAX)),
+                );
+            });
+
             // Gold with coins icon
             ui.horizontal(|ui| {
                 let coin_img = egui::Image::new(egui::load::SizedTexture::new(
@@ -192,6 +262,42 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                             .color(egui::Color32::from_rgb(150, 120, 210)),
                     );
                 });
+            }
+
+            // Hunger warning label (derived from the hunger meter)
+            match data.hunger_state {
+                HungerState::Hungry => {
+                    ui.label(
+                        egui::RichText::new("Hungry — no natural healing")
+                            .color(egui::Color32::from_rgb(220, 160, 70)),
+                    );
+                }
+                HungerState::Starving => {
+                    ui.label(
+                        egui::RichText::new("Starving!")
+                            .strong()
+                            .color(egui::Color32::from_rgb(230, 80, 70)),
+                    );
+                }
+                HungerState::Fed => {}
+            }
+
+            // Fatigue warning label (derived from the fatigue meter)
+            match data.fatigue_state {
+                FatigueState::Tired => {
+                    ui.label(
+                        egui::RichText::new("Tired — sloppy and easy to spot")
+                            .color(egui::Color32::from_rgb(200, 190, 110)),
+                    );
+                }
+                FatigueState::Exhausted => {
+                    ui.label(
+                        egui::RichText::new("Exhausted!")
+                            .strong()
+                            .color(egui::Color32::from_rgb(170, 120, 220)),
+                    );
+                }
+                FatigueState::Rested => {}
             }
 
             // Elapsed game time (HH:MM:SS)

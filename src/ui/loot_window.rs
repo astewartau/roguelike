@@ -6,7 +6,6 @@ use super::icons::UiIcons;
 use super::style;
 use super::UiActions;
 use crate::components::{Container, ItemInstance};
-use crate::systems;
 use hecs::World;
 
 /// Data needed to render the loot window
@@ -98,17 +97,23 @@ pub fn draw_loot_window(
                             egui::vec2(40.0, 40.0),
                         ))
                         .uv(uv)
+                        .tint(UiIcons::item_ui_tint(item_type))
                         .bg_fill(style::colors::PANEL_BG);
 
-                        let item_name = systems::item_name(item_type);
+                        let item_name = instance.display_name();
                         let response = ui.add(egui::ImageButton::new(image).frame(false));
 
-                        // Affix lines for the hover tooltip
-                        let affix_text: String = instance
-                            .affixes
-                            .iter()
-                            .map(|a| format!("\n{}", a.label()))
-                            .collect();
+                        // Affix lines for the hover tooltip. Unidentified gear
+                        // shows its rarity but hides components behind "???".
+                        let affix_text: String = if instance.identified {
+                            instance
+                                .affixes
+                                .iter()
+                                .map(|a| format!("\n{}", a.describe()))
+                                .collect()
+                        } else {
+                            instance.affixes.iter().map(|_| "\n???".to_string()).collect()
+                        };
                         if response
                             .on_hover_text(format!(
                                 "{} ({}){}\n\nClick to take",

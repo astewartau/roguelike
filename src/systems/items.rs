@@ -29,6 +29,9 @@ pub enum ItemUseResult {
     ApplyFearToVisible,
     /// Scroll of Slow: apply slow to all visible enemies
     ApplySlowToVisible,
+    /// Empty water flask: try to fill it from an adjacent water tile
+    /// (needs grid access, so the caller resolves it via `fill_water_flask`)
+    FillWaterFlask { item_index: usize },
 }
 
 /// Get the display name of an item
@@ -66,12 +69,40 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         inv.items[item_index].kind
     };
 
+    // Water flasks are stateful (empty <-> full) and are handled specially
+    // rather than through the def table:
+    //  - drinking a full flask douses any Burning on the drinker and leaves
+    //    the empty flask behind (the kind swaps in place; same weight);
+    //  - an empty flask needs grid access to find water, so the caller
+    //    resolves the returned FillWaterFlask via `fill_water_flask`.
+    match item_type {
+        ItemType::WaterFlaskFull => {
+            super::effects::remove_effect_from_entity(
+                world,
+                entity,
+                crate::components::EffectType::Burning,
+            );
+            if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
+                if let Some(item) = inv.items.get_mut(item_index) {
+                    item.kind = ItemType::WaterFlaskEmpty;
+                }
+            }
+            return ItemUseResult::Used { item_type };
+        }
+        ItemType::WaterFlaskEmpty => {
+            return ItemUseResult::FillWaterFlask { item_index };
+        }
+        _ => {}
+    }
+
     let def = get_def(item_type);
 
     // Handle based on use effect from definition
     let result = match def.use_effect {
         UseEffect::Equip => {
-            if def.category == ItemCategory::Armor {
+            // Armor and accessories both route through the body/head/ring/
+            // amulet slot path; only true weapons go to the weapon slot.
+            if matches!(def.category, ItemCategory::Armor | ItemCategory::Accessory) {
                 return ItemUseResult::IsArmor { item_type, item_index };
             }
             return ItemUseResult::IsWeapon { item_type, item_index };
@@ -81,9 +112,22 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         }
         UseEffect::Heal(amount) => {
             apply_heal(world, entity, amount);
+            // Food's primary job is feeding the hunger meter; the heal is a
+            // small side benefit. No-op for non-food healers (potions).
+            if let Some(hunger) = super::survival::food_hunger_restore(item_type) {
+                super::survival::restore_hunger(world, entity, hunger);
+            }
             ItemUseResult::Used { item_type }
         }
         UseEffect::ApplyEffect(effect_type, duration) => {
+            // Scroll magnitudes scale with the reader's effective INT
+            // (Invisibility/Speed/Protection durations). Potions are alchemy,
+            // not magic — they stay fixed.
+            let duration = if def.category == ItemCategory::Scroll {
+                duration * crate::queries::int_power(world, entity)
+            } else {
+                duration
+            };
             apply_status_effect(world, entity, effect_type, duration);
             ItemUseResult::Used { item_type }
         }
@@ -109,6 +153,38 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
     }
 
     result
+}
+
+/// Try to fill an empty water flask: succeeds if the entity is standing on or
+/// next to a water tile, swapping the inventory item to a full flask in place.
+/// Returns whether the flask was filled.
+pub fn fill_water_flask(
+    world: &mut World,
+    grid: &crate::grid::Grid,
+    entity: Entity,
+    item_index: usize,
+) -> bool {
+    let Some((px, py)) = crate::queries::get_entity_position(world, entity) else {
+        return false;
+    };
+
+    let near_water = grid
+        .water_positions
+        .iter()
+        .any(|&(wx, wy)| (wx - px).abs() <= 1 && (wy - py).abs() <= 1);
+    if !near_water {
+        return false;
+    }
+
+    if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
+        if let Some(item) = inv.items.get_mut(item_index) {
+            if item.kind == ItemType::WaterFlaskEmpty {
+                item.kind = ItemType::WaterFlaskFull;
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // Helper functions for applying item effects
@@ -202,6 +278,86 @@ mod tests {
         // Weapons don't require targeting
         assert!(!item_requires_target(ItemType::Sword));
         assert!(!item_requires_target(ItemType::Bow));
+    }
+
+    #[test]
+    fn test_water_flask_fill_and_empty_transitions() {
+        use crate::components::{ItemInstance, Position, StatusEffects};
+        use crate::grid::Grid;
+        use crate::tile::{Tile, TileType};
+
+        let mut world = hecs::World::new();
+        let mut inv = Inventory::new();
+        inv.items.push(ItemInstance::plain(ItemType::WaterFlaskEmpty));
+        let entity = world.spawn((Position::new(2, 2), inv, StatusEffects::new()));
+
+        let mut grid = Grid {
+            width: 5,
+            height: 5,
+            tiles: vec![Tile::new(TileType::Floor); 25],
+            chest_positions: vec![],
+            door_positions: vec![],
+            brazier_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
+            starting_room: None,
+            illumination: vec![0.0; 25],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
+        };
+
+        // Using the empty flask defers to the fill flow.
+        assert_eq!(
+            use_item(&mut world, entity, 0),
+            ItemUseResult::FillWaterFlask { item_index: 0 }
+        );
+
+        // No water anywhere: fill fails, flask stays empty.
+        assert!(!super::fill_water_flask(&mut world, &grid, entity, 0));
+        {
+            let inv = world.get::<&Inventory>(entity).expect("inventory");
+            assert_eq!(inv.items[0].kind, ItemType::WaterFlaskEmpty);
+        }
+
+        // Water adjacent: fill succeeds, flask becomes full.
+        grid.water_positions.push((3, 2));
+        assert!(super::fill_water_flask(&mut world, &grid, entity, 0));
+        {
+            let inv = world.get::<&Inventory>(entity).expect("inventory");
+            assert_eq!(inv.items[0].kind, ItemType::WaterFlaskFull);
+        }
+
+        // Drinking the full flask douses Burning on self and leaves the empty
+        // flask behind (not consumed).
+        crate::systems::effects::add_effect_to_entity(
+            &mut world,
+            entity,
+            crate::components::EffectType::Burning,
+            10.0,
+        );
+        assert_eq!(
+            use_item(&mut world, entity, 0),
+            ItemUseResult::Used { item_type: ItemType::WaterFlaskFull }
+        );
+        let inv = world.get::<&Inventory>(entity).expect("inventory");
+        assert_eq!(inv.items.len(), 1, "flask must not be consumed");
+        assert_eq!(inv.items[0].kind, ItemType::WaterFlaskEmpty);
+        drop(inv);
+        let burning = crate::systems::effects::entity_has_effect(
+            &world,
+            entity,
+            crate::components::EffectType::Burning,
+        );
+        assert!(!burning, "drinking the flask douses the drinker");
     }
 
     #[test]

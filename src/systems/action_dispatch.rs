@@ -53,6 +53,12 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::Tumble { .. } => TUMBLE_DURATION, // Ranger roll
         ActionType::PlaceSnareTrap { .. } => SNARE_TRAP_DURATION, // Ranger trap
         ActionType::ShootCripplingShot { .. } => ACTION_SHOOT_DURATION, // Same as bow shot
+        ActionType::CastLearnedSpell { ability, .. } => match ability {
+            // Learned Fireball mirrors the scroll cast; the rest are quick
+            crate::components::AbilityType::LearnedFireball => ACTION_SHOOT_DURATION,
+            _ => ACTION_WAIT_DURATION,
+        },
+        ActionType::StartRaiseDead { .. } => ACTION_WAIT_DURATION, // Starting the channel (quick)
         ActionType::Recover => ACTION_RECOVER_DURATION, // Post-shot recovery
     };
 

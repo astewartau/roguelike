@@ -1,11 +1,14 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, CompanionAI, Container, Door, EffectType, Equipment, Experience, Health,
-    ItemInstance, ItemType, Position, Sprite, Stats, Weapon,
+    Actor, Affix, Attackable, BlocksMovement, ChaseAI, CompanionAI, Container, Door, EffectType,
+    Equipment, Experience, Health, ItemInstance, ItemType, Position, Sprite, Stats, VisualPosition,
+    Weapon,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
+use crate::grid::Grid;
+use crate::spatial_cache::SpatialCache;
 use crate::systems::experience::{calculate_xp_value, grant_xp};
 use crate::tile::tile_ids;
 use crate::time_system::ActionScheduler;
@@ -15,6 +18,237 @@ use rand::Rng;
 /// Calculate total damage for a weapon
 pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
+}
+
+/// Amount healed by an `OnHitLifesteal` affix for a given hit.
+/// Always at least 1 when any damage was dealt.
+pub fn lifesteal_heal(damage: i32, fraction: f32) -> i32 {
+    if damage <= 0 {
+        return 0;
+    }
+    ((damage as f32 * fraction).round() as i32).max(1)
+}
+
+/// Attacker-side damage multiplier from conditional states:
+/// - `LowHealthDamage` weapon affix: bonus damage while the attacker is below
+///   the low-health threshold;
+/// - Tired (player-only `Fatigue` meter above the threshold): -10% damage.
+///
+/// Multiply raw weapon damage by this before `apply_damage`.
+pub fn attacker_conditional_damage_mult(world: &World, attacker: Entity) -> f32 {
+    let mut mult = 1.0;
+
+    // Tired attackers swing softer (player-only; enemies have no Fatigue).
+    let tired = world
+        .get::<&crate::components::Fatigue>(attacker)
+        .map(|f| f.is_tired())
+        .unwrap_or(false);
+    if tired {
+        mult *= TIRED_DAMAGE_MULT;
+    }
+
+    let low_health = world
+        .get::<&Health>(attacker)
+        .map(|h| (h.current as f32) < (h.max as f32 * LOW_HEALTH_DAMAGE_THRESHOLD))
+        .unwrap_or(false);
+    if low_health {
+        if let Ok(equipment) = world.get::<&Equipment>(attacker) {
+            if let Some(source) = equipment.weapon_source.as_ref() {
+                for affix in &source.affixes {
+                    if let Affix::LowHealthDamage(bonus) = affix {
+                        mult += bonus;
+                    }
+                }
+            }
+        }
+    }
+    mult
+}
+
+/// Noise radius of an attack made by `attacker`: the base radius, doubled if
+/// any worn gear carries the `CursedLoud` affix. Curses apply while equipped
+/// whether or not the item has been identified.
+pub fn attack_noise_radius(world: &World, attacker: Entity, base: i32) -> i32 {
+    let loud = world
+        .get::<&Equipment>(attacker)
+        .map(|e| e.has_cursed_loud())
+        .unwrap_or(false);
+    if loud {
+        base * 2
+    } else {
+        base
+    }
+}
+
+/// Resolve all weapon on-hit affix components after a successful hit.
+///
+/// This is the single chokepoint for on-hit triggers: the melee path
+/// (`actions::apply_attack` / `apply_cleave`) and the projectile hit path
+/// (`projectile::update_projectiles`) both route through here — do NOT
+/// re-implement per-ability. No-op for attackers without a `weapon_source`
+/// (enemy claws/bows are not item instances).
+pub fn resolve_weapon_on_hit(
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut SpatialCache,
+    attacker: Entity,
+    target: Entity,
+    damage: i32,
+    events: &mut EventQueue,
+) {
+    if damage <= 0 {
+        return;
+    }
+
+    let affixes: Vec<Affix> = match world.get::<&Equipment>(attacker) {
+        Ok(e) => match e.weapon_source.as_ref() {
+            Some(source) => source.affixes.clone(),
+            None => return,
+        },
+        Err(_) => return,
+    };
+    if affixes.is_empty() {
+        return;
+    }
+
+    let target_died = world
+        .get::<&Health>(target)
+        .map(|h| h.current <= 0)
+        .unwrap_or(true);
+
+    let mut rng = rand::thread_rng();
+    for affix in &affixes {
+        match affix {
+            Affix::OnHitIgnite(chance) => {
+                // Same Burning status the fire system applies (see
+                // fire::try_combat_ignite); the fire system then handles
+                // spread, grass ignition, and dousing.
+                if !target_died && rng.gen::<f32>() < *chance {
+                    crate::systems::effects::add_effect_to_entity(
+                        world,
+                        target,
+                        EffectType::Burning,
+                        BURNING_DURATION,
+                    );
+                    if let Some(pos) = crate::queries::get_entity_position(world, target) {
+                        events.push(GameEvent::CaughtFire { entity: target, position: pos });
+                    }
+                }
+            }
+            Affix::OnHitSlow(chance) => {
+                if !target_died && rng.gen::<f32>() < *chance {
+                    crate::systems::effects::add_effect_to_entity(
+                        world,
+                        target,
+                        EffectType::Slowed,
+                        ON_HIT_SLOW_DURATION,
+                    );
+                }
+            }
+            Affix::OnHitFear(chance) => {
+                if !target_died && rng.gen::<f32>() < *chance {
+                    crate::systems::effects::add_effect_to_entity(
+                        world,
+                        target,
+                        EffectType::Feared,
+                        ON_HIT_FEAR_DURATION,
+                    );
+                }
+            }
+            Affix::OnHitLifesteal(fraction) => {
+                heal_entity(world, attacker, lifesteal_heal(damage, *fraction));
+            }
+            Affix::OnHitKnockback => {
+                if !target_died {
+                    try_knockback(world, grid, spatial_cache, attacker, target, events);
+                }
+            }
+            Affix::KillHeal(amount) => {
+                if target_died {
+                    heal_entity(world, attacker, *amount);
+                }
+            }
+            // Attacker-side conditional, applied pre-damage via
+            // attacker_conditional_damage_mult.
+            Affix::LowHealthDamage(_) => {}
+            // Stat / flat / curse affixes have no on-hit trigger.
+            _ => {}
+        }
+    }
+}
+
+/// Heal an entity, clamped to its max health.
+fn heal_entity(world: &mut World, entity: Entity, amount: i32) {
+    if amount <= 0 {
+        return;
+    }
+    if let Ok(mut health) = world.get::<&mut Health>(entity) {
+        if health.current > 0 {
+            health.current = (health.current + amount).min(health.max);
+        }
+    }
+}
+
+/// Push `target` one tile directly away from `attacker` if the destination
+/// tile is walkable and unoccupied. Updates the spatial cache and emits an
+/// `EntityMoved` event so downstream systems stay consistent.
+fn try_knockback(
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut SpatialCache,
+    attacker: Entity,
+    target: Entity,
+    events: &mut EventQueue,
+) {
+    let Some((ax, ay)) = crate::queries::get_entity_position(world, attacker) else {
+        return;
+    };
+    let Some((tx, ty)) = crate::queries::get_entity_position(world, target) else {
+        return;
+    };
+
+    let dx = (tx - ax).signum();
+    let dy = (ty - ay).signum();
+    if dx == 0 && dy == 0 {
+        return;
+    }
+
+    let dest = (tx + dx, ty + dy);
+    if !grid.is_walkable(dest.0, dest.1) {
+        return;
+    }
+    if crate::queries::is_position_blocked(world, dest.0, dest.1, Some(target)) {
+        return;
+    }
+
+    if let Ok(mut pos) = world.get::<&mut Position>(target) {
+        pos.x = dest.0;
+        pos.y = dest.1;
+    } else {
+        return;
+    }
+    // Snap the visual so the shove reads as an impact rather than a stroll.
+    if let Ok(mut vis) = world.get::<&mut VisualPosition>(target) {
+        vis.x = dest.0 as f32;
+        vis.y = dest.1 as f32;
+    }
+    spatial_cache.update_position(target, (tx, ty), dest);
+    events.push(GameEvent::EntityMoved {
+        entity: target,
+        from: (tx, ty),
+        to: dest,
+    });
+
+    // Knocked into a lit brazier? It topples onto the victim, spilling fire
+    // over the tile they just landed on (see systems::fire::topple_brazier).
+    let brazier_hit: Option<Entity> = world
+        .query::<(&Position, &crate::components::Brazier)>()
+        .iter()
+        .find(|(_, (p, b))| b.lit && p.x == dest.0 && p.y == dest.1)
+        .map(|(id, _)| id);
+    if let Some(brazier) = brazier_hit {
+        crate::systems::fire::topple_brazier(world, grid, brazier, events);
+    }
 }
 
 /// Apply `raw` incoming damage to `target`, accounting for invulnerability,
@@ -32,10 +266,13 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
     }
 
     // Sneak attack: an unaware target takes extra damage from this hit.
+    // Symmetric for the player: while asleep (the `Asleep` marker the sleep
+    // action adds) the player counts as unaware and eats the same multiplier.
     let unaware = world
         .get::<&ChaseAI>(target)
         .map(|ai| ai.state == crate::components::AIState::Unaware)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || world.get::<&crate::components::Asleep>(target).is_ok();
     let mut dmg = if unaware {
         (raw as f32 * SNEAK_ATTACK_MULT) as i32
     } else {
@@ -70,7 +307,11 @@ pub fn apply_damage(world: &mut World, target: Entity, raw: i32) -> i32 {
     crate::systems::ai::wake_on_attacked(world, target);
 
     // Morale: a surviving enemy that drops below the HP threshold may panic.
-    if hp_after.0 > 0 && world.get::<&ChaseAI>(target).is_ok() {
+    // Bosses (FearImmune) never break.
+    if hp_after.0 > 0
+        && world.get::<&ChaseAI>(target).is_ok()
+        && world.get::<&crate::components::FearImmune>(target).is_err()
+    {
         let frac = hp_after.0 as f32 / hp_after.1 as f32;
         if frac < MORALE_HP_THRESHOLD && rand::thread_rng().gen_bool(MORALE_FLEE_CHANCE) {
             crate::systems::effects::add_effect_to_entity(
@@ -145,25 +386,45 @@ pub fn handle_door_closed(world: &mut World, door_id: Entity) {
     }
 }
 
-/// Turn dead entities into bones (health <= 0) and grant XP to player
-/// Also cancels any pending actions for dead entities in the scheduler
+/// Turn dead entities into bones (health <= 0) and grant XP to player.
+/// Also cancels any pending actions for dead entities in the scheduler.
+/// Returns the number of hostile enemies (ChaseAI) that died, so the engine
+/// can keep the run's kill counter (companion deaths don't count).
+/// `floor` scales corpse gold with depth (see `ENEMY_GOLD_PER_FLOOR`).
 pub fn remove_dead_entities(
     world: &mut World,
     player_entity: Entity,
+    floor: u32,
     rng: &mut impl Rng,
     events: &mut EventQueue,
     mut scheduler: Option<&mut ActionScheduler>,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
-) {
+) -> u32 {
     let mut to_convert = Vec::new();
+    let mut hostile_kills: u32 = 0;
 
     for (id, (pos, health, stats)) in world.query::<(&Position, &Health, Option<&Stats>)>().iter()
     {
         // Never convert the player into a corpse - the player keeps its Health
         // component (at <=0) so the engine can detect death and show the retry
         // screen. The dead player is handled separately by the game over flow.
+        // Oil barrels are also skipped: a destroyed barrel detonates in the
+        // fire system (systems::fire::tick_fire) instead of leaving bones.
+        if world.entity(id).map(|e| e.has::<crate::components::OilBarrel>()).unwrap_or(false) {
+            continue;
+        }
         if id != player_entity && health.current <= 0 {
-            let xp = calculate_xp_value(stats);
+            // Bosses grant a bonus multiple of their (already stat-inflated) XP.
+            let is_boss = world
+                .entity(id)
+                .map(|e| e.has::<crate::components::Boss>())
+                .unwrap_or(false);
+            let xp = calculate_xp_value(stats) * if is_boss { BOSS_XP_MULT } else { 1 };
+            // Kill counter: hostile enemies only (companions carry
+            // CompanionAI instead of ChaseAI and don't count).
+            if world.entity(id).map(|e| e.has::<ChaseAI>()).unwrap_or(false) {
+                hostile_kills += 1;
+            }
             to_convert.push((id, (pos.x as f32 + 0.5, pos.y as f32 + 0.5), xp));
         }
     }
@@ -193,11 +454,29 @@ pub fn remove_dead_entities(
             sched.cancel_for_entity(id);
         }
 
+        // Boss deaths are floor milestones: flourish message via a dedicated
+        // event (fired before EntityDied so the log reads slain-then-eulogy).
+        let boss_name: Option<String> = if world
+            .entity(id)
+            .map(|e| e.has::<crate::components::Boss>())
+            .unwrap_or(false)
+        {
+            world
+                .get::<&crate::components::Name>(id)
+                .map(|n| n.0.clone())
+                .ok()
+        } else {
+            None
+        };
+
         // Emit death event
         events.push(GameEvent::EntityDied {
             entity: id,
             position,
         });
+        if let Some(name) = boss_name {
+            events.push(GameEvent::BossDefeated { name });
+        }
 
         // Remove from spatial cache before removing components
         spatial_cache.remove_entity(id);
@@ -226,8 +505,13 @@ pub fn remove_dead_entities(
             sprite.tile_id = bones_ref.1;
         }
 
-        // Add loot container with random gold
-        let gold = rng.gen_range(ENEMY_GOLD_DROP_MIN..=ENEMY_GOLD_DROP_MAX);
+        // Add loot container with random gold, scaled by depth (bosses hoard
+        // a fat purse on top)
+        let mut gold =
+            rng.gen_range(ENEMY_GOLD_DROP_MIN..=ENEMY_GOLD_DROP_MAX) + floor * ENEMY_GOLD_PER_FLOOR;
+        if world.get::<&crate::components::Boss>(id).is_ok() {
+            gold *= BOSS_GOLD_MULT;
+        }
 
         // Check if enemy had a bow - 50% chance to drop arrows
         let mut loot_items = Vec::new();
@@ -247,9 +531,11 @@ pub fn remove_dead_entities(
     }
 
     // Ally-death morale: living enemies near a fresh corpse may panic and flee.
+    // Bosses (FearImmune) are unshakable.
     for (dx, dy) in death_positions {
         let nearby: Vec<Entity> = world
             .query::<(&Position, &ChaseAI, &Health)>()
+            .without::<&crate::components::FearImmune>()
             .iter()
             .filter(|(_, (pos, _, h))| {
                 h.current > 0 && (pos.x - dx).abs().max((pos.y - dy).abs()) <= ALLY_DEATH_MORALE_RADIUS
@@ -267,6 +553,8 @@ pub fn remove_dead_entities(
             }
         }
     }
+
+    hostile_kills
 }
 
 #[cfg(test)]
@@ -283,5 +571,18 @@ mod tests {
             damage_bonus: 2,
         };
         assert_eq!(weapon_damage(&weapon), 7);
+    }
+
+    #[test]
+    fn test_lifesteal_heal_math() {
+        // 25% of 12 damage = 3
+        assert_eq!(lifesteal_heal(12, 0.25), 3);
+        // Rounds to nearest: 10% of 14 = 1.4 -> 1
+        assert_eq!(lifesteal_heal(14, 0.10), 1);
+        // Always at least 1 when damage was dealt
+        assert_eq!(lifesteal_heal(1, 0.10), 1);
+        // No heal without damage
+        assert_eq!(lifesteal_heal(0, 0.25), 0);
+        assert_eq!(lifesteal_heal(-5, 0.25), 0);
     }
 }

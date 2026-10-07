@@ -17,6 +17,48 @@ pub struct InventoryWindowData {
     pub viewport_height: f32,
 }
 
+/// Color used for identified curse lines in tooltips.
+const CURSE_TEXT: egui::Color32 = egui::Color32::from_rgb(205, 90, 80);
+
+/// Rarity + affix block for a gear tooltip.
+///
+/// Unidentified items show their rarity color and an "Unidentified" tag but
+/// hide their affix lines behind "???" (Legendary names are hidden through
+/// `ItemInstance::display_name`). Identified curse lines render red.
+fn affix_block_ui(ui: &mut egui::Ui, inst: &crate::components::ItemInstance) {
+    use crate::components::Rarity;
+    if inst.rarity == Rarity::Common && inst.affixes.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(inst.rarity.label()).color(style::rarity_color(inst.rarity)));
+    if !inst.identified {
+        ui.label(
+            egui::RichText::new("Unidentified")
+                .italics()
+                .color(style::colors::TEXT_MUTED),
+        );
+        for _ in &inst.affixes {
+            ui.label(egui::RichText::new("???").color(style::colors::TEXT_MUTED));
+        }
+    } else {
+        for affix in &inst.affixes {
+            let color = if affix.is_curse() {
+                CURSE_TEXT
+            } else {
+                style::colors::TEXT_PRIMARY
+            };
+            ui.label(egui::RichText::new(affix.describe()).color(color));
+        }
+    }
+}
+
+/// Muted footer hint lines for a tooltip ("Click to unequip", ...).
+fn tooltip_hint_ui(ui: &mut egui::Ui, hint: &str) {
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(hint).small().color(style::colors::TEXT_MUTED));
+}
+
 /// Render the inventory/character window
 pub fn draw_inventory_window(
     ctx: &egui::Context,
@@ -103,15 +145,25 @@ fn draw_stats_column(
         ui.heading("CHARACTER STATS");
         ui.separator();
         ui.add_space(10.0);
-        ui.label(format!("Strength: {}", stats.strength));
+        // Effective stats include stat affixes on equipped gear; show the
+        // gear contribution alongside the base value.
+        let effective = crate::queries::effective_stats(world, player_entity);
+        let stat_line = |label: &str, base: i32, eff: i32| {
+            if eff != base {
+                format!("{}: {} ({:+})", label, eff, eff - base)
+            } else {
+                format!("{}: {}", label, base)
+            }
+        };
+        ui.label(stat_line("Strength", stats.strength, effective.strength));
         ui.add_space(5.0);
-        ui.label(format!("Intelligence: {}", stats.intelligence));
+        ui.label(stat_line("Intelligence", stats.intelligence, effective.intelligence));
         ui.add_space(5.0);
-        ui.label(format!("Agility: {}", stats.agility));
+        ui.label(stat_line("Agility", stats.agility, effective.agility));
         ui.add_space(10.0);
         ui.separator();
 
-        let carry_capacity = stats.strength as f32 * 2.0;
+        let carry_capacity = effective.strength as f32 * 2.0;
         if let Ok(inventory) = world.get::<&Inventory>(player_entity) {
             ui.label(format!(
                 "Weight: {:.1} / {:.1} kg",
@@ -142,18 +194,7 @@ fn draw_stats_column(
         ui.add_space(10.0);
 
         if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
-            // Affix/rarity suffix for the equipped weapon's tooltip
-            let weapon_affix_text: String = equipment
-                .weapon_source
-                .as_ref()
-                .filter(|inst| !inst.affixes.is_empty()
-                    || inst.rarity != crate::components::Rarity::Common)
-                .map(|inst| {
-                    let affixes: String =
-                        inst.affixes.iter().map(|a| format!("\n{}", a.label())).collect();
-                    format!("\n\n{}{}", inst.rarity.label(), affixes)
-                })
-                .unwrap_or_default();
+            let weapon_source = equipment.weapon_source.as_ref();
 
             // Single weapon slot
             ui.horizontal(|ui| {
@@ -178,14 +219,23 @@ fn draw_stats_column(
                         .uv(weapon_uv);
                         image.paint_at(ui, rect);
 
-                        let response = response.on_hover_text(format!(
-                            "{}\n\nDamage: {} + {} = {}{}\n\nClick to unequip\nRight-click for options",
-                            weapon.name,
-                            weapon.base_damage,
-                            weapon.damage_bonus,
-                            systems::weapon_damage(weapon),
-                            weapon_affix_text
-                        ));
+                        // Unidentified sources hide their (Legendary) name
+                        let title = weapon_source
+                            .map(|inst| inst.display_name())
+                            .unwrap_or_else(|| weapon.name.clone());
+                        let response = response.on_hover_ui(|ui| {
+                            ui.label(egui::RichText::new(title).strong());
+                            ui.label(format!(
+                                "Damage: {} + {} = {}",
+                                weapon.base_damage,
+                                weapon.damage_bonus,
+                                systems::weapon_damage(weapon),
+                            ));
+                            if let Some(inst) = weapon_source {
+                                affix_block_ui(ui, inst);
+                            }
+                            tooltip_hint_ui(ui, "Click to unequip\nRight-click for options");
+                        });
 
                         // Left-click unequips
                         if response.clicked() {
@@ -210,10 +260,20 @@ fn draw_stats_column(
                         .uv(icons.bow_uv);
                         image.paint_at(ui, rect);
 
-                        let response = response.on_hover_text(format!(
-                            "{}\n\nDamage: {}\nSpeed: {:.0} tiles/sec{}\n\nClick to unequip\nRight-click for options",
-                            bow.name, bow.base_damage, bow.arrow_speed, weapon_affix_text
-                        ));
+                        let title = weapon_source
+                            .map(|inst| inst.display_name())
+                            .unwrap_or_else(|| bow.name.clone());
+                        let response = response.on_hover_ui(|ui| {
+                            ui.label(egui::RichText::new(title).strong());
+                            ui.label(format!(
+                                "Damage: {}\nSpeed: {:.0} tiles/sec",
+                                bow.base_damage, bow.arrow_speed,
+                            ));
+                            if let Some(inst) = weapon_source {
+                                affix_block_ui(ui, inst);
+                            }
+                            tooltip_hint_ui(ui, "Click to unequip\nRight-click for options");
+                        });
 
                         // Left-click unequips
                         if response.clicked() {
@@ -235,11 +295,13 @@ fn draw_stats_column(
                 }
             });
 
-            // Armor slots (body / head)
-            use crate::systems::item_defs::{armor_base_defense, ArmorSlot};
+            // Armor + accessory slots (body / head / ring / amulet)
+            use crate::systems::item_defs::{armor_base_defense, is_accessory_kind, ArmorSlot};
             for (label, slot, piece) in [
                 ("Body:", ArmorSlot::Body, &equipment.body),
                 ("Head:", ArmorSlot::Head, &equipment.head),
+                ("Ring:", ArmorSlot::Ring, &equipment.ring),
+                ("Amulet:", ArmorSlot::Amulet, &equipment.amulet),
             ] {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -255,16 +317,22 @@ fn draw_stats_column(
                             .uv(icons.get_item_uv(instance.kind));
                             image.paint_at(ui, rect);
 
-                            let defense = armor_base_defense(instance.kind) + instance.defense_bonus();
-                            let affixes: String =
-                                instance.affixes.iter().map(|a| format!("\n{}", a.label())).collect();
-                            let response = response.on_hover_text(format!(
-                                "{} ({})\n\nDefense: {}{}\n\nClick to unequip",
-                                systems::item_name(instance.kind),
-                                instance.rarity.label(),
-                                defense,
-                                affixes,
-                            ));
+                            let response = response.on_hover_ui(|ui| {
+                                ui.label(egui::RichText::new(instance.display_name()).strong());
+                                // Accessories are pure affix carriers: no defense line.
+                                // Unidentified armor only shows its known base defense.
+                                if !is_accessory_kind(instance.kind) {
+                                    let defense = armor_base_defense(instance.kind)
+                                        + if instance.identified {
+                                            instance.defense_bonus()
+                                        } else {
+                                            0
+                                        };
+                                    ui.label(format!("Defense: {}", defense));
+                                }
+                                affix_block_ui(ui, instance);
+                                tooltip_hint_ui(ui, "Click to unequip");
+                            });
                             if response.clicked() {
                                 actions.unequip_armor = Some(slot);
                             }
@@ -307,6 +375,12 @@ fn draw_inventory_column(
         ui.separator();
         ui.add_space(10.0);
 
+        // Which ammo the bow currently loads (for the tooltip marker)
+        let active_ammo = world
+            .get::<&crate::components::ActiveAmmo>(player_entity)
+            .map(|a| a.kind)
+            .unwrap_or(crate::components::ItemType::Arrow);
+
         if let Ok(inventory) = world.get::<&Inventory>(player_entity) {
             if inventory.items.is_empty() {
                 ui.label(
@@ -332,12 +406,13 @@ fn draw_inventory_column(
                         // Paint black background first
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
 
-                        // Then paint the image on top
+                        // Then paint the image on top (fire arrows tinted orange)
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.items_texture_id,
                             size,
                         ))
-                        .uv(uv);
+                        .uv(uv)
+                        .tint(UiIcons::item_ui_tint(slot.item_type));
                         image.paint_at(ui, rect);
 
                         // Draw stack count if more than 1
@@ -361,46 +436,62 @@ fn draw_inventory_column(
                             );
                         }
 
-                        // Rarity + affix lines for gear (looked up from the backing instance)
-                        let gear_text: String = inventory
-                            .items
-                            .get(slot.first_index)
-                            .filter(|inst| !inst.affixes.is_empty()
-                                || inst.rarity != crate::components::Rarity::Common)
-                            .map(|inst| {
-                                let affixes: String =
-                                    inst.affixes.iter().map(|a| format!("\n{}", a.label())).collect();
-                                format!(" ({}){}", inst.rarity.label(), affixes)
-                            })
-                            .unwrap_or_default();
+                        // Rarity + affix block for gear (looked up from the backing
+                        // instance); identified Legendary items show their name,
+                        // unidentified gear hides affixes behind "???".
+                        let backing = inventory.items.get(slot.first_index);
+                        let item_display_name = backing
+                            .map(|inst| inst.display_name())
+                            .unwrap_or_else(|| systems::item_name(slot.item_type).to_string());
 
-                        // Build hover text based on item type
-                        let hover_text = if slot.count > 1 {
-                            format!(
-                                "{} (x{})\n\nRight-click for options",
-                                systems::item_name(slot.item_type),
-                                slot.count
-                            )
-                        } else if is_throwable {
-                            format!(
-                                "{}{}\n\nLeft-click to drink\nRight-click for options",
-                                systems::item_name(slot.item_type),
-                                gear_text
-                            )
+                        // Rarity-colored border so Magic/Rare/Legendary gear stands out
+                        if let Some(inst) = backing {
+                            if inst.rarity != crate::components::Rarity::Common {
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    0.0,
+                                    egui::Stroke::new(2.0, style::rarity_color(inst.rarity)),
+                                );
+                            }
+                        }
+
+                        // Ammo stacks show whether they're the loaded ammo type
+                        let ammo_text = if slot.item_type.is_ammo() {
+                            if slot.item_type == active_ammo {
+                                Some("Active ammo")
+                            } else {
+                                Some("Right-click to use as ammo")
+                            }
                         } else {
-                            format!(
-                                "{}{}\n\nLeft-click to use\nRight-click for options",
-                                systems::item_name(slot.item_type),
-                                gear_text
-                            )
+                            None
                         };
 
-                        let response = response.on_hover_text(hover_text);
+                        let response = response.on_hover_ui(|ui| {
+                            let title = if slot.count > 1 {
+                                format!("{} (x{})", item_display_name, slot.count)
+                            } else {
+                                item_display_name.clone()
+                            };
+                            ui.label(egui::RichText::new(title).strong());
+                            if let Some(inst) = backing {
+                                affix_block_ui(ui, inst);
+                            }
+                            if let Some(ammo) = ammo_text {
+                                ui.add_space(4.0);
+                                ui.label(ammo);
+                            }
+                            let hint = if slot.count > 1 {
+                                "Right-click for options"
+                            } else if is_throwable {
+                                "Left-click to drink\nRight-click for options"
+                            } else {
+                                "Left-click to use\nRight-click for options"
+                            };
+                            tooltip_hint_ui(ui, hint);
+                        });
 
                         // Drag source: carry this item type to the hotbar (ammo excluded)
-                        if response.drag_started()
-                            && slot.item_type != crate::components::ItemType::Arrow
-                        {
+                        if response.drag_started() && !slot.item_type.is_ammo() {
                             response.dnd_set_drag_payload(HotbarDrag::external(HotbarEntry::Item(
                                 slot.item_type,
                             )));
@@ -447,6 +538,12 @@ fn draw_spellbook_column(
         if let Ok(ra) = world.get::<&RangerAbilities>(player_entity) {
             for (at, _, _) in ra.abilities.iter() {
                 abilities.push(*at);
+            }
+        }
+        // Learned spells (studied scrolls + the Necromancer's Raise Dead).
+        if let Ok(la) = world.get::<&crate::components::LearnedAbilities>(player_entity) {
+            for spell in la.spells.iter() {
+                abilities.push(spell.ability);
             }
         }
         // Rest is a universal ability available to every class.
@@ -605,6 +702,33 @@ fn draw_item_context_menu(
                             ui.separator();
                         }
 
+                        // Ammo stacks: select which ammo the bow loads
+                        if item_type.is_ammo() {
+                            if ui.button("Use as ammo").clicked() {
+                                actions.set_active_ammo = Some(item_type);
+                                ui_state.item_context_menu = None;
+                            }
+                        }
+
+                        // Learnable scrolls: Study (consumes the scroll and
+                        // permanently learns its spell if INT allows; trying
+                        // with low INT logs the requirement instead).
+                        if let Some(required_int) =
+                            crate::systems::item_defs::min_learn_int(item_type)
+                        {
+                            let current_int =
+                                crate::queries::effective_stats(world, player_entity).intelligence;
+                            let label = if current_int >= required_int {
+                                "Study".to_string()
+                            } else {
+                                format!("Study (needs {} INT)", required_int)
+                            };
+                            if ui.button(label).clicked() {
+                                actions.item_to_study = Some(item_idx);
+                                ui_state.item_context_menu = None;
+                            }
+                        }
+
                         // Show options based on item type (not for stackable ammo)
                         if !is_stackable {
                             if is_throwable {
@@ -618,12 +742,11 @@ fn draw_item_context_menu(
                                 }
                             } else {
                                 // Non-throwable items: Use/Equip
-                                let is_weapon = matches!(
-                                    item_type,
-                                    crate::components::ItemType::Sword
-                                        | crate::components::ItemType::Bow
+                                let is_equippable = matches!(
+                                    crate::systems::item_defs::get_def(item_type).use_effect,
+                                    crate::systems::item_defs::UseEffect::Equip
                                 );
-                                let button_text = if is_weapon { "Equip" } else { "Use" };
+                                let button_text = if is_equippable { "Equip" } else { "Use" };
                                 if ui.button(button_text).clicked() {
                                     actions.item_to_use = Some(item_idx);
                                     ui_state.item_context_menu = None;

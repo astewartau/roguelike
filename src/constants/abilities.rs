@@ -77,3 +77,101 @@ pub const RANGE_FAR_MULT: f32 = 0.8;      // -20% damage at far range (6+ tiles)
 
 /// Player bow maximum range
 pub const BOW_RANGE: i32 = 10;
+
+// =============================================================================
+// INT SCALING FOR MAGIC
+// =============================================================================
+
+/// Extra magic power per point of INT above 10 (+5% per point).
+pub const INT_POWER_PER_POINT: f32 = 0.05;
+/// Floor on the INT power multiplier (very low INT still casts at half power).
+pub const INT_POWER_MIN_MULT: f32 = 0.5;
+
+/// Magic power multiplier for a given (effective) Intelligence score.
+///
+/// `1.0` at INT 10, +5% per point above, -5% per point below, floored at
+/// [`INT_POWER_MIN_MULT`]. Applied to spell damage, magical effect durations,
+/// and scroll magnitudes — staff *melee* damage is deliberately NOT scaled.
+pub fn int_power_mult(int: i32) -> f32 {
+    (1.0 + (int - 10) as f32 * INT_POWER_PER_POINT).max(INT_POWER_MIN_MULT)
+}
+
+// =============================================================================
+// LEARNED SPELLS (studied from scrolls)
+// =============================================================================
+
+// Minimum effective INT required to Study each scroll into a permanent spell.
+// Reveal/Mapping are pure utility and intentionally NOT learnable.
+pub const LEARN_INT_BLINK: i32 = 14;
+pub const LEARN_INT_FIREBALL: i32 = 16;
+pub const LEARN_INT_FEAR: i32 = 15;
+pub const LEARN_INT_SLOW: i32 = 13;
+pub const LEARN_INT_PROTECTION: i32 = 13;
+pub const LEARN_INT_SPEED: i32 = 12;
+pub const LEARN_INT_INVISIBILITY: i32 = 15;
+
+// Energy costs / cooldowns for learned casts (long cooldowns — the scroll
+// stays the spammable path, the learned spell is the repeatable one).
+pub const LEARNED_BLINK_ENERGY_COST: i32 = 1;
+pub const LEARNED_BLINK_COOLDOWN: f32 = 45.0;
+pub const LEARNED_FIREBALL_ENERGY_COST: i32 = 2;
+pub const LEARNED_FIREBALL_COOLDOWN: f32 = 60.0;
+pub const LEARNED_FEAR_ENERGY_COST: i32 = 2;
+pub const LEARNED_FEAR_COOLDOWN: f32 = 50.0;
+pub const LEARNED_SLOW_ENERGY_COST: i32 = 1;
+pub const LEARNED_SLOW_COOLDOWN: f32 = 40.0;
+pub const LEARNED_PROTECTION_ENERGY_COST: i32 = 1;
+pub const LEARNED_PROTECTION_COOLDOWN: f32 = 50.0;
+pub const LEARNED_SPEED_ENERGY_COST: i32 = 1;
+pub const LEARNED_SPEED_COOLDOWN: f32 = 45.0;
+pub const LEARNED_INVISIBILITY_ENERGY_COST: i32 = 2;
+pub const LEARNED_INVISIBILITY_COOLDOWN: f32 = 70.0;
+
+// =============================================================================
+// NECROMANCER - RAISE DEAD
+// =============================================================================
+
+pub const RAISE_DEAD_COOLDOWN: f32 = 30.0;
+pub const RAISE_DEAD_ENERGY_COST: i32 = 2;
+/// Maximum distance (Chebyshev) to a targeted bones pile.
+pub const RAISE_DEAD_RANGE: i32 = 5;
+/// Channel time before the skeleton rises (mirrors the Tame channel).
+pub const RAISE_DEAD_CHANNEL_DURATION: f32 = 3.0;
+/// INT points above 10 per additional controllable skeleton.
+pub const RAISE_DEAD_INT_PER_EXTRA: i32 = 6;
+
+/// How many raised skeletons a caster with the given (effective) INT can
+/// control at once: 1 at INT 10, +1 per [`RAISE_DEAD_INT_PER_EXTRA`] INT
+/// (INT 16 = 2, INT 22 = 3). Never below 1.
+pub fn raise_dead_cap(int: i32) -> usize {
+    let extra = (int - 10).max(0) / RAISE_DEAD_INT_PER_EXTRA;
+    (1 + extra) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_int_power_mult_curve() {
+        assert!((int_power_mult(10) - 1.0).abs() < f32::EPSILON);
+        assert!((int_power_mult(11) - 1.05).abs() < 1e-6);
+        assert!((int_power_mult(16) - 1.3).abs() < 1e-6);
+        assert!((int_power_mult(20) - 1.5).abs() < 1e-6);
+        // Below 10 it shrinks, floored at the minimum.
+        assert!((int_power_mult(8) - 0.9).abs() < 1e-6);
+        assert!((int_power_mult(0) - INT_POWER_MIN_MULT).abs() < f32::EPSILON);
+        assert!((int_power_mult(-100) - INT_POWER_MIN_MULT).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_raise_dead_cap_formula() {
+        assert_eq!(raise_dead_cap(10), 1);
+        assert_eq!(raise_dead_cap(15), 1);
+        assert_eq!(raise_dead_cap(16), 2);
+        assert_eq!(raise_dead_cap(21), 2);
+        assert_eq!(raise_dead_cap(22), 3);
+        // Low INT never drops below one skeleton.
+        assert_eq!(raise_dead_cap(3), 1);
+    }
+}

@@ -119,9 +119,21 @@ pub fn give_item_to_player(world: &mut World, player_entity: Entity, item: ItemT
     use crate::components::Inventory;
     use crate::systems::items::item_weight;
 
+    // Accessories are pure affix carriers — give a rolled (Magic) one so it
+    // actually does something.
+    let instance = if crate::systems::item_defs::is_accessory_kind(item) {
+        crate::systems::item_defs::roll_gear_with_rarity(
+            item,
+            crate::components::Rarity::Magic,
+            &mut rand::thread_rng(),
+        )
+    } else {
+        ItemInstance::plain(item)
+    };
+
     if let Ok(mut inv) = world.get::<&mut Inventory>(player_entity) {
         let weight = item_weight(item);
-        inv.items.push(ItemInstance::plain(item));
+        inv.items.push(instance);
         inv.current_weight_kg += weight;
     }
 }

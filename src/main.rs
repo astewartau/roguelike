@@ -16,11 +16,11 @@ mod pathfinding;
 mod queries;
 mod render;
 mod renderer;
+mod run_history;
 mod spatial_cache;
 mod spawning;
 mod systems;
 mod tile;
-mod tileset;
 mod time_system;
 mod ui;
 mod vfx;
@@ -215,15 +215,22 @@ impl AppState {
         // Process UI actions
         self.engine.process_ui_actions(&ui_actions);
 
-        // Handle start game action (from class selection screen)
+        // Handle start game action (from class selection screen); the seed
+        // comes from the start screen's seed field (random when left as-is)
         if let Some(class) = ui_actions.start_game {
-            self.engine.start_game(class, &mut self.render_ctx.camera);
+            let seed = self.engine.next_run_seed();
+            self.engine.start_game(class, seed, &mut self.render_ctx.camera);
         }
 
-        // Handle retry action (from game over screen) - restart with same class
+        // Handle retry action (from game over / pause screen) - restart with
+        // the same class AND the same seed, so it's a true retry of the run
         if ui_actions.retry_game {
             if let Some(class) = self.engine.selected_class {
-                self.engine.start_game(class, &mut self.render_ctx.camera);
+                let seed = self
+                    .engine
+                    .current_run_seed()
+                    .unwrap_or_else(|| self.engine.next_run_seed());
+                self.engine.start_game(class, seed, &mut self.render_ctx.camera);
             }
         }
 

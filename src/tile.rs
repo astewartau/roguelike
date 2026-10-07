@@ -100,6 +100,8 @@ pub mod tile_ids {
     pub const BLOOD_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 1, TILES_COLS)); // 23.b blood spatter 2
     pub const SLIME_SMALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 2, TILES_COLS)); // 23.c slime small
     pub const SLIME_LARGE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 3, TILES_COLS)); // 23.d slime large
+    /// Oil puddle: the large pool decal (23.d), rendered with a dark brown tint
+    pub const OIL_PUDDLE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 3, TILES_COLS));
 
     // Coffins (row 24)
     pub const COFFIN_CLOSED: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(24, 0, TILES_COLS)); // 24.a coffin closed
@@ -143,7 +145,13 @@ pub mod tile_ids {
     pub const ZOMBIE: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(5, 4, MONSTERS_COLS)); // 5.e zombie
     pub const SLIME: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(3, 0, MONSTERS_COLS)); // 3.a small slime
     pub const SPIDER: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(7, 8, MONSTERS_COLS)); // 7.i giant spider
+    pub const GIANT_SPIDER: (SpriteSheet, u32) = SPIDER; // 7.i giant spider
+    pub const LESSER_GIANT_SPIDER: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(7, 9, MONSTERS_COLS)); // 7.j lesser giant spider
     pub const BAT: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(7, 6, MONSTERS_COLS)); // 7.g giant bat
+    pub const GOBLIN_SHAMAN: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(1, 6, MONSTERS_COLS)); // 1.g goblin mage
+    /// Spider web overlay: no web sprite exists in the sheets, so a
+    /// white-tinted tall-grass sprite reads as pale gauze (see WEB_TINT).
+    pub const WEB: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat, tinted white
 
     // ===== ITEMS SHEET (weapons, armor, potions, etc.) =====
 
@@ -160,6 +168,10 @@ pub mod tile_ids {
     pub const CHAIN_MAIL: (SpriteSheet, u32) = (SpriteSheet::Items, rc(13, 3, ITEMS_COLS)); // 13.d chain mail
     pub const HELMET: (SpriteSheet, u32) = (SpriteSheet::Items, rc(16, 4, ITEMS_COLS)); // 16.e helm
 
+    // Accessories (rows 17-19: pendants & rings)
+    pub const RING: (SpriteSheet, u32) = (SpriteSheet::Items, rc(18, 3, ITEMS_COLS)); // 18.d ruby ring
+    pub const AMULET: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant
+
     // Potions
     pub const RED_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(20, 1, ITEMS_COLS)); // 20.b red potion
     pub const BLUE_POTION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(21, 3, ITEMS_COLS)); // 21.d blue potion
@@ -175,15 +187,39 @@ pub mod tile_ids {
     pub const CHEESE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 0, ITEMS_COLS)); // 26.a cheese
     pub const BREAD: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 1, ITEMS_COLS)); // 26.b bread
     pub const APPLE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 2, ITEMS_COLS)); // 26.c apple
+    pub const BOTTLE_WATER: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 4, ITEMS_COLS)); // 26.e bottle of water
 
     // Traps (inventory item uses flame sword icon)
     pub const FIRE_TRAP: (SpriteSheet, u32) = (SpriteSheet::Items, rc(1, 10, ITEMS_COLS)); // 1.k flame sword
+
+    // Custom ability icons (drawn by assets/custom/make_tiles.py, pasted into rows 26-27)
+    pub const RAISE_DEAD: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 5, ITEMS_COLS)); // 26.f raise dead (custom)
+    pub const LIFE_DRAIN: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 6, ITEMS_COLS)); // 26.g life drain (custom)
+    pub const TAME: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 0, ITEMS_COLS)); // 27.a tame (custom)
+    pub const REST: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 1, ITEMS_COLS)); // 27.b rest (custom)
+    pub const SLEEP: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 2, ITEMS_COLS)); // 27.c sleep (custom)
+    pub const BARKSKIN: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 3, ITEMS_COLS)); // 27.d barkskin (custom)
+    pub const SPRINT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 4, ITEMS_COLS)); // 27.e sprint (custom)
+    pub const DISENGAGE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 5, ITEMS_COLS)); // 27.f disengage (custom)
+    pub const TUMBLE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 6, ITEMS_COLS)); // 27.g tumble (custom)
+    pub const CRIPPLING_SHOT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 7, ITEMS_COLS)); // 27.h crippling shot (custom)
+    pub const STUN: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 8, ITEMS_COLS)); // 27.i stun (custom)
 
     // ===== TILES SHEET - TRAPS =====
 
     // Traps (row 17 of tiles.png)
     pub const PRESSURE_PLATE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 9, TILES_COLS)); // 17.j pressure plate (up)
     pub const PRESSURE_PLATE_DOWN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 10, TILES_COLS)); // 17.k pressure plate (down)
+    /// Revealed dungeon floor trap (tinted per trap kind)
+    pub const TRAP_DOOR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 13, TILES_COLS)); // 17.n trap door
+
+    // Room furniture (repurposed tiles, tinted to distinguish)
+    /// Fountain basin: the pit tile, blue-tinted while it holds water
+    pub const FOUNTAIN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 12, TILES_COLS)); // 17.m pit
+    /// Altar: the pentagram tile, red-tinted
+    pub const ALTAR: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 14, TILES_COLS)); // 17.o pentagram
+    /// Shrine: the ankh item sprite, gold-tinted
+    pub const SHRINE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 6, ITEMS_COLS)); // items 17.g ankh
 
     // UI Icons (using items that work as icons)
     pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
@@ -193,6 +229,8 @@ pub mod tile_ids {
 
     /// Brazier (lit) - first frame, row 2 in animated-tiles.png
     pub const BRAZIER: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(2, 0, ANIMATED_TILES_COLS));
+    /// Brazier (unlit) - row 1 in animated-tiles.png (used for toppled braziers)
+    pub const BRAZIER_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(1, 0, ANIMATED_TILES_COLS));
     /// Fire pit (lit) - first frame, row 4 in animated-tiles.png
     pub const FIRE_PIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(4, 0, ANIMATED_TILES_COLS));
     /// Animated water - first frame, row 11 in animated-tiles.png (11 frames)
@@ -250,6 +288,11 @@ impl TileType {
 
     pub fn blocks_vision(&self) -> bool {
         matches!(self, TileType::Wall | TileType::Empty | TileType::TallGrass)
+    }
+
+    /// Whether this terrain can catch fire (and burn away).
+    pub fn is_flammable(&self) -> bool {
+        matches!(self, TileType::TallGrass)
     }
 }
 

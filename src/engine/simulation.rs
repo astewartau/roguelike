@@ -36,6 +36,10 @@ pub struct TurnExecutionResult {
     pub player_took_damage: bool,
     pub enemy_spotted_player: bool,
     pub skeleton_spawns: Vec<(i32, i32)>,
+    /// Positions where Raise Dead completed (spawn friendly skeletons here)
+    pub raised_skeletons: Vec<(i32, i32)>,
+    /// Boss minion summons: (boss, position) pairs to spawn hostile spiders at
+    pub boss_minion_spawns: Vec<(Entity, (i32, i32))>,
 }
 
 impl TurnExecutionResult {
@@ -51,6 +55,10 @@ pub struct EventProcessingResult {
     pub player_took_damage: bool,
     pub enemy_spotted_player: bool,
     pub skeleton_spawns: Vec<(i32, i32)>,
+    /// Positions where Raise Dead completed (spawn friendly skeletons here)
+    pub raised_skeletons: Vec<(i32, i32)>,
+    /// Boss minion summons: (boss, position) pairs to spawn hostile spiders at
+    pub boss_minion_spawns: Vec<(Entity, (i32, i32))>,
 }
 
 impl EventProcessingResult {
@@ -87,6 +95,8 @@ pub fn execute_player_intent(
             player_took_damage: false,
             enemy_spotted_player: false,
             skeleton_spawns: Vec::new(),
+            raised_skeletons: Vec::new(),
+            boss_minion_spawns: Vec::new(),
         };
     }
 
@@ -100,6 +110,8 @@ pub fn execute_player_intent(
                 player_took_damage: false,
                 enemy_spotted_player: false,
                 skeleton_spawns: Vec::new(),
+                raised_skeletons: Vec::new(),
+                boss_minion_spawns: Vec::new(),
             };
         }
     };
@@ -112,6 +124,8 @@ pub fn execute_player_intent(
             player_took_damage: false,
             enemy_spotted_player: false,
             skeleton_spawns: Vec::new(),
+            raised_skeletons: Vec::new(),
+            boss_minion_spawns: Vec::new(),
         };
     }
 
@@ -143,6 +157,8 @@ pub fn execute_player_intent(
         player_took_damage: event_result.player_took_damage,
         enemy_spotted_player: event_result.enemy_spotted_player,
         skeleton_spawns: event_result.skeleton_spawns,
+        raised_skeletons: event_result.raised_skeletons,
+        boss_minion_spawns: event_result.boss_minion_spawns,
     }
 }
 
@@ -198,6 +214,8 @@ pub fn execute_player_turn(
             player_took_damage: false,
             enemy_spotted_player: false,
             skeleton_spawns: Vec::new(),
+            raised_skeletons: Vec::new(),
+            boss_minion_spawns: Vec::new(),
         };
     }
 
@@ -211,6 +229,8 @@ pub fn execute_player_turn(
             player_took_damage: false,
             enemy_spotted_player: false,
             skeleton_spawns: Vec::new(),
+            raised_skeletons: Vec::new(),
+            boss_minion_spawns: Vec::new(),
         };
     }
 
@@ -229,6 +249,8 @@ pub fn execute_player_turn(
         player_took_damage: event_result.player_took_damage,
         enemy_spotted_player: event_result.enemy_spotted_player,
         skeleton_spawns: event_result.skeleton_spawns,
+        raised_skeletons: event_result.raised_skeletons,
+        boss_minion_spawns: event_result.boss_minion_spawns,
     }
 }
 
@@ -265,7 +287,7 @@ pub fn advance_until_player_ready(
             .unwrap_or(false);
 
         if player_can_act {
-            update_projectiles_at_time(world, grid, clock.time, events);
+            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events);
             return;
         }
 
@@ -296,7 +318,7 @@ pub fn advance_until_player_ready(
         clock.advance_to(completion_time);
         let elapsed = clock.time - previous_time;
 
-        update_projectiles_at_time(world, grid, clock.time, events);
+        update_projectiles_at_time(world, grid, spatial_cache, clock.time, events);
 
         time_system::tick_health_regen(world, clock.time, Some(events));
         time_system::tick_energy_regen(world, clock.time, Some(events));
@@ -306,6 +328,7 @@ pub fn advance_until_player_ready(
         time_system::tick_ranged_cooldowns(world, elapsed);
         systems::ai::tick_threat_decay(world, grid, &*spatial_cache, elapsed);
         systems::ai::tick_alarms(world, elapsed);
+        systems::ai::tick_role_cooldowns(world, elapsed);
 
         time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
 
@@ -392,7 +415,7 @@ pub fn wait_for_energy(
             clock.advance_to(completion_time);
             let elapsed = clock.time - previous_time;
 
-            update_projectiles_at_time(world, grid, clock.time, events);
+            update_projectiles_at_time(world, grid, spatial_cache, clock.time, events);
             time_system::tick_health_regen(world, clock.time, Some(events));
             time_system::tick_energy_regen(world, clock.time, Some(events));
             time_system::tick_burn_damage(world, clock.time, events);
@@ -400,6 +423,7 @@ pub fn wait_for_energy(
             time_system::tick_ability_cooldowns(world, elapsed);
             time_system::tick_ranged_cooldowns(world, elapsed);
             systems::ai::tick_alarms(world, elapsed);
+            systems::ai::tick_role_cooldowns(world, elapsed);
 
             // Complete the action
             time_system::complete_action(world, grid, next_entity, spatial_cache, events, clock.time, clock, scheduler);
@@ -427,10 +451,29 @@ pub fn wait_for_energy(
 fn update_projectiles_at_time(
     world: &mut World,
     grid: &Grid,
+    spatial_cache: &mut SpatialCache,
     current_time: f32,
     events: &mut EventQueue,
 ) {
-    systems::update_projectiles(world, grid, current_time, events);
+    systems::update_projectiles(world, grid, spatial_cache, current_time, events);
+}
+
+/// Display name of an entity for damage attribution ("Goblin", ...).
+fn entity_display_name(world: &World, entity: Entity) -> String {
+    world
+        .get::<&crate::components::Name>(entity)
+        .map(|n| n.0.clone())
+        .unwrap_or_else(|_| "an enemy".to_string())
+}
+
+/// Remember the most recent source of player damage (best-effort cause of
+/// death for the run-history record).
+fn record_player_damage_source(world: &mut World, player_entity: Entity, source: String) {
+    if let Ok(mut last) = world.get::<&mut crate::components::LastDamageSource>(player_entity) {
+        last.0 = source;
+        return;
+    }
+    let _ = world.insert_one(player_entity, crate::components::LastDamageSource(source));
 }
 
 /// Process all pending events.
@@ -463,6 +506,8 @@ pub fn process_events_with_audio(
         player_took_damage: false,
         enemy_spotted_player: false,
         skeleton_spawns: Vec::new(),
+        raised_skeletons: Vec::new(),
+        boss_minion_spawns: Vec::new(),
     };
 
     // Collect events for audio processing
@@ -505,7 +550,35 @@ pub fn process_events_with_audio(
                 }
                 if *target == player_entity {
                     result.player_took_damage = true;
+                    let source = entity_display_name(world, *attacker);
+                    record_player_damage_source(world, player_entity, source);
                 }
+            }
+            GameEvent::ProjectileHit { source, target: Some(target), damage, .. } => {
+                if *target == player_entity && *damage > 0 {
+                    let source = entity_display_name(world, *source);
+                    record_player_damage_source(world, player_entity, source);
+                }
+            }
+            GameEvent::BurnDamage { entity, .. } if *entity == player_entity => {
+                record_player_damage_source(world, player_entity, "burning".to_string());
+            }
+            GameEvent::StarvationDamage { entity, .. } if *entity == player_entity => {
+                record_player_damage_source(world, player_entity, "starvation".to_string());
+            }
+            GameEvent::FireTrapTriggered { victim, .. } if *victim == player_entity => {
+                record_player_damage_source(world, player_entity, "a fire trap".to_string());
+            }
+            GameEvent::DungeonTrapTriggered { kind, victim, damage, .. }
+                if *victim == player_entity && *damage > 0 =>
+            {
+                let source = match kind {
+                    crate::components::DungeonTrapKind::Spike => "a spike trap",
+                    crate::components::DungeonTrapKind::Fire => "a fire trap",
+                    crate::components::DungeonTrapKind::Snare => "a snare trap",
+                    crate::components::DungeonTrapKind::Alarm => "an alarm trap",
+                };
+                record_player_damage_source(world, player_entity, source.to_string());
             }
             GameEvent::AIStateChanged { entity, new_state } => {
                 if *new_state == crate::components::AIState::Chasing {
@@ -517,6 +590,12 @@ pub fn process_events_with_audio(
             }
             GameEvent::CoffinSkeletonSpawn { position } => {
                 result.skeleton_spawns.push(*position);
+            }
+            GameEvent::SkeletonRaised { position, .. } => {
+                result.raised_skeletons.push(*position);
+            }
+            GameEvent::BossMinionSpawn { boss, position } => {
+                result.boss_minion_spawns.push((*boss, *position));
             }
             _ => {}
         }
@@ -533,6 +612,10 @@ pub struct UiActionResult {
     pub close_chest: bool,
     pub close_dialogue: bool,
     pub close_shop: bool,
+    pub close_altar: bool,
+    /// A spell was just learned by studying a scroll; the engine auto-assigns
+    /// it to the first free hotbar slot so it's immediately usable.
+    pub learned_ability: Option<crate::components::AbilityType>,
 }
 
 impl Default for UiActionResult {
@@ -544,11 +627,14 @@ impl Default for UiActionResult {
             close_chest: false,
             close_dialogue: false,
             close_shop: false,
+            close_altar: false,
+            learned_ability: None,
         }
     }
 }
 
-/// Process UI actions and execute game logic.
+/// Process UI actions and execute game logic. `rng` is the seeded game rng
+/// (altar outcomes draw from it).
 pub fn process_ui_actions(
     world: &mut World,
     grid: &mut Grid,
@@ -558,6 +644,7 @@ pub fn process_ui_actions(
     ui_state: &GameUiState,
     events: &mut EventQueue,
     game_time: f32,
+    rng: &mut impl Rng,
 ) -> UiActionResult {
     let mut result = UiActionResult::default();
 
@@ -624,6 +711,23 @@ pub fn process_ui_actions(
         }
     }
 
+    // Altar interactions: sacrifice the chosen inventory item.
+    if ui_state.open_altar.is_some() {
+        if let Some(item_index) = actions.altar_sacrifice {
+            crate::systems::furniture::perform_altar_sacrifice(
+                world,
+                player_entity,
+                item_index,
+                events,
+                rng,
+            );
+            result.close_altar = true;
+        }
+        if actions.close_altar {
+            result.close_altar = true;
+        }
+    }
+
     // Item use
     if let Some(item_index) = actions.item_to_use {
         let use_result = systems::use_item(world, player_entity, item_index);
@@ -631,10 +735,17 @@ pub fn process_ui_actions(
         match use_result {
             systems::ItemUseResult::RequiresTarget { item_type, item_index } => {
                 let params = systems::item_targeting_params(item_type);
+                // Blink range is a scroll magnitude: it scales with the
+                // reader's effective INT (apply_blink checks the same range).
+                let max_range = if item_type == ItemType::ScrollOfBlink {
+                    systems::actions::scaled_blink_range(world, player_entity)
+                } else {
+                    params.max_range
+                };
                 result.enter_targeting = Some(TargetingMode {
                     item_type,
                     item_index,
-                    max_range: params.max_range,
+                    max_range,
                     radius: params.radius,
                 });
                 result.close_inventory = true;
@@ -650,38 +761,47 @@ pub fn process_ui_actions(
             }
             systems::ItemUseResult::ApplyFearToVisible => {
                 let player_pos = queries::get_entity_position(world, player_entity).unwrap_or((0, 0));
+                // Scroll magnitude scales with the reader's effective INT.
+                let duration = constants::FEAR_DURATION * queries::int_power(world, player_entity);
                 systems::effects::apply_effect_to_visible_enemies(
                     world, grid, player_pos,
-                    constants::FOV_RADIUS, EffectType::Feared, constants::FEAR_DURATION,
+                    constants::FOV_RADIUS, EffectType::Feared, duration,
                 );
                 systems::remove_item_from_inventory(world, player_entity, item_index);
             }
             systems::ItemUseResult::ApplySlowToVisible => {
                 let player_pos = queries::get_entity_position(world, player_entity).unwrap_or((0, 0));
+                // Scroll magnitude scales with the reader's effective INT.
+                let duration = constants::SLOW_DURATION * queries::int_power(world, player_entity);
                 systems::effects::apply_effect_to_visible_enemies(
                     world, grid, player_pos,
-                    constants::FOV_RADIUS, EffectType::Slowed, constants::SLOW_DURATION,
+                    constants::FOV_RADIUS, EffectType::Slowed, duration,
                 );
                 systems::remove_item_from_inventory(world, player_entity, item_index);
             }
             systems::ItemUseResult::IsWeapon { item_type, item_index } => {
-                systems::actions::apply_equip_weapon(world, player_entity, item_index);
-                events.push(GameEvent::WeaponEquipped {
-                    entity: player_entity,
-                    weapon_type: item_type,
-                });
+                let result =
+                    systems::actions::apply_equip_weapon(world, player_entity, item_index);
+                if result == systems::actions::ActionResult::Completed {
+                    events.push(GameEvent::WeaponEquipped {
+                        entity: player_entity,
+                        weapon_type: item_type,
+                    });
+                }
             }
             systems::ItemUseResult::IsArmor { item_type: _, item_index } => {
                 systems::actions::apply_equip_armor(world, player_entity, item_index);
             }
             systems::ItemUseResult::Used { item_type } => {
-                // Emit PotionDrunk event for potions
+                // Emit PotionDrunk event for potions (drinking a full water
+                // flask also douses any Burning; see systems::items::use_item)
                 if matches!(
                     item_type,
                     ItemType::HealthPotion
                         | ItemType::RegenerationPotion
                         | ItemType::StrengthPotion
                         | ItemType::ConfusionPotion
+                        | ItemType::WaterFlaskFull
                 ) {
                     events.push(GameEvent::PotionDrunk {
                         entity: player_entity,
@@ -689,8 +809,23 @@ pub fn process_ui_actions(
                     });
                 }
             }
+            systems::ItemUseResult::FillWaterFlask { item_index } => {
+                // Fill from an adjacent (or underfoot) water tile.
+                if systems::items::fill_water_flask(world, grid, player_entity, item_index) {
+                    events.push(GameEvent::FlaskFilled { entity: player_entity });
+                } else {
+                    events.push(GameEvent::FlaskFillFailed { entity: player_entity });
+                }
+            }
             _ => {}
         }
+    }
+
+    // Study a scroll: with enough effective INT this consumes the scroll and
+    // permanently adds its spell to the player's spell list (LearnedAbilities).
+    if let Some(item_index) = actions.item_to_study {
+        result.learned_ability = study_scroll(world, player_entity, item_index, events);
+        result.close_context_menu = true;
     }
 
     // Throw item
@@ -734,7 +869,175 @@ pub fn process_ui_actions(
         systems::actions::apply_drop_equipped_weapon(world, player_entity, events);
     }
 
+    // Select active bow ammo (Arrow / FireArrow)
+    if let Some(kind) = actions.set_active_ammo {
+        if kind.is_ammo() {
+            let _ = world.insert_one(player_entity, crate::components::ActiveAmmo { kind });
+            result.close_context_menu = true;
+        }
+    }
+
     result
+}
+
+/// Attempt to study the scroll at `item_index` in the player's inventory.
+///
+/// Requires the scroll to be learnable (`min_learn_int`) and the player's
+/// *effective* INT (gear counts) to meet the threshold. On success the scroll
+/// is consumed and the spell is added to `LearnedAbilities`; returns the
+/// learned ability so the engine can hotbar it. All outcomes emit an event
+/// for the message log.
+fn study_scroll(
+    world: &mut World,
+    player_entity: Entity,
+    item_index: usize,
+    events: &mut EventQueue,
+) -> Option<crate::components::AbilityType> {
+    use crate::components::LearnedAbilities;
+    use crate::systems::item_defs::{min_learn_int, scroll_learned_ability};
+
+    let item_type = {
+        let inv = world.get::<&Inventory>(player_entity).ok()?;
+        inv.items.get(item_index)?.kind
+    };
+
+    let required_int = min_learn_int(item_type)?;
+    let ability = scroll_learned_ability(item_type)?;
+
+    let current_int = queries::effective_stats(world, player_entity).intelligence;
+    if current_int < required_int {
+        events.push(GameEvent::SpellStudyFailed {
+            scroll: item_type,
+            required_int,
+            current_int,
+        });
+        return None;
+    }
+
+    // Already known? Keep the scroll.
+    let already_known = world
+        .get::<&LearnedAbilities>(player_entity)
+        .map(|la| la.knows(ability))
+        .unwrap_or(false);
+    if already_known {
+        events.push(GameEvent::SpellAlreadyKnown { ability });
+        return None;
+    }
+
+    // Consume the scroll and commit the spell to memory.
+    systems::remove_item_from_inventory(world, player_entity, item_index);
+    let had_component = {
+        if let Ok(mut learned) = world.get::<&mut LearnedAbilities>(player_entity) {
+            learned.learn(ability);
+            true
+        } else {
+            false
+        }
+    };
+    if !had_component {
+        let mut learned = LearnedAbilities::default();
+        learned.learn(ability);
+        let _ = world.insert_one(player_entity, learned);
+    }
+
+    events.push(GameEvent::SpellLearned { ability });
+    Some(ability)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{
+        AbilityType, Affix, Equipment, ItemInstance, LearnedAbilities, Rarity, Stats,
+    };
+
+    /// Spawn a bare player with one Scroll of Blink and the given base INT.
+    fn player_with_blink_scroll(world: &mut World, int: i32) -> Entity {
+        let mut inv = Inventory::new();
+        inv.items.push(ItemInstance::plain(ItemType::ScrollOfBlink));
+        world.spawn((inv, Stats::new(10, int, 10), LearnedAbilities::default()))
+    }
+
+    #[test]
+    fn test_study_fails_below_int_threshold() {
+        let mut world = World::new();
+        let player = player_with_blink_scroll(&mut world, 13); // Blink needs 14
+        let mut events = EventQueue::new();
+
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+
+        assert!(learned.is_none());
+        // The scroll is kept and nothing was learned.
+        assert_eq!(world.get::<&Inventory>(player).unwrap().items.len(), 1);
+        assert!(!world
+            .get::<&LearnedAbilities>(player)
+            .unwrap()
+            .knows(AbilityType::LearnedBlink));
+        // Feedback event carries the requirement.
+        assert!(events.drain().any(|e| matches!(
+            e,
+            GameEvent::SpellStudyFailed { required_int: 14, current_int: 13, .. }
+        )));
+    }
+
+    #[test]
+    fn test_study_success_consumes_scroll_and_learns_spell() {
+        let mut world = World::new();
+        let player = player_with_blink_scroll(&mut world, 14);
+        let mut events = EventQueue::new();
+
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+
+        assert_eq!(learned, Some(AbilityType::LearnedBlink));
+        assert!(world.get::<&Inventory>(player).unwrap().items.is_empty());
+        assert!(world
+            .get::<&LearnedAbilities>(player)
+            .unwrap()
+            .knows(AbilityType::LearnedBlink));
+        assert!(events
+            .drain()
+            .any(|e| matches!(e, GameEvent::SpellLearned { .. })));
+    }
+
+    #[test]
+    fn test_study_uses_effective_int_from_gear() {
+        let mut world = World::new();
+        // Base INT 12, +2 from an identified helmet affix = 14 (meets Blink).
+        let player = player_with_blink_scroll(&mut world, 12);
+        let mut equipment = Equipment::empty();
+        equipment.head = Some(ItemInstance {
+            kind: ItemType::Helmet,
+            rarity: Rarity::Magic,
+            affixes: vec![Affix::Intelligence(2)],
+            name: None,
+            identified: true,
+            identify_progress: 0.0,
+        });
+        world.insert_one(player, equipment).expect("insert equipment");
+
+        let mut events = EventQueue::new();
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+        assert_eq!(learned, Some(AbilityType::LearnedBlink));
+    }
+
+    #[test]
+    fn test_study_known_spell_keeps_scroll() {
+        let mut world = World::new();
+        let player = player_with_blink_scroll(&mut world, 18);
+        world
+            .get::<&mut LearnedAbilities>(player)
+            .expect("learned abilities")
+            .learn(AbilityType::LearnedBlink);
+
+        let mut events = EventQueue::new();
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+
+        assert!(learned.is_none());
+        assert_eq!(world.get::<&Inventory>(player).unwrap().items.len(), 1);
+        assert!(events
+            .drain()
+            .any(|e| matches!(e, GameEvent::SpellAlreadyKnown { .. })));
+    }
 }
 
 // =============================================================================
@@ -780,10 +1083,26 @@ fn buy_item_from_vendor(
         if player_inv.gold < price { return; }
     }
 
+    // Accessories are pure affix carriers — a plain ring would be pointless,
+    // so shop stock is rolled on purchase (Magic tier) and sold identified:
+    // the merchant vouches for the wares.
+    let instance = if crate::systems::item_defs::is_accessory_kind(item_type) {
+        let mut rng = rand::thread_rng();
+        let mut inst = crate::systems::item_defs::roll_gear_with_rarity(
+            item_type,
+            crate::components::Rarity::Magic,
+            &mut rng,
+        );
+        inst.identified = true;
+        inst
+    } else {
+        ItemInstance::plain(item_type)
+    };
+
     // Transfer gold from player to vendor
     if let Ok(mut player_inv) = world.get::<&mut Inventory>(player_entity) {
         player_inv.gold -= price;
-        player_inv.items.push(ItemInstance::plain(item_type));
+        player_inv.items.push(instance);
         player_inv.current_weight_kg += item_weight(item_type);
     }
 

@@ -36,17 +36,31 @@ pub struct Grid {
     pub shop_position: Option<(i32, i32)>,
     /// Shop decoration positions (jars, sacks, etc.)
     pub shop_decor_positions: Vec<(i32, i32)>,
+    /// Hidden floor trap positions (kinds rolled at spawn time)
+    pub trap_positions: Vec<(i32, i32)>,
+    /// Room furniture positions (fountain/altar/shrine, rolled at spawn time)
+    pub furniture_positions: Vec<(i32, i32)>,
+    /// The sealed hidden room on this floor, if any
+    pub secret_room: Option<Rect>,
+    /// The sealed doorway of the hidden room (spawns a SecretDoor entity)
+    pub secret_door_pos: Option<(i32, i32)>,
 }
 
 impl Grid {
     pub fn new(width: usize, height: usize) -> Self {
-        Self::new_floor(width, height, 0)
+        Self::new_floor(width, height, 0, &mut rand::thread_rng())
     }
 
-    /// Generate a dungeon floor. floor_num 0 is the first floor (no stairs up).
-    pub fn new_floor(width: usize, height: usize, floor_num: u32) -> Self {
+    /// Generate a dungeon floor from the given rng (the same rng state always
+    /// produces the same layout). floor_num 0 is the first floor (no stairs up).
+    pub fn new_floor(
+        width: usize,
+        height: usize,
+        floor_num: u32,
+        rng: &mut impl rand::Rng,
+    ) -> Self {
         // Generate dungeon using BSP
-        let result = DungeonGenerator::generate(width, height, floor_num);
+        let result = DungeonGenerator::generate_with_rng(width, height, floor_num, rng);
 
         Self {
             width,
@@ -66,6 +80,10 @@ impl Grid {
             barrel_positions: result.barrel_positions,
             shop_position: result.shop_position,
             shop_decor_positions: result.shop_decor_positions,
+            trap_positions: result.trap_positions,
+            furniture_positions: result.furniture_positions,
+            secret_room: result.secret_room,
+            secret_door_pos: result.secret_door_pos,
         }
     }
 

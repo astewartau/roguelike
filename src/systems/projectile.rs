@@ -22,13 +22,15 @@ use hecs::{Entity, World};
 pub fn update_projectiles(
     world: &mut World,
     grid: &Grid,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
     current_time: f32,
     events: &mut EventQueue,
 ) {
     // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity, potion_type)
     type Hit = (Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity, Option<ItemType>);
     let mut hits: Vec<Hit> = Vec::new();
-    let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>)> = Vec::new();
+    // (projectile_entity, x, y, potion_type, incendiary)
+    let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>, bool)> = Vec::new();
 
     // Get all attackable entities and their positions for collision checking
     let attackables: Vec<(Entity, i32, i32)> = world
@@ -77,7 +79,13 @@ pub fn update_projectiles(
                 } else {
                     (pos.x, pos.y)
                 };
-                finished_projectiles.push((projectile_entity, final_pos.0, final_pos.1, projectile.potion_type));
+                finished_projectiles.push((
+                    projectile_entity,
+                    final_pos.0,
+                    final_pos.1,
+                    projectile.potion_type,
+                    projectile.incendiary,
+                ));
                 hit_something = true;
                 break;
             }
@@ -98,7 +106,13 @@ pub fn update_projectiles(
                         projectile.source,
                         projectile.potion_type,
                     ));
-                    finished_projectiles.push((projectile_entity, tile_x, tile_y, projectile.potion_type));
+                    finished_projectiles.push((
+                        projectile_entity,
+                        tile_x,
+                        tile_y,
+                        projectile.potion_type,
+                        projectile.incendiary,
+                    ));
                     hit_something = true;
                     break;
                 }
@@ -123,7 +137,13 @@ pub fn update_projectiles(
         } else {
             // Projectile reached end of path without hitting anything - mark as finished
             if let Some((final_x, final_y, _)) = projectile.path.last() {
-                finished_projectiles.push((projectile_entity, *final_x, *final_y, projectile.potion_type));
+                finished_projectiles.push((
+                    projectile_entity,
+                    *final_x,
+                    *final_y,
+                    projectile.potion_type,
+                    projectile.incendiary,
+                ));
             }
         }
     }
@@ -155,6 +175,20 @@ pub fn update_projectiles(
             if let Some((effect_type, duration)) = on_hit_effect {
                 effects::add_effect_to_entity(world, target_entity, effect_type, duration);
             }
+
+            // Resolve weapon on-hit affixes for ranged hits through the shared
+            // chokepoint (potions carry no weapon affixes).
+            if potion_type.is_none() {
+                crate::systems::combat::resolve_weapon_on_hit(
+                    world,
+                    grid,
+                    spatial_cache,
+                    source,
+                    target_entity,
+                    actual_damage,
+                    events,
+                );
+            }
         }
 
         // Classify the projectile so the log can describe it specifically.
@@ -178,7 +212,7 @@ pub fn update_projectiles(
 
     // Mark projectiles as finished (don't despawn yet - wait for visual catch-up)
     // Also apply potion splash effects for potion projectiles
-    for (entity, final_x, final_y, potion_type) in finished_projectiles {
+    for (entity, final_x, final_y, potion_type, incendiary) in finished_projectiles {
         if let Ok(mut projectile) = world.get::<&mut Projectile>(entity) {
             projectile.finished = Some((final_x, final_y, current_time));
         }
@@ -188,9 +222,16 @@ pub fn update_projectiles(
             pos.y = final_y;
         }
 
+        // Fire arrows ignite the tile they land on (grass catches; the fire
+        // system then handles spread and burnout).
+        if incendiary {
+            ignite_tile(world, grid, final_x, final_y);
+        }
+
         // If this is a potion projectile, apply splash effect and emit event
         if let Some(ptype) = potion_type {
-            apply_potion_splash(world, ptype, final_x, final_y);
+            let thrower = world.get::<&Projectile>(entity).map(|p| p.source).ok();
+            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y);
             events.push(GameEvent::PotionSplash {
                 x: final_x,
                 y: final_y,
@@ -198,6 +239,50 @@ pub fn update_projectiles(
             });
         }
     }
+}
+
+/// Ignite a tile hit by an incendiary projectile: flammable tiles (tall grass)
+/// catch fire via the same burning-grass entities the fire-spread system uses,
+/// and any oil puddle on the tile lights up. No-op for wet grass or tiles
+/// already burning.
+fn ignite_tile(world: &mut World, grid: &Grid, x: i32, y: i32) {
+    // Oil on the tile catches regardless of the terrain underneath.
+    let puddles: Vec<hecs::Entity> = world
+        .query::<(&Position, &crate::components::OilPuddle)>()
+        .iter()
+        .filter(|(_, (pos, _))| pos.x == x && pos.y == y)
+        .map(|(id, _)| id)
+        .collect();
+    for id in puddles {
+        crate::systems::fire::ignite_oil_puddle(world, id);
+    }
+
+    let flammable = grid
+        .get(x, y)
+        .map(|t| t.tile_type.is_flammable())
+        .unwrap_or(false);
+    if !flammable {
+        return;
+    }
+
+    // Soaked grass can't catch.
+    let wet = world
+        .query::<(&Position, &crate::components::WetGrass)>()
+        .iter()
+        .any(|(_, (pos, _))| pos.x == x && pos.y == y);
+    if wet {
+        return;
+    }
+
+    let already_burning = world
+        .query::<(&Position, &crate::components::BurningGrass)>()
+        .iter()
+        .any(|(_, (pos, _))| pos.x == x && pos.y == y);
+    if already_burning {
+        return;
+    }
+
+    crate::spawning::spawn_burning_grass(world, x, y);
 }
 
 /// Update visual positions of projectiles for smooth interpolation.
@@ -259,8 +344,9 @@ pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<((i32, i
             // Visual has caught up, safe to despawn
             to_despawn.push(entity);
 
-            // If this was an arrow (not a potion), it may be recoverable
-            if projectile.potion_type.is_none() {
+            // If this was an arrow (not a potion), it may be recoverable.
+            // Fire arrows burn up on impact and are never recovered.
+            if projectile.potion_type.is_none() && !projectile.incendiary {
                 arrow_recovery_info.push(((pos.x, pos.y), projectile.hit_enemy));
             }
         }

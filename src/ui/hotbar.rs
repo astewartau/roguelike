@@ -15,7 +15,8 @@ use super::icons::UiIcons;
 use super::style;
 use super::UiActions;
 use crate::components::{
-    AbilityType, Actor, ClassAbility, Inventory, ItemType, RangerAbilities, SecondaryAbility,
+    AbilityType, Actor, ClassAbility, Inventory, ItemType, LearnedAbilities, RangerAbilities,
+    SecondaryAbility,
 };
 use crate::systems;
 use hecs::{Entity, World};
@@ -63,7 +64,7 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
     match ability {
         AbilityType::Cleave => (icons.items_texture_id, icons.cleave_uv),
         AbilityType::Sprint => (icons.items_texture_id, icons.sprint_uv),
-        AbilityType::Tame => (icons.items_texture_id, icons.heart_uv),
+        AbilityType::Tame => (icons.items_texture_id, icons.tame_uv),
         AbilityType::Barkskin => (icons.items_texture_id, icons.barkskin_uv),
         AbilityType::LifeDrain => (icons.items_texture_id, icons.life_drain_uv),
         AbilityType::Fear => (icons.tiles_texture_id, icons.fear_uv),
@@ -71,8 +72,18 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
         AbilityType::Tumble => (icons.items_texture_id, icons.tumble_uv),
         AbilityType::SnareTrap => (icons.tiles_texture_id, icons.snare_trap_uv),
         AbilityType::CripplingShot => (icons.items_texture_id, icons.crippling_shot_uv),
-        AbilityType::Stun => (icons.items_texture_id, icons.diamond_uv),
-        AbilityType::Rest => (icons.items_texture_id, icons.heart_uv),
+        AbilityType::Stun => (icons.items_texture_id, icons.stun_uv),
+        AbilityType::Rest => (icons.items_texture_id, icons.rest_uv),
+        AbilityType::Sleep => (icons.items_texture_id, icons.sleep_uv),
+        // Learned spells keep the scroll icon they were studied from.
+        AbilityType::LearnedBlink
+        | AbilityType::LearnedFireball
+        | AbilityType::LearnedFear
+        | AbilityType::LearnedSlow
+        | AbilityType::LearnedProtection
+        | AbilityType::LearnedSpeed
+        | AbilityType::LearnedInvisibility => (icons.items_texture_id, icons.scroll_uv),
+        AbilityType::RaiseDead => (icons.items_texture_id, icons.raise_dead_uv),
     }
 }
 
@@ -96,6 +107,11 @@ pub fn ability_status(world: &World, player: Entity, ability: AbilityType) -> (f
     if let Ok(ra) = world.get::<&RangerAbilities>(player) {
         if let Some((_, cd, total)) = ra.abilities.iter().find(|(at, _, _)| *at == ability) {
             return (*cd, *total, can_afford);
+        }
+    }
+    if let Ok(la) = world.get::<&LearnedAbilities>(player) {
+        if let Some(spell) = la.get(ability) {
+            return (spell.cooldown_remaining, spell.cooldown_total, can_afford);
         }
     }
     (0.0, 0.0, can_afford)

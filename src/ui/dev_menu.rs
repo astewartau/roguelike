@@ -51,7 +51,10 @@ impl DevTool {
 }
 
 /// All item types for the dev menu
-const ALL_ITEMS: [ItemType; 14] = [
+const ALL_ITEMS: [ItemType; 18] = [
+    // Accessories (rolled with random affixes when given)
+    ItemType::Ring,
+    ItemType::Amulet,
     // Potions
     ItemType::HealthPotion,
     ItemType::RegenerationPotion,
@@ -69,6 +72,9 @@ const ALL_ITEMS: [ItemType; 14] = [
     ItemType::ScrollOfSlow,
     // Traps
     ItemType::FireTrap,
+    // Ammunition
+    ItemType::Arrow,
+    ItemType::FireArrow,
 ];
 
 /// State for the developer menu

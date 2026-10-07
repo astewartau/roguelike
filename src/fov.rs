@@ -209,6 +209,10 @@ mod tests {
             barrel_positions: vec![],
             shop_position: None,
             shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
         };
         for &(x, y) in walls {
             if let Some(tile) = grid.get_mut(x, y) {

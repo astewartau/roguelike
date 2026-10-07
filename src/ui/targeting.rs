@@ -78,14 +78,39 @@ pub fn get_ability_targeting_overlay_data(
     let cursor_x = world_pos.x.floor() as i32;
     let cursor_y = world_pos.y.floor() as i32;
 
-    // Collect positions of tameable entities within range
+    // Collect valid-target highlight positions: tameable animals for Tame,
+    // bones/corpse piles for Raise Dead.
     let mut tameable_positions = Vec::new();
-    for (_, (pos, _)) in world.query::<(&Position, &Tameable)>().iter() {
-        let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
-        if dist <= targeting.max_range {
-            tameable_positions.push((pos.x, pos.y));
+    match targeting.ability_type {
+        AbilityType::Tame => {
+            for (_, (pos, _)) in world.query::<(&Position, &Tameable)>().iter() {
+                let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
+                if dist <= targeting.max_range {
+                    tameable_positions.push((pos.x, pos.y));
+                }
+            }
         }
+        AbilityType::RaiseDead => {
+            use crate::components::{Container, ContainerType};
+            for (_, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
+                if !matches!(container.container_type, ContainerType::Corpse) {
+                    continue;
+                }
+                let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
+                if dist <= targeting.max_range {
+                    tameable_positions.push((pos.x, pos.y));
+                }
+            }
+        }
+        _ => {}
     }
+
+    // Learned Fireball shows the same AoE preview as the scroll.
+    let radius = if targeting.ability_type == AbilityType::LearnedFireball {
+        crate::constants::FIREBALL_RADIUS
+    } else {
+        0
+    };
 
     // Calculate FOV for abilities that require line of sight (CripplingShot)
     let requires_los = matches!(targeting.ability_type, AbilityType::CripplingShot);
@@ -128,8 +153,8 @@ pub fn get_ability_targeting_overlay_data(
         cursor_x,
         cursor_y,
         max_range: targeting.max_range,
-        radius: 0,
-        is_blink: false,
+        radius,
+        is_blink: targeting.ability_type == AbilityType::LearnedBlink,
         item_type: None,
         ability_type: Some(targeting.ability_type),
         tameable_positions,
@@ -163,13 +188,16 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         )
     };
 
-    // Check if this is ability targeting (Tame)
+    // Check if this is ability targeting (Tame / Raise Dead)
     let is_tame = matches!(data.ability_type, Some(AbilityType::Tame));
+    let is_raise = matches!(data.ability_type, Some(AbilityType::RaiseDead));
     let is_crippling_shot = matches!(data.ability_type, Some(AbilityType::CripplingShot));
 
     // Draw tiles in range with a subtle highlight
     let range_color = if is_tame {
         egui::Color32::from_rgba_unmultiplied(150, 255, 150, 40) // Green tint for tame
+    } else if is_raise {
+        egui::Color32::from_rgba_unmultiplied(190, 150, 255, 40) // Purple tint for raise dead
     } else if is_crippling_shot {
         egui::Color32::from_rgba_unmultiplied(255, 200, 100, 40) // Orange tint for crippling shot
     } else {
@@ -201,17 +229,23 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         }
     }
 
-    // For Tame ability, highlight tameable targets with a bright color
-    if is_tame {
-        let tameable_color = egui::Color32::from_rgba_unmultiplied(255, 100, 200, 120); // Pink/magenta
+    // For Tame / Raise Dead, highlight valid targets with a bright color
+    if is_tame || is_raise {
+        let (fill, stroke) = if is_raise {
+            (
+                egui::Color32::from_rgba_unmultiplied(170, 110, 255, 120), // Purple for bones
+                egui::Color32::from_rgb(200, 160, 255),
+            )
+        } else {
+            (
+                egui::Color32::from_rgba_unmultiplied(255, 100, 200, 120), // Pink/magenta
+                egui::Color32::from_rgb(255, 150, 220),
+            )
+        };
         for &(tx, ty) in &data.tameable_positions {
             let rect = tile_rect(tx, ty);
-            painter.rect_filled(rect, 0.0, tameable_color);
-            painter.rect_stroke(
-                rect,
-                0.0,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 150, 220)),
-            );
+            painter.rect_filled(rect, 0.0, fill);
+            painter.rect_stroke(rect, 0.0, egui::Stroke::new(2.0, stroke));
         }
     }
 
@@ -234,7 +268,7 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
     let cursor_on_tameable = data.tameable_positions.contains(&(data.cursor_x, data.cursor_y));
 
     // Draw cursor tile highlight
-    let cursor_color = if is_tame {
+    let cursor_color = if is_tame || is_raise {
         if in_range && cursor_on_tameable {
             egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150) // Green for valid tame target
         } else if in_range {
@@ -293,13 +327,15 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
     }
 
     // Draw info text near the cursor
-    let info_text = if is_tame {
+    let info_text = if is_tame || is_raise {
         if !in_range {
             "Out of range"
         } else if cursor_on_tameable {
-            "Click to tame"
+            if is_raise { "Click to raise" } else { "Click to tame" }
         } else if data.tameable_positions.is_empty() {
-            "No animals in range"
+            if is_raise { "No bones in range" } else { "No animals in range" }
+        } else if is_raise {
+            "Select a bones pile"
         } else {
             "Select an animal"
         }
@@ -323,6 +359,8 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
             _ => {
                 if data.is_blink {
                     "Click to teleport"
+                } else if matches!(data.ability_type, Some(AbilityType::LearnedFireball)) {
+                    "Click to cast fireball"
                 } else {
                     "Click to use"
                 }
@@ -332,7 +370,7 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         "Out of range"
     };
 
-    let text_color = if is_tame {
+    let text_color = if is_tame || is_raise {
         if in_range && cursor_on_tameable {
             egui::Color32::from_rgb(100, 255, 100) // Green for valid
         } else if in_range {

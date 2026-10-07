@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, StatusEffects, VisualPosition};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::fov::FOV;
 use crate::grid::Grid;
@@ -23,6 +23,9 @@ pub mod effects {
     // pub const SHIELDED: u32 = 1 << 3;
 }
 
+/// Default (no-op) sprite tint
+const NO_TINT: (f32, f32, f32) = (1.0, 1.0, 1.0);
+
 /// Entity ready for rendering with all visual state
 pub struct RenderEntity {
     pub x: f32,
@@ -33,6 +36,8 @@ pub struct RenderEntity {
     #[allow(dead_code)] // Reserved for shader effect flags
     pub effects: u32, // Bitfield of active effects
     pub overlay: Option<Sprite>, // Optional overlay sprite (e.g., weapon)
+    /// RGB color tint multiplied with the sprite texture (1,1,1 = untinted)
+    pub tint: (f32, f32, f32),
 }
 
 /// Update visibility based on illumination and line-of-sight.
@@ -308,6 +313,12 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         // Check for overlay sprite (e.g., weapon)
         let overlay = world.get::<&OverlaySprite>(id).ok().map(|o| Sprite::new(o.sheet, o.tile_id));
 
+        // Per-entity color tint (e.g., fire arrows)
+        let tint = world
+            .get::<&SpriteTint>(id)
+            .map(|t| (t.r, t.g, t.b))
+            .unwrap_or(NO_TINT);
+
         let entity_effects = effects::NONE;
 
         if id == player_entity {
@@ -326,6 +337,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 alpha,
                 effects: effects::NONE,
                 overlay,
+                tint,
             });
         } else if is_visible {
             // Use tile illumination for entity brightness (+0.1 to stand out, capped at 1.0)
@@ -346,6 +358,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 alpha: 1.0,
                 effects: entity_effects,
                 overlay,
+                tint,
             };
             // Actors go on top layer, everything else on ground layer
             if is_actor {
@@ -364,6 +377,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 alpha: 1.0,
                 effects: effects::NONE,
                 overlay: None, // Don't show overlays in fog
+                tint,
             });
         }
     }
@@ -401,6 +415,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 alpha: 1.0,
                 effects: effects::NONE,
                 overlay: None,
+                tint: NO_TINT,
             });
         } else if is_explored {
             // Show in fog at same brightness as other fog tiles
@@ -412,6 +427,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 alpha: 1.0,
                 effects: effects::NONE,
                 overlay: None,
+                tint: NO_TINT,
             });
         }
     }
@@ -456,6 +472,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                     alpha: 0.8, // Slightly transparent so entity shows through
                     effects: effects::BURNING, // Mark for third-pass rendering
                     overlay: None,
+                    tint: NO_TINT,
                 });
             }
         }
@@ -491,6 +508,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 alpha: 0.9,
                 effects: effects::BURNING,
                 overlay: None,
+                tint: NO_TINT,
             });
         }
     }

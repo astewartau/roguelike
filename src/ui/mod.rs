@@ -4,6 +4,7 @@
 
 pub mod style;
 
+mod altar_window;
 mod dev_menu;
 mod dialogue;
 mod game_over_screen;
@@ -20,26 +21,27 @@ mod targeting;
 mod vfx;
 
 // Re-export public items from submodules
+pub use altar_window::{draw_altar_window, get_altar_window_data};
 pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
-pub use dialogue::{draw_dialogue_window, get_dialogue_window_data, DialogueWindowData};
-pub use game_over_screen::{run_game_over_screen, GameOverChoice};
+pub use dialogue::{draw_dialogue_window, get_dialogue_window_data};
+pub use game_over_screen::{run_game_over_screen, GameOverChoice, GameOverStats};
 pub use hotbar::{ability_icon, ability_status, draw_drag_ghost, draw_hotbars, HotbarDrag, HotbarEntry};
 pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
-pub use loot_window::{draw_loot_window, get_loot_window_data, LootWindowData};
+pub use loot_window::{draw_loot_window, get_loot_window_data};
 pub use message_log::{draw_message_log, MessageLog};
 pub use pause_screen::{run_pause_screen, PauseChoice};
-pub use shop_window::{draw_shop_window, get_shop_window_data, ShopWindowData};
+pub use shop_window::{draw_shop_window, get_shop_window_data};
 pub use start_screen::run_start_screen;
-pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarData};
-pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data, TargetingOverlayData};
+pub use status_bar::{draw_status_bar, get_status_bar_data};
+pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
     draw_resting_indicators,
     draw_potion_splashes, draw_taming_beams, get_buff_aura_data, get_enemy_health_data,
-    get_enemy_status_data, get_life_drain_beam_data, get_taming_beam_data, EnemyHealthData,
-    EnemyStatusData, LifeDrainBeamData, PlayerBuffAuraData, TamingBeamData,
+    get_enemy_status_data, get_life_drain_beam_data, get_taming_beam_data, LifeDrainBeamData,
+    TamingBeamData,
 };
 
 use crate::camera::Camera;
@@ -58,6 +60,8 @@ pub struct UiActions {
     pub item_to_use: Option<usize>,
     /// Throw a potion at a target (enters targeting mode)
     pub item_to_throw: Option<usize>,
+    /// Study a scroll (permanently learn its spell if INT allows)
+    pub item_to_study: Option<usize>,
     /// Drop an item from inventory onto the ground
     pub item_to_drop: Option<usize>,
     /// Drop the currently equipped weapon onto the ground
@@ -90,6 +94,12 @@ pub struct UiActions {
     pub return_to_menu: bool,
     /// Quit the application (from the pause menu)
     pub exit_game: bool,
+    /// Select which ammo type the bow loads next (Arrow / FireArrow)
+    pub set_active_ammo: Option<crate::components::ItemType>,
+    /// Sacrifice the inventory item at this index on the open altar
+    pub altar_sacrifice: Option<usize>,
+    /// Close the altar window without sacrificing
+    pub close_altar: bool,
 }
 
 // =============================================================================
@@ -117,6 +127,8 @@ pub struct GameUiState {
     pub dialogue_selected: usize,
     /// Currently shopping at vendor (for shop window)
     pub shopping_at: Option<Entity>,
+    /// Currently open altar (for the sacrifice window)
+    pub open_altar: Option<Entity>,
     /// Show inventory window
     pub show_inventory: bool,
     /// Show grid overlay
@@ -146,6 +158,7 @@ impl GameUiState {
             talking_to: None,
             dialogue_selected: 0,
             shopping_at: None,
+            open_altar: None,
             show_inventory: false,
             show_grid_lines: false,
             item_context_menu: None,
@@ -182,12 +195,19 @@ impl GameUiState {
                     self.talking_to = None; // Close dialogue when shop opens
                 }
             }
+            GameEvent::AltarOpened { altar, player } => {
+                // Open the sacrifice window if the player used the altar
+                if *player == self.player_entity {
+                    self.open_altar = Some(*altar);
+                }
+            }
             GameEvent::EntityMoved { entity, .. } => {
                 // Close windows when player moves away
                 if *entity == self.player_entity {
                     self.open_chest = None;
                     self.talking_to = None;
                     self.shopping_at = None;
+                    self.open_altar = None;
                 }
             }
             _ => {}
@@ -227,6 +247,10 @@ impl GameUiState {
             self.shopping_at = None;
             closed = true;
         }
+        if self.open_altar.is_some() {
+            self.open_altar = None;
+            closed = true;
+        }
         if self.talking_to.is_some() {
             self.talking_to = None;
             closed = true;
@@ -252,6 +276,11 @@ impl GameUiState {
     /// Close the shop window
     pub fn close_shop(&mut self) {
         self.shopping_at = None;
+    }
+
+    /// Close the altar sacrifice window
+    pub fn close_altar(&mut self) {
+        self.open_altar = None;
     }
 
     /// Close the item context menu
@@ -314,6 +343,15 @@ pub fn run_ui(
     let shop_data = get_shop_window_data(
         world,
         ui_state.shopping_at,
+        player_entity,
+        camera.viewport_width,
+        camera.viewport_height,
+    );
+
+    // Get altar window data if an altar is open
+    let altar_data = get_altar_window_data(
+        world,
+        ui_state.open_altar,
         player_entity,
         camera.viewport_width,
         camera.viewport_height,
@@ -401,6 +439,11 @@ pub fn run_ui(
         // Shop window (if shopping at vendor)
         if let Some(ref data) = shop_data {
             draw_shop_window(ctx, data, icons, &mut actions);
+        }
+
+        // Altar sacrifice window (if an altar is open)
+        if let Some(ref data) = altar_data {
+            draw_altar_window(ctx, data, icons, &mut actions);
         }
 
         // Inventory window (if toggled)

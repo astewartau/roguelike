@@ -118,6 +118,26 @@ pub struct GameEngine {
 
     /// Accumulates fast-forwarded game-time toward the next rest step.
     rest_accumulator: f32,
+
+    /// True while the player is sleeping (time auto-fast-forwards each frame,
+    /// fatigue recovers, and the player counts as unaware/sneak-attackable).
+    sleeping: bool,
+
+    /// Accumulates fast-forwarded game-time toward the next sleep step.
+    sleep_accumulator: f32,
+
+    /// How the start screen picks the next run's seed (random/daily/custom).
+    pub seed_mode: crate::run_history::SeedMode,
+
+    /// Seed text for SeedMode::Custom (numbers parse directly, words hash).
+    pub seed_input: String,
+
+    /// Whether the start screen's stats panel (past runs) is open.
+    pub stats_open: bool,
+
+    /// All recorded runs from `runs_history.jsonl`, newest first. The start
+    /// screen aggregates stats over the lot and lists the most recent few.
+    pub past_runs: Vec<crate::run_history::RunRecord>,
 }
 
 impl GameEngine {
@@ -142,12 +162,40 @@ impl GameEngine {
             audio,
             resting: false,
             rest_accumulator: 0.0,
+            sleeping: false,
+            sleep_accumulator: 0.0,
+            seed_mode: crate::run_history::SeedMode::default(),
+            seed_input: String::new(),
+            stats_open: false,
+            past_runs: crate::run_history::load_recent(usize::MAX),
         }
     }
 
-    /// Start the game with the selected class.
-    pub fn start_game(&mut self, class: PlayerClass, camera: &mut Camera) {
-        let mut state = GameState::new(class);
+    /// The seed the next run will use, per the start screen's seed mode:
+    /// fresh entropy, today's daily seed, or the custom text (numeric or
+    /// hashed; empty custom text falls back to a random seed).
+    pub fn next_run_seed(&self) -> u64 {
+        use crate::run_history::SeedMode;
+        match self.seed_mode {
+            SeedMode::Random => crate::run_history::random_seed(),
+            SeedMode::Daily => crate::run_history::daily_seed(),
+            SeedMode::Custom => crate::run_history::seed_from_text(&self.seed_input)
+                .unwrap_or_else(crate::run_history::random_seed),
+        }
+    }
+
+    /// The seed of the current (or just-ended) run, if any.
+    pub fn current_run_seed(&self) -> Option<u64> {
+        self.state.as_ref().map(|s| s.seed)
+    }
+
+    /// Start the game with the selected class and run seed.
+    pub fn start_game(&mut self, class: PlayerClass, seed: u64, camera: &mut Camera) {
+        // A run abandoned mid-play (retry from the pause menu) still gets a
+        // history line; no-op if there is no live run or it was already saved.
+        self.finalize_run_record();
+
+        let mut state = GameState::new(class, seed);
 
         // Initialize AI actors
         state.initialize_ai(&mut self.events);
@@ -194,11 +242,23 @@ impl GameEngine {
                     entries.push(*at);
                 }
             }
+            // Spell-list abilities (the Necromancer starts with Raise Dead).
+            if let Ok(la) = state
+                .world
+                .get::<&crate::components::LearnedAbilities>(state.player_entity)
+            {
+                for spell in la.spells.iter() {
+                    entries.push(spell.ability);
+                }
+            }
             for (slot, ability) in ui_state.hotbar_main.iter_mut().zip(entries) {
                 *slot = Some(crate::ui::HotbarEntry::Ability(ability));
             }
 
-            // Everyone gets Rest, bound to the R slot of the Q/E/R hotbar.
+            // Everyone gets Rest, bound to the R slot of the Q/E/R hotbar,
+            // and Sleep on the E slot.
+            ui_state.hotbar_qer[1] =
+                Some(crate::ui::HotbarEntry::Ability(AbilityType::Sleep));
             ui_state.hotbar_qer[2] =
                 Some(crate::ui::HotbarEntry::Ability(AbilityType::Rest));
         }
@@ -206,6 +266,10 @@ impl GameEngine {
         self.state = Some(state);
         self.ui_state = Some(ui_state);
         self.game_mode = GameMode::Playing;
+        self.resting = false;
+        self.rest_accumulator = 0.0;
+        self.sleeping = false;
+        self.sleep_accumulator = 0.0;
     }
 
     /// Check if we're currently playing (not on start screen).
@@ -215,12 +279,67 @@ impl GameEngine {
 
     /// Tear down the current run and return to the class selection screen.
     pub fn return_to_start_screen(&mut self) {
+        // Record a retreat-to-menu as an abandoned run (no-op if the death
+        // was already recorded when the game-over screen appeared).
+        self.finalize_run_record();
+
         self.state = None;
         self.ui_state = None;
         self.input = InputState::new();
         self.vfx = VfxManager::new();
         self.events = EventQueue::new();
         self.game_mode = GameMode::StartScreen;
+        self.resting = false;
+        self.rest_accumulator = 0.0;
+        self.sleeping = false;
+        self.sleep_accumulator = 0.0;
+
+        // Refresh the history panel; the seed mode and any custom seed text
+        // are kept so a typed seed survives a retreat to the menu.
+        self.past_runs = crate::run_history::load_recent(usize::MAX);
+    }
+
+    /// Append the current run to `runs_history.jsonl` if it hasn't been
+    /// recorded yet. Called on death, on retreat-to-menu, and before a retry
+    /// replaces the state. Safe to call repeatedly.
+    fn finalize_run_record(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if state.run_recorded {
+            return;
+        }
+        state.run_recorded = true;
+
+        let dead = state
+            .world
+            .get::<&Health>(state.player_entity)
+            .map(|h| h.is_dead())
+            .unwrap_or(false);
+        let cause_of_death = if dead {
+            state
+                .world
+                .get::<&crate::components::LastDamageSource>(state.player_entity)
+                .map(|s| s.0.clone())
+                .unwrap_or_else(|_| "unknown".to_string())
+        } else {
+            "abandoned".to_string()
+        };
+
+        let record = crate::run_history::RunRecord {
+            timestamp: crate::run_history::unix_now_secs(),
+            seed: state.seed,
+            class: state.player_class.name().to_string(),
+            floor_reached: state.current_floor,
+            game_time_survived_secs: state.game_clock.time,
+            kills: state.kills,
+            cause_of_death,
+        };
+        crate::run_history::append_run(&record);
+        // Keep the in-memory panel current without re-reading the file.
+        self.past_runs.insert(0, record);
+        self.past_runs
+            .truncate(crate::run_history::PAST_RUNS_SHOWN);
     }
 
     /// Get a reference to the UI state (panics if not playing).
@@ -384,6 +503,9 @@ impl GameEngine {
                     .unwrap_or(false);
                 if player_dead {
                     self.game_mode = GameMode::GameOver;
+                    // Write this run's history line as soon as death is
+                    // detected (the game-over screen shows the same stats).
+                    self.finalize_run_record();
                 }
             }
         }
@@ -396,6 +518,10 @@ impl GameEngine {
                 window_action: None,
             };
         }
+
+        // Game-clock time before this frame's simulation, so fire can advance in
+        // game-time (and freeze when paused/idle).
+        let clock_t0 = self.state.as_ref().map(|s| s.game_clock.time).unwrap_or(0.0);
 
         // Handle input first (needs full &mut self access). Skip entirely when
         // not actively playing (e.g. paused) so the turn-based simulation stays
@@ -417,6 +543,13 @@ impl GameEngine {
             self.update_rest(dt);
         }
 
+        // Fast-forward the simulation while sleeping (like rest, but recovers
+        // fatigue and wakes on damage / nearby enemies).
+        {
+            puffin::profile_scope!("update_sleep");
+            self.update_sleep(dt);
+        }
+
         // Now extract state references for the rest
         let state = self.state.as_mut().expect("State checked above");
         let ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
@@ -428,14 +561,15 @@ impl GameEngine {
             self.vfx.update(dt);
         }
 
-        // Remove dead entities
+        // Remove dead entities (loot rolls draw from the seeded game rng);
+        // hostile deaths feed the run's kill counter.
         {
             puffin::profile_scope!("remove_dead");
-            let mut rng = rand::thread_rng();
-            systems::remove_dead_entities(
+            state.kills += systems::remove_dead_entities(
                 &mut state.world,
                 state.player_entity,
-                &mut rng,
+                state.current_floor,
+                &mut state.rng,
                 &mut self.events,
                 Some(&mut state.action_scheduler),
                 &mut state.spatial_cache,
@@ -459,6 +593,8 @@ impl GameEngine {
 
         // Collect skeleton spawn positions before floor transition might invalidate state
         let skeleton_spawns = event_result.skeleton_spawns.clone();
+        let raised_skeletons = event_result.raised_skeletons.clone();
+        let boss_minion_spawns = event_result.boss_minion_spawns.clone();
 
         if let Some(direction) = event_result.floor_transition {
             self.handle_floor_transition(direction, camera);
@@ -493,6 +629,37 @@ impl GameEngine {
             if let Some(ui_state) = self.ui_state.as_mut() {
                 ui_state.close_chest();
             }
+        }
+
+        // Spawn friendly skeletons from completed Raise Dead channels
+        for (x, y) in &raised_skeletons {
+            spawn_raised_skeleton(
+                &mut state.world,
+                state.player_entity,
+                *x,
+                *y,
+                &state.game_clock,
+                &mut state.action_scheduler,
+                &mut state.active_ai_tracker,
+                &mut state.spatial_cache,
+            );
+        }
+
+        // Spawn boss-summoned spiderlings (Mother Silkrot's brood)
+        for (boss, (x, y)) in &boss_minion_spawns {
+            spawn_boss_minion(
+                &mut state.world,
+                &state.grid,
+                *boss,
+                *x,
+                *y,
+                state.player_entity,
+                &state.game_clock,
+                &mut state.action_scheduler,
+                &mut state.active_ai_tracker,
+                &mut state.spatial_cache,
+                &mut self.events,
+            );
         }
 
         // Visual lerping
@@ -531,6 +698,72 @@ impl GameEngine {
         // Update camera
         camera.update(dt, self.input.mouse_down);
 
+        // Advance spreading fire (burnout + grass/creature ignition), paced by
+        // the game-time elapsed this frame. May revert burnt grass to floor and
+        // set fov_dirty, which the FOV update below then picks up.
+        {
+            puffin::profile_scope!("tick_fire");
+            let game_dt = state.game_clock.time - clock_t0;
+            systems::fire::tick_fire(
+                &mut state.world,
+                &mut state.grid,
+                &mut self.events,
+                game_dt,
+                &mut state.fire_accumulator,
+                &mut state.fov_dirty,
+            );
+
+            // Passive identification of carried/equipped items, paced by the
+            // same game-time delta (frozen while paused/idle).
+            systems::identify::tick_identification(
+                &mut state.world,
+                state.player_entity,
+                game_dt,
+                &mut state.identify_accumulator,
+                &mut self.events,
+            );
+
+            // Survival clock: hunger drains and fatigue grows in game-time
+            // (so both race ahead during rest/sleep fast-forward).
+            let survival = systems::survival::tick_survival(
+                &mut state.world,
+                state.player_entity,
+                game_dt,
+                &mut state.survival_accumulator,
+                systems::survival::SurvivalContext {
+                    resting: self.resting,
+                    sleeping: self.sleeping,
+                },
+                &mut self.events,
+            );
+
+            // Starvation damage interrupts rest and wakes a sleeper (inlined
+            // rather than via stop_rest/stop_sleep: `state` holds a field
+            // borrow of self here, so re-borrow ui_state directly).
+            if survival.starvation_damage {
+                if self.sleeping {
+                    self.sleeping = false;
+                    self.sleep_accumulator = 0.0;
+                    let _ = state
+                        .world
+                        .remove_one::<crate::components::Asleep>(state.player_entity);
+                    self.vfx.clear_resting_bubble();
+                    if let Some(ui) = self.ui_state.as_mut() {
+                        ui.message_log
+                            .system("You are jolted awake by gnawing hunger!");
+                    }
+                } else if self.resting {
+                    self.resting = false;
+                    self.rest_accumulator = 0.0;
+                    self.vfx.clear_resting_bubble();
+                    if let Some(ui) = self.ui_state.as_mut() {
+                        ui.message_log
+                            .system("Your rest is broken by gnawing hunger!");
+                    }
+                }
+            }
+        }
+
         // Update visibility based on LOS and illumination (only when game state changed)
         if state.fov_dirty {
             {
@@ -557,6 +790,11 @@ impl GameEngine {
 
             state.fov_dirty = false;
         }
+
+        // First-sighting boss announcements ("... glares at you!"). Cheap:
+        // at most one boss per floor; the event is picked up by the message
+        // log on the next event-processing pass.
+        systems::ai::announce_boss_sightings(&mut state.world, &state.grid, &mut self.events);
 
         // Collect renderables
         let entities = {
@@ -590,6 +828,7 @@ impl GameEngine {
             ui_state,
             &mut self.events,
             state.game_clock.time,
+            &mut state.rng,
         );
 
         // Handle ability activation from a hotbar slot
@@ -601,6 +840,19 @@ impl GameEngine {
         // Apply UI state changes
         if let Some(targeting) = ui_result.enter_targeting {
             self.input.targeting_mode = Some(targeting);
+        }
+        // A freshly studied spell goes straight onto the first free hotbar
+        // slot (main bar first, then shift bar) so it's immediately usable.
+        if let Some(ability) = ui_result.learned_ability {
+            let entry = Some(crate::ui::HotbarEntry::Ability(ability));
+            if let Some(slot) = ui_state
+                .hotbar_main
+                .iter_mut()
+                .chain(ui_state.hotbar_shift.iter_mut())
+                .find(|s| s.is_none())
+            {
+                *slot = entry;
+            }
         }
         if ui_result.close_inventory {
             ui_state.show_inventory = false;
@@ -616,6 +868,9 @@ impl GameEngine {
         }
         if ui_result.close_shop {
             ui_state.close_shop();
+        }
+        if ui_result.close_altar {
+            ui_state.close_altar();
         }
     }
 
@@ -722,13 +977,17 @@ impl GameEngine {
     ) -> crate::ui::UiActions {
         match self.game_mode {
             GameMode::StartScreen => {
-                // Show class selection screen
+                // Show class selection screen (with seed picker + stats panel)
                 let start_result = crate::ui::run_start_screen(
                     egui_glow,
                     window,
                     tileset,
                     ui_icons,
                     &mut self.selected_class,
+                    &mut self.seed_mode,
+                    &mut self.seed_input,
+                    &mut self.stats_open,
+                    &self.past_runs,
                 );
 
                 // Return start_game action if player clicked Start
@@ -737,14 +996,23 @@ impl GameEngine {
                 actions
             }
             GameMode::GameOver => {
-                let (time_survived, floor) = self
+                let stats = self
                     .state
                     .as_ref()
-                    .map(|s| (s.game_clock.time, s.current_floor))
-                    .unwrap_or((0.0, 0));
+                    .map(|s| crate::ui::GameOverStats {
+                        time_survived: s.game_clock.time,
+                        floor: s.current_floor,
+                        seed: s.seed,
+                        kills: s.kills,
+                        cause_of_death: s
+                            .world
+                            .get::<&crate::components::LastDamageSource>(s.player_entity)
+                            .map(|src| src.0.clone())
+                            .unwrap_or_else(|_| "unknown".to_string()),
+                    })
+                    .unwrap_or_default();
 
-                let choice =
-                    crate::ui::run_game_over_screen(egui_glow, window, time_survived, floor);
+                let choice = crate::ui::run_game_over_screen(egui_glow, window, &stats);
 
                 let mut actions = crate::ui::UiActions::default();
                 match choice {
@@ -839,8 +1107,31 @@ impl GameEngine {
             return result;
         }
 
+        // While sleeping, the simulation auto-advances (see update_sleep);
+        // swallow normal input. Any movement, interaction, or fresh click
+        // wakes the player up (as does activating Sleep again, via try_sleep).
+        if self.sleeping {
+            let interacted = frame.player_intent.is_some()
+                || frame.enter_pressed
+                || frame.toggle_inventory
+                || frame.toggle_grid_lines
+                || !self.input.player_path.is_empty();
+            if interacted {
+                self.input.clear_path();
+                self.sleeping = false;
+                self.sleep_accumulator = 0.0;
+                let _ = state
+                    .world
+                    .remove_one::<crate::components::Asleep>(state.player_entity);
+                self.vfx.clear_resting_bubble();
+                ui_state.message_log.system("You wake up.");
+            }
+            return result;
+        }
+
         // While resting, the simulation auto-advances (see update_rest); swallow
         // normal input. Any movement, interaction, or fresh click cancels rest.
+        // (Activating Sleep from the hotbar supersedes rest via try_sleep.)
         if self.resting {
             let interacted = frame.player_intent.is_some()
                 || frame.enter_pressed
@@ -939,6 +1230,8 @@ impl GameEngine {
 
             // Collect skeleton spawn positions before floor transition might invalidate state
             let skeleton_spawns = turn_result.skeleton_spawns.clone();
+            let raised_skeletons = turn_result.raised_skeletons.clone();
+            let boss_minion_spawns = turn_result.boss_minion_spawns.clone();
 
             match turn_result.turn_result {
                 TurnResult::Started => {
@@ -1008,6 +1301,43 @@ impl GameEngine {
                     ui_state.close_chest();
                 }
             }
+
+            // Spawn friendly skeletons from completed Raise Dead channels
+            if !raised_skeletons.is_empty() {
+                let state = self.state.as_mut().expect("State should exist");
+                for (x, y) in &raised_skeletons {
+                    spawn_raised_skeleton(
+                        &mut state.world,
+                        state.player_entity,
+                        *x,
+                        *y,
+                        &state.game_clock,
+                        &mut state.action_scheduler,
+                        &mut state.active_ai_tracker,
+                        &mut state.spatial_cache,
+                    );
+                }
+            }
+
+            // Spawn boss-summoned spiderlings
+            if !boss_minion_spawns.is_empty() {
+                let state = self.state.as_mut().expect("State should exist");
+                for (boss, (x, y)) in &boss_minion_spawns {
+                    spawn_boss_minion(
+                        &mut state.world,
+                        &state.grid,
+                        *boss,
+                        *x,
+                        *y,
+                        state.player_entity,
+                        &state.game_clock,
+                        &mut state.action_scheduler,
+                        &mut state.active_ai_tracker,
+                        &mut state.spatial_cache,
+                        &mut self.events,
+                    );
+                }
+            }
         }
 
         // Mouse drag for camera
@@ -1051,9 +1381,13 @@ impl GameEngine {
     /// Activate an ability by type, routing to whichever component holds it
     /// (class ability, secondary ability, or a ranger ability slot).
     fn try_use_ability(&mut self, ability_type: AbilityType) {
-        // Rest is a universal ability not tied to a class component.
+        // Rest and Sleep are universal abilities not tied to a class component.
         if ability_type == AbilityType::Rest {
             self.try_rest();
+            return;
+        }
+        if ability_type == AbilityType::Sleep {
+            self.try_sleep();
             return;
         }
 
@@ -1061,6 +1395,7 @@ impl GameEngine {
             Class,
             Secondary,
             Ranger(usize),
+            Learned,
         }
 
         let route = {
@@ -1088,6 +1423,12 @@ impl GameEngine {
                 .and_then(|ra| ra.abilities.iter().position(|(at, _, _)| *at == ability_type))
             {
                 Route::Ranger(index)
+            } else if world
+                .get::<&crate::components::LearnedAbilities>(player)
+                .map(|la| la.knows(ability_type))
+                .unwrap_or(false)
+            {
+                Route::Learned
             } else {
                 return;
             }
@@ -1097,7 +1438,33 @@ impl GameEngine {
             Route::Class => self.try_use_class_ability(),
             Route::Secondary => self.try_use_secondary_ability(),
             Route::Ranger(index) => self.try_use_ranger_ability(index),
+            Route::Learned => self.try_use_learned_ability(ability_type),
         }
+    }
+
+    /// Activate a learned spell (studied scroll) or Raise Dead.
+    fn try_use_learned_ability(&mut self, ability_type: AbilityType) {
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+        let Some(ref mut ui_state) = self.ui_state else {
+            return;
+        };
+
+        activate_learned_ability(
+            &mut state.world,
+            &state.grid,
+            state.player_entity,
+            ability_type,
+            &mut state.game_clock,
+            &mut state.action_scheduler,
+            &mut state.active_ai_tracker,
+            &mut state.spatial_cache,
+            &mut self.events,
+            &mut self.vfx,
+            ui_state,
+            &mut self.input,
+        );
     }
 
     fn try_use_class_ability(&mut self) {
@@ -1202,6 +1569,14 @@ impl GameEngine {
             ui_state.message_log.system("You can't rest with enemies nearby.");
             return;
         }
+        // Hungry stops natural regen, so resting can't heal (a Regeneration
+        // potion still works and is checked separately in update_rest).
+        if player_too_hungry_to_recover(&state.world, state.player_entity) {
+            ui_state
+                .message_log
+                .system("You are too hungry to recover — find something to eat.");
+            return;
+        }
 
         // Begin resting and show the Zzz bubble. Healing happens purely from the
         // game's normal time-based regen as the Wait steps advance the clock.
@@ -1263,6 +1638,12 @@ impl GameEngine {
                 self.stop_rest("Your rest is interrupted!");
                 return;
             }
+            // Hunger dropped below the threshold mid-rest: healing has
+            // stopped, so don't spin (and starve) forever.
+            if player_too_hungry_to_recover(&state.world, state.player_entity) {
+                self.stop_rest("You are too hungry to keep resting.");
+                return;
+            }
 
             let result = execute_player_intent(
                 &mut state.world,
@@ -1280,11 +1661,242 @@ impl GameEngine {
             );
             state.fov_dirty = true;
 
+            // A Raise Dead channel can tick over during rest's auto-Waits;
+            // don't drop the skeleton on the floor.
+            for (x, y) in &result.raised_skeletons {
+                spawn_raised_skeleton(
+                    &mut state.world,
+                    state.player_entity,
+                    *x,
+                    *y,
+                    &state.game_clock,
+                    &mut state.action_scheduler,
+                    &mut state.active_ai_tracker,
+                    &mut state.spatial_cache,
+                );
+            }
+
             if result.turn_result != simulation::TurnResult::Started
                 || result.enemy_spotted_player
                 || result.player_took_damage
             {
                 self.stop_rest("Your rest is interrupted!");
+                return;
+            }
+        }
+
+        // Keep the bubble pinned above the (stationary) player.
+        if let Some(ref state) = self.state {
+            if let Ok(pos) = state.world.get::<&crate::components::Position>(state.player_entity) {
+                self.vfx.set_resting_bubble(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
+            }
+        }
+    }
+
+    /// Toggle sleeping. Activating Sleep while already asleep wakes up;
+    /// otherwise it begins sleeping if it's safe and the player is tired at
+    /// all. While asleep the player carries the `Asleep` marker: enemies get
+    /// the sneak-attack multiplier on them and notice them far more easily.
+    fn try_sleep(&mut self) {
+        if self.sleeping {
+            self.stop_sleep("You wake up.");
+            return;
+        }
+
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+        let Some(ref mut ui_state) = self.ui_state else {
+            return;
+        };
+
+        // Only start sleeping while idle (not mid-action).
+        let is_idle = state
+            .world
+            .get::<&Actor>(state.player_entity)
+            .map(|a| a.current_action.is_none())
+            .unwrap_or(false);
+        if !is_idle {
+            return;
+        }
+
+        let fatigue = state
+            .world
+            .get::<&crate::components::Fatigue>(state.player_entity)
+            .map(|f| f.value)
+            .unwrap_or(0.0);
+        if fatigue <= 0.0 {
+            ui_state.message_log.system("You don't feel tired.");
+            return;
+        }
+        if simulation::any_enemy_alerted(&state.world, state.player_entity) {
+            ui_state.message_log.system("You can't sleep with enemies nearby.");
+            return;
+        }
+
+        // Sleep supersedes rest, and you can't stay crouched while unconscious.
+        self.resting = false;
+        self.rest_accumulator = 0.0;
+        let _ = state
+            .world
+            .remove_one::<crate::components::Sneaking>(state.player_entity);
+
+        // Begin sleeping: the Asleep marker makes the player sneak-attackable
+        // and easy to notice (see combat::apply_damage and systems::ai).
+        self.sleeping = true;
+        self.sleep_accumulator = 0.0;
+        let _ = state
+            .world
+            .insert_one(state.player_entity, crate::components::Asleep);
+        if let Ok(pos) = state.world.get::<&crate::components::Position>(state.player_entity) {
+            self.vfx.set_resting_bubble(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
+        }
+        ui_state.message_log.system("You lie down and drift off to sleep...");
+    }
+
+    /// End sleeping, remove the Asleep marker and bubble, and log `message`.
+    fn stop_sleep(&mut self, message: &str) {
+        if !self.sleeping {
+            return;
+        }
+        self.sleeping = false;
+        self.sleep_accumulator = 0.0;
+        if let Some(ref mut state) = self.state {
+            let _ = state
+                .world
+                .remove_one::<crate::components::Asleep>(state.player_entity);
+        }
+        self.vfx.clear_resting_bubble();
+        if let Some(ref mut ui_state) = self.ui_state {
+            ui_state.message_log.system(message);
+        }
+    }
+
+    /// Advance the sleep fast-forward by one frame's worth of game-time,
+    /// stepping the simulation in small Wait increments (same pacing as
+    /// rest). Fatigue itself recovers in the survival tick, which is paced by
+    /// the game-time these steps generate. Stops when fatigue reaches zero or
+    /// the sleeper is interrupted: by taking any damage (attacks, burning —
+    /// detected as an HP drop), or by an enemy waking/spotting them.
+    fn update_sleep(&mut self, dt: f32) {
+        if !self.sleeping {
+            return;
+        }
+
+        // How many discrete Wait-steps to run this frame, paced by real time.
+        self.sleep_accumulator += dt * REST_TIME_SCALE;
+        let mut steps =
+            (self.sleep_accumulator / crate::constants::ACTION_WAIT_DURATION) as i32;
+        if steps <= 0 {
+            return;
+        }
+        steps = steps.min(REST_MAX_STEPS_PER_FRAME);
+        self.sleep_accumulator -= steps as f32 * crate::constants::ACTION_WAIT_DURATION;
+
+        let mut rng = rand::thread_rng();
+        for _ in 0..steps {
+            let Some(ref mut state) = self.state else {
+                self.sleeping = false;
+                return;
+            };
+            let Some(ref mut ui_state) = self.ui_state else {
+                self.sleeping = false;
+                return;
+            };
+
+            // Fully recovered?
+            let fatigue = state
+                .world
+                .get::<&crate::components::Fatigue>(state.player_entity)
+                .map(|f| f.value)
+                .unwrap_or(0.0);
+            if fatigue <= 0.0 {
+                self.stop_sleep("You wake up feeling refreshed.");
+                return;
+            }
+            if simulation::any_enemy_alerted(&state.world, state.player_entity) {
+                self.stop_sleep("You are jolted awake — something has noticed you!");
+                return;
+            }
+
+            // Exhaustion can leave the player at 0 energy (no regen while
+            // awake); Wait needs the actor able to act, so wait for a point
+            // first (regen works while asleep).
+            let energy = state
+                .world
+                .get::<&Actor>(state.player_entity)
+                .map(|a| a.energy)
+                .unwrap_or(0);
+            if energy <= 0 {
+                let got = simulation::wait_for_energy(
+                    &mut state.world,
+                    &state.grid,
+                    state.player_entity,
+                    1,
+                    &mut state.game_clock,
+                    &mut state.action_scheduler,
+                    &mut state.active_ai_tracker,
+                    &mut state.spatial_cache,
+                    &mut self.events,
+                    &mut rng,
+                );
+                if !got {
+                    self.stop_sleep("You wake up.");
+                    return;
+                }
+            }
+
+            // Any HP drop while asleep wakes the player (attacks, burning,
+            // traps — starvation is handled separately in the survival tick).
+            let hp_before = state
+                .world
+                .get::<&Health>(state.player_entity)
+                .map(|h| h.current)
+                .unwrap_or(0);
+
+            let result = execute_player_intent(
+                &mut state.world,
+                &state.grid,
+                state.player_entity,
+                crate::systems::player_input::PlayerIntent::Wait,
+                &mut state.game_clock,
+                &mut state.action_scheduler,
+                &mut state.active_ai_tracker,
+                &mut state.spatial_cache,
+                &mut self.events,
+                &mut self.vfx,
+                ui_state,
+                self.audio.as_ref(),
+            );
+            state.fov_dirty = true;
+
+            // As with rest: a Raise Dead channel completing during sleep's
+            // auto-Waits still spawns the skeleton.
+            for (x, y) in &result.raised_skeletons {
+                spawn_raised_skeleton(
+                    &mut state.world,
+                    state.player_entity,
+                    *x,
+                    *y,
+                    &state.game_clock,
+                    &mut state.action_scheduler,
+                    &mut state.active_ai_tracker,
+                    &mut state.spatial_cache,
+                );
+            }
+
+            let hp_after = self
+                .state
+                .as_ref()
+                .and_then(|s| s.world.get::<&Health>(s.player_entity).ok().map(|h| h.current))
+                .unwrap_or(0);
+
+            if result.turn_result != simulation::TurnResult::Started
+                || result.enemy_spotted_player
+                || result.player_took_damage
+                || hp_after < hp_before
+            {
+                self.stop_sleep("You are rudely awakened!");
                 return;
             }
         }
@@ -1321,6 +1933,7 @@ impl GameEngine {
             current_grid,
             &mut state.floors,
             state.current_floor,
+            state.seed,
             direction,
             state.player_entity,
             &state.game_clock,
@@ -1341,6 +1954,110 @@ impl GameEngine {
             result.player_visual_pos.1 + 0.5,
         ));
     }
+}
+
+/// True when the player is Hungry (or worse) and has no Regenerating effect:
+/// natural HP regen is stopped, so resting cannot heal them.
+fn player_too_hungry_to_recover(world: &hecs::World, player: Entity) -> bool {
+    let hungry = world
+        .get::<&crate::components::Hunger>(player)
+        .map(|h| h.is_hungry())
+        .unwrap_or(false);
+    hungry
+        && !crate::systems::effects::entity_has_effect(
+            world,
+            player,
+            crate::components::EffectType::Regenerating,
+        )
+}
+
+/// Spawn a raised skeleton companion at a position (Raise Dead completion).
+///
+/// Uses the standard Skeleton stat block but wired into the tamed-companion
+/// infrastructure: no hostile AI, walkable (no BlocksMovement), `TamedBy` +
+/// `CompanionAI` for defensive follow behavior, plus the `RaisedUndead`
+/// marker that counts against the caster's INT-scaled control cap.
+#[allow(clippy::too_many_arguments)]
+fn spawn_raised_skeleton(
+    world: &mut hecs::World,
+    owner: Entity,
+    x: i32,
+    y: i32,
+    clock: &crate::time_system::GameClock,
+    scheduler: &mut crate::time_system::ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
+) {
+    let skeleton = spawning::enemies::SKELETON.spawn(world, x, y);
+
+    // Convert the hostile stat block into an ally (same path as taming).
+    let _ = world.remove_one::<crate::components::ChaseAI>(skeleton);
+    let _ = world.remove_one::<crate::components::BlocksMovement>(skeleton);
+    let _ = world.remove_one::<crate::components::Asleep>(skeleton);
+    let _ = world.insert(
+        skeleton,
+        (
+            crate::components::TamedBy { owner },
+            crate::components::CompanionAI {
+                owner,
+                follow_distance: 2,
+                threat_table: Vec::new(),
+            },
+            crate::components::RaisedUndead,
+            // Sickly green tint so allied bones read differently from the
+            // hostile skeletons they share a sprite with.
+            crate::components::SpriteTint { r: 0.65, g: 1.0, b: 0.75 },
+        ),
+    );
+
+    // Companions don't block movement or vision.
+    spatial_cache.register_entity(skeleton, (x, y), false, false);
+
+    // Track and schedule so the companion AI starts acting.
+    active_ai_tracker.register_entity(skeleton);
+    active_ai_tracker.mark_active(skeleton);
+    scheduler.schedule(skeleton, clock.time + 0.1);
+}
+
+/// Spawn a boss-summoned Lesser Giant Spider at (x, y): hostile, already
+/// alerted to the player, and counted against the boss's minion cap.
+#[allow(clippy::too_many_arguments)]
+fn spawn_boss_minion(
+    world: &mut hecs::World,
+    grid: &crate::grid::Grid,
+    boss: Entity,
+    x: i32,
+    y: i32,
+    player_entity: Entity,
+    clock: &crate::time_system::GameClock,
+    scheduler: &mut crate::time_system::ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    events: &mut EventQueue,
+) {
+    let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(world, x, y);
+    let _ = world.insert_one(spider, crate::components::BossMinion { boss });
+
+    // Summoned mid-fight: wide awake and already hunting the summoner's prey.
+    let _ = world.remove_one::<crate::components::Asleep>(spider);
+    let player_pos = world
+        .get::<&crate::components::Position>(player_entity)
+        .map(|p| (p.x, p.y))
+        .ok();
+    if let Ok(mut ai) = world.get::<&mut crate::components::ChaseAI>(spider) {
+        ai.state = crate::components::AIState::Chasing;
+        ai.add_threat(player_entity, crate::constants::WAKE_THREAT);
+        if let Some(pos) = player_pos {
+            ai.update_target_pos(player_entity, pos);
+        }
+    }
+
+    spatial_cache.register_entity(spider, (x, y), true, false);
+    let mut rng = rand::thread_rng();
+    initialization::initialize_single_ai_actor(
+        world, grid, spider, player_entity, clock, scheduler,
+        active_ai_tracker, spatial_cache, events, &mut rng,
+    );
 }
 
 /// Try to activate the player's class ability.
@@ -1442,6 +2159,16 @@ fn activate_class_ability(
         // Ranger abilities are handled via RangerAbilities component and number keys
         AbilityType::Disengage | AbilityType::Tumble | AbilityType::SnareTrap | AbilityType::CripplingShot => return false,
         AbilityType::Rest => return false, // Rest is handled in try_use_ability, never routed here
+        AbilityType::Sleep => return false, // Sleep is handled in try_use_ability, never routed here
+        // Learned spells + Raise Dead route through activate_learned_ability
+        AbilityType::LearnedBlink
+        | AbilityType::LearnedFireball
+        | AbilityType::LearnedFear
+        | AbilityType::LearnedSlow
+        | AbilityType::LearnedProtection
+        | AbilityType::LearnedSpeed
+        | AbilityType::LearnedInvisibility
+        | AbilityType::RaiseDead => return false,
     };
 
     // Start the action
@@ -1585,6 +2312,149 @@ fn activate_secondary_ability(
     start_result.is_ok()
 }
 
+/// Activate a learned spell (studied from a scroll) or Raise Dead.
+///
+/// Targeted spells (Blink / Fireball / Raise Dead) enter ability-targeting
+/// mode; the click then flows through the normal intent path. Untargeted
+/// spells start a `CastLearnedSpell` action immediately. Cooldowns start in
+/// `apply_cast_learned_spell` / `apply_start_raise_dead` on success.
+#[allow(clippy::too_many_arguments)]
+fn activate_learned_ability(
+    world: &mut hecs::World,
+    grid: &crate::grid::Grid,
+    player: Entity,
+    ability_type: AbilityType,
+    game_clock: &mut crate::time_system::GameClock,
+    action_scheduler: &mut crate::time_system::ActionScheduler,
+    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
+    spatial_cache: &mut crate::spatial_cache::SpatialCache,
+    events: &mut EventQueue,
+    vfx: &mut VfxManager,
+    ui_state: &mut GameUiState,
+    input_state: &mut InputState,
+) -> bool {
+    use crate::components::LearnedAbilities;
+
+    // Check if player is idle
+    let is_idle = world
+        .get::<&Actor>(player)
+        .map(|a| a.current_action.is_none())
+        .unwrap_or(false);
+    if !is_idle {
+        return false;
+    }
+
+    // Look up the spell entry (must be known and off cooldown)
+    let is_ready = world
+        .get::<&LearnedAbilities>(player)
+        .ok()
+        .and_then(|la| la.get(ability_type).map(|s| s.cooldown_remaining <= 0.0));
+    let Some(is_ready) = is_ready else {
+        return false;
+    };
+    if !is_ready {
+        return false;
+    }
+
+    // Check if player can ever afford this (max_energy >= cost)
+    let energy_cost = ability_type.energy_cost();
+    let can_afford = world
+        .get::<&Actor>(player)
+        .map(|a| a.max_energy >= energy_cost)
+        .unwrap_or(false);
+    if !can_afford {
+        return false;
+    }
+
+    // Targeted spells enter targeting mode instead of executing immediately.
+    match ability_type {
+        AbilityType::RaiseDead => {
+            // Enforce the INT-scaled control cap up front, with feedback.
+            let int = crate::queries::effective_stats(world, player).intelligence;
+            let cap = crate::constants::raise_dead_cap(int);
+            let active = systems::actions::raised_undead_count(world);
+            if active >= cap {
+                ui_state.message_log.system(format!(
+                    "You cannot control more than {} raised skeleton{} (1 + 1 per {} INT above 10).",
+                    cap,
+                    if cap == 1 { "" } else { "s" },
+                    crate::constants::RAISE_DEAD_INT_PER_EXTRA,
+                ));
+                return false;
+            }
+            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+                ability_type: AbilityType::RaiseDead,
+                max_range: crate::constants::RAISE_DEAD_RANGE,
+            });
+            return true;
+        }
+        AbilityType::LearnedBlink => {
+            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+                ability_type: AbilityType::LearnedBlink,
+                max_range: systems::actions::scaled_blink_range(world, player),
+            });
+            return true;
+        }
+        AbilityType::LearnedFireball => {
+            input_state.ability_targeting_mode = Some(input::AbilityTargetingMode {
+                ability_type: AbilityType::LearnedFireball,
+                max_range: crate::constants::FIREBALL_RANGE,
+            });
+            return true;
+        }
+        _ => {}
+    }
+
+    // Untargeted learned cast: wait for energy, then start the action.
+    let mut rng = rand::thread_rng();
+    let got_energy = simulation::wait_for_energy(
+        world,
+        grid,
+        player,
+        energy_cost,
+        game_clock,
+        action_scheduler,
+        active_ai_tracker,
+        spatial_cache,
+        events,
+        &mut rng,
+    );
+    if !got_energy {
+        let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+        return false;
+    }
+
+    let start_result = time_system::start_action(
+        world,
+        player,
+        ActionType::CastLearnedSpell {
+            ability: ability_type,
+            target_x: 0,
+            target_y: 0,
+        },
+        game_clock,
+        action_scheduler,
+    );
+
+    if start_result.is_ok() {
+        simulation::advance_until_player_ready(
+            world,
+            grid,
+            player,
+            game_clock,
+            action_scheduler,
+            active_ai_tracker,
+            spatial_cache,
+            events,
+            &mut rng,
+        );
+    }
+
+    let _ = process_events(events, world, grid, spatial_cache, vfx, ui_state, player);
+
+    start_result.is_ok()
+}
+
 /// Activate a Ranger ability by index (0-3 for keys 1-4).
 fn activate_ranger_ability(
     world: &mut hecs::World,
@@ -1708,4 +2578,52 @@ fn activate_ranger_ability(
 #[derive(Default)]
 struct InputResult {
     toggle_fullscreen: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A raised skeleton is a true companion: standard skeleton stat block
+    /// wired into the tamed-ally infrastructure (CompanionAI + TamedBy +
+    /// RaisedUndead), not a hostile — and it doesn't block its owner's path.
+    #[test]
+    fn test_spawn_raised_skeleton_is_companion_not_hostile() {
+        let mut world = hecs::World::new();
+        let owner = world.spawn((crate::components::Position::new(1, 1),));
+
+        let clock = crate::time_system::GameClock::new();
+        let mut scheduler = crate::time_system::ActionScheduler::new();
+        let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+        let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+
+        spawn_raised_skeleton(
+            &mut world, owner, 2, 1, &clock, &mut scheduler, &mut tracker, &mut cache,
+        );
+
+        let (skeleton, _) = world
+            .query::<&crate::components::RaisedUndead>()
+            .iter()
+            .next()
+            .map(|(id, r)| (id, *r))
+            .expect("a raised skeleton exists");
+
+        // Ally wiring...
+        let companion_owner = world
+            .get::<&crate::components::CompanionAI>(skeleton)
+            .map(|c| c.owner)
+            .expect("companion AI attached");
+        assert_eq!(companion_owner, owner);
+        assert!(world.get::<&crate::components::TamedBy>(skeleton).is_ok());
+        // ... and no hostile leftovers.
+        assert!(world.get::<&crate::components::ChaseAI>(skeleton).is_err());
+        assert!(world.get::<&crate::components::BlocksMovement>(skeleton).is_err());
+        assert!(world.get::<&crate::components::Asleep>(skeleton).is_err());
+        // It keeps the skeleton stat block (alive, counted against the cap).
+        assert_eq!(
+            crate::systems::actions::raised_undead_count(&world),
+            1,
+            "the new companion counts against the raise cap"
+        );
+    }
 }

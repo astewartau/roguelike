@@ -46,6 +46,15 @@ pub enum PlayerIntent {
     PlaceSnareTrap { target_x: i32, target_y: i32 },
     /// Ranger: Shoot crippling shot that slows target
     ShootCripplingShot { target_x: i32, target_y: i32 },
+    /// Cast a learned (studied) spell at a target position (Blink/Fireball;
+    /// untargeted learned casts are activated directly from the hotbar)
+    CastLearnedSpell {
+        ability: crate::components::AbilityType,
+        target_x: i32,
+        target_y: i32,
+    },
+    /// Necromancer: start channeling Raise Dead on a bones container
+    StartRaiseDead { target: Entity },
 }
 
 /// Result of validating a targeting action
@@ -200,11 +209,12 @@ pub fn intent_to_action(
                     target_x: *target_x,
                     target_y: *target_y,
                 }),
-                // Throwable potions
+                // Throwable potions (and the water flask, which splash-douses)
                 ItemType::HealthPotion
                 | ItemType::RegenerationPotion
                 | ItemType::StrengthPotion
-                | ItemType::ConfusionPotion => Some(ActionType::ThrowPotion {
+                | ItemType::ConfusionPotion
+                | ItemType::WaterFlaskFull => Some(ActionType::ThrowPotion {
                     potion_type: *item_type,
                     target_x: *target_x,
                     target_y: *target_y,
@@ -242,6 +252,18 @@ pub fn intent_to_action(
             target_x: *target_x,
             target_y: *target_y,
         }),
+
+        PlayerIntent::CastLearnedSpell { ability, target_x, target_y } => {
+            Some(ActionType::CastLearnedSpell {
+                ability: *ability,
+                target_x: *target_x,
+                target_y: *target_y,
+            })
+        }
+
+        PlayerIntent::StartRaiseDead { target } => {
+            Some(ActionType::StartRaiseDead { target: *target })
+        }
     }
 }
 

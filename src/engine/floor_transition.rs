@@ -28,11 +28,26 @@ pub struct SavedEntity {
     pub entity_type: SavedEntityType,
 }
 
+/// Boss role data saved with a boss enemy (name, ability, announced state).
+pub struct SavedBoss {
+    pub name: String,
+    pub ability: crate::components::BossAbility,
+    pub announced: bool,
+}
+
 /// Types of entities that can be saved.
 pub enum SavedEntityType {
     Enemy {
+        /// The full stat/trait template the enemy was spawned from, so a
+        /// revisited floor restores the same enemy type (shaman, spider,
+        /// archer, ...) instead of downgrading everything to a skeleton.
+        def: spawning::EnemyDef,
         health_current: i32,
         health_max: i32,
+        /// Whether the enemy was asleep when the player left the floor.
+        asleep: bool,
+        /// Present if this enemy is the floor boss.
+        boss: Option<SavedBoss>,
     },
     Chest {
         is_open: bool,
@@ -45,6 +60,18 @@ pub enum SavedEntityType {
     Bones {
         gold: u32,
         items: Vec<ItemInstance>,
+    },
+    /// An undiscovered secret door (discovered ones are saved as `Door`)
+    SecretDoor,
+    /// A dungeon floor trap (triggered ones are despawned, so never saved)
+    Trap {
+        kind: crate::components::DungeonTrapKind,
+        revealed: bool,
+    },
+    /// Room furniture (fountain / altar / shrine)
+    Furniture {
+        kind: crate::components::FurnitureKind,
+        used: bool,
     },
 }
 
@@ -68,16 +95,38 @@ pub fn can_transition_floor(current_floor: u32, direction: crate::events::StairD
 pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloor {
     let mut entities = Vec::new();
 
-    // Save enemies
+    // Save enemies (hostile ChaseAI actors; tamed companions use CompanionAI
+    // and are not floor-bound). The spawn template stored on the entity
+    // preserves its exact type; enemies spawned without one (dev tools,
+    // legacy saves) fall back to a skeleton as before.
     for (id, (pos, health, _)) in world.query::<(&Position, &Health, &ChaseAI)>().iter() {
         if id == player_entity {
             continue;
         }
+        let def = world
+            .get::<&spawning::EnemyDef>(id)
+            .map(|d| (*d).clone())
+            .unwrap_or_else(|_| spawning::enemies::SKELETON.clone());
+        let asleep = world
+            .entity(id)
+            .map(|e| e.has::<crate::components::Asleep>())
+            .unwrap_or(false);
+        let boss = world.get::<&crate::components::Boss>(id).ok().map(|b| SavedBoss {
+            name: world
+                .get::<&crate::components::Name>(id)
+                .map(|n| n.0.clone())
+                .unwrap_or_else(|_| def.name.to_string()),
+            ability: b.ability,
+            announced: b.announced,
+        });
         entities.push(SavedEntity {
             pos: (pos.x, pos.y),
             entity_type: SavedEntityType::Enemy {
+                def,
                 health_current: health.current,
                 health_max: health.max,
+                asleep,
+                boss,
             },
         });
     }
@@ -119,6 +168,45 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
             pos: (pos.x, pos.y),
             entity_type: SavedEntityType::Door {
                 is_open: door.is_open,
+            },
+        });
+    }
+
+    // Save undiscovered secret doors
+    for (_, (pos, _)) in world
+        .query::<(&Position, &crate::components::SecretDoor)>()
+        .iter()
+    {
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type: SavedEntityType::SecretDoor,
+        });
+    }
+
+    // Save untriggered dungeon traps (keeping their revealed state)
+    for (_, (pos, trap)) in world
+        .query::<(&Position, &crate::components::DungeonTrap)>()
+        .iter()
+    {
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type: SavedEntityType::Trap {
+                kind: trap.kind,
+                revealed: trap.revealed,
+            },
+        });
+    }
+
+    // Save room furniture (keeping spent state)
+    for (_, (pos, furniture)) in world
+        .query::<(&Position, &crate::components::Furniture)>()
+        .iter()
+    {
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type: SavedEntityType::Furniture {
+                kind: furniture.kind,
+                used: furniture.used,
             },
         });
     }
@@ -171,11 +259,21 @@ pub fn load_floor(
     for saved_entity in saved_entities {
         let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
         match &saved_entity.entity_type {
-            SavedEntityType::Enemy { health_current, health_max } => {
-                let enemy = spawning::enemies::SKELETON.spawn(world, pos.x, pos.y);
+            SavedEntityType::Enemy { def, health_current, health_max, asleep, boss } => {
+                let enemy = def.spawn(world, pos.x, pos.y);
                 if let Ok(mut health) = world.get::<&mut Health>(enemy) {
                     health.current = *health_current;
                     health.max = *health_max;
+                }
+                // spawn() re-rolls the sleep chance; restore the state the
+                // enemy was actually left in.
+                if *asleep {
+                    let _ = world.insert_one(enemy, crate::components::Asleep);
+                } else {
+                    let _ = world.remove_one::<crate::components::Asleep>(enemy);
+                }
+                if let Some(b) = boss {
+                    spawning::apply_boss_role(world, enemy, &b.name, b.ability, b.announced);
                 }
                 crate::systems::ai::decide_action(
                     world, grid, enemy, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, &mut rng,
@@ -234,16 +332,38 @@ pub fn load_floor(
                     container,
                 ));
             }
+            SavedEntityType::SecretDoor => {
+                let wall_sprite = super::initialization::secret_door_wall_sprite(grid, pos.x, pos.y);
+                spawning::spawn_secret_door(world, pos.x, pos.y, wall_sprite);
+            }
+            SavedEntityType::Trap { kind, revealed } => {
+                let trap = spawning::spawn_dungeon_trap(world, pos.x, pos.y, *kind);
+                if *revealed {
+                    crate::systems::discovery::reveal_trap(world, trap, *kind);
+                }
+            }
+            SavedEntityType::Furniture { kind, used } => {
+                let piece = spawning::spawn_furniture(world, pos.x, pos.y, *kind);
+                if *used {
+                    crate::systems::furniture::mark_spent(world, piece);
+                }
+            }
         }
     }
 }
 
 /// Handle a floor transition (going up or down stairs).
+///
+/// `run_seed` is the run's seed: brand-new floors derive a per-floor rng from
+/// it (via `game_state::floor_seed`), so the same seed always produces the
+/// same floors regardless of visit order. Revisited floors are restored from
+/// their saved state instead.
 pub fn handle_floor_transition(
     world: &mut World,
     current_grid: Grid,
     floors: &mut HashMap<u32, SavedFloor>,
     current_floor: u32,
+    run_seed: u64,
     direction: crate::events::StairDirection,
     player_entity: Entity,
     clock: &GameClock,
@@ -291,7 +411,19 @@ pub fn handle_floor_transition(
         );
         grid
     } else {
-        let grid = Grid::new_floor(DUNGEON_DEFAULT_WIDTH, DUNGEON_DEFAULT_HEIGHT, target_floor);
+        // A floor never visited before: layout + loot come from a fresh rng
+        // derived from the run seed and floor number only.
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut floor_rng =
+            StdRng::seed_from_u64(super::game_state::floor_seed(run_seed, target_floor));
+
+        let grid = Grid::new_floor(
+            DUNGEON_DEFAULT_WIDTH,
+            DUNGEON_DEFAULT_HEIGHT,
+            target_floor,
+            &mut floor_rng,
+        );
 
         let spawn_pos = match direction {
             StairDirection::Down => grid.stairs_up_pos.unwrap_or((1, 1)),
@@ -309,6 +441,7 @@ pub fn handle_floor_transition(
             active_ai_tracker,
             spatial_cache,
             events,
+            &mut floor_rng,
         );
         grid
     };
@@ -331,5 +464,137 @@ pub fn handle_floor_transition(
         new_floor: target_floor,
         new_grid,
         player_visual_pos,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{Asleep, Boss, BossAbility, FearImmune, SupportAI, Venomous};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    fn setup() -> (World, Grid, Entity) {
+        let mut rng = StdRng::seed_from_u64(99);
+        let grid = Grid::new_floor(40, 40, 1, &mut rng);
+        let mut world = World::new();
+        let pos = Position::new(1, 1);
+        let player = world.spawn((pos, VisualPosition::from_position(&pos), Health::new(30)));
+        (world, grid, player)
+    }
+
+    /// Save the floor, clear it, and load it back — the round trip the player
+    /// takes when descending and then returning up the stairs.
+    fn save_and_reload(world: &mut World, grid: Grid, player: Entity) -> Grid {
+        let saved = save_floor(world, grid, player);
+        let mut scheduler = ActionScheduler::new();
+        clear_floor_entities(world, player, &mut scheduler);
+
+        let clock = GameClock::new();
+        let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+        let cache = crate::spatial_cache::SpatialCache::rebuild_from_world(world);
+        let mut events = EventQueue::new();
+        let grid = saved.grid;
+        load_floor(
+            world,
+            &grid,
+            &saved.entities,
+            player,
+            (1, 1),
+            &clock,
+            &mut scheduler,
+            &mut tracker,
+            &cache,
+            &mut events,
+        );
+        grid
+    }
+
+    /// Find the (unique) entity carrying the given display name.
+    fn find_named(world: &World, name: &str) -> Entity {
+        let matches: Vec<Entity> = world
+            .query::<&crate::components::Name>()
+            .iter()
+            .filter(|(_, n)| n.0 == name)
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(matches.len(), 1, "expected exactly one '{name}'");
+        matches[0]
+    }
+
+    #[test]
+    fn test_revisited_floor_preserves_enemy_types() {
+        let (mut world, grid, player) = setup();
+
+        // A venomous spider, a support shaman, and an archer — the enemy
+        // kinds the old save path used to downgrade to plain skeletons.
+        let spider = spawning::enemies::GIANT_SPIDER.spawn(&mut world, 5, 5);
+        let shaman = spawning::enemies::GOBLIN_SHAMAN.spawn(&mut world, 7, 5);
+        let archer = spawning::enemies::SKELETON_ARCHER.spawn(&mut world, 9, 5);
+
+        // Deterministic health + sleep state to verify restoration.
+        world.get::<&mut Health>(spider).unwrap().current = 3;
+        let _ = world.remove_one::<Asleep>(spider);
+        let _ = world.insert_one(shaman, Asleep);
+        let _ = world.remove_one::<Asleep>(archer);
+
+        save_and_reload(&mut world, grid, player);
+
+        let spider = find_named(&world, "Giant Spider");
+        assert!(world.get::<&crate::components::Spider>(spider).is_ok());
+        assert!(world.get::<&Venomous>(spider).is_ok());
+        assert_eq!(world.get::<&Health>(spider).unwrap().current, 3);
+        assert!(world.get::<&Asleep>(spider).is_err(), "awake spider stays awake");
+
+        let shaman = find_named(&world, "Goblin Shaman");
+        assert!(world.get::<&SupportAI>(shaman).is_ok());
+        assert!(world.get::<&Asleep>(shaman).is_ok(), "sleeping shaman stays asleep");
+
+        let archer = find_named(&world, "Skeleton Archer");
+        let has_bow = world
+            .get::<&crate::components::Equipment>(archer)
+            .map(|e| e.get_bow().is_some())
+            .unwrap_or(false);
+        assert!(has_bow, "archer keeps its ranged weapon");
+    }
+
+    #[test]
+    fn test_revisited_floor_preserves_boss() {
+        let (mut world, grid, player) = setup();
+
+        let boss = spawning::spawn_boss(&mut world, 3, 6, 6).expect("floor 3 boss");
+        let scaled_max = world.get::<&Health>(boss).unwrap().max;
+        world.get::<&mut Health>(boss).unwrap().current = scaled_max - 7;
+        world.get::<&mut Boss>(boss).unwrap().announced = true;
+
+        save_and_reload(&mut world, grid, player);
+
+        let boss = find_named(&world, "Gnash, Orc Warlord");
+        let role = world.get::<&Boss>(boss).map(|b| *b).expect("Boss role restored");
+        assert_eq!(role.ability, BossAbility::GroundSlam);
+        assert!(role.announced, "announcement state survives the round trip");
+        assert!(world.get::<&FearImmune>(boss).is_ok());
+        assert!(world.get::<&Asleep>(boss).is_err(), "bosses never sleep");
+        let health = world.get::<&Health>(boss).map(|h| (h.current, h.max)).unwrap();
+        assert_eq!(health, (scaled_max - 7, scaled_max), "scaled boss HP survives");
+    }
+
+    #[test]
+    fn test_enemy_without_template_falls_back_to_skeleton() {
+        let (mut world, grid, player) = setup();
+
+        // A bare hostile without a spawn template (dev tools / legacy saves).
+        let pos = Position::new(4, 4);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Health::new(9),
+            ChaseAI::new(6),
+        ));
+
+        save_and_reload(&mut world, grid, player);
+
+        let skeleton = find_named(&world, "Skeleton");
+        assert_eq!(world.get::<&Health>(skeleton).unwrap().current, 9);
     }
 }

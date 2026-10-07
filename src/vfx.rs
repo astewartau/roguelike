@@ -322,6 +322,11 @@ impl VfxManager {
                     self.spawn_damage_number(position.0, position.1, *damage);
                 }
             }
+            GameEvent::StarvationDamage { position, damage, .. } => {
+                // Starvation damage floats a number like burn damage does
+                // (it's always the player, so always on a visible tile).
+                self.spawn_damage_number(position.0, position.1, *damage);
+            }
             GameEvent::TamingStarted { tamer, target } => {
                 // Start the taming channel visual
                 self.start_taming_beam(*tamer, *target);
@@ -337,6 +342,30 @@ impl VfxManager {
             GameEvent::LifeDrainEnded { caster, .. } | GameEvent::LifeDrainInterrupted { caster, .. } => {
                 // Stop the life drain beam visual
                 self.stop_life_drain_beam(*caster);
+            }
+            GameEvent::EnemyHealed { amount, position, .. } => {
+                // Green heal number over the mended ally (event is only
+                // emitted when the tile is visible, but double-check).
+                if grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) {
+                    self.spawn(
+                        position.0 as f32 + 0.5,
+                        position.1 as f32 + 0.5,
+                        VfxType::HealNumber { amount: *amount },
+                    );
+                }
+            }
+            GameEvent::BossAbilityUsed { ability, position, .. } => {
+                // Gnash's slam gets an explosion ring; other boss casts read
+                // through their spawned effects (spiders, skeletons).
+                if *ability == crate::components::BossAbility::GroundSlam
+                    && grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false)
+                {
+                    self.spawn_explosion(
+                        position.0 as f32 + 0.5,
+                        position.1 as f32 + 0.5,
+                        crate::constants::BOSS_SLAM_RADIUS,
+                    );
+                }
             }
             GameEvent::LifeDrainTick { target_pos, caster_pos, damage, healed, .. } => {
                 // Show damage number on target

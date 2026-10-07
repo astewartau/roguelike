@@ -41,6 +41,10 @@ pub struct PlayerBuffAuraData {
     pub has_protected: bool,
     pub has_barkskin: bool,
     pub is_sneaking: bool,
+    /// Hunger meter at zero: dim red pulse (the body consuming itself).
+    pub is_starving: bool,
+    /// Fatigue meter maxed: heavy grey haze.
+    pub is_exhausted: bool,
 }
 
 /// Extract player buff aura data from the world
@@ -55,6 +59,14 @@ pub fn get_buff_aura_data(world: &World, player_entity: Entity) -> Option<Player
         has_protected: effects::has_effect(&status_effects, EffectType::Protected),
         has_barkskin: effects::has_effect(&status_effects, EffectType::Barkskin),
         is_sneaking: world.get::<&crate::components::Sneaking>(player_entity).is_ok(),
+        is_starving: world
+            .get::<&crate::components::Hunger>(player_entity)
+            .map(|h| h.is_starving())
+            .unwrap_or(false),
+        is_exhausted: world
+            .get::<&crate::components::Fatigue>(player_entity)
+            .map(|f| f.is_exhausted())
+            .unwrap_or(false),
     })
 }
 
@@ -550,6 +562,7 @@ pub fn draw_potion_splashes(ctx: &egui::Context, effects: &[VisualEffect], camer
             ItemType::RegenerationPotion => (50, 200, 80), // Green
             ItemType::StrengthPotion => (220, 160, 50),    // Amber/Orange
             ItemType::ConfusionPotion => (80, 120, 220),   // Blue
+            ItemType::WaterFlaskFull => (90, 160, 230),    // Water blue
             _ => (200, 200, 200),                          // Fallback gray
         };
 
@@ -618,7 +631,13 @@ pub fn draw_player_buff_auras(
     let Some(data) = data else {
         return;
     };
-    if !data.has_regen && !data.has_protected && !data.has_barkskin && !data.is_sneaking {
+    if !data.has_regen
+        && !data.has_protected
+        && !data.has_barkskin
+        && !data.is_sneaking
+        && !data.is_starving
+        && !data.is_exhausted
+    {
         return;
     }
 
@@ -663,6 +682,20 @@ pub fn draw_player_buff_auras(
 
     // Pulsing effect
     let pulse = 0.7 + 0.3 * (real_time * 3.0).sin();
+
+    // Starving: a slow, dim red pulse — the body consuming itself.
+    if data.is_starving {
+        let slow_pulse = 0.6 + 0.4 * (real_time * 1.5).sin();
+        let color =
+            egui::Color32::from_rgba_unmultiplied(200, 45, 30, (55.0 * slow_pulse) as u8);
+        painter.circle_filled(center, tile_size * 0.55, color);
+    }
+
+    // Exhausted: a heavy grey haze around the player.
+    if data.is_exhausted {
+        let color = egui::Color32::from_rgba_unmultiplied(120, 115, 140, 50);
+        painter.circle_filled(center, tile_size * 0.6, color);
+    }
 
     // Draw regeneration aura (green glow)
     if data.has_regen {

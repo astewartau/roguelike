@@ -116,10 +116,107 @@ pub const SLIME_INTELLIGENCE: i32 = 1;
 pub const SLIME_AGILITY: i32 = 2;
 pub const SLIME_DAMAGE: i32 = 4;
 
-/// Gold dropped by enemies (min)
-pub const ENEMY_GOLD_DROP_MIN: u32 = 1;
-/// Gold dropped by enemies (max)
-pub const ENEMY_GOLD_DROP_MAX: u32 = 10;
+// GOBLIN SHAMAN - fragile support caster: heals/hastes allies, kites, raises the alarm
+pub const GOBLIN_SHAMAN_HEALTH: i32 = 20;
+pub const GOBLIN_SHAMAN_MAX_ENERGY: i32 = 4;
+/// Slower than the goblins it patches up (1.0 = player-speed).
+pub const GOBLIN_SHAMAN_SPEED: f32 = 1.0;
+pub const GOBLIN_SHAMAN_SIGHT_RADIUS: i32 = 8;
+pub const GOBLIN_SHAMAN_STRENGTH: i32 = 4;
+pub const GOBLIN_SHAMAN_INTELLIGENCE: i32 = 5;
+pub const GOBLIN_SHAMAN_AGILITY: i32 = 6;
+pub const GOBLIN_SHAMAN_DAMAGE: i32 = 3;
+/// Seconds between shaman support casts (heal or haste).
+pub const SHAMAN_SUPPORT_COOLDOWN: f32 = 4.0;
+/// HP restored by a shaman heal.
+pub const SHAMAN_HEAL_AMOUNT: i32 = 8;
+/// Range (Chebyshev tiles) within which the shaman can support an ally.
+pub const SHAMAN_SUPPORT_RANGE: i32 = 8;
+/// Duration of the shaman's haste (SpeedBoost) on an ally.
+pub const SHAMAN_HASTE_DURATION: f32 = 6.0;
+/// The shaman tries to stay at least this far from its threat target...
+pub const SHAMAN_KITE_MIN: i32 = 3;
+/// ...and no farther than this (closes back in to keep allies in support range).
+pub const SHAMAN_KITE_MAX: i32 = 5;
+
+// LESSER GIANT SPIDER - fast, fragile webspinner (early floors)
+pub const LESSER_SPIDER_HEALTH: i32 = 18;
+pub const LESSER_SPIDER_MAX_ENERGY: i32 = 4;
+pub const LESSER_SPIDER_SPEED: f32 = 1.8;
+pub const LESSER_SPIDER_SIGHT_RADIUS: i32 = 8;
+pub const LESSER_SPIDER_STRENGTH: i32 = 4;
+pub const LESSER_SPIDER_INTELLIGENCE: i32 = 1;
+pub const LESSER_SPIDER_AGILITY: i32 = 9;
+pub const LESSER_SPIDER_DAMAGE: i32 = 4;
+
+// GIANT SPIDER - venomous webspinner (floor 3+); its bite Slows
+pub const GIANT_SPIDER_HEALTH: i32 = 45;
+pub const GIANT_SPIDER_MAX_ENERGY: i32 = 3;
+pub const GIANT_SPIDER_SPEED: f32 = 1.3;
+pub const GIANT_SPIDER_SIGHT_RADIUS: i32 = 8;
+pub const GIANT_SPIDER_STRENGTH: i32 = 10;
+pub const GIANT_SPIDER_INTELLIGENCE: i32 = 1;
+pub const GIANT_SPIDER_AGILITY: i32 = 6;
+pub const GIANT_SPIDER_DAMAGE: i32 = 9;
+/// Duration of the Slowed venom applied by a giant spider's bite.
+pub const SPIDER_VENOM_SLOW_DURATION: f32 = 4.0;
+
+// WEBS (see systems/webs.rs and the web arm of systems/fire.rs)
+/// Seconds between a spider laying webs (while chasing or idling).
+pub const WEB_LAY_COOLDOWN: f32 = 8.0;
+/// Maximum live webs a single spider maintains.
+pub const WEB_MAX_PER_SPIDER: usize = 6;
+/// Hard cap on live webs across the whole floor.
+pub const WEB_TOTAL_CAP: usize = 24;
+/// How long a non-spider is Rooted when it blunders into a web.
+pub const WEB_ROOT_DURATION: f32 = 2.0;
+/// Per-fire-step chance a web adjacent to any fire source ignites (webs are
+/// tinder — fire leaps through a web-choked room).
+pub const WEB_IGNITE_CHANCE: f64 = 0.8;
+/// How long an ignited web burns before it (and the web) are consumed.
+pub const WEB_BURN_DURATION: f32 = 3.0;
+/// White gauze tint for web sprites (repurposed tall-grass sprite).
+pub const WEB_TINT: (f32, f32, f32) = (1.6, 1.6, 1.8);
+
+// BOSSES (every 3rd floor — see spawning::bosses)
+/// Boss max-health multiplier over its base enemy.
+pub const BOSS_HEALTH_MULT: f32 = 2.5;
+/// Boss melee-damage multiplier over its base enemy.
+pub const BOSS_DAMAGE_MULT: f32 = 1.5;
+/// Boss stat (STR/INT/AGI) multiplier — also inflates its XP value.
+pub const BOSS_STAT_MULT: f32 = 1.3;
+/// Extra sight radius over the base enemy (slightly larger threat range).
+pub const BOSS_SIGHT_BONUS: i32 = 2;
+/// Additional flat scaling applied per boss cycle past the first three
+/// (floor 12+ repeats the roster, tougher each lap).
+pub const BOSS_CYCLE_HEALTH_MULT: f32 = 1.5;
+/// Boss kills grant this multiple of the normal stat-derived XP.
+pub const BOSS_XP_MULT: u32 = 2;
+/// Gold multiplier on a boss corpse.
+pub const BOSS_GOLD_MULT: u32 = 5;
+/// Gnash's ground slam: cooldown / Chebyshev radius / stun / raw damage.
+pub const BOSS_SLAM_COOLDOWN: f32 = 12.0;
+pub const BOSS_SLAM_RADIUS: i32 = 2;
+pub const BOSS_SLAM_STUN_DURATION: f32 = 2.0;
+pub const BOSS_SLAM_DAMAGE: i32 = 6;
+/// Silkrot's brood: cooldown / spiders per cast / max alive at once.
+pub const BOSS_SPIDER_SPAWN_COOLDOWN: f32 = 20.0;
+pub const BOSS_SPIDER_SPAWN_COUNT: usize = 2;
+pub const BOSS_SPIDER_MINION_CAP: usize = 4;
+/// Silkrot lays webs far faster than a normal spider.
+pub const BOSS_WEB_LAY_COOLDOWN: f32 = 3.0;
+/// Vhal's raise-dead: cooldown / bones-search radius (Chebyshev).
+pub const BOSS_RAISE_COOLDOWN: f32 = 15.0;
+pub const BOSS_RAISE_RANGE: i32 = 6;
+
+/// Gold dropped by enemies (min, before the depth bonus)
+/// (balance: was 1, out of line with 25-140g vendor prices)
+pub const ENEMY_GOLD_DROP_MIN: u32 = 2;
+/// Gold dropped by enemies (max, before the depth bonus)
+pub const ENEMY_GOLD_DROP_MAX: u32 = 12;
+/// Extra gold per floor of depth on every enemy drop, so kill income keeps
+/// pace with the vendor's deeper (pricier) stock instead of staying flat
+pub const ENEMY_GOLD_PER_FLOOR: u32 = 3;
 
 // THREAT SYSTEM
 /// Threat generated per point of damage dealt

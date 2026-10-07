@@ -1,7 +1,8 @@
 use crate::constants::*;
 use crate::grid::Decal;
 use crate::tile::{tile_ids, Tile, TileType};
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 /// A rectangle representing a room or region
 #[derive(Clone, Copy, Debug)]
@@ -242,6 +243,14 @@ pub struct DungeonResult {
     pub shop_position: Option<(i32, i32)>,
     /// Shop decoration positions (jars, sacks, etc.)
     pub shop_decor_positions: Vec<(i32, i32)>,
+    /// Hidden floor trap positions (kinds are rolled at spawn time)
+    pub trap_positions: Vec<(i32, i32)>,
+    /// Room furniture positions (fountain/altar/shrine, rolled at spawn time)
+    pub furniture_positions: Vec<(i32, i32)>,
+    /// The sealed hidden room, if this floor has one
+    pub secret_room: Option<Rect>,
+    /// The sealed doorway of the hidden room (spawns a SecretDoor entity)
+    pub secret_door_pos: Option<(i32, i32)>,
 }
 
 pub struct DungeonGenerator {
@@ -250,6 +259,9 @@ pub struct DungeonGenerator {
     tiles: Vec<Tile>,
     /// Water positions collected during generation
     water_positions: Vec<(i32, i32)>,
+    /// Child rng for cosmetic floor-tile sprite variants (see set_tile);
+    /// seeded from the layout rng so seeded floors are fully reproducible.
+    floor_variant_rng: StdRng,
 }
 
 impl DungeonGenerator {
@@ -259,13 +271,32 @@ impl DungeonGenerator {
             height,
             tiles: vec![Tile::new(TileType::Wall); width * height],
             water_positions: Vec::new(),
+            // Reseeded from the layout rng in generate_with_rng.
+            floor_variant_rng: StdRng::seed_from_u64(0),
         }
     }
 
-    /// Generate a dungeon floor. floor_num 0 is the starting floor (no stairs up).
+    /// Generate a dungeon floor with an unseeded (entropy) rng.
+    /// Prefer `generate_with_rng` for seeded runs. (Kept as the convenience
+    /// entry point for tests; the game always passes a seeded rng.)
+    #[allow(dead_code)]
     pub fn generate(width: usize, height: usize, floor_num: u32) -> DungeonResult {
+        Self::generate_with_rng(width, height, floor_num, &mut rand::thread_rng())
+    }
+
+    /// Generate a dungeon floor from the given rng: the same rng state always
+    /// produces the same layout. floor_num 0 is the starting floor (no stairs up).
+    pub fn generate_with_rng(
+        width: usize,
+        height: usize,
+        floor_num: u32,
+        rng: &mut impl Rng,
+    ) -> DungeonResult {
         let mut gen = Self::new(width, height);
-        let mut rng = rand::thread_rng();
+        // Cosmetic floor-tile variants come from a child rng so set_tile
+        // (called without an rng argument) stays deterministic too.
+        gen.floor_variant_rng = StdRng::seed_from_u64(rng.gen());
+        let mut rng = rng;
 
         // Create the root BSP node covering the entire map
         let root_region = Rect::new(0, 0, width as i32, height as i32);
@@ -412,6 +443,45 @@ impl DungeonGenerator {
         let shop_position = gen.generate_shop_position(&themed_rooms);
         let shop_decor_positions = gen.generate_shop_decor_positions(&themed_rooms, &mut rng);
 
+        // Occasionally seal one small side-room behind a secret door.
+        // Must happen after door positions are known; the sealed doorway is
+        // removed from the normal door list.
+        let mut door_positions = door_positions;
+        let (secret_room, secret_door_pos) = gen.select_secret_room(
+            &themed_rooms,
+            &mut door_positions,
+            stairs_up_pos,
+            stairs_down_pos,
+            &mut rng,
+        );
+
+        // Room furniture (fountains/altars/shrines): roughly one per 3 rooms.
+        // Avoid tiles already claimed by chests, braziers, coffins, etc.
+        let mut occupied: Vec<(i32, i32)> = Vec::new();
+        occupied.extend(chest_positions.iter().copied());
+        occupied.extend(brazier_positions.iter().copied());
+        occupied.extend(coffin_positions.iter().copied());
+        occupied.extend(barrel_positions.iter().copied());
+        occupied.extend(shop_decor_positions.iter().copied());
+        occupied.extend(shop_position.iter().copied());
+        occupied.extend(gen.water_positions.iter().copied());
+        let furniture_positions =
+            gen.generate_furniture_positions(&themed_rooms, &occupied, &mut rng);
+
+        // Hidden floor traps (1-3, +1 per 2 floors deeper) on open floor away
+        // from stairs, doors, the player start, and claimed tiles.
+        occupied.extend(furniture_positions.iter().copied());
+        occupied.extend(door_positions.iter().map(|(pos, _)| *pos));
+        occupied.extend(secret_door_pos.iter().copied());
+        let trap_positions = gen.generate_trap_positions(
+            &themed_rooms,
+            &occupied,
+            stairs_up_pos,
+            stairs_down_pos,
+            floor_num,
+            &mut rng,
+        );
+
         // Starting room is the first room (where player spawns)
         let starting_room = rooms.first().copied();
 
@@ -439,6 +509,10 @@ impl DungeonGenerator {
             barrel_positions,
             shop_position,
             shop_decor_positions,
+            trap_positions,
+            furniture_positions,
+            secret_room,
+            secret_door_pos,
         }
     }
 
@@ -454,7 +528,9 @@ impl DungeonGenerator {
             let mut tile = Tile::new(tile_type);
             // Randomly vary floor tiles for visual interest
             if tile_type == TileType::Floor {
-                let variant = rand::thread_rng().gen_range(0..tile_ids::FLOOR_VARIANTS.len());
+                let variant = self
+                    .floor_variant_rng
+                    .gen_range(0..tile_ids::FLOOR_VARIANTS.len());
                 tile.sprite_override = Some(tile_ids::FLOOR_VARIANTS[variant]);
             }
             self.tiles[idx] = tile;
@@ -581,12 +657,12 @@ impl DungeonGenerator {
                 } else {
                     false
                 };
-                let se_walkable = if x < width - 1 && y < height - 1 {
+                let _se_walkable = if x < width - 1 && y < height - 1 {
                     self.tiles[(y + 1) as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
                 } else {
                     false
                 };
-                let sw_walkable = if x > 0 && y < height - 1 {
+                let _sw_walkable = if x > 0 && y < height - 1 {
                     self.tiles[(y + 1) as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
                 } else {
                     false
@@ -1298,6 +1374,235 @@ impl DungeonGenerator {
         positions
     }
 
+    /// Pick positions for room furniture (fountain/altar/shrine): roughly one
+    /// per `FURNITURE_ROOMS_PER_PIECE` rooms, never in Shop rooms or the
+    /// starting room, on open floor away from the room center (chest spot).
+    fn generate_furniture_positions(
+        &self,
+        themed_rooms: &[ThemedRoom],
+        occupied: &[(i32, i32)],
+        rng: &mut impl Rng,
+    ) -> Vec<(i32, i32)> {
+        let mut positions = Vec::new();
+
+        // Eligible rooms: not the starting room (index 0), not Shop, and big
+        // enough to hold furniture without choking the walkway.
+        let eligible: Vec<&ThemedRoom> = themed_rooms
+            .iter()
+            .enumerate()
+            .filter(|(i, room)| {
+                *i != 0
+                    && room.theme != RoomTheme::Shop
+                    && room.rect.width >= 4
+                    && room.rect.height >= 4
+            })
+            .map(|(_, room)| room)
+            .collect();
+
+        if eligible.is_empty() {
+            return positions;
+        }
+
+        let count = (themed_rooms.len() / FURNITURE_ROOMS_PER_PIECE).max(1);
+
+        // Shuffle eligible rooms, take the first `count`.
+        let mut pool: Vec<&ThemedRoom> = eligible;
+        for i in (1..pool.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            pool.swap(i, j);
+        }
+
+        for room in pool.into_iter().take(count) {
+            let center = room.rect.center();
+            // Try a handful of interior tiles.
+            for _ in 0..12 {
+                let x = rng.gen_range(room.rect.x + 1..room.rect.x + room.rect.width - 1);
+                let y = rng.gen_range(room.rect.y + 1..room.rect.y + room.rect.height - 1);
+                if (x, y) == center {
+                    continue; // chest / stairs spot
+                }
+                if occupied.contains(&(x, y)) || positions.contains(&(x, y)) {
+                    continue;
+                }
+                if self.get_tile(x, y) == Some(TileType::Floor) {
+                    positions.push((x, y));
+                    break;
+                }
+            }
+        }
+
+        positions
+    }
+
+    /// Pick positions for hidden floor traps: 1-3 per floor plus one per two
+    /// floors of depth, on room/corridor floor tiles away from stairs and the
+    /// starting room, skipping doors and already-claimed tiles.
+    fn generate_trap_positions(
+        &self,
+        themed_rooms: &[ThemedRoom],
+        occupied: &[(i32, i32)],
+        stairs_up: Option<(i32, i32)>,
+        stairs_down: Option<(i32, i32)>,
+        floor_num: u32,
+        rng: &mut impl Rng,
+    ) -> Vec<(i32, i32)> {
+        let count =
+            rng.gen_range(TRAPS_PER_FLOOR_MIN..=TRAPS_PER_FLOOR_MAX) + floor_num / TRAP_EXTRA_PER_FLOORS;
+
+        let starting_room = themed_rooms.first().map(|r| r.rect);
+        let shop_rooms: Vec<Rect> = themed_rooms
+            .iter()
+            .filter(|r| r.theme == RoomTheme::Shop)
+            .map(|r| r.rect)
+            .collect();
+
+        let near_stairs = |x: i32, y: i32| {
+            [stairs_up, stairs_down].iter().flatten().any(|&(sx, sy)| {
+                (x - sx).abs().max((y - sy).abs()) < TRAP_MIN_DIST_FROM_STAIRS
+            })
+        };
+
+        let mut candidates: Vec<(i32, i32)> = Vec::new();
+        for y in 0..self.height as i32 {
+            for x in 0..self.width as i32 {
+                if self.get_tile(x, y) != Some(TileType::Floor) {
+                    continue;
+                }
+                if near_stairs(x, y)
+                    || occupied.contains(&(x, y))
+                    || starting_room.map(|r| r.contains(x, y)).unwrap_or(false)
+                    || shop_rooms.iter().any(|r| r.contains(x, y))
+                {
+                    continue;
+                }
+                candidates.push((x, y));
+            }
+        }
+
+        let mut positions = Vec::new();
+        for _ in 0..count {
+            if candidates.is_empty() {
+                break;
+            }
+            let idx = rng.gen_range(0..candidates.len());
+            positions.push(candidates.swap_remove(idx));
+        }
+        positions
+    }
+
+    /// Walkable openings on a room's one-tile perimeter ring: ring tiles that
+    /// are walkable and cardinally adjacent to a walkable tile inside the room.
+    fn room_openings(&self, room: &Rect) -> Vec<(i32, i32)> {
+        let mut openings = Vec::new();
+        let mut check = |x: i32, y: i32| {
+            if self.get_tile(x, y).map(|t| t.is_walkable()).unwrap_or(false) {
+                // Cardinal neighbor inside the room must be walkable too.
+                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if room.contains(nx, ny)
+                        && self.get_tile(nx, ny).map(|t| t.is_walkable()).unwrap_or(false)
+                    {
+                        openings.push((x, y));
+                        return;
+                    }
+                }
+            }
+        };
+        for x in room.x..room.x + room.width {
+            check(x, room.y - 1);
+            check(x, room.y + room.height);
+        }
+        for y in room.y..room.y + room.height {
+            check(room.x - 1, y);
+            check(room.x + room.width, y);
+        }
+        openings
+    }
+
+    /// BFS reachability over walkable tiles with one tile treated as blocked.
+    fn is_reachable_without(&self, start: (i32, i32), goal: (i32, i32), blocked: (i32, i32)) -> bool {
+        use std::collections::{HashSet, VecDeque};
+        if start == goal {
+            return true;
+        }
+        let mut visited: HashSet<(i32, i32)> = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        visited.insert(start);
+        while let Some((x, y)) = queue.pop_front() {
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let next = (x + dx, y + dy);
+                if next == goal {
+                    return true;
+                }
+                if next == blocked || visited.contains(&next) {
+                    continue;
+                }
+                if self.get_tile(next.0, next.1).map(|t| t.is_walkable()).unwrap_or(false) {
+                    visited.insert(next);
+                    queue.push_back(next);
+                }
+            }
+        }
+        false
+    }
+
+    /// Occasionally (35% of floors) seal one small side-room behind a secret
+    /// door. Only rooms with exactly one walkable opening — which must also be
+    /// a door candidate — are eligible, and sealing must keep both staircases
+    /// reachable from each other. The sealed doorway is removed from the
+    /// normal door list. Returns (room, doorway).
+    fn select_secret_room(
+        &self,
+        themed_rooms: &[ThemedRoom],
+        door_positions: &mut Vec<((i32, i32), RoomTheme)>,
+        stairs_up: Option<(i32, i32)>,
+        stairs_down: Option<(i32, i32)>,
+        rng: &mut impl Rng,
+    ) -> (Option<Rect>, Option<(i32, i32)>) {
+        if themed_rooms.len() < 3 || !rng.gen_bool(SECRET_ROOM_CHANCE) {
+            return (None, None);
+        }
+
+        let last_idx = themed_rooms.len() - 1;
+        let door_set: Vec<(i32, i32)> = door_positions.iter().map(|(pos, _)| *pos).collect();
+
+        let mut candidates: Vec<(Rect, (i32, i32))> = Vec::new();
+        for (i, room) in themed_rooms.iter().enumerate() {
+            // Never the starting room, the stairs-down room, or the shop.
+            if i == 0 || i == last_idx || room.theme == RoomTheme::Shop {
+                continue;
+            }
+            if room.rect.width * room.rect.height > SECRET_ROOM_MAX_AREA {
+                continue;
+            }
+            let openings = self.room_openings(&room.rect);
+            let [doorway] = openings.as_slice() else {
+                continue; // needs exactly one way in
+            };
+            if !door_set.contains(doorway) {
+                continue; // the opening must be a proper doorway chokepoint
+            }
+            // Sealing must not cut the path between staircases (belt and
+            // braces — a one-opening room can't be on the critical path, but
+            // verify anyway).
+            let reachable = match (stairs_up, stairs_down) {
+                (Some(up), Some(down)) => self.is_reachable_without(up, down, *doorway),
+                _ => true,
+            };
+            if reachable {
+                candidates.push((room.rect, *doorway));
+            }
+        }
+
+        if candidates.is_empty() {
+            return (None, None);
+        }
+        let (room, doorway) = candidates[rng.gen_range(0..candidates.len())];
+        door_positions.retain(|(pos, _)| *pos != doorway);
+        (Some(room), Some(doorway))
+    }
+
     /// Check if a tile is a good door candidate:
     /// - Must be a floor tile
     /// - Must have walls on two opposite sides (horizontal or vertical)
@@ -1423,6 +1728,99 @@ mod tests {
         if let Some((x, y)) = result.stairs_down_pos {
             let idx = y as usize * 50 + x as usize;
             assert_eq!(result.tiles[idx].tile_type, TileType::StairsDown);
+        }
+    }
+
+    #[test]
+    fn test_traps_avoid_stairs_and_player_start() {
+        // Deeper floor so there are guaranteed traps and both staircases.
+        for _ in 0..10 {
+            let result = DungeonGenerator::generate(50, 50, 4);
+            assert!(!result.trap_positions.is_empty(), "deep floors always roll traps");
+            let start = result.starting_room.expect("has a starting room");
+            for &(x, y) in &result.trap_positions {
+                // On plain floor.
+                let idx = y as usize * 50 + x as usize;
+                assert_eq!(result.tiles[idx].tile_type, TileType::Floor);
+                // Never inside the starting room.
+                assert!(!start.contains(x, y), "trap inside starting room at ({x},{y})");
+                // Never near either staircase.
+                for stairs in [result.stairs_up_pos, result.stairs_down_pos].iter().flatten() {
+                    let dist = (x - stairs.0).abs().max((y - stairs.1).abs());
+                    assert!(
+                        dist >= TRAP_MIN_DIST_FROM_STAIRS,
+                        "trap at ({x},{y}) too close to stairs at {stairs:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_secret_room_sealed_only_with_single_doorway() {
+        // Run generation many times; whenever a secret room appears, its
+        // doorway must be the room's only opening, it must not be in the
+        // normal door list, and both staircases must stay mutually reachable.
+        let mut found = 0;
+        for _ in 0..60 {
+            let result = DungeonGenerator::generate(50, 50, 1);
+            let (Some(room), Some(doorway)) = (result.secret_room, result.secret_door_pos) else {
+                continue;
+            };
+            found += 1;
+
+            // Rebuild a generator view over the produced tiles to reuse helpers.
+            let gen = DungeonGenerator {
+                width: 50,
+                height: 50,
+                tiles: result.tiles.clone(),
+                water_positions: vec![],
+                floor_variant_rng: StdRng::seed_from_u64(0),
+            };
+            let openings = gen.room_openings(&room);
+            assert_eq!(openings, vec![doorway], "secret room must have exactly one opening");
+
+            // The sealed doorway spawns no normal door.
+            assert!(
+                !result.door_positions.iter().any(|(pos, _)| *pos == doorway),
+                "sealed doorway must be removed from the door list"
+            );
+
+            // Sealing keeps the stairs connected.
+            let (up, down) = (
+                result.stairs_up_pos.expect("floor 1 has stairs up"),
+                result.stairs_down_pos.expect("has stairs down"),
+            );
+            assert!(
+                gen.is_reachable_without(up, down, doorway),
+                "stairs must remain mutually reachable with the doorway sealed"
+            );
+        }
+        assert!(found > 0, "60 floors at 35% should produce at least one secret room");
+    }
+
+    #[test]
+    fn test_furniture_positions_on_floor_outside_shop() {
+        for _ in 0..10 {
+            let result = DungeonGenerator::generate(50, 50, 0);
+            let shop_rooms: Vec<Rect> = result
+                .themed_rooms
+                .iter()
+                .filter(|r| r.theme == RoomTheme::Shop)
+                .map(|r| r.rect)
+                .collect();
+            for &(x, y) in &result.furniture_positions {
+                let idx = y as usize * 50 + x as usize;
+                assert_eq!(result.tiles[idx].tile_type, TileType::Floor);
+                assert!(
+                    !shop_rooms.iter().any(|r| r.contains(x, y)),
+                    "furniture must never spawn in shop rooms"
+                );
+                assert!(
+                    !result.chest_positions.contains(&(x, y)),
+                    "furniture must not share a tile with a chest"
+                );
+            }
         }
     }
 

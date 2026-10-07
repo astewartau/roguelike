@@ -6,50 +6,66 @@ use super::icons::UiIcons;
 use super::style;
 use crate::components::PlayerClass;
 use crate::multi_tileset::MultiTileset;
+use crate::run_history::{RunRecord, SeedMode, PAST_RUNS_SHOWN};
 use egui_glow::EguiGlow;
 use winit::window::Window;
 
 /// Run the start screen UI for class selection.
+///
+/// `seed_mode` picks how the run is seeded (random / daily / custom);
+/// `seed_input` is the custom seed text (numbers parse directly, other text
+/// is hashed). `past_runs` (all recorded runs, newest first) backs the Stats
+/// panel, toggled by `stats_open`, whose "use seed" buttons copy a past seed
+/// into the custom field.
+///
 /// Returns Some(PlayerClass) if the player clicked Start, None otherwise.
+#[allow(clippy::too_many_arguments)]
 pub fn run_start_screen(
     egui_glow: &mut EguiGlow,
     window: &Window,
     tileset: &MultiTileset,
     icons: &UiIcons,
     selected_class: &mut Option<PlayerClass>,
+    seed_mode: &mut SeedMode,
+    seed_input: &mut String,
+    stats_open: &mut bool,
+    past_runs: &[RunRecord],
 ) -> Option<PlayerClass> {
     let mut start_clicked = None;
 
     egui_glow.run(window, |ctx| {
         // Keyboard navigation: arrows/WASD change class, Enter/Space starts.
         // Default-select the first class so the menu always has a highlight and
-        // Enter works straight away.
+        // Enter works straight away. Suppressed while a widget (the seed text
+        // field) has keyboard focus, so typing a seed doesn't flip classes.
         let classes = PlayerClass::ALL;
         if selected_class.is_none() {
             *selected_class = Some(classes[0]);
         }
-        ctx.input(|i| {
-            use egui::Key;
-            let cur = selected_class
-                .and_then(|c| classes.iter().position(|&x| x == c))
-                .unwrap_or(0);
-            let next = i.key_pressed(Key::ArrowRight)
-                || i.key_pressed(Key::D)
-                || i.key_pressed(Key::ArrowDown)
-                || i.key_pressed(Key::S);
-            let prev = i.key_pressed(Key::ArrowLeft)
-                || i.key_pressed(Key::A)
-                || i.key_pressed(Key::ArrowUp)
-                || i.key_pressed(Key::W);
-            if next {
-                *selected_class = Some(classes[(cur + 1) % classes.len()]);
-            } else if prev {
-                *selected_class = Some(classes[(cur + classes.len() - 1) % classes.len()]);
-            }
-            if i.key_pressed(Key::Enter) || i.key_pressed(Key::Space) {
-                start_clicked = *selected_class;
-            }
-        });
+        if !ctx.wants_keyboard_input() {
+            ctx.input(|i| {
+                use egui::Key;
+                let cur = selected_class
+                    .and_then(|c| classes.iter().position(|&x| x == c))
+                    .unwrap_or(0);
+                let next = i.key_pressed(Key::ArrowRight)
+                    || i.key_pressed(Key::D)
+                    || i.key_pressed(Key::ArrowDown)
+                    || i.key_pressed(Key::S);
+                let prev = i.key_pressed(Key::ArrowLeft)
+                    || i.key_pressed(Key::A)
+                    || i.key_pressed(Key::ArrowUp)
+                    || i.key_pressed(Key::W);
+                if next {
+                    *selected_class = Some(classes[(cur + 1) % classes.len()]);
+                } else if prev {
+                    *selected_class = Some(classes[(cur + classes.len() - 1) % classes.len()]);
+                }
+                if i.key_pressed(Key::Enter) || i.key_pressed(Key::Space) {
+                    start_clicked = *selected_class;
+                }
+            });
+        }
 
         // Center the window
         egui::CentralPanel::default()
@@ -200,8 +216,161 @@ pub fn run_start_screen(
                             .color(egui::Color32::GRAY),
                         );
                     }
+
+                    ui.add_space(24.0);
+
+                    // Seed picker: random every run, today's daily seed, or a
+                    // custom entry (numbers used as-is, words hashed).
+                    ui.label(
+                        egui::RichText::new("Seed")
+                            .size(14.0)
+                            .color(egui::Color32::LIGHT_GRAY),
+                    );
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let total_width = 3.0 * 80.0 + 2.0 * ui.spacing().item_spacing.x;
+                        ui.add_space((ui.available_width() - total_width) / 2.0);
+                        for (mode, label) in [
+                            (SeedMode::Random, "Random"),
+                            (SeedMode::Daily, "Daily"),
+                            (SeedMode::Custom, "Custom"),
+                        ] {
+                            let selected = *seed_mode == mode;
+                            let text = egui::RichText::new(label).size(14.0).color(
+                                if selected {
+                                    style::colors::DUNGEON_GOLD
+                                } else {
+                                    egui::Color32::LIGHT_GRAY
+                                },
+                            );
+                            let button = egui::SelectableLabel::new(selected, text);
+                            if ui.add_sized(egui::vec2(80.0, 22.0), button).clicked() {
+                                *seed_mode = mode;
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                    match seed_mode {
+                        SeedMode::Random => {
+                            ui.label(
+                                egui::RichText::new("A fresh dungeon every run")
+                                    .size(12.0)
+                                    .color(egui::Color32::GRAY),
+                            );
+                        }
+                        SeedMode::Daily => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} — same dungeon for everyone today",
+                                    crate::run_history::daily_date_string()
+                                ))
+                                .size(12.0)
+                                .color(egui::Color32::GRAY),
+                            );
+                        }
+                        SeedMode::Custom => {
+                            ui.add(
+                                egui::TextEdit::singleline(seed_input)
+                                    .desired_width(240.0)
+                                    .horizontal_align(egui::Align::Center)
+                                    .font(egui::TextStyle::Monospace)
+                                    .hint_text("number or words"),
+                            );
+                        }
+                    }
+
+                    ui.add_space(16.0);
+
+                    // Stats panel toggle (past runs live behind it).
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new(if *stats_open {
+                                "Hide Stats"
+                            } else {
+                                "Stats"
+                            })
+                            .size(14.0),
+                        ))
+                        .clicked()
+                    {
+                        *stats_open = !*stats_open;
+                    }
                 });
             });
+
+        // Stats panel: aggregate numbers over all recorded runs plus the most
+        // recent few (from runs_history.jsonl), newest first. "use seed"
+        // copies that run's seed into the custom seed field. Opens centered,
+        // draggable by its title bar, closable via the X (which resets
+        // stats_open through .open()).
+        if *stats_open {
+            egui::Window::new("Stats")
+                .open(stats_open)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.screen_rect().center())
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    if past_runs.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No completed runs yet.")
+                                .size(13.0)
+                                .color(egui::Color32::LIGHT_GRAY),
+                        );
+                        return;
+                    }
+
+                    let best_floor = past_runs.iter().map(|r| r.floor_reached).max().unwrap_or(0);
+                    let total_kills: u32 = past_runs.iter().map(|r| r.kills).sum();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} runs — best: floor {} — {} total kills",
+                            past_runs.len(),
+                            best_floor + 1,
+                            total_kills
+                        ))
+                        .size(13.0)
+                        .color(style::colors::DUNGEON_GOLD),
+                    );
+                    ui.separator();
+
+                    egui::Grid::new("past_runs_grid")
+                        .num_columns(3)
+                        .spacing(egui::vec2(10.0, 4.0))
+                        .show(ui, |ui| {
+                            for run in past_runs.iter().take(PAST_RUNS_SHOWN) {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} — floor {}",
+                                        run.class,
+                                        run.floor_reached + 1
+                                    ))
+                                    .size(13.0)
+                                    .color(egui::Color32::WHITE),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} kills — {}",
+                                        run.kills, run.cause_of_death
+                                    ))
+                                    .size(12.0)
+                                    .color(egui::Color32::LIGHT_GRAY),
+                                );
+                                if ui
+                                    .small_button(
+                                        egui::RichText::new("use seed").size(12.0),
+                                    )
+                                    .on_hover_text(format!("Seed: {}", run.seed))
+                                    .clicked()
+                                {
+                                    *seed_input = run.seed.to_string();
+                                    *seed_mode = SeedMode::Custom;
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+        }
     });
 
     start_clicked

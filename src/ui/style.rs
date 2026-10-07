@@ -44,6 +44,7 @@ pub mod colors {
     pub const RARITY_COMMON: Color32 = TEXT_PRIMARY;
     pub const RARITY_MAGIC: Color32 = Color32::from_rgb(110, 160, 230);
     pub const RARITY_RARE: Color32 = Color32::from_rgb(230, 200, 90);
+    pub const RARITY_LEGENDARY: Color32 = Color32::from_rgb(255, 145, 40);
 }
 
 /// Color for an item rarity tier (for tooltips and item names).
@@ -53,6 +54,7 @@ pub fn rarity_color(rarity: crate::components::Rarity) -> Color32 {
         Rarity::Common => colors::RARITY_COMMON,
         Rarity::Magic => colors::RARITY_MAGIC,
         Rarity::Rare => colors::RARITY_RARE,
+        Rarity::Legendary => colors::RARITY_LEGENDARY,
     }
 }
 

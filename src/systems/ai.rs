@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::active_ai_tracker::ActiveAITracker;
-use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, Door, EffectType, Equipment, Health, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, TamedBy, TamingInProgress};
+use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -197,6 +197,50 @@ pub fn interrupt_shout_on_damage(world: &mut World, entity: Entity) {
     let _ = world.remove_one::<AlarmInProgress>(entity);
 }
 
+/// Advance the role-specific ability cooldowns (shaman support casts, spider
+/// web-laying, boss unique abilities). Ticked in game-time alongside
+/// `tick_alarms`.
+pub fn tick_role_cooldowns(world: &mut World, elapsed: f32) {
+    if elapsed <= 0.0 {
+        return;
+    }
+    for (_, support) in world.query_mut::<&mut SupportAI>() {
+        support.cooldown = (support.cooldown - elapsed).max(0.0);
+    }
+    for (_, spinner) in world.query_mut::<&mut WebSpinner>() {
+        spinner.cooldown = (spinner.cooldown - elapsed).max(0.0);
+    }
+    for (_, boss) in world.query_mut::<&mut Boss>() {
+        boss.cooldown = (boss.cooldown - elapsed).max(0.0);
+    }
+}
+
+/// Announce any boss the player can now see for the first time
+/// ("Gnash, Orc Warlord glares at you!"). Called from the engine tick after
+/// the FOV update; cheap (there is at most one boss per floor).
+pub fn announce_boss_sightings(world: &mut World, grid: &Grid, events: &mut EventQueue) {
+    let mut sighted: Vec<(Entity, String)> = Vec::new();
+    for (id, (pos, boss)) in world.query::<(&Position, &Boss)>().iter() {
+        if boss.announced {
+            continue;
+        }
+        let visible = grid.get(pos.x, pos.y).map(|t| t.visible).unwrap_or(false);
+        if visible {
+            let name = world
+                .get::<&Name>(id)
+                .map(|n| n.0.clone())
+                .unwrap_or_else(|_| "The boss".to_string());
+            sighted.push((id, name));
+        }
+    }
+    for (id, name) in sighted {
+        if let Ok(mut boss) = world.get::<&mut Boss>(id) {
+            boss.announced = true;
+        }
+        events.push(GameEvent::BossSighted { boss: id, name });
+    }
+}
+
 /// Wake an enemy that was attacked while unaware, sending it after the player.
 /// No-op for already-aware enemies and non-enemies.
 pub fn wake_on_attacked(world: &mut World, entity: Entity) {
@@ -336,6 +380,13 @@ fn determine_action(
 
     // Is the player sneaking? (reduces detection by unaware/unalerted enemies)
     let player_sneaking = world.get::<&Sneaking>(player_entity).is_ok();
+    // A sleeping player (Asleep marker from the Sleep action) isn't hiding —
+    // they're far easier to notice. A Tired player is sloppier too.
+    let player_asleep = world.get::<&Asleep>(player_entity).is_ok();
+    let player_tired = world
+        .get::<&crate::components::Fatigue>(player_entity)
+        .map(|f| f.is_tired())
+        .unwrap_or(false);
 
     // Feared: flee from highest-threat source
     if is_feared && !is_rooted {
@@ -353,6 +404,24 @@ fn determine_action(
     // Busy raising an alarm shout — keep channeling (advanced by tick_alarms).
     if world.get::<&AlarmInProgress>(entity).is_ok() {
         return ActionType::Wait;
+    }
+
+    // Spiders lay a web on their own tile every few seconds while active
+    // (chasing or idling — never while asleep). A free side effect of the
+    // decision, not an action.
+    let spinner_state = world
+        .get::<&WebSpinner>(entity)
+        .ok()
+        .map(|w| (w.cooldown <= 0.0, w.interval));
+    if let Some((ready, interval)) = spinner_state {
+        if ready
+            && world.get::<&Asleep>(entity).is_err()
+            && crate::systems::webs::try_lay_web(world, entity, entity_pos.0, entity_pos.1)
+        {
+            if let Ok(mut spinner) = world.get::<&mut WebSpinner>(entity) {
+                spinner.cooldown = interval;
+            }
+        }
     }
 
     // Unaware (asleep or idly patrolling): not yet aware of the player. Build an
@@ -380,7 +449,14 @@ fn determine_action(
             if asleep {
                 gain *= ASLEEP_ALERT_MULT;
             }
-            if player_sneaking {
+            // Tired players are noticed faster (+25% alertness gain).
+            if player_tired {
+                gain *= TIRED_ALERTNESS_MULT;
+            }
+            if player_asleep {
+                // Lying unconscious in the open: much easier to spot.
+                gain *= SLEEPING_PLAYER_ALERT_MULT;
+            } else if player_sneaking {
                 gain *= SNEAK_ALERTNESS_MULT;
             }
             let new_alert = world.get::<&ChaseAI>(entity).map(|a| a.alertness + gain).unwrap_or(0.0);
@@ -540,10 +616,18 @@ fn determine_action(
     // Raise an alarm shout: a smart, aware enemy with a sleeping ally nearby and
     // no shout on cooldown begins a channeled shout (interruptible). It wakes
     // nearby unaware allies on completion (see tick_alarms).
+    //
+    // Support casters (Goblin Shaman) have a distinct alert behavior: they
+    // shout the moment they spot the player, whether or not anyone nearby is
+    // still asleep.
     let is_aware = matches!(new_state, AIState::Chasing | AIState::Investigating);
+    let is_support = world.get::<&SupportAI>(entity).is_ok();
+    let just_spotted = new_state == AIState::Chasing && current_state != AIState::Chasing;
     if is_aware && !is_rooted && world.get::<&CanOpenDoors>(entity).is_ok() {
         let ready = world.get::<&ChaseAI>(entity).map(|ai| ai.shout_cooldown <= 0.0).unwrap_or(false);
-        if ready && unaware_ally_near(world, entity_pos, SHOUT_WAKE_RADIUS, entity) {
+        let wants_shout = unaware_ally_near(world, entity_pos, SHOUT_WAKE_RADIUS, entity)
+            || (is_support && just_spotted);
+        if ready && wants_shout {
             let _ = world.insert_one(entity, AlarmInProgress { remaining: SHOUT_DURATION });
             if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
                 ai.shout_cooldown = SHOUT_COOLDOWN;
@@ -553,10 +637,31 @@ fn determine_action(
         }
     }
 
+    // Boss unique abilities (ground slam / summon spiders / raise dead),
+    // each on its own cooldown.
+    if !is_rooted {
+        if let Some(action) = try_boss_ability(
+            world, grid, entity, entity_pos, new_state,
+            &potential_targets, &visible_targets, spatial_cache, events,
+        ) {
+            return action;
+        }
+    }
+
+    // Shaman support cast: heal the most wounded visible ally in range, or
+    // haste one that is attacking the player.
+    if is_support && is_aware {
+        if let Some(action) = try_support_cast(
+            world, grid, spatial_cache, entity, entity_pos, player_entity, events,
+        ) {
+            return action;
+        }
+    }
+
     // If rooted, can only attack adjacent targets - cannot move
     if is_rooted {
         // Check all threat targets for adjacency
-        for &(target_entity, target_pos) in &potential_targets {
+        for &(_target_entity, target_pos) in &potential_targets {
             let dx = target_pos.0 - entity_pos.0;
             let dy = target_pos.1 - entity_pos.1;
             if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) {
@@ -605,6 +710,24 @@ fn determine_action(
 
     // Determine movement direction
     let (dx, dy) = if let Some(target_pos) = move_target {
+        // Support casters kite: keep a 3-5 tile cushion from the target they
+        // can see — back off when crowded, close in when allies drift out of
+        // support range, hold position in the sweet spot.
+        if is_support && target_visible {
+            let dist = (entity_pos.0 - target_pos.0)
+                .abs()
+                .max((entity_pos.1 - target_pos.1).abs());
+            if dist < SHAMAN_KITE_MIN {
+                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, blocking_positions, rng);
+                if fdx == 0 && fdy == 0 {
+                    return ActionType::Wait;
+                }
+                return action_dispatch::determine_action_type(world, grid, entity, fdx, fdy);
+            } else if dist <= SHAMAN_KITE_MAX {
+                return ActionType::Wait;
+            }
+            // dist > SHAMAN_KITE_MAX: fall through to normal approach.
+        }
         let can_open = world.get::<&CanOpenDoors>(entity).is_ok();
         let pathfinding_blocked = ai_pathfinding_blocked(world, spatial_cache, can_open);
         pathfinding::next_step_toward(grid, entity_pos, target_pos, &pathfinding_blocked)
@@ -630,6 +753,260 @@ fn determine_action(
     }
 
     action
+}
+
+// =============================================================================
+// BOSS ABILITIES
+// =============================================================================
+
+/// Fire the boss's unique ability if it is ready and conditions are met.
+/// Returns Some(Wait) when the ability was used this turn (the cast IS the
+/// turn), None to fall through to normal behavior.
+#[allow(clippy::too_many_arguments)]
+fn try_boss_ability(
+    world: &mut World,
+    grid: &Grid,
+    entity: Entity,
+    entity_pos: (i32, i32),
+    state: AIState,
+    potential_targets: &[(Entity, (i32, i32))],
+    visible_targets: &HashSet<Entity>,
+    spatial_cache: &SpatialCache,
+    events: &mut EventQueue,
+) -> Option<ActionType> {
+    let (ability, ready) = match world.get::<&Boss>(entity) {
+        Ok(boss) => (boss.ability, boss.cooldown <= 0.0),
+        Err(_) => return None,
+    };
+    if !ready {
+        return None;
+    }
+    let aware = matches!(state, AIState::Chasing | AIState::Investigating);
+
+    let cheb = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs().max((a.1 - b.1).abs());
+
+    match ability {
+        BossAbility::GroundSlam => {
+            // Needs a visible player-side target within the shockwave.
+            let in_range = potential_targets.iter().any(|&(t, tp)| {
+                visible_targets.contains(&t) && cheb(entity_pos, tp) <= BOSS_SLAM_RADIUS
+            });
+            if !in_range {
+                return None;
+            }
+            events.push(GameEvent::BossAbilityUsed { boss: entity, ability, position: entity_pos });
+
+            // Damage + stun everything player-side caught in the radius
+            // (fellow enemies are spared — the shockwave is aimed).
+            let victims: Vec<(Entity, (i32, i32))> = potential_targets
+                .iter()
+                .filter(|&&(_, tp)| cheb(entity_pos, tp) <= BOSS_SLAM_RADIUS)
+                .copied()
+                .collect();
+            for (victim, vpos) in victims {
+                let damage = crate::systems::combat::apply_damage(world, victim, BOSS_SLAM_DAMAGE);
+                crate::systems::effects::add_effect_to_entity(
+                    world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
+                );
+                events.push(GameEvent::AttackHit {
+                    attacker: entity,
+                    target: victim,
+                    target_pos: (vpos.0 as f32 + 0.5, vpos.1 as f32 + 0.5),
+                    damage,
+                    kind: crate::events::DamageKind::Slam,
+                    crit: false,
+                });
+            }
+            if let Ok(mut boss) = world.get::<&mut Boss>(entity) {
+                boss.cooldown = BOSS_SLAM_COOLDOWN;
+            }
+            Some(ActionType::Wait)
+        }
+        BossAbility::SummonSpiders => {
+            if !aware {
+                return None;
+            }
+            // Cap living minions; don't consume the cooldown while capped so
+            // the next brood follows promptly once one falls.
+            let alive = world
+                .query::<(&BossMinion, &Health)>()
+                .iter()
+                .filter(|(_, (minion, health))| minion.boss == entity && health.current > 0)
+                .count();
+            if alive >= BOSS_SPIDER_MINION_CAP {
+                return None;
+            }
+            let want = BOSS_SPIDER_SPAWN_COUNT.min(BOSS_SPIDER_MINION_CAP - alive);
+
+            // Free adjacent tiles for the brood to skitter out of.
+            let blocking = spatial_cache.get_blocking_positions();
+            let spots: Vec<(i32, i32)> = [
+                (-1, 0), (1, 0), (0, -1), (0, 1),
+                (-1, -1), (-1, 1), (1, -1), (1, 1),
+            ]
+            .iter()
+            .map(|(dx, dy)| (entity_pos.0 + dx, entity_pos.1 + dy))
+            .filter(|&(x, y)| grid.is_walkable(x, y) && !blocking.contains(&(x, y)))
+            .take(want)
+            .collect();
+            if spots.is_empty() {
+                return None;
+            }
+
+            events.push(GameEvent::BossAbilityUsed { boss: entity, ability, position: entity_pos });
+            for spot in spots {
+                events.push(GameEvent::BossMinionSpawn { boss: entity, position: spot });
+            }
+            if let Ok(mut boss) = world.get::<&mut Boss>(entity) {
+                boss.cooldown = BOSS_SPIDER_SPAWN_COOLDOWN;
+            }
+            Some(ActionType::Wait)
+        }
+        BossAbility::RaiseDead => {
+            if !aware {
+                return None;
+            }
+            // Nearest bones pile (corpse container) in range is consumed and
+            // rises as a hostile skeleton (spawned by the engine, which owns
+            // the scheduler — same path as coffin skeletons).
+            let bones: Option<(Entity, (i32, i32))> = world
+                .query::<(&Position, &crate::components::Container)>()
+                .iter()
+                .filter(|(_, (pos, container))| {
+                    container.container_type == ContainerType::Corpse
+                        && cheb(entity_pos, (pos.x, pos.y)) <= BOSS_RAISE_RANGE
+                })
+                .min_by_key(|(_, (pos, _))| cheb(entity_pos, (pos.x, pos.y)))
+                .map(|(id, (pos, _))| (id, (pos.x, pos.y)));
+            let (bones_id, bones_pos) = bones?;
+
+            let _ = world.despawn(bones_id);
+            events.push(GameEvent::BossAbilityUsed { boss: entity, ability, position: entity_pos });
+            events.push(GameEvent::CoffinSkeletonSpawn { position: bones_pos });
+            if let Ok(mut boss) = world.get::<&mut Boss>(entity) {
+                boss.cooldown = BOSS_RAISE_COOLDOWN;
+            }
+            Some(ActionType::Wait)
+        }
+    }
+}
+
+// =============================================================================
+// SUPPORT CASTER (GOBLIN SHAMAN)
+// =============================================================================
+
+/// Pick the heal target from (entity, current_hp, max_hp) candidates: the
+/// living, damaged one at the lowest health fraction.
+pub fn select_heal_target(candidates: &[(Entity, i32, i32)]) -> Option<Entity> {
+    candidates
+        .iter()
+        .filter(|&&(_, current, max)| current > 0 && current < max)
+        .min_by(|a, b| {
+            let fa = a.1 as f32 / a.2.max(1) as f32;
+            let fb = b.1 as f32 / b.2.max(1) as f32;
+            fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|&(entity, _, _)| entity)
+}
+
+/// Cast a support spell if the cooldown is ready: heal the most wounded
+/// visible ally within range, or failing that haste an ally that is engaged
+/// with the player. Returns Some(Wait) when a cast happened.
+fn try_support_cast(
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &SpatialCache,
+    entity: Entity,
+    entity_pos: (i32, i32),
+    player_entity: Entity,
+    events: &mut EventQueue,
+) -> Option<ActionType> {
+    let ready = world
+        .get::<&SupportAI>(entity)
+        .map(|s| s.cooldown <= 0.0)
+        .unwrap_or(false);
+    if !ready {
+        return None;
+    }
+
+    // Visible living allies within support range.
+    let vision_blocking = spatial_cache.get_vision_blocking();
+    let allies: Vec<(Entity, (i32, i32), i32, i32)> = world
+        .query::<(&Position, &ChaseAI, &Health)>()
+        .iter()
+        .filter(|&(id, (pos, _, health))| {
+            id != entity
+                && health.current > 0
+                && (pos.x - entity_pos.0).abs().max((pos.y - entity_pos.1).abs())
+                    <= SHAMAN_SUPPORT_RANGE
+                && has_line_of_sight(grid, vision_blocking, entity_pos.0, entity_pos.1, pos.x, pos.y)
+        })
+        .map(|(id, (pos, _, health))| (id, (pos.x, pos.y), health.current, health.max))
+        .collect();
+    if allies.is_empty() {
+        return None;
+    }
+
+    // Priority 1: mend the most wounded ally.
+    let heal_candidates: Vec<(Entity, i32, i32)> =
+        allies.iter().map(|&(id, _, cur, max)| (id, cur, max)).collect();
+    if let Some(target) = select_heal_target(&heal_candidates) {
+        let mut healed = 0;
+        if let Ok(mut health) = world.get::<&mut Health>(target) {
+            let before = health.current;
+            health.current = (health.current + SHAMAN_HEAL_AMOUNT).min(health.max);
+            healed = health.current - before;
+        }
+        if healed > 0 {
+            let target_pos = allies
+                .iter()
+                .find(|&&(id, ..)| id == target)
+                .map(|&(_, pos, ..)| pos)
+                .unwrap_or(entity_pos);
+            // Green vfx + message only when the player can see it happen.
+            let seen = grid.get(target_pos.0, target_pos.1).map(|t| t.visible).unwrap_or(false);
+            if seen {
+                events.push(GameEvent::EnemyHealed {
+                    healer: entity,
+                    target,
+                    amount: healed,
+                    position: target_pos,
+                });
+            }
+            if let Ok(mut support) = world.get::<&mut SupportAI>(entity) {
+                support.cooldown = SHAMAN_SUPPORT_COOLDOWN;
+            }
+            return Some(ActionType::Wait);
+        }
+    }
+
+    // Priority 2: haste an unhastened ally that is attacking the player.
+    let haste_target: Option<(Entity, (i32, i32))> = allies
+        .iter()
+        .filter(|&&(id, ..)| {
+            !queries::has_status_effect(world, id, EffectType::SpeedBoost)
+                && world
+                    .get::<&ChaseAI>(id)
+                    .map(|ai| ai.threat_table.iter().any(|e| e.entity == player_entity))
+                    .unwrap_or(false)
+        })
+        .map(|&(id, pos, ..)| (id, pos))
+        .next();
+    if let Some((target, target_pos)) = haste_target {
+        crate::systems::effects::add_effect_to_entity(
+            world, target, EffectType::SpeedBoost, SHAMAN_HASTE_DURATION,
+        );
+        let seen = grid.get(target_pos.0, target_pos.1).map(|t| t.visible).unwrap_or(false);
+        if seen {
+            events.push(GameEvent::EnemyHasted { healer: entity, target, position: target_pos });
+        }
+        if let Ok(mut support) = world.get::<&mut SupportAI>(entity) {
+            support.cooldown = SHAMAN_SUPPORT_COOLDOWN;
+        }
+        return Some(ActionType::Wait);
+    }
+
+    None
 }
 
 // =============================================================================
@@ -1048,4 +1425,28 @@ fn flee_from_target(
 
     // Panicked flee fallback — desperation overrides fire avoidance.
     random_wander(grid, pos, blocked, &HashSet::new(), rng)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_select_heal_target_prefers_lowest_health_fraction() {
+        let mut world = World::new();
+        let a = world.spawn(());
+        let b = world.spawn(());
+        let c = world.spawn(());
+
+        // b is at 25%, a at 50%: heal b even though a is missing more raw HP.
+        let candidates = vec![(a, 40, 80), (b, 5, 20), (c, 30, 30)];
+        assert_eq!(select_heal_target(&candidates), Some(b));
+
+        // Fully healthy or dead allies are never heal targets.
+        let candidates = vec![(a, 80, 80), (b, 0, 20)];
+        assert_eq!(select_heal_target(&candidates), None);
+
+        // Empty input degrades gracefully.
+        assert_eq!(select_heal_target(&[]), None);
+    }
 }

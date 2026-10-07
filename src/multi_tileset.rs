@@ -1,11 +1,19 @@
 //! Multi-texture tileset loader for 32rogues sprite sheets.
 
 use crate::tile::SpriteSheet;
-use crate::tileset::TileUV;
 use glow::HasContext;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+
+/// UV coordinates for a tile (normalized 0-1)
+#[derive(Clone, Copy, Debug)]
+pub struct TileUV {
+    pub u0: f32,
+    pub v0: f32,
+    pub u1: f32,
+    pub v1: f32,
+}
 
 /// Data for a single sprite sheet
 struct SheetData {

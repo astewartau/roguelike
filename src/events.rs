@@ -28,6 +28,8 @@ pub enum DamageKind {
     CripplingShot,
     /// A thrown potion impact (splash, no direct damage).
     Potion,
+    /// A boss ground slam (Gnash's shockwave).
+    Slam,
 }
 
 /// Game events that systems can emit and subscribe to.
@@ -221,6 +223,13 @@ pub enum GameEvent {
         item: crate::components::ItemType,
         value: u32,
     },
+    /// A carried item finished identifying (see systems::identify)
+    ItemIdentified {
+        /// Full display name now that it's known (e.g. a Legendary name)
+        name: String,
+        /// Whether the item turned out to carry a curse affix
+        cursed: bool,
+    },
     /// An entity took burn damage from being on fire
     BurnDamage {
         entity: Entity,
@@ -231,6 +240,23 @@ pub enum GameEvent {
     CaughtFire {
         entity: Entity,
         position: (i32, i32),
+    },
+    /// An oil barrel exploded (damage + burning oil spray). VFX/audio reuse
+    /// the FireballExplosion event emitted alongside this one.
+    BarrelExploded {
+        position: (i32, i32),
+    },
+    /// A brazier was toppled (by interaction or knockback), spilling fire.
+    BrazierToppled {
+        position: (i32, i32),
+    },
+    /// The player filled an empty water flask from a water tile.
+    FlaskFilled {
+        entity: Entity,
+    },
+    /// The player tried to fill a flask with no water in reach.
+    FlaskFillFailed {
+        entity: Entity,
     },
     /// A fire trap was placed
     FireTrapPlaced {
@@ -290,6 +316,145 @@ pub enum GameEvent {
         entity: Entity,
         ability: crate::components::AbilityType,
     },
+    /// The player's hunger crossed into a new coarse state (one-shot per
+    /// crossing; the message log turns these into warnings).
+    HungerStateChanged {
+        state: crate::components::HungerState,
+    },
+    /// The player's fatigue crossed into a new coarse state.
+    FatigueStateChanged {
+        state: crate::components::FatigueState,
+    },
+    /// The player took starvation damage (hunger at zero). Applied directly
+    /// to Health — armor and protection do not reduce it.
+    StarvationDamage {
+        entity: Entity,
+        position: (f32, f32),
+        damage: i32,
+    },
+    /// The player studied a scroll and permanently learned its spell.
+    SpellLearned {
+        ability: crate::components::AbilityType,
+    },
+    /// The player tried to study a scroll without enough Intelligence.
+    SpellStudyFailed {
+        scroll: crate::components::ItemType,
+        required_int: i32,
+        current_int: i32,
+    },
+    /// The player tried to study a scroll whose spell is already known.
+    SpellAlreadyKnown {
+        ability: crate::components::AbilityType,
+    },
+    /// Raise Dead channel started on a bones pile.
+    RaiseDeadStarted {
+        caster: Entity,
+        target: Entity,
+    },
+    /// Raise Dead channel failed (moved / out of range / bones gone).
+    RaiseDeadFailed {
+        caster: Entity,
+    },
+    /// Raise Dead completed: spawn a skeleton companion at this position.
+    /// Handled by the engine (needs the scheduler), like CoffinSkeletonSpawn.
+    SkeletonRaised {
+        owner: Entity,
+        position: (i32, i32),
+    },
+    /// The player spotted a hidden dungeon trap (it now renders).
+    TrapSpotted {
+        position: (i32, i32),
+    },
+    /// A dungeon-generated floor trap was triggered (and consumed).
+    DungeonTrapTriggered {
+        kind: crate::components::DungeonTrapKind,
+        victim: Entity,
+        position: (i32, i32),
+        /// Damage dealt (spike/fire traps; 0 for snare/alarm)
+        damage: i32,
+    },
+    /// The player noticed a hidden passage (secret door became a real door).
+    SecretDoorFound {
+        position: (i32, i32),
+    },
+    /// The player drank from a fountain (or found it dry).
+    FountainUsed {
+        entity: Entity,
+        outcome: FountainOutcome,
+    },
+    /// The player interacted with an altar: open the sacrifice window.
+    AltarOpened {
+        altar: Entity,
+        player: Entity,
+    },
+    /// The player sacrificed an item at an altar.
+    AltarSacrificed {
+        item_name: String,
+        blessed: bool,
+        /// Human-readable outcome ("Your Strength increases!", ...)
+        detail: String,
+    },
+    /// The player touched a shrine. `fresh` is false if it was already spent.
+    ShrineUsed {
+        entity: Entity,
+        fresh: bool,
+    },
+    /// A support caster (Goblin Shaman) healed an ally. Only emitted when the
+    /// target tile is visible to the player.
+    EnemyHealed {
+        healer: Entity,
+        target: Entity,
+        amount: i32,
+        position: (i32, i32),
+    },
+    /// A support caster hasted an ally attacking the player. Only emitted
+    /// when the target tile is visible to the player.
+    EnemyHasted {
+        healer: Entity,
+        target: Entity,
+        position: (i32, i32),
+    },
+    /// A non-spider entity blundered into a web (Rooted; web consumed).
+    WebTouched {
+        victim: Entity,
+        position: (i32, i32),
+    },
+    /// The player laid eyes on a floor boss for the first time.
+    BossSighted {
+        boss: Entity,
+        name: String,
+    },
+    /// A floor boss died (milestone message + bonus XP already granted).
+    BossDefeated {
+        name: String,
+    },
+    /// A boss used its unique ability (message log / VFX flourish).
+    BossAbilityUsed {
+        boss: Entity,
+        ability: crate::components::BossAbility,
+        position: (i32, i32),
+    },
+    /// A boss summoned a minion: spawn it at this position (handled by the
+    /// engine like CoffinSkeletonSpawn, since spawning needs the scheduler).
+    BossMinionSpawn {
+        boss: Entity,
+        position: (i32, i32),
+    },
+}
+
+/// What drinking from a fountain did (for the message log / VFX).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FountainOutcome {
+    /// Fully healed
+    Heal,
+    /// Hunger fully restored
+    Food,
+    /// Random beneficial effect
+    Buff(crate::components::EffectType),
+    /// Mild debuff (Confused or Slowed)
+    Bad(crate::components::EffectType),
+    /// The fountain was already used up
+    Dry,
 }
 
 /// Simple event queue - events are pushed during update, processed at end of frame

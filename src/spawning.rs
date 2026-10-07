@@ -51,6 +51,14 @@ pub struct EnemyDef {
     pub tameable: bool,
     /// Whether this enemy is smart enough to open doors and raise an alarm shout
     pub can_open_doors: bool,
+    /// How readily this enemy catches fire (0 = fireproof, e.g. skeletons/slimes)
+    pub flammability: f32,
+    /// Venomous bite: melee hits apply Slowed for this many seconds (0 = none)
+    pub venom_slow: f32,
+    /// Support caster (Goblin Shaman): kites and heals/hastes allies
+    pub support: bool,
+    /// Spider-kin: ignores webs and periodically lays them
+    pub spider: bool,
 }
 
 impl EnemyDef {
@@ -118,6 +126,10 @@ impl EnemyDef {
         // Name so the message log can refer to this enemy
         let _ = world.insert_one(entity, crate::components::Name::new(self.name));
 
+        // Keep the full template on the entity so floor save/load can restore
+        // this exact enemy type when the player revisits the floor.
+        let _ = world.insert_one(entity, self.clone());
+
         // Add Tameable component for animals that can be tamed
         if self.tameable {
             let _ = world.insert_one(entity, Tameable);
@@ -131,6 +143,44 @@ impl EnemyDef {
         // Smart enemies can open doors and raise alarm shouts.
         if self.can_open_doors {
             let _ = world.insert_one(entity, crate::components::CanOpenDoors);
+        }
+
+        // Flammable enemies can catch fire.
+        if self.flammability > 0.0 {
+            let _ = world.insert_one(
+                entity,
+                crate::components::Combustible { flammability: self.flammability },
+            );
+        }
+
+        // Venomous biters apply Slowed on melee hits (enemy melee path).
+        if self.venom_slow > 0.0 {
+            let _ = world.insert_one(
+                entity,
+                crate::components::Venomous { slow_duration: self.venom_slow },
+            );
+        }
+
+        // Support casters (shamans) heal/haste allies and kite.
+        if self.support {
+            let _ = world.insert_one(
+                entity,
+                crate::components::SupportAI { cooldown: crate::constants::SHAMAN_SUPPORT_COOLDOWN },
+            );
+        }
+
+        // Spider-kin ignore webs and periodically lay them.
+        if self.spider {
+            let _ = world.insert(
+                entity,
+                (
+                    crate::components::Spider,
+                    crate::components::WebSpinner {
+                        cooldown: crate::constants::WEB_LAY_COOLDOWN,
+                        interval: crate::constants::WEB_LAY_COOLDOWN,
+                    },
+                ),
+            );
         }
 
         entity
@@ -157,6 +207,10 @@ pub mod enemies {
         ranged: None,
         tameable: false,
         can_open_doors: true,
+        flammability: 0.0, // bone doesn't burn
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -174,6 +228,10 @@ pub mod enemies {
         ranged: None,
         tameable: true, // Rats are animals and can be tamed by Druids
         can_open_doors: false,
+        flammability: 0.35,
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -195,6 +253,10 @@ pub mod enemies {
         }),
         tameable: false,
         can_open_doors: true,
+        flammability: 0.0, // bone doesn't burn
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const GOBLIN: EnemyDef = EnemyDef {
@@ -212,6 +274,10 @@ pub mod enemies {
         ranged: None,
         tameable: false,
         can_open_doors: true,
+        flammability: 0.35,
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const ORC: EnemyDef = EnemyDef {
@@ -229,6 +295,10 @@ pub mod enemies {
         ranged: None,
         tameable: false,
         can_open_doors: true,
+        flammability: 0.35,
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const ZOMBIE: EnemyDef = EnemyDef {
@@ -246,6 +316,10 @@ pub mod enemies {
         ranged: None,
         tameable: false,
         can_open_doors: false,
+        flammability: 0.2, // rotting flesh, smoulders
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const BAT: EnemyDef = EnemyDef {
@@ -263,6 +337,10 @@ pub mod enemies {
         ranged: None,
         tameable: true, // Beasts can be tamed by Druids; a fast scout companion
         can_open_doors: false,
+        flammability: 0.35,
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -280,7 +358,84 @@ pub mod enemies {
         ranged: None,
         tameable: false,
         can_open_doors: false,
+        flammability: 0.0, // wet, doesn't burn
+        venom_slow: 0.0,
+        support: false,
+        spider: false,
     };
+
+    pub const GOBLIN_SHAMAN: EnemyDef = EnemyDef {
+        name: "Goblin Shaman",
+        sprite: tile_ids::GOBLIN_SHAMAN,
+        overlay_sprite: None,
+        health: GOBLIN_SHAMAN_HEALTH,
+        max_energy: GOBLIN_SHAMAN_MAX_ENERGY,
+        speed: GOBLIN_SHAMAN_SPEED,
+        sight_radius: GOBLIN_SHAMAN_SIGHT_RADIUS,
+        damage: GOBLIN_SHAMAN_DAMAGE,
+        strength: GOBLIN_SHAMAN_STRENGTH,
+        intelligence: GOBLIN_SHAMAN_INTELLIGENCE,
+        agility: GOBLIN_SHAMAN_AGILITY,
+        ranged: None,
+        tameable: false,
+        can_open_doors: true,
+        flammability: 0.35,
+        venom_slow: 0.0,
+        support: true,
+        spider: false,
+    };
+
+    pub const LESSER_GIANT_SPIDER: EnemyDef = EnemyDef {
+        name: "Lesser Giant Spider",
+        sprite: tile_ids::LESSER_GIANT_SPIDER,
+        overlay_sprite: None,
+        health: LESSER_SPIDER_HEALTH,
+        max_energy: LESSER_SPIDER_MAX_ENERGY,
+        speed: LESSER_SPIDER_SPEED,
+        sight_radius: LESSER_SPIDER_SIGHT_RADIUS,
+        damage: LESSER_SPIDER_DAMAGE,
+        strength: LESSER_SPIDER_STRENGTH,
+        intelligence: LESSER_SPIDER_INTELLIGENCE,
+        agility: LESSER_SPIDER_AGILITY,
+        ranged: None,
+        tameable: false,
+        can_open_doors: false,
+        flammability: 0.5, // bristly and dry — catches easily
+        venom_slow: 0.0,
+        support: false,
+        spider: true,
+    };
+
+    pub const GIANT_SPIDER: EnemyDef = EnemyDef {
+        name: "Giant Spider",
+        sprite: tile_ids::GIANT_SPIDER,
+        overlay_sprite: None,
+        health: GIANT_SPIDER_HEALTH,
+        max_energy: GIANT_SPIDER_MAX_ENERGY,
+        speed: GIANT_SPIDER_SPEED,
+        sight_radius: GIANT_SPIDER_SIGHT_RADIUS,
+        damage: GIANT_SPIDER_DAMAGE,
+        strength: GIANT_SPIDER_STRENGTH,
+        intelligence: GIANT_SPIDER_INTELLIGENCE,
+        agility: GIANT_SPIDER_AGILITY,
+        ranged: None,
+        tameable: false,
+        can_open_doors: false,
+        flammability: 0.5,
+        venom_slow: SPIDER_VENOM_SLOW_DURATION,
+        support: false,
+        spider: true,
+    };
+}
+
+/// How many Goblin Shamans spawn on a floor: none on floor 0, two on floor 1,
+/// then +1 per two floors (floor 3 -> 3, floor 5 -> 4, ...).
+pub fn shaman_count_for_floor(floor: u32) -> usize {
+    if floor == 0 {
+        0
+    } else {
+        2 + ((floor - 1) / 2) as usize
+    }
 }
 
 /// Spawn configuration for a dungeon level
@@ -306,7 +461,7 @@ impl SpawnConfig {
         // Counts are tuned for the ~40x40 / ~8-room default floor so density
         // stays comfortable; the smaller map means fewer enemies than a raw
         // count would suggest.
-        let roster: Vec<(EnemyDef, usize)> = match floor {
+        let mut roster: Vec<(EnemyDef, usize)> = match floor {
             // Floor 0 — gentle introduction
             0 => vec![
                 (enemies::RAT.clone(), 10),
@@ -345,6 +500,20 @@ impl SpawnConfig {
                 ]
             }
         };
+
+        // Goblin Shamans: priority-target support casters from floor 1 on.
+        let shamans = shaman_count_for_floor(floor);
+        if shamans > 0 {
+            roster.push((enemies::GOBLIN_SHAMAN.clone(), shamans));
+        }
+
+        // Spiders: lesser webspinners from floor 1, venomous giants from floor 3.
+        if floor >= 1 {
+            roster.push((enemies::LESSER_GIANT_SPIDER.clone(), 3));
+        }
+        if floor >= 3 {
+            roster.push((enemies::GIANT_SPIDER.clone(), 2));
+        }
 
         Self {
             entries: roster
@@ -567,6 +736,9 @@ pub mod vendors {
                 (ItemType::LeatherArmor, 1),
                 (ItemType::Helmet, 1),
                 (ItemType::Arrow, 10),
+                (ItemType::FireArrow, crate::constants::FIRE_ARROW_BUNDLE_COUNT),
+                (ItemType::WaterFlaskFull, 1),
+                (ItemType::WaterFlaskEmpty, 1),
             ],
             2..=3 => vec![
                 (ItemType::HealthPotion, 2),
@@ -575,7 +747,11 @@ pub mod vendors {
                 (ItemType::ScrollOfBlink, 1),
                 (ItemType::Dagger, 1),
                 (ItemType::LeatherArmor, 1),
+                (ItemType::Ring, 1),
                 (ItemType::Arrow, 15),
+                (ItemType::FireArrow, crate::constants::FIRE_ARROW_BUNDLE_COUNT),
+                (ItemType::WaterFlaskFull, 1),
+                (ItemType::WaterFlaskEmpty, 1),
             ],
             _ => vec![
                 (ItemType::HealthPotion, 3),
@@ -584,7 +760,11 @@ pub mod vendors {
                 (ItemType::ScrollOfFear, 1),
                 (ItemType::Sword, 1),
                 (ItemType::ChainMail, 1),
+                (ItemType::Ring, 1),
+                (ItemType::Amulet, 1),
                 (ItemType::Arrow, 20),
+                (ItemType::FireArrow, crate::constants::FIRE_ARROW_BUNDLE_COUNT * 2),
+                (ItemType::WaterFlaskFull, 2),
             ],
         }
     }
@@ -612,9 +792,27 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     ))
 }
 
-/// Spawn a brazier entity with light source and animated fire sprite
+/// Spawn a burning-grass fire at a tile: a short-lived hazard entity that shows
+/// flames, ignites things stepping on it (CausesBurning), and is avoided by AI.
+/// When it burns out (see `tick_fire`) its tile reverts to floor.
+pub fn spawn_burning_grass(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{AnimatedSprite, BurningGrass, CausesBurning};
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        AnimatedSprite::fire_pit(),
+        LightSource::brazier(),
+        CausesBurning,
+        BurningGrass { remaining: crate::constants::GRASS_BURN_DURATION },
+    ))
+}
+
+/// Spawn a brazier entity with light source and animated fire sprite.
+/// Braziers can be toppled (see `systems::fire::topple_brazier`).
 pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, CausesBurning};
+    use crate::components::{AnimatedSprite, Brazier, CausesBurning};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -623,5 +821,325 @@ pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         AnimatedSprite::brazier(),
         LightSource::brazier(),
         CausesBurning,
+        Brazier { lit: true },
     ))
+}
+
+/// Spawn an (unlit) oil puddle on a floor tile: walkable, doesn't block
+/// vision, and harmless until fire reaches it (see `systems::fire`).
+pub fn spawn_oil_puddle(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{OilPuddle, Sprite, SpriteTint};
+    use crate::constants::OIL_PUDDLE_TINT;
+
+    let pos = Position::new(x, y);
+    let (r, g, b) = OIL_PUDDLE_TINT;
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::OIL_PUDDLE),
+        SpriteTint { r, g, b },
+        OilPuddle,
+    ))
+}
+
+/// Spawn a hidden dungeon floor trap. No sprite: it is invisible until the
+/// player detects it (see `systems::discovery`), at which point it gains a
+/// tinted trap-door sprite. Walkable — stepping on it triggers it.
+pub fn spawn_dungeon_trap(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    kind: crate::components::DungeonTrapKind,
+) -> hecs::Entity {
+    use crate::components::DungeonTrap;
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        DungeonTrap { kind, revealed: false },
+    ))
+}
+
+/// Spawn a piece of room furniture (fountain / altar / shrine). Blocks
+/// movement; interacting (bump or Ctrl+direction) uses it — see
+/// `systems::furniture`.
+pub fn spawn_furniture(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    kind: crate::components::FurnitureKind,
+) -> hecs::Entity {
+    use crate::components::{Furniture, FurnitureKind, Name, SpriteTint};
+    use crate::constants::{ALTAR_TINT, FOUNTAIN_TINT, SHRINE_TINT};
+
+    let (sprite, tint, name) = match kind {
+        FurnitureKind::Fountain => (tile_ids::FOUNTAIN, FOUNTAIN_TINT, "Fountain"),
+        FurnitureKind::Altar => (tile_ids::ALTAR, ALTAR_TINT, "Altar"),
+        FurnitureKind::Shrine => (tile_ids::SHRINE, SHRINE_TINT, "Shrine"),
+    };
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(sprite),
+        SpriteTint { r: tint.0, g: tint.1, b: tint.2 },
+        Name::new(name),
+        Furniture { kind, used: false },
+        BlocksMovement,
+    ))
+}
+
+/// Spawn a secret door sealing a hidden room: renders as the given wall
+/// sprite and blocks movement + vision like a wall. Discovery (see
+/// `systems::discovery`) converts it into a normal openable door.
+pub fn spawn_secret_door(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    wall_sprite: (SpriteSheet, u32),
+) -> hecs::Entity {
+    use crate::components::{BlocksVision, SecretDoor};
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(wall_sprite),
+        SecretDoor,
+        BlocksVision,
+        BlocksMovement,
+    ))
+}
+
+/// Spawn a spider web on a floor tile: walkable, renders as pale gauze under
+/// actors, roots non-spiders that enter (see `systems::webs`), and is highly
+/// flammable (see `systems::fire`).
+pub fn spawn_web(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    spinner: Option<hecs::Entity>,
+) -> hecs::Entity {
+    use crate::components::{SpriteTint, Web};
+    use crate::constants::WEB_TINT;
+
+    let pos = Position::new(x, y);
+    let (r, g, b) = WEB_TINT;
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::WEB),
+        SpriteTint { r, g, b },
+        Web { spinner },
+    ))
+}
+
+// =============================================================================
+// BOSSES (every 3rd floor)
+// =============================================================================
+
+/// The boss roster entry for a floor: base enemy, unique name, and ability.
+/// Floors 3/6/9 introduce Gnash/Silkrot/Vhal; deeper floors cycle the roster
+/// (with extra scaling per lap — see `boss_def_for_floor`).
+pub fn boss_for_floor(floor: u32) -> Option<(&'static str, crate::components::BossAbility)> {
+    use crate::components::BossAbility;
+    if !is_boss_floor(floor) {
+        return None;
+    }
+    let index = (floor / 3 - 1) % 3;
+    Some(match index {
+        0 => ("Gnash, Orc Warlord", BossAbility::GroundSlam),
+        1 => ("Mother Silkrot", BossAbility::SummonSpiders),
+        _ => ("King Vhal the Undying", BossAbility::RaiseDead),
+    })
+}
+
+/// Bosses appear on every 3rd floor (3, 6, 9, ...).
+pub fn is_boss_floor(floor: u32) -> bool {
+    floor > 0 && floor.is_multiple_of(3)
+}
+
+/// Build the scaled `EnemyDef` for the given boss floor.
+fn boss_def_for_floor(floor: u32) -> Option<(EnemyDef, &'static str, crate::components::BossAbility)> {
+    use crate::components::BossAbility;
+    use crate::constants::*;
+
+    let (name, ability) = boss_for_floor(floor)?;
+    let base = match ability {
+        BossAbility::GroundSlam => enemies::ORC.clone(),
+        BossAbility::SummonSpiders => enemies::GIANT_SPIDER.clone(),
+        BossAbility::RaiseDead => enemies::SKELETON.clone(),
+    };
+
+    // Extra scaling for each full lap of the roster beyond floors 3/6/9.
+    let laps = (floor / 3).saturating_sub(1) / 3;
+    let cycle_mult = BOSS_CYCLE_HEALTH_MULT.powi(laps as i32);
+
+    let mut def = base;
+    def.health = ((def.health as f32) * BOSS_HEALTH_MULT * cycle_mult).round() as i32;
+    def.damage = ((def.damage as f32) * BOSS_DAMAGE_MULT * cycle_mult).round() as i32;
+    def.strength = ((def.strength as f32) * BOSS_STAT_MULT).round() as i32;
+    def.intelligence = ((def.intelligence as f32) * BOSS_STAT_MULT).round() as i32;
+    def.agility = ((def.agility as f32) * BOSS_STAT_MULT).round() as i32;
+    def.sight_radius += BOSS_SIGHT_BONUS;
+    Some((def, name, ability))
+}
+
+/// Ability cooldown for a boss kind.
+fn boss_cooldown(ability: crate::components::BossAbility) -> f32 {
+    use crate::components::BossAbility;
+    use crate::constants::*;
+    match ability {
+        BossAbility::GroundSlam => BOSS_SLAM_COOLDOWN,
+        BossAbility::SummonSpiders => BOSS_SPIDER_SPAWN_COOLDOWN,
+        BossAbility::RaiseDead => BOSS_RAISE_COOLDOWN,
+    }
+}
+
+/// Spawn the boss for this floor at (x, y): the scaled base enemy plus the
+/// `Boss` role, its unique name, and fear immunity. Bosses start awake
+/// (never asleep) but unaware, prowling their lair. Returns None on
+/// non-boss floors.
+pub fn spawn_boss(world: &mut World, floor: u32, x: i32, y: i32) -> Option<hecs::Entity> {
+    let (def, name, ability) = boss_def_for_floor(floor)?;
+    let boss = def.spawn(world, x, y);
+    apply_boss_role(world, boss, name, ability, false);
+    Some(boss)
+}
+
+/// Attach the boss role to an already-spawned enemy: unique display name,
+/// `Boss` ability + cooldown, fear immunity, wakefulness, and (for Silkrot)
+/// the faster web-lay interval. Shared by `spawn_boss` and floor save/load,
+/// which restores bosses on revisited floors.
+pub fn apply_boss_role(
+    world: &mut World,
+    entity: hecs::Entity,
+    name: &str,
+    ability: crate::components::BossAbility,
+    announced: bool,
+) {
+    use crate::components::{Asleep, Boss, BossAbility, FearImmune, Name, WebSpinner};
+
+    // Awake (asleep=false), just not yet alerted.
+    let _ = world.remove_one::<Asleep>(entity);
+    // Unique display name replaces the base enemy's.
+    let _ = world.insert_one(entity, Name::new(name));
+    let _ = world.insert(
+        entity,
+        (
+            Boss { ability, cooldown: boss_cooldown(ability), announced },
+            FearImmune,
+        ),
+    );
+
+    // Silkrot webs her lair constantly.
+    if ability == BossAbility::SummonSpiders {
+        if let Ok(mut spinner) = world.get::<&mut WebSpinner>(entity) {
+            spinner.interval = crate::constants::BOSS_WEB_LAY_COOLDOWN;
+            spinner.cooldown = crate::constants::BOSS_WEB_LAY_COOLDOWN;
+        }
+    }
+}
+
+/// Spawn an explosive oil barrel: blocks movement, highly combustible, and
+/// attackable (destroying it by damage sets it off — see `systems::fire`).
+/// Distinguished from food storage barrels by a red/dark tint.
+pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{Combustible, Health, Name, OilBarrel, Sprite, SpriteTint};
+    use crate::constants::{OIL_BARREL_FLAMMABILITY, OIL_BARREL_HEALTH, OIL_BARREL_TINT};
+
+    let pos = Position::new(x, y);
+    let (r, g, b) = OIL_BARREL_TINT;
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::BARREL),
+        SpriteTint { r, g, b },
+        Name::new("Oil Barrel"),
+        OilBarrel,
+        Health::new(OIL_BARREL_HEALTH),
+        StatusEffects::new(),
+        Combustible { flammability: OIL_BARREL_FLAMMABILITY },
+        Attackable,
+        BlocksMovement,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::BossAbility;
+
+    #[test]
+    fn test_boss_floor_selection() {
+        // Non-boss floors
+        assert!(boss_for_floor(0).is_none());
+        assert!(boss_for_floor(1).is_none());
+        assert!(boss_for_floor(2).is_none());
+        assert!(boss_for_floor(4).is_none());
+
+        // The introductory trio
+        assert_eq!(
+            boss_for_floor(3),
+            Some(("Gnash, Orc Warlord", BossAbility::GroundSlam))
+        );
+        assert_eq!(
+            boss_for_floor(6),
+            Some(("Mother Silkrot", BossAbility::SummonSpiders))
+        );
+        assert_eq!(
+            boss_for_floor(9),
+            Some(("King Vhal the Undying", BossAbility::RaiseDead))
+        );
+
+        // Cycles beyond floor 9
+        assert_eq!(
+            boss_for_floor(12),
+            Some(("Gnash, Orc Warlord", BossAbility::GroundSlam))
+        );
+        assert_eq!(
+            boss_for_floor(18),
+            Some(("King Vhal the Undying", BossAbility::RaiseDead))
+        );
+    }
+
+    #[test]
+    fn test_boss_scaling() {
+        let (def, _, _) = boss_def_for_floor(3).expect("floor 3 is a boss floor");
+        let base = enemies::ORC;
+        assert_eq!(def.health, (base.health as f32 * crate::constants::BOSS_HEALTH_MULT).round() as i32);
+        assert_eq!(def.damage, (base.damage as f32 * crate::constants::BOSS_DAMAGE_MULT).round() as i32);
+        assert_eq!(def.sight_radius, base.sight_radius + crate::constants::BOSS_SIGHT_BONUS);
+
+        // A second lap through the roster is tougher than the first.
+        let (lap1, _, _) = boss_def_for_floor(3).expect("boss floor");
+        let (lap2, _, _) = boss_def_for_floor(12).expect("boss floor");
+        assert!(lap2.health > lap1.health);
+    }
+
+    #[test]
+    fn test_spawned_boss_has_role_components() {
+        let mut world = World::new();
+        let boss = spawn_boss(&mut world, 3, 5, 5).expect("boss spawns on floor 3");
+        assert!(world.get::<&crate::components::Boss>(boss).is_ok());
+        assert!(world.get::<&crate::components::FearImmune>(boss).is_ok());
+        // Awake (never asleep), per spec.
+        assert!(world.get::<&crate::components::Asleep>(boss).is_err());
+        let name = world.get::<&crate::components::Name>(boss).map(|n| n.0.clone());
+        assert_eq!(name.ok().as_deref(), Some("Gnash, Orc Warlord"));
+
+        // Non-boss floors spawn nothing.
+        assert!(spawn_boss(&mut world, 4, 5, 5).is_none());
+    }
+
+    #[test]
+    fn test_shaman_count_scaling() {
+        assert_eq!(shaman_count_for_floor(0), 0);
+        assert_eq!(shaman_count_for_floor(1), 2);
+        assert_eq!(shaman_count_for_floor(2), 2);
+        assert_eq!(shaman_count_for_floor(3), 3);
+        assert_eq!(shaman_count_for_floor(5), 4);
+    }
 }

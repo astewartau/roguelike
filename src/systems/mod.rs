@@ -20,14 +20,20 @@ pub mod animation;
 pub mod combat;
 pub mod dev_tools;
 pub mod dialogue;
+pub mod discovery;
 pub mod effects;
 pub mod experience;
+pub mod fire;
+pub mod furniture;
+pub mod identify;
 pub mod inventory;
 pub mod item_defs;
 pub mod items;
 pub mod player_input;
 pub mod projectile;
 pub mod rendering;
+pub mod survival;
+pub mod webs;
 
 // Re-export commonly used items
 pub use animation::{update_lunge_animations, visual_lerp};

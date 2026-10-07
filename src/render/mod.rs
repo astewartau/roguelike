@@ -108,6 +108,13 @@ impl RenderContext {
                 .unwrap();
         }
         {
+            // Tall-grass blades drawn above entities so characters look concealed.
+            puffin::profile_scope!("render_grass_canopy");
+            self.renderer
+                .render_grass_canopy(&self.camera, grid, &self.tileset)
+                .unwrap();
+        }
+        {
             puffin::profile_scope!("render_vfx");
             self.renderer.render_vfx(&self.camera, vfx_effects);
             self.renderer.render_fire(&self.camera, fires);

@@ -50,13 +50,19 @@ pub fn entity_has_effect(world: &World, entity: Entity, effect_type: EffectType)
         .unwrap_or(false)
 }
 
-/// Add or refresh an effect on an entity
+/// Add or refresh an effect on an entity.
+/// Fear never sticks to `FearImmune` entities (bosses).
 pub fn add_effect_to_entity(
     world: &mut World,
     entity: Entity,
     effect_type: EffectType,
     duration: f32,
 ) {
+    if effect_type == EffectType::Feared
+        && world.get::<&crate::components::FearImmune>(entity).is_ok()
+    {
+        return;
+    }
     if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
         add_effect(&mut effects, effect_type, duration);
     }
@@ -102,5 +108,29 @@ pub fn apply_effect_to_visible_enemies(
 
     for entity in enemies_to_affect {
         add_effect_to_entity(world, entity, effect, duration);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::FearImmune;
+
+    #[test]
+    fn test_fear_immune_blocks_feared_but_not_other_effects() {
+        let mut world = World::new();
+        let boss = world.spawn((StatusEffects::new(), FearImmune));
+
+        add_effect_to_entity(&mut world, boss, EffectType::Feared, 5.0);
+        assert!(
+            !entity_has_effect(&world, boss, EffectType::Feared),
+            "FearImmune entities can never be Feared"
+        );
+
+        add_effect_to_entity(&mut world, boss, EffectType::Slowed, 5.0);
+        assert!(
+            entity_has_effect(&world, boss, EffectType::Slowed),
+            "other effects still apply to FearImmune entities"
+        );
     }
 }

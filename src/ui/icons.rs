@@ -27,6 +27,8 @@ pub struct UiIcons {
     pub leather_armor_uv: egui::Rect,
     pub chain_mail_uv: egui::Rect,
     pub helmet_uv: egui::Rect,
+    pub ring_uv: egui::Rect,
+    pub amulet_uv: egui::Rect,
     pub red_potion_uv: egui::Rect,
     pub green_potion_uv: egui::Rect,
     pub amber_potion_uv: egui::Rect,
@@ -40,12 +42,18 @@ pub struct UiIcons {
     pub apple_uv: egui::Rect,
     pub fire_trap_uv: egui::Rect,
     pub arrow_uv: egui::Rect,
+    pub water_flask_uv: egui::Rect,
     // Ability icons
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
     pub barkskin_uv: egui::Rect,
     pub life_drain_uv: egui::Rect,
+    pub raise_dead_uv: egui::Rect,
     pub fear_uv: egui::Rect,
+    pub tame_uv: egui::Rect,
+    pub rest_uv: egui::Rect,
+    pub sleep_uv: egui::Rect,
+    pub stun_uv: egui::Rect,
     // Ranger ability icons
     pub disengage_uv: egui::Rect,
     pub tumble_uv: egui::Rect,
@@ -75,6 +83,8 @@ impl UiIcons {
             leather_armor_uv: tileset.get_egui_uv(tile_ids::LEATHER_ARMOR.0, tile_ids::LEATHER_ARMOR.1),
             chain_mail_uv: tileset.get_egui_uv(tile_ids::CHAIN_MAIL.0, tile_ids::CHAIN_MAIL.1),
             helmet_uv: tileset.get_egui_uv(tile_ids::HELMET.0, tile_ids::HELMET.1),
+            ring_uv: tileset.get_egui_uv(tile_ids::RING.0, tile_ids::RING.1),
+            amulet_uv: tileset.get_egui_uv(tile_ids::AMULET.0, tile_ids::AMULET.1),
             red_potion_uv: tileset.get_egui_uv(tile_ids::RED_POTION.0, tile_ids::RED_POTION.1),
             green_potion_uv: tileset.get_egui_uv(tile_ids::GREEN_POTION.0, tile_ids::GREEN_POTION.1),
             amber_potion_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION.0, tile_ids::AMBER_POTION.1),
@@ -88,18 +98,23 @@ impl UiIcons {
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
             fire_trap_uv: tileset.get_egui_uv(tile_ids::FIRE_TRAP.0, tile_ids::FIRE_TRAP.1),
             arrow_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
-            // Ability icons: AXE for Cleave, BLUE_POTION for Sprint, AMBER_POTION for Barkskin (brown)
+            water_flask_uv: tileset.get_egui_uv(tile_ids::BOTTLE_WATER.0, tile_ids::BOTTLE_WATER.1),
+            // Ability icons: AXE for Cleave; the rest are custom-drawn
+            // (items sheet rows 26-27, see assets/custom/make_tiles.py)
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
-            sprint_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
-            barkskin_uv: tileset.get_egui_uv(tile_ids::AMBER_POTION.0, tile_ids::AMBER_POTION.1),
-            // RED_POTION for Life Drain (blood/life theme), SKULL for Fear
-            life_drain_uv: tileset.get_egui_uv(tile_ids::RED_POTION.0, tile_ids::RED_POTION.1),
+            sprint_uv: tileset.get_egui_uv(tile_ids::SPRINT.0, tile_ids::SPRINT.1),
+            barkskin_uv: tileset.get_egui_uv(tile_ids::BARKSKIN.0, tile_ids::BARKSKIN.1),
+            life_drain_uv: tileset.get_egui_uv(tile_ids::LIFE_DRAIN.0, tile_ids::LIFE_DRAIN.1),
+            raise_dead_uv: tileset.get_egui_uv(tile_ids::RAISE_DEAD.0, tile_ids::RAISE_DEAD.1),
             fear_uv: tileset.get_egui_uv(tile_ids::SKULL.0, tile_ids::SKULL.1),
-            // Ranger ability icons (using placeholder sprites for now)
-            disengage_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
-            tumble_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
+            tame_uv: tileset.get_egui_uv(tile_ids::TAME.0, tile_ids::TAME.1),
+            rest_uv: tileset.get_egui_uv(tile_ids::REST.0, tile_ids::REST.1),
+            sleep_uv: tileset.get_egui_uv(tile_ids::SLEEP.0, tile_ids::SLEEP.1),
+            stun_uv: tileset.get_egui_uv(tile_ids::STUN.0, tile_ids::STUN.1),
+            disengage_uv: tileset.get_egui_uv(tile_ids::DISENGAGE.0, tile_ids::DISENGAGE.1),
+            tumble_uv: tileset.get_egui_uv(tile_ids::TUMBLE.0, tile_ids::TUMBLE.1),
             snare_trap_uv: tileset.get_egui_uv(tile_ids::PRESSURE_PLATE.0, tile_ids::PRESSURE_PLATE.1),
-            crippling_shot_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
+            crippling_shot_uv: tileset.get_egui_uv(tile_ids::CRIPPLING_SHOT.0, tile_ids::CRIPPLING_SHOT.1),
         }
     }
 
@@ -124,6 +139,8 @@ impl UiIcons {
             ItemType::LeatherArmor => self.leather_armor_uv,
             ItemType::ChainMail => self.chain_mail_uv,
             ItemType::Helmet => self.helmet_uv,
+            ItemType::Ring => self.ring_uv,
+            ItemType::Amulet => self.amulet_uv,
             ItemType::HealthPotion => self.red_potion_uv,
             ItemType::RegenerationPotion => self.green_potion_uv,
             ItemType::StrengthPotion => self.amber_potion_uv,
@@ -142,6 +159,21 @@ impl UiIcons {
             ItemType::Apple => self.apple_uv,
             ItemType::FireTrap => self.fire_trap_uv,
             ItemType::Arrow => self.arrow_uv,
+            // Fire arrows reuse the arrow sprite, tinted via item_ui_tint
+            ItemType::FireArrow => self.arrow_uv,
+            // Both flask states share the bottle sprite; the empty one is
+            // grayed out via item_ui_tint
+            ItemType::WaterFlaskEmpty | ItemType::WaterFlaskFull => self.water_flask_uv,
+        }
+    }
+
+    /// UI icon tint for an item type (fire arrows render as orange arrows,
+    /// empty water flasks render grayed out).
+    pub fn item_ui_tint(item_type: ItemType) -> egui::Color32 {
+        match item_type {
+            ItemType::FireArrow => egui::Color32::from_rgb(255, 140, 75),
+            ItemType::WaterFlaskEmpty => egui::Color32::from_rgb(140, 140, 140),
+            _ => egui::Color32::WHITE,
         }
     }
 

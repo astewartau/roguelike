@@ -147,6 +147,25 @@ pub enum AbilityType {
     Stun,
     /// Universal: Rest to fast-forward time until healed or interrupted
     Rest,
+    /// Universal: Sleep to fast-forward time until fatigue is gone or
+    /// interrupted (you are unaware while asleep — enemies sneak-attack you)
+    Sleep,
+    /// Learned spell (studied from a Scroll of Blink)
+    LearnedBlink,
+    /// Learned spell (studied from a Scroll of Fireball)
+    LearnedFireball,
+    /// Learned spell (studied from a Scroll of Fear)
+    LearnedFear,
+    /// Learned spell (studied from a Scroll of Slow)
+    LearnedSlow,
+    /// Learned spell (studied from a Scroll of Protection)
+    LearnedProtection,
+    /// Learned spell (studied from a Scroll of Speed)
+    LearnedSpeed,
+    /// Learned spell (studied from a Scroll of Invisibility)
+    LearnedInvisibility,
+    /// Necromancer: channel over a bones pile to raise a skeleton companion
+    RaiseDead,
 }
 
 impl AbilityType {
@@ -165,6 +184,15 @@ impl AbilityType {
             AbilityType::CripplingShot => "Crippling Shot",
             AbilityType::Stun => "Stun",
             AbilityType::Rest => "Rest",
+            AbilityType::Sleep => "Sleep",
+            AbilityType::LearnedBlink => "Blink",
+            AbilityType::LearnedFireball => "Fireball",
+            AbilityType::LearnedFear => "Fear",
+            AbilityType::LearnedSlow => "Slow",
+            AbilityType::LearnedProtection => "Protection",
+            AbilityType::LearnedSpeed => "Speed",
+            AbilityType::LearnedInvisibility => "Invisibility",
+            AbilityType::RaiseDead => "Raise Dead",
         }
     }
 
@@ -183,6 +211,15 @@ impl AbilityType {
             AbilityType::CripplingShot => "Arrow that slows the target",
             AbilityType::Stun => "Stun all nearby enemies for 5 seconds",
             AbilityType::Rest => "Rest until healed or an enemy spots you",
+            AbilityType::Sleep => "Sleep off your fatigue — but you're defenseless while asleep",
+            AbilityType::LearnedBlink => "Teleport to a nearby tile (scales with INT)",
+            AbilityType::LearnedFireball => "Hurl an explosive fireball (scales with INT)",
+            AbilityType::LearnedFear => "Terrify all visible enemies (scales with INT)",
+            AbilityType::LearnedSlow => "Slow all visible enemies (scales with INT)",
+            AbilityType::LearnedProtection => "Halve incoming damage for a while (scales with INT)",
+            AbilityType::LearnedSpeed => "Move and act faster for a while (scales with INT)",
+            AbilityType::LearnedInvisibility => "Fade from sight for a while (scales with INT)",
+            AbilityType::RaiseDead => "Channel over bones to raise a skeleton ally",
         }
     }
 
@@ -201,6 +238,86 @@ impl AbilityType {
             AbilityType::CripplingShot => CRIPPLING_SHOT_ENERGY_COST,
             AbilityType::Stun => STUN_ENERGY_COST,
             AbilityType::Rest => 0,
+            AbilityType::Sleep => 0,
+            AbilityType::LearnedBlink => LEARNED_BLINK_ENERGY_COST,
+            AbilityType::LearnedFireball => LEARNED_FIREBALL_ENERGY_COST,
+            AbilityType::LearnedFear => LEARNED_FEAR_ENERGY_COST,
+            AbilityType::LearnedSlow => LEARNED_SLOW_ENERGY_COST,
+            AbilityType::LearnedProtection => LEARNED_PROTECTION_ENERGY_COST,
+            AbilityType::LearnedSpeed => LEARNED_SPEED_ENERGY_COST,
+            AbilityType::LearnedInvisibility => LEARNED_INVISIBILITY_ENERGY_COST,
+            AbilityType::RaiseDead => RAISE_DEAD_ENERGY_COST,
+        }
+    }
+
+    /// Cooldown for a learned/studied spell (or Raise Dead). `None` for
+    /// abilities that live on other components (class/secondary/ranger).
+    pub fn learned_cooldown(&self) -> Option<f32> {
+        match self {
+            AbilityType::LearnedBlink => Some(LEARNED_BLINK_COOLDOWN),
+            AbilityType::LearnedFireball => Some(LEARNED_FIREBALL_COOLDOWN),
+            AbilityType::LearnedFear => Some(LEARNED_FEAR_COOLDOWN),
+            AbilityType::LearnedSlow => Some(LEARNED_SLOW_COOLDOWN),
+            AbilityType::LearnedProtection => Some(LEARNED_PROTECTION_COOLDOWN),
+            AbilityType::LearnedSpeed => Some(LEARNED_SPEED_COOLDOWN),
+            AbilityType::LearnedInvisibility => Some(LEARNED_INVISIBILITY_COOLDOWN),
+            AbilityType::RaiseDead => Some(RAISE_DEAD_COOLDOWN),
+            _ => None,
+        }
+    }
+}
+
+/// A spell the player has permanently learned (by studying a scroll), or an
+/// innate spell-list ability (the Necromancer's Raise Dead). Energy cost comes
+/// from [`AbilityType::energy_cost`]; the cooldown is stored per entry.
+#[derive(Debug, Clone, Copy)]
+pub struct LearnedSpell {
+    pub ability: AbilityType,
+    /// Seconds remaining on cooldown (0 = ready)
+    pub cooldown_remaining: f32,
+    /// Total cooldown duration
+    pub cooldown_total: f32,
+}
+
+/// The player's spell list: permanently learned abilities with individual
+/// long cooldowns. Ticked alongside the other ability cooldowns.
+#[derive(Debug, Clone, Default)]
+pub struct LearnedAbilities {
+    pub spells: Vec<LearnedSpell>,
+}
+
+impl LearnedAbilities {
+    /// Does this list already contain the given ability?
+    pub fn knows(&self, ability: AbilityType) -> bool {
+        self.spells.iter().any(|s| s.ability == ability)
+    }
+
+    /// Add a newly learned ability (no-op if already known). Returns whether
+    /// it was added.
+    pub fn learn(&mut self, ability: AbilityType) -> bool {
+        if self.knows(ability) {
+            return false;
+        }
+        let Some(cooldown) = ability.learned_cooldown() else {
+            return false;
+        };
+        self.spells.push(LearnedSpell {
+            ability,
+            cooldown_remaining: 0.0,
+            cooldown_total: cooldown,
+        });
+        true
+    }
+
+    /// Look up a learned spell entry.
+    pub fn get(&self, ability: AbilityType) -> Option<&LearnedSpell> {
+        self.spells.iter().find(|s| s.ability == ability)
+    }
+
+    /// Start the cooldown for a learned spell (no-op if not known).
+    pub fn start_cooldown(&mut self, ability: AbilityType) {
+        if let Some(spell) = self.spells.iter_mut().find(|s| s.ability == ability) {
+            spell.cooldown_remaining = spell.cooldown_total;
         }
     }
 }
@@ -418,6 +535,127 @@ pub struct Player;
 #[derive(Debug, Clone, Copy)]
 pub struct Sneaking;
 
+// =============================================================================
+// SURVIVAL METERS (player-only)
+// =============================================================================
+
+/// Coarse hunger state, derived from the `Hunger` meter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HungerState {
+    /// Above the hungry threshold: no penalties.
+    Fed,
+    /// Below the hungry threshold: natural HP regen stops.
+    Hungry,
+    /// Meter at zero: taking periodic starvation damage.
+    Starving,
+}
+
+/// Hunger meter (player-only — enemies never hunger). Starts full and drains
+/// over game time (see `systems::survival`); eating food restores it.
+#[derive(Debug, Clone, Copy)]
+pub struct Hunger {
+    /// Current fullness, 0.0 (starving) to `HUNGER_MAX` (fully fed).
+    pub value: f32,
+    /// Accumulated game-time toward the next starvation damage tick (only
+    /// meaningful while starving; reset when fed).
+    pub starvation_timer: f32,
+}
+
+impl Hunger {
+    pub fn new() -> Self {
+        Self {
+            value: crate::constants::HUNGER_MAX,
+            starvation_timer: 0.0,
+        }
+    }
+
+    /// Coarse state for UI labels and threshold-crossing messages.
+    pub fn state(&self) -> HungerState {
+        if self.value <= 0.0 {
+            HungerState::Starving
+        } else if self.value < crate::constants::HUNGER_HUNGRY_THRESHOLD {
+            HungerState::Hungry
+        } else {
+            HungerState::Fed
+        }
+    }
+
+    /// Hungry or worse: natural HP regen is stopped.
+    pub fn is_hungry(&self) -> bool {
+        self.value < crate::constants::HUNGER_HUNGRY_THRESHOLD
+    }
+
+    /// Meter empty: periodic starvation damage.
+    pub fn is_starving(&self) -> bool {
+        self.value <= 0.0
+    }
+
+    /// Restore hunger from eating, clamped to the cap.
+    pub fn eat(&mut self, amount: f32) {
+        self.value = (self.value + amount).min(crate::constants::HUNGER_MAX);
+    }
+}
+
+impl Default for Hunger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Coarse fatigue state, derived from the `Fatigue` meter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FatigueState {
+    /// Below the tired threshold: no penalties.
+    Rested,
+    /// Above the tired threshold: enemies notice the player faster (+25%
+    /// alertness gain) and the player's damage drops (-10%).
+    Tired,
+    /// Meter at cap: actions are 25% slower and energy regen stops (while
+    /// awake — sleeping is the recovery path).
+    Exhausted,
+}
+
+/// Fatigue meter (player-only). Starts empty and grows over game time while
+/// awake (faster while sprinting); sleeping drains it quickly.
+#[derive(Debug, Clone, Copy)]
+pub struct Fatigue {
+    /// Current fatigue, 0.0 (fully rested) to `FATIGUE_MAX` (exhausted).
+    pub value: f32,
+}
+
+impl Fatigue {
+    pub fn new() -> Self {
+        Self { value: 0.0 }
+    }
+
+    /// Coarse state for UI labels and threshold-crossing messages.
+    pub fn state(&self) -> FatigueState {
+        if self.value >= crate::constants::FATIGUE_MAX {
+            FatigueState::Exhausted
+        } else if self.value > crate::constants::FATIGUE_TIRED_THRESHOLD {
+            FatigueState::Tired
+        } else {
+            FatigueState::Rested
+        }
+    }
+
+    /// Tired or worse: alertness/damage penalties apply.
+    pub fn is_tired(&self) -> bool {
+        self.value > crate::constants::FATIGUE_TIRED_THRESHOLD
+    }
+
+    /// Meter maxed: action-speed penalty, no energy regen while awake.
+    pub fn is_exhausted(&self) -> bool {
+        self.value >= crate::constants::FATIGUE_MAX
+    }
+}
+
+impl Default for Fatigue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Health component - pure data
 #[derive(Debug, Clone, Copy)]
 pub struct Health {
@@ -520,12 +758,27 @@ pub enum ItemType {
     FireTrap,
     // Ammunition
     Arrow,
+    FireArrow,
+    // Accessories (pure affix carriers, no base stats)
+    Ring,
+    Amulet,
+    // Utility
+    /// Empty water flask: use next to (or in) water to fill it
+    WaterFlaskEmpty,
+    /// Filled water flask: drink to douse yourself, or throw to splash-douse
+    /// fires and wet grass (see systems::fire)
+    WaterFlaskFull,
 }
 
 impl ItemType {
     /// Returns true if this item type stacks in inventory
     pub fn is_stackable(&self) -> bool {
-        matches!(self, ItemType::Arrow)
+        matches!(self, ItemType::Arrow | ItemType::FireArrow)
+    }
+
+    /// Returns true if this item type is bow ammunition
+    pub fn is_ammo(&self) -> bool {
+        matches!(self, ItemType::Arrow | ItemType::FireArrow)
     }
 }
 
@@ -539,7 +792,8 @@ pub enum Rarity {
     Common,
     Magic,
     Rare,
-    // Legendary reserved for a later pass
+    /// 3-4 affix components and a generated name ("Emberfang, Sword of the Wolf")
+    Legendary,
 }
 
 impl Rarity {
@@ -549,46 +803,142 @@ impl Rarity {
             Rarity::Common => "Common",
             Rarity::Magic => "Magic",
             Rarity::Rare => "Rare",
+            Rarity::Legendary => "Legendary",
         }
     }
 }
 
-/// A rolled modifier on a gear instance. Empty for consumables.
+/// A rolled modifier component on a gear instance. Empty for consumables.
 ///
-/// First pass intentionally only covers the two affixes that apply at clean
-/// chokepoints (weapon damage, armor defense). Stat/health/on-hit affixes are a
-/// later addition.
+/// Affixes are composable components: higher rarity means more of them, and a
+/// Legendary is an unexpected *combination*, not a bigger number. Stat and
+/// flat-bonus affixes apply through `queries::effective_stats` and the
+/// damage/defense chokepoints; on-hit affixes resolve centrally in
+/// `systems::combat::resolve_weapon_on_hit`.
+///
+/// Curse affixes are negative components that can roll alongside good ones
+/// (gamble items). They are hidden until the item is identified (see
+/// `systems::identify`), but apply while equipped regardless: `CursedFragile`
+/// through defense math, `CursedHeavy` through action speed in the time
+/// system, and `CursedLoud` through attack noise radius.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Affix {
     /// Bonus melee/ranged damage (weapons)
     Damage(i32),
     /// Bonus flat defense (armor)
     Defense(i32),
+    /// Bonus Strength while equipped
+    Strength(i32),
+    /// Bonus Agility while equipped
+    Agility(i32),
+    /// Bonus Intelligence while equipped
+    Intelligence(i32),
+    /// Bonus maximum health while equipped
+    MaxHealth(i32),
+    /// Chance (0..1) to set the target Burning on a weapon hit
+    OnHitIgnite(f32),
+    /// Chance (0..1) to Slow the target on a weapon hit
+    OnHitSlow(f32),
+    /// Chance (0..1) to Fear the target on a weapon hit
+    OnHitFear(f32),
+    /// Fraction (0..1) of damage dealt healed back to the attacker
+    OnHitLifesteal(f32),
+    /// Weapon hits push the target one tile away (if walkable)
+    OnHitKnockback,
+    /// On killing blow: heal the attacker N health
+    KillHeal(i32),
+    /// Below the low-health threshold: +X fraction bonus damage
+    LowHealthDamage(f32),
+    /// Curse: -N defense
+    CursedFragile(i32),
+    /// Curse: slower attack/movement (fractional penalty; applied in a later pass)
+    CursedHeavy(f32),
+    /// Curse: attacks make double noise radius (applied in a later pass)
+    CursedLoud,
 }
 
 impl Affix {
-    /// Human-readable label for tooltips, e.g. "+2 Damage".
-    pub fn label(&self) -> String {
+    /// Human-readable description for tooltips, e.g. "+2 Damage".
+    pub fn describe(&self) -> String {
         match self {
             Affix::Damage(n) => format!("+{} Damage", n),
             Affix::Defense(n) => format!("+{} Defense", n),
+            Affix::Strength(n) => format!("+{} Strength", n),
+            Affix::Agility(n) => format!("+{} Agility", n),
+            Affix::Intelligence(n) => format!("+{} Intelligence", n),
+            Affix::MaxHealth(n) => format!("+{} Max Health", n),
+            Affix::OnHitIgnite(c) => format!("{:.0}% chance to ignite on hit", c * 100.0),
+            Affix::OnHitSlow(c) => format!("{:.0}% chance to slow on hit", c * 100.0),
+            Affix::OnHitFear(c) => format!("{:.0}% chance to terrify on hit", c * 100.0),
+            Affix::OnHitLifesteal(f) => format!("Heals {:.0}% of damage dealt", f * 100.0),
+            Affix::OnHitKnockback => "Knocks targets back on hit".to_string(),
+            Affix::KillHeal(n) => format!("Heals {} health on kill", n),
+            Affix::LowHealthDamage(f) => {
+                format!("+{:.0}% damage while below 30% health", f * 100.0)
+            }
+            Affix::CursedFragile(n) => format!("Cursed: -{} Defense", n),
+            Affix::CursedHeavy(f) => format!("Cursed: {:.0}% slower", f * 100.0),
+            Affix::CursedLoud => "Cursed: attacks ring out twice as loud".to_string(),
         }
+    }
+
+    /// Whether this affix is a curse (negative component).
+    pub fn is_curse(&self) -> bool {
+        matches!(
+            self,
+            Affix::CursedFragile(_) | Affix::CursedHeavy(_) | Affix::CursedLoud
+        )
     }
 }
 
 /// One concrete item in the world. Consumables are trivial instances (no
-/// affixes, Common); gear can carry rolled rarity and affixes.
+/// affixes, Common); gear can carry rolled rarity, affixes, and (for
+/// Legendary items) a generated name.
 #[derive(Debug, Clone)]
 pub struct ItemInstance {
     pub kind: ItemType,
     pub rarity: Rarity,
     pub affixes: Vec<Affix>,
+    /// Generated name for Legendary items (e.g. "Emberfang, Sword of the Wolf").
+    pub name: Option<String>,
+    /// Whether the item's affixes (and Legendary name) are known to the
+    /// carrier. Magic+ gear drops unidentified; carrying it long enough
+    /// identifies it (see `systems::identify`).
+    pub identified: bool,
+    /// Game-time seconds this item has been carried toward identification.
+    pub identify_progress: f32,
 }
 
 impl ItemInstance {
     /// A plain, unmodified item — consumables, vendor stock, arrows, starting gear.
     pub fn plain(kind: ItemType) -> Self {
-        Self { kind, rarity: Rarity::Common, affixes: Vec::new() }
+        Self {
+            kind,
+            rarity: Rarity::Common,
+            affixes: Vec::new(),
+            name: None,
+            identified: true,
+            identify_progress: 0.0,
+        }
+    }
+
+    /// Display name: the generated Legendary name if present, else the base
+    /// item name from its definition. Unidentified gear hides its Legendary
+    /// name and reads as e.g. "Unidentified Sword".
+    pub fn display_name(&self) -> String {
+        let base = crate::systems::items::item_name(self.kind);
+        if !self.identified {
+            return format!("Unidentified {}", base);
+        }
+        match &self.name {
+            Some(name) => name.clone(),
+            None => base.to_string(),
+        }
+    }
+
+    /// Whether any of this instance's affixes is a curse.
+    pub fn has_curse(&self) -> bool {
+        self.affixes.iter().any(|a| a.is_curse())
     }
 
     /// Sum of all `Affix::Damage` modifiers on this instance.
@@ -602,12 +952,58 @@ impl ItemInstance {
             .sum()
     }
 
-    /// Sum of all `Affix::Defense` modifiers on this instance.
+    /// Sum of all `Affix::Defense` modifiers on this instance, minus any
+    /// `CursedFragile` penalty.
     pub fn defense_bonus(&self) -> i32 {
         self.affixes
             .iter()
             .map(|a| match a {
                 Affix::Defense(n) => *n,
+                Affix::CursedFragile(n) => -*n,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Sum of all `Affix::Strength` modifiers on this instance.
+    pub fn strength_bonus(&self) -> i32 {
+        self.affixes
+            .iter()
+            .map(|a| match a {
+                Affix::Strength(n) => *n,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Sum of all `Affix::Agility` modifiers on this instance.
+    pub fn agility_bonus(&self) -> i32 {
+        self.affixes
+            .iter()
+            .map(|a| match a {
+                Affix::Agility(n) => *n,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Sum of all `Affix::Intelligence` modifiers on this instance.
+    pub fn intelligence_bonus(&self) -> i32 {
+        self.affixes
+            .iter()
+            .map(|a| match a {
+                Affix::Intelligence(n) => *n,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Sum of all `Affix::MaxHealth` modifiers on this instance.
+    pub fn max_health_bonus(&self) -> i32 {
+        self.affixes
+            .iter()
+            .map(|a| match a {
+                Affix::MaxHealth(n) => *n,
                 _ => 0,
             })
             .sum()
@@ -782,6 +1178,11 @@ pub enum ActionType {
     PlaceSnareTrap { target_x: i32, target_y: i32 },
     /// Ranger ability: shoot arrow that slows target
     ShootCripplingShot { target_x: i32, target_y: i32 },
+    /// Cast a learned (studied) spell. Target coords are ignored for
+    /// untargeted spells (Fear/Slow/Protection/Speed/Invisibility).
+    CastLearnedSpell { ability: AbilityType, target_x: i32, target_y: i32 },
+    /// Necromancer ability: start channeling Raise Dead on a bones pile
+    StartRaiseDead { target: Entity },
     /// Recovery after shooting (auto-queued, allows arrow to fly)
     Recover,
 }
@@ -821,6 +1222,8 @@ impl ActionType {
             ActionType::Tumble { .. } => TUMBLE_ENERGY_COST,
             ActionType::PlaceSnareTrap { .. } => SNARE_TRAP_ENERGY_COST,
             ActionType::ShootCripplingShot { .. } => CRIPPLING_SHOT_ENERGY_COST,
+            ActionType::CastLearnedSpell { ability, .. } => ability.energy_cost(),
+            ActionType::StartRaiseDead { .. } => RAISE_DEAD_ENERGY_COST,
             ActionType::Recover => 0, // Free action, just takes time
         }
     }
@@ -894,6 +1297,13 @@ pub enum AIState {
 /// from the first hit (sneak attack). Removed when the enemy wakes.
 #[derive(Debug, Clone, Copy)]
 pub struct Asleep;
+
+/// The most recent thing that hurt the player ("Goblin", "burning",
+/// "starvation", "a spike trap", ...). Kept on the player entity and updated
+/// during event processing; read at death as the best-effort cause of death
+/// for the run-history record.
+#[derive(Debug, Clone)]
+pub struct LastDamageSource(pub String);
 
 /// Marker for enemies intelligent enough to open doors (and to raise an alarm
 /// shout). Dumb beasts/undead lack it, so a closed door stops them.
@@ -1226,6 +1636,10 @@ pub struct Equipment {
     pub body: Option<ItemInstance>,
     /// Head armor slot
     pub head: Option<ItemInstance>,
+    /// Ring accessory slot (pure affix carrier)
+    pub ring: Option<ItemInstance>,
+    /// Amulet accessory slot (pure affix carrier)
+    pub amulet: Option<ItemInstance>,
 }
 
 impl Equipment {
@@ -1264,18 +1678,77 @@ impl Equipment {
             weapon_source: None,
             body: None,
             head: None,
+            ring: None,
+            amulet: None,
         }
     }
 
-    /// Total flat defense from all armor slots (base by kind + Defense affixes).
-    /// Works for any entity with an Equipment component, so granting an enemy
-    /// armor later is just a matter of filling a slot.
+    /// Iterate over every equipped item instance (weapon source, armor,
+    /// accessories). The single place that defines "what counts as worn gear"
+    /// for affix aggregation.
+    pub fn equipped_instances(&self) -> impl Iterator<Item = &ItemInstance> {
+        [
+            self.weapon_source.as_ref(),
+            self.body.as_ref(),
+            self.head.as_ref(),
+            self.ring.as_ref(),
+            self.amulet.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// Mutable variant of [`equipped_instances`] (used by identification).
+    pub fn equipped_instances_mut(&mut self) -> impl Iterator<Item = &mut ItemInstance> {
+        [
+            self.weapon_source.as_mut(),
+            self.body.as_mut(),
+            self.head.as_mut(),
+            self.ring.as_mut(),
+            self.amulet.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// Total flat defense from all armor + accessory slots (base by kind +
+    /// Defense affixes, minus CursedFragile). Works for any entity with an
+    /// Equipment component, so granting an enemy armor later is just a matter
+    /// of filling a slot.
     pub fn total_defense(&self) -> i32 {
-        [&self.body, &self.head]
+        [&self.body, &self.head, &self.ring, &self.amulet]
             .iter()
             .filter_map(|s| s.as_ref())
             .map(|inst| crate::systems::item_defs::armor_base_defense(inst.kind) + inst.defense_bonus())
             .sum()
+    }
+
+    /// Total `Affix::Damage` bonus from the weapon's backing instance plus
+    /// accessories. Rings/amulets are pure affix carriers, so their damage
+    /// affixes apply to every weapon (and unarmed) attack.
+    pub fn affix_damage_bonus(&self) -> i32 {
+        self.weapon_source.as_ref().map_or(0, |w| w.damage_bonus())
+            + self.ring.as_ref().map_or(0, |r| r.damage_bonus())
+            + self.amulet.as_ref().map_or(0, |a| a.damage_bonus())
+    }
+
+    /// Sum of all `CursedHeavy` fractions across worn gear. Applied as an
+    /// action-speed penalty in the time system (curses bite whether or not
+    /// the item has been identified).
+    pub fn cursed_heavy_total(&self) -> f32 {
+        self.equipped_instances()
+            .flat_map(|inst| inst.affixes.iter())
+            .map(|a| match a {
+                Affix::CursedHeavy(f) => *f,
+                _ => 0.0,
+            })
+            .sum()
+    }
+
+    /// Whether any worn gear carries `CursedLoud` (attacks make double noise).
+    pub fn has_cursed_loud(&self) -> bool {
+        self.equipped_instances()
+            .any(|inst| inst.affixes.iter().any(|a| matches!(a, Affix::CursedLoud)))
     }
 
     /// Check if a bow is equipped (either in main slot or enemy_ranged)
@@ -1384,11 +1857,30 @@ pub struct Projectile {
     pub on_hit_effect: Option<(EffectType, f32)>,
     /// Whether this projectile hit an enemy (used for arrow recovery)
     pub hit_enemy: bool,
+    /// Fire arrows: ignites the landing tile (grass catches) and burns up
+    /// on impact (never recoverable).
+    pub incendiary: bool,
 }
 
 /// Marker component for projectiles (for queries)
 #[derive(Debug, Clone, Copy)]
 pub struct ProjectileMarker;
+
+/// The ammo type a shooter prefers to load next (toggled from the inventory).
+/// Absent = normal arrows. Shots fall back to whatever ammo is actually carried.
+#[derive(Debug, Clone, Copy)]
+pub struct ActiveAmmo {
+    pub kind: ItemType,
+}
+
+/// Per-entity sprite color tint (multiplied with the texture color).
+/// Used e.g. to render fire arrows as red/orange-tinted normal arrows.
+#[derive(Debug, Clone, Copy)]
+pub struct SpriteTint {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+}
 
 // =============================================================================
 // NPC / DIALOGUE COMPONENTS
@@ -1503,6 +1995,65 @@ impl LightSource {
 #[derive(Debug, Clone, Copy)]
 pub struct CausesBurning;
 
+/// How readily an entity catches fire. Entities without this component never
+/// ignite. `flammability` is a 0..1 chance multiplier applied to ignition rolls.
+#[derive(Debug, Clone, Copy)]
+pub struct Combustible {
+    pub flammability: f32,
+}
+
+/// A patch of tall grass that is currently on fire. Lives as a short fire entity
+/// (with `CausesBurning` + a fire sprite); when `remaining` hits zero it burns
+/// out and its tile reverts to floor.
+#[derive(Debug, Clone, Copy)]
+pub struct BurningGrass {
+    pub remaining: f32,
+}
+
+/// A puddle of spilled oil on the floor. Walkable, doesn't block vision, and
+/// harmless until fire reaches it — then it ignites readily (see
+/// `systems::fire`). Water splashes douse the flames but the puddle remains,
+/// re-ignitable.
+#[derive(Debug, Clone, Copy)]
+pub struct OilPuddle;
+
+/// An oil puddle that is currently burning. Paired with `CausesBurning`, a
+/// fire sprite, and a light source while alight; when `remaining` hits zero
+/// the fuel is spent and the puddle burns away entirely.
+#[derive(Debug, Clone, Copy)]
+pub struct BurningOil {
+    pub remaining: f32,
+}
+
+/// Marker for explosive oil barrels. Blocks movement and is highly
+/// combustible: once Burning, a short fuse (`BarrelFuse`) starts, then the
+/// barrel explodes — damage in a radius plus a spray of burning oil puddles.
+/// Destroying one by damage also sets it off.
+#[derive(Debug, Clone, Copy)]
+pub struct OilBarrel;
+
+/// Lit fuse on an ignited oil barrel. Ticked by `systems::fire`; the barrel
+/// explodes when `remaining` reaches zero.
+#[derive(Debug, Clone, Copy)]
+pub struct BarrelFuse {
+    pub remaining: f32,
+}
+
+/// Grass tile soaked by a water splash: unignitable until it dries out.
+/// Lives as an invisible timer entity on the tile, checked by fire spread.
+#[derive(Debug, Clone, Copy)]
+pub struct WetGrass {
+    pub remaining: f32,
+}
+
+/// A standing brazier (dungeon light source). Toppling it (interaction or a
+/// knockback into it) snuffs the stand and spills fire onto nearby tiles;
+/// `lit` is false once toppled.
+#[derive(Debug, Clone, Copy)]
+pub struct Brazier {
+    pub lit: bool,
+}
+
 /// Fire trap component - causes burning when stepped on (but not by owner or their pets)
 #[derive(Debug, Clone, Copy)]
 pub struct PlacedFireTrap {
@@ -1533,6 +2084,62 @@ pub struct PlacedTrap {
     /// Type of trap and its parameters
     pub trap_type: TrapType,
 }
+
+// =============================================================================
+// DUNGEON TRAPS, FURNITURE, AND SECRET DOORS (dungeon-generated discoveries)
+// =============================================================================
+
+/// Kinds of hidden floor traps placed by dungeon generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DungeonTrapKind {
+    /// Direct damage through `apply_damage`
+    Spike,
+    /// Small burst + Burning; spills fire onto the tile (ignites grass/oil)
+    Fire,
+    /// Roots the victim in place for a few seconds
+    Snare,
+    /// Harmless but loud: wakes every enemy in a wide radius
+    Alarm,
+}
+
+/// A hidden floor trap placed by dungeon generation. Spawned without a
+/// `Sprite` (invisible); when the player detects it (Agility-scaled per-step
+/// roll while adjacent — see `systems::discovery`) it gains a tinted trap-door
+/// sprite and can be stepped around. Stepping ON it — player or enemy,
+/// revealed or not — triggers and consumes it.
+#[derive(Debug, Clone, Copy)]
+pub struct DungeonTrap {
+    pub kind: DungeonTrapKind,
+    /// Whether the player has spotted this trap (it renders once revealed)
+    pub revealed: bool,
+}
+
+/// Kinds of room furniture interactables placed by dungeon generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FurnitureKind {
+    /// Drink for a random outcome (heal / food / buff / mild debuff); one use
+    Fountain,
+    /// Sacrifice an inventory item for a chance at a blessing; reusable
+    Altar,
+    /// Identifies everything carried + a protection ward; one use
+    Shrine,
+}
+
+/// Room furniture the player can interact with (bump or Ctrl+direction).
+/// See `systems::furniture` for the interaction logic.
+#[derive(Debug, Clone, Copy)]
+pub struct Furniture {
+    pub kind: FurnitureKind,
+    /// One-use pieces (fountain, shrine) flip this and go inert/grey
+    pub used: bool,
+}
+
+/// A sealed doorway hiding a secret room. Renders as a wall and blocks
+/// movement + vision like one. Passive discovery when the player is adjacent
+/// (Agility-scaled roll, same helper as traps) converts it into a normal
+/// openable `Door` with a distinct tint.
+#[derive(Debug, Clone, Copy)]
+pub struct SecretDoor;
 
 // =============================================================================
 // RANGER ABILITIES
@@ -1599,6 +2206,23 @@ pub struct TamingInProgress {
     pub required: f32,
 }
 
+/// Tracks an active Raise Dead channel (Necromancer). Mirrors the Tame
+/// channel: progress accrues while the caster Waits in range of the bones.
+#[derive(Debug, Clone, Copy)]
+pub struct RaiseDeadInProgress {
+    /// The bones/corpse container being raised
+    pub target: Entity,
+    /// Current channel progress in seconds
+    pub progress: f32,
+    /// Required channel time to complete
+    pub required: f32,
+}
+
+/// Marks a skeleton companion created by Raise Dead (counts against the
+/// caster's INT-scaled control cap while alive).
+#[derive(Debug, Clone, Copy)]
+pub struct RaisedUndead;
+
 /// Tracks active life drain channeling for the Necromancer
 #[derive(Debug, Clone, Copy)]
 pub struct LifeDrainInProgress {
@@ -1662,4 +2286,137 @@ impl CompanionAI {
 pub struct RangedCooldown {
     /// Remaining cooldown time in seconds
     pub remaining: f32,
+}
+
+// =============================================================================
+// ENEMY ROLES: SUPPORT CASTERS, SPIDERS & WEBS, BOSSES
+// =============================================================================
+
+/// Support-caster AI (Goblin Shaman): kites its threat target and, on a
+/// cooldown, heals the most wounded visible ally — or hastes one attacking
+/// the player. Behavior lives in `systems::ai`; the cooldown is ticked by
+/// `systems::ai::tick_role_cooldowns`.
+#[derive(Debug, Clone, Copy)]
+pub struct SupportAI {
+    /// Seconds until the next support cast (heal/haste) is available.
+    pub cooldown: f32,
+}
+
+/// Marker: spider-kin. Spiders never trigger (or consume) webs.
+#[derive(Debug, Clone, Copy)]
+pub struct Spider;
+
+/// Periodically lays `Web` entities on its own tile while awake
+/// (see `systems::webs::try_lay_web`).
+#[derive(Debug, Clone, Copy)]
+pub struct WebSpinner {
+    /// Seconds until the next web can be laid.
+    pub cooldown: f32,
+    /// Seconds between webs for this spinner (bosses spin faster).
+    pub interval: f32,
+}
+
+/// A sticky web on the floor. Non-spider entities stepping in are Rooted
+/// briefly and the web is consumed. Highly flammable (see `systems::fire`).
+#[derive(Debug, Clone, Copy)]
+pub struct Web {
+    /// The spider that laid it (None for dev-spawned webs); used for the
+    /// per-spider live-web cap.
+    pub spinner: Option<Entity>,
+}
+
+/// Timer on an ignited web: when it expires the web has burnt away.
+#[derive(Debug, Clone, Copy)]
+pub struct BurningWeb {
+    pub remaining: f32,
+}
+
+/// The unique ability a boss cycles on its cooldown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BossAbility {
+    /// Gnash: stun + damage everything near him.
+    GroundSlam,
+    /// Silkrot: spawn lesser spiders (capped) while webbing constantly.
+    SummonSpiders,
+    /// Vhal: raise a hostile skeleton from nearby bones.
+    RaiseDead,
+}
+
+/// A named floor boss: scaled-up enemy with a unique cooldown ability,
+/// immune to fear/morale, announced on first sighting, bonus XP on death.
+#[derive(Debug, Clone, Copy)]
+pub struct Boss {
+    pub ability: BossAbility,
+    /// Seconds until the ability is ready (ticked by `tick_role_cooldowns`).
+    pub cooldown: f32,
+    /// Whether the first-sighting message has been shown.
+    pub announced: bool,
+}
+
+/// A minion summoned by a boss (counts toward its alive-minion cap).
+#[derive(Debug, Clone, Copy)]
+pub struct BossMinion {
+    pub boss: Entity,
+}
+
+/// Marker: never panics from morale checks and cannot be Feared (bosses).
+#[derive(Debug, Clone, Copy)]
+pub struct FearImmune;
+
+/// A venomous melee attacker: successful hits apply Slowed for this long
+/// (Giant Spider). Applied directly in the enemy melee path since enemy
+/// natural weapons are not item instances with on-hit affixes.
+#[derive(Debug, Clone, Copy)]
+pub struct Venomous {
+    pub slow_duration: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn instance(kind: ItemType, affixes: Vec<Affix>) -> ItemInstance {
+        ItemInstance {
+            kind,
+            rarity: Rarity::Magic,
+            affixes,
+            name: None,
+            identified: true,
+            identify_progress: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_total_defense_includes_accessories_and_cursed_fragile() {
+        let mut eq = Equipment::empty();
+        eq.body = Some(instance(ItemType::LeatherArmor, vec![Affix::Defense(2)]));
+        eq.ring = Some(instance(ItemType::Ring, vec![Affix::Defense(1)]));
+        eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::CursedFragile(2)]));
+
+        // Leather base 2 + 2 affix + 1 ring - 2 cursed amulet = 3
+        assert_eq!(eq.total_defense(), crate::constants::LEATHER_ARMOR_DEFENSE + 2 + 1 - 2);
+    }
+
+    #[test]
+    fn test_cursed_heavy_and_loud_aggregate_across_worn_gear() {
+        let mut eq = Equipment::empty();
+        assert_eq!(eq.cursed_heavy_total(), 0.0);
+        assert!(!eq.has_cursed_loud());
+
+        eq.weapon_source = Some(instance(ItemType::Sword, vec![Affix::CursedHeavy(0.2)]));
+        eq.ring = Some(instance(ItemType::Ring, vec![Affix::CursedHeavy(0.1)]));
+        eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::CursedLoud]));
+
+        assert!((eq.cursed_heavy_total() - 0.3).abs() < 0.0001);
+        assert!(eq.has_cursed_loud());
+    }
+
+    #[test]
+    fn test_affix_damage_bonus_includes_accessories() {
+        let mut eq = Equipment::empty();
+        eq.weapon_source = Some(instance(ItemType::Sword, vec![Affix::Damage(2)]));
+        eq.ring = Some(instance(ItemType::Ring, vec![Affix::Damage(1)]));
+        eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::Damage(3)]));
+        assert_eq!(eq.affix_damage_bonus(), 6);
+    }
 }

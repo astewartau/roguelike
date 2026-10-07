@@ -767,7 +767,15 @@ impl Renderer {
                             continue;
                         }
 
-                        let (sheet, tile_id) = tile.sprite();
+                        // Tall grass draws grassy ground here; the grass blades
+                        // themselves are drawn above entities in render_grass_canopy
+                        // (so characters appear concealed in the grass).
+                        let (sheet, tile_id) = if tile.tile_type == crate::tile::TileType::TallGrass {
+                            let variants = &crate::tile::tile_ids::GRASS_VARIANTS;
+                            variants[((x + y).rem_euclid(variants.len() as i32)) as usize]
+                        } else {
+                            tile.sprite()
+                        };
                         let uv = tileset.get_uv(sheet, tile_id);
                         // Use pre-computed illumination for fog of war (low values)
                         // Per-pixel lighting handles visible tiles
@@ -949,6 +957,64 @@ impl Renderer {
         Ok(())
     }
 
+    /// Render the tall-grass "canopy" — the grass blades drawn on top of entities
+    /// so characters standing in grass appear concealed by it. The grassy ground
+    /// itself is drawn in the base tile pass (see `render`).
+    pub fn render_grass_canopy(&mut self, camera: &Camera, grid: &Grid, tileset: &MultiTileset) -> Result<(), String> {
+        unsafe {
+            self.gl.use_program(Some(self.program));
+            self.gl.bind_vertex_array(Some(self.vao));
+
+            tileset.bind(&self.gl, SpriteSheet::Tiles, 0);
+            self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
+
+            let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
+            let grass_uv = {
+                let (sheet, id) = crate::tile::tile_ids::TALL_GRASS;
+                tileset.get_uv(sheet, id)
+            };
+
+            let mut instance_data = Vec::new();
+            for y in min_y..=max_y {
+                for x in min_x..=max_x {
+                    let Some(tile) = grid.get(x, y) else { continue };
+                    if tile.tile_type != crate::tile::TileType::TallGrass || !tile.explored {
+                        continue;
+                    }
+                    let idx = y as usize * grid.width + x as usize;
+                    let fog = grid.illumination.get(idx).copied().unwrap_or(0.5);
+
+                    instance_data.push(x as f32);
+                    instance_data.push(y as f32);
+                    instance_data.push(grass_uv.u0);
+                    instance_data.push(grass_uv.v0);
+                    instance_data.push(grass_uv.u1);
+                    instance_data.push(grass_uv.v1);
+                    instance_data.push(fog);
+                    instance_data.push(1.0); // alpha
+                    instance_data.push(1.0); // tint r
+                    instance_data.push(1.0); // tint g
+                    instance_data.push(1.0); // tint b
+                }
+            }
+
+            if !instance_data.is_empty() {
+                self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+                self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
+
+                let projection = camera.projection_matrix();
+                self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, projection.as_ref());
+
+                let instance_count = instance_data.len() / 11;
+                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
+            }
+
+            self.gl.bind_vertex_array(None);
+        }
+
+        Ok(())
+    }
+
     /// Render entities - groups by sprite sheet for multi-texture rendering
     pub fn render_entities(&mut self, camera: &Camera, entities: &[RenderEntity], tileset: &MultiTileset) -> Result<(), String> {
         if entities.is_empty() {
@@ -990,9 +1056,9 @@ impl Renderer {
                     instance_data.push(uv.v1);
                     instance_data.push(entity.brightness);
                     instance_data.push(entity.alpha);
-                    instance_data.push(1.0); // tint R
-                    instance_data.push(1.0); // tint G
-                    instance_data.push(1.0); // tint B
+                    instance_data.push(entity.tint.0); // tint R
+                    instance_data.push(entity.tint.1); // tint G
+                    instance_data.push(entity.tint.2); // tint B
                 }
 
                 if !instance_data.is_empty() {

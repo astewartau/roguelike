@@ -18,11 +18,27 @@ use hecs::{Entity, World};
 use rand::seq::SliceRandom;
 use rand::Rng;
 
-/// Spawn all chests from grid positions with randomized contents.
+/// Spawn all chests from grid positions with randomized contents. The chest
+/// inside a sealed hidden room rolls as if it were `SECRET_CHEST_FLOOR_BONUS`
+/// floors deeper and always contains a rolled gear piece.
 fn spawn_chests(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
     for (x, y) in &grid.chest_positions {
         let pos = Position::new(*x, *y);
-        let container = generate_chest_contents(floor, rng);
+        let in_secret_room = grid
+            .secret_room
+            .map(|room| room.contains(*x, *y))
+            .unwrap_or(false);
+        let container = if in_secret_room {
+            let boosted_floor = floor + SECRET_CHEST_FLOOR_BONUS;
+            let mut container = generate_chest_contents(boosted_floor, rng);
+            // A hidden hoard always holds at least one piece of gear.
+            if let Some(&kind) = GEAR_POOL.choose(rng) {
+                container.items.push(roll_gear(kind, boosted_floor, rng));
+            }
+            container
+        } else {
+            generate_chest_contents(floor, rng)
+        };
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
@@ -31,6 +47,73 @@ fn spawn_chests(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) 
             BlocksMovement,
         ));
     }
+}
+
+/// Spawn hidden floor traps at the positions rolled by dungeon generation.
+/// Kinds are rolled here (spike is slightly favored).
+fn spawn_dungeon_traps(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+    use crate::components::DungeonTrapKind;
+
+    for (x, y) in &grid.trap_positions {
+        let roll: f32 = rng.gen();
+        let kind = if roll < 0.30 {
+            DungeonTrapKind::Spike
+        } else if roll < 0.55 {
+            DungeonTrapKind::Fire
+        } else if roll < 0.80 {
+            DungeonTrapKind::Snare
+        } else {
+            DungeonTrapKind::Alarm
+        };
+        spawning::spawn_dungeon_trap(world, *x, *y, kind);
+    }
+}
+
+/// Spawn room furniture (fountain / altar / shrine) at rolled positions.
+fn spawn_furniture_pieces(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+    use crate::components::FurnitureKind;
+
+    let kinds = [
+        FurnitureKind::Fountain,
+        FurnitureKind::Altar,
+        FurnitureKind::Shrine,
+    ];
+    for (x, y) in &grid.furniture_positions {
+        let Some(&kind) = kinds.choose(rng) else {
+            continue;
+        };
+        spawning::spawn_furniture(world, *x, *y, kind);
+    }
+}
+
+/// Wall sprite for a secret door at (x, y): copies an adjacent wall tile's
+/// (possibly themed/oriented) sprite so the seam is invisible.
+pub(crate) fn secret_door_wall_sprite(
+    grid: &Grid,
+    x: i32,
+    y: i32,
+) -> (crate::tile::SpriteSheet, u32) {
+    [(0, -1), (0, 1), (-1, 0), (1, 0)]
+        .iter()
+        .find_map(|(dx, dy)| {
+            grid.get(x + dx, y + dy).and_then(|tile| {
+                if tile.tile_type == crate::tile::TileType::Wall {
+                    Some(tile.sprite())
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or(tile_ids::WALL)
+}
+
+/// Spawn the secret door sealing this floor's hidden room, if any.
+fn spawn_secret_door_entity(world: &mut World, grid: &Grid) {
+    let Some((x, y)) = grid.secret_door_pos else {
+        return;
+    };
+    let wall_sprite = secret_door_wall_sprite(grid, x, y);
+    spawning::spawn_secret_door(world, x, y, wall_sprite);
 }
 
 /// Spawn all doors from grid positions with theme-appropriate sprites.
@@ -70,7 +153,10 @@ fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng)
         let gold = rng.gen_range(15..30);
         let items: Vec<ItemInstance> = if rng.gen_bool(0.25) {
             // 25% chance for a rolled gear piece (weapon or armor)
-            vec![roll_gear(*GEAR_POOL.choose(rng).unwrap(), floor, rng)]
+            match GEAR_POOL.choose(rng) {
+                Some(&kind) => vec![roll_gear(kind, floor, rng)],
+                None => vec![],
+            }
         } else if rng.gen_bool(0.4) {
             // otherwise 40% chance for a rare consumable
             let rare_items = [
@@ -80,7 +166,10 @@ fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng)
                 ItemType::StrengthPotion,
                 ItemType::ScrollOfProtection,
             ];
-            vec![ItemInstance::plain(*rare_items.choose(rng).unwrap())]
+            rare_items
+                .choose(rng)
+                .map(|&kind| vec![ItemInstance::plain(kind)])
+                .unwrap_or_default()
         } else {
             vec![]
         };
@@ -98,16 +187,88 @@ fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng)
     }
 }
 
-/// Spawn all barrels from grid positions with food items.
-fn spawn_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+/// Spawn explosive oil barrels: 1-2 hide among the Storage-room food barrels
+/// (their positions are returned so `spawn_barrels` can skip them), and some
+/// floors also get 1-2 out in the corridors.
+fn spawn_oil_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) -> Vec<(i32, i32)> {
+    let mut oil_positions: Vec<(i32, i32)> = Vec::new();
+
+    // Storage rooms: convert 1-2 of the rolled barrel spots into oil barrels.
+    if !grid.barrel_positions.is_empty() {
+        let count = rng
+            .gen_range(OIL_BARRELS_STORAGE_MIN..=OIL_BARRELS_STORAGE_MAX)
+            .min(grid.barrel_positions.len());
+        let mut pool: Vec<(i32, i32)> = grid.barrel_positions.clone();
+        for _ in 0..count {
+            if pool.is_empty() {
+                break;
+            }
+            let idx = rng.gen_range(0..pool.len());
+            oil_positions.push(pool.swap_remove(idx));
+        }
+    }
+
+    // Corridors: occasionally 1-2 barrels stand out in the open. Corridor
+    // tiles are walkable floor outside every room; skip doors and stairs.
+    // Blocking a chokepoint is fine — barrels are destructible (they explode).
+    if rng.gen_bool(OIL_BARREL_CORRIDOR_FLOOR_CHANCE) {
+        let door_tiles: Vec<(i32, i32)> =
+            grid.door_positions.iter().map(|((x, y), _)| (*x, *y)).collect();
+        let in_any_room = |x: i32, y: i32| {
+            grid.themed_rooms.iter().any(|r| r.rect.contains(x, y))
+        };
+        let corridor_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
+            .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
+                    && !in_any_room(x, y)
+                    && !door_tiles.contains(&(x, y))
+                    && Some((x, y)) != grid.stairs_up_pos
+                    && Some((x, y)) != grid.stairs_down_pos
+            })
+            .collect();
+
+        if !corridor_tiles.is_empty() {
+            let count = rng
+                .gen_range(OIL_BARRELS_CORRIDOR_MIN..=OIL_BARRELS_CORRIDOR_MAX)
+                .min(corridor_tiles.len());
+            let mut pool = corridor_tiles;
+            for _ in 0..count {
+                if pool.is_empty() {
+                    break;
+                }
+                let idx = rng.gen_range(0..pool.len());
+                oil_positions.push(pool.swap_remove(idx));
+            }
+        }
+    }
+
+    for &(x, y) in &oil_positions {
+        spawning::spawn_oil_barrel(world, x, y);
+    }
+    oil_positions
+}
+
+/// Spawn all barrels from grid positions with food items, skipping any spots
+/// already taken by oil barrels.
+fn spawn_barrels(
+    world: &mut World,
+    grid: &Grid,
+    skip_positions: &[(i32, i32)],
+    rng: &mut impl Rng,
+) {
     for (x, y) in &grid.barrel_positions {
+        if skip_positions.contains(&(*x, *y)) {
+            continue;
+        }
         let pos = Position::new(*x, *y);
 
         // Barrels contain food items
         let food_items = [ItemType::Cheese, ItemType::Bread, ItemType::Apple];
         let items: Vec<ItemInstance> = if rng.gen_bool(0.7) {
-            // 70% chance for food
-            vec![ItemInstance::plain(*food_items.choose(rng).unwrap())]
+            // 70% chance for food (plain bread if the pool is somehow empty)
+            let kind = food_items.choose(rng).copied().unwrap_or(ItemType::Bread);
+            vec![ItemInstance::plain(kind)]
         } else {
             vec![]
         };
@@ -145,7 +306,10 @@ fn spawn_shop_decorations(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
 
     for (x, y) in &grid.shop_decor_positions {
         let pos = Position::new(*x, *y);
-        let sprite = decor_sprites.choose(rng).unwrap();
+        // Skip decoration if the sprite pool is somehow empty
+        let Some(sprite) = decor_sprites.choose(rng) else {
+            continue;
+        };
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
@@ -162,61 +326,86 @@ fn spawn_vendor(world: &mut World, grid: &Grid, floor_num: u32) {
     }
 }
 
-/// Weapons and armor that can drop as rolled gear.
-const GEAR_POOL: [ItemType; 7] = [
-    ItemType::Sword,
-    ItemType::Dagger,
-    ItemType::Staff,
-    ItemType::Bow,
-    ItemType::LeatherArmor,
-    ItemType::ChainMail,
-    ItemType::Helmet,
-];
+// Gear roll tables (rarity weights, affix pools, legendary names) live in
+// systems/item_defs.rs.
+use crate::systems::item_defs::{roll_gear, roll_gear_with_rarity, roll_rarity, GEAR_POOL};
 
-/// Roll a gear instance (weapon or armor) with floor-scaled rarity and affixes.
-///
-/// Rarity weights shift toward rarer tiers with depth. Affix count is fixed by
-/// rarity (Common 0 / Magic 1 / Rare 2); weapons roll `Damage`, armor rolls
-/// `Defense`.
-fn roll_gear(kind: ItemType, floor: u32, rng: &mut impl Rng) -> ItemInstance {
-    use crate::components::{Affix, Rarity};
+/// Spawn the floor boss (every 3rd floor) in the largest non-start, non-shop
+/// room, awake, with a guaranteed chest beside it rolled at Rare or better.
+fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
+    use crate::components::Rarity;
+    use std::collections::HashSet;
 
-    // Rarity weights (out of their sum). Deeper floors push toward Magic/Rare.
-    let common_w = 70u32.saturating_sub(floor * 3).max(25);
-    let magic_w = 25 + floor * 2;
-    let rare_w = 5 + floor * 3;
-    let total = common_w + magic_w + rare_w;
-
-    let roll = rng.gen_range(0..total);
-    let rarity = if roll < common_w {
-        Rarity::Common
-    } else if roll < common_w + magic_w {
-        Rarity::Magic
-    } else {
-        Rarity::Rare
-    };
-
-    let affix_count = match rarity {
-        Rarity::Common => 0,
-        Rarity::Magic => 1,
-        Rarity::Rare => 2,
-    };
-
-    let is_weapon = matches!(
-        kind,
-        ItemType::Sword | ItemType::Bow | ItemType::Dagger | ItemType::Staff
-    );
-
-    let mut affixes = Vec::with_capacity(affix_count);
-    for _ in 0..affix_count {
-        if is_weapon {
-            affixes.push(Affix::Damage(rng.gen_range(1..=3)));
-        } else {
-            affixes.push(Affix::Defense(rng.gen_range(1..=2)));
-        }
+    if !spawning::is_boss_floor(floor) {
+        return;
     }
 
-    ItemInstance { kind, rarity, affixes }
+    // Largest room that is neither the starting room nor the shop.
+    let starting = grid.starting_room;
+    let lair = grid
+        .themed_rooms
+        .iter()
+        .filter(|room| {
+            room.theme != RoomTheme::Shop
+                && starting
+                    .map(|s| s.x != room.rect.x || s.y != room.rect.y)
+                    .unwrap_or(true)
+        })
+        .max_by_key(|room| room.rect.width * room.rect.height);
+    let Some(lair) = lair else {
+        return;
+    };
+    let rect = lair.rect;
+
+    // Free = walkable terrain with no blocking entity (enemies, chests, ...).
+    let blocked: HashSet<(i32, i32)> = world
+        .query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .map(|(_, (p, _))| (p.x, p.y))
+        .collect();
+    let free = |x: i32, y: i32| grid.is_walkable(x, y) && !blocked.contains(&(x, y));
+
+    // Boss stands as close to the room's center as possible.
+    let (cx, cy) = rect.center();
+    let mut interior: Vec<(i32, i32)> = (1..rect.height - 1)
+        .flat_map(|dy| (1..rect.width - 1).map(move |dx| (rect.x + dx, rect.y + dy)))
+        .collect();
+    interior.sort_by_key(|&(x, y)| (x - cx).abs() + (y - cy).abs());
+    let Some(&(bx, by)) = interior.iter().find(|&&(x, y)| free(x, y)) else {
+        return;
+    };
+    if spawning::spawn_boss(world, floor, bx, by).is_none() {
+        return;
+    }
+
+    // Guaranteed hoard next to the boss: a chest whose gear rolls at least
+    // Rare (Legendary stays possible via the normal floor-scaled roll).
+    let chest_spot = [
+        (0, -1), (0, 1), (-1, 0), (1, 0),
+        (-1, -1), (-1, 1), (1, -1), (1, 1),
+    ]
+    .iter()
+    .map(|(dx, dy)| (bx + dx, by + dy))
+    .find(|&(x, y)| free(x, y) && rect.contains(x, y));
+    if let Some((chx, chy)) = chest_spot {
+        let mut items: Vec<ItemInstance> = Vec::new();
+        if let Some(&kind) = GEAR_POOL.choose(rng) {
+            let rarity = match roll_rarity(floor, rng) {
+                Rarity::Common | Rarity::Magic => Rarity::Rare,
+                better => better,
+            };
+            items.push(roll_gear_with_rarity(kind, rarity, rng));
+        }
+        let gold = rng.gen_range(30..=60);
+        let pos = Position::new(chx, chy);
+        world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            Sprite::from_ref(tile_ids::CHEST_CLOSED),
+            Container::chest(items, gold),
+            BlocksMovement,
+        ));
+    }
 }
 
 /// Generate randomized chest contents.
@@ -249,13 +438,13 @@ fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
     let roll: f32 = rng.gen();
 
     let mut items = if roll < 0.35 {
-        let item = *common_items.choose(rng).unwrap();
+        let item = common_items.choose(rng).copied().unwrap_or(ItemType::Bread);
         vec![item]
     } else if roll < 0.55 {
-        let item = *uncommon_items.choose(rng).unwrap();
+        let item = uncommon_items.choose(rng).copied().unwrap_or(ItemType::Bread);
         vec![item]
     } else if roll < 0.70 {
-        let item = *rare_items.choose(rng).unwrap();
+        let item = rare_items.choose(rng).copied().unwrap_or(ItemType::Bread);
         vec![item]
     } else if roll < 0.85 {
         let all_items = [
@@ -274,8 +463,8 @@ fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
             ItemType::ScrollOfSlow,
         ];
         vec![
-            *common_items.choose(rng).unwrap(),
-            *all_items.choose(rng).unwrap(),
+            common_items.choose(rng).copied().unwrap_or(ItemType::Bread),
+            all_items.choose(rng).copied().unwrap_or(ItemType::Bread),
         ]
     } else {
         vec![]
@@ -286,6 +475,14 @@ fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
         let arrow_count = rng.gen_range(3..=8);
         for _ in 0..arrow_count {
             items.push(ItemType::Arrow);
+        }
+    }
+
+    // Small chance to include a bundle of fire arrows
+    if rng.gen::<f32>() < CHEST_FIRE_ARROW_CHANCE {
+        let count = rng.gen_range(CHEST_FIRE_ARROW_MIN..=CHEST_FIRE_ARROW_MAX);
+        for _ in 0..count {
+            items.push(ItemType::FireArrow);
         }
     }
 
@@ -301,16 +498,22 @@ fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
 
     // 30% chance to also contain a rolled gear piece (weapon or armor).
     if rng.gen::<f32>() < 0.30 {
-        let kind = *GEAR_POOL.choose(rng).unwrap();
-        instances.push(roll_gear(kind, floor, rng));
+        if let Some(&kind) = GEAR_POOL.choose(rng) {
+            instances.push(roll_gear(kind, floor, rng));
+        }
     }
 
     Container::chest(instances, gold)
 }
 
-/// Initialize the game world with player, enemies, and objects.
+/// Initialize the game world with player, enemies, and objects. `rng` drives
+/// all loot/spawn rolls, so a seeded rng reproduces the floor exactly.
 /// Returns (world, player_entity, player_start_position).
-pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Position) {
+pub fn init_world(
+    grid: &Grid,
+    player_class: PlayerClass,
+    rng: &mut impl Rng,
+) -> (World, Entity, Position) {
     let mut world = World::new();
 
     // Find player spawn position (default to map center; overwritten below)
@@ -377,6 +580,21 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
     ));
 
+    // The player can catch fire (e.g. standing in burning grass).
+    let _ = world.insert_one(
+        player_entity,
+        crate::components::Combustible { flammability: PLAYER_FLAMMABILITY },
+    );
+
+    // Survival meters are player-only: enemies never hunger or tire.
+    let _ = world.insert(
+        player_entity,
+        (
+            crate::components::Hunger::new(),
+            crate::components::Fatigue::new(),
+        ),
+    );
+
     // Fighter gets a secondary ability (Stun)
     if player_class == PlayerClass::Fighter {
         let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Stun, STUN_COOLDOWN));
@@ -392,21 +610,35 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Fear, FEAR_ABILITY_COOLDOWN));
     }
 
+    // Every class carries a spell list (filled by studying scrolls); the
+    // Necromancer starts with Raise Dead in it.
+    {
+        let mut learned = crate::components::LearnedAbilities::default();
+        if player_class == PlayerClass::Necromancer {
+            learned.learn(AbilityType::RaiseDead);
+        }
+        let _ = world.insert_one(player_entity, learned);
+    }
+
     // Ranger gets the RangerAbilities component for number key abilities
     if player_class == PlayerClass::Ranger {
         let _ = world.insert_one(player_entity, RangerAbilities::new());
     }
 
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
-    let mut rng = rand::thread_rng();
+    // (all rolls come from the caller's rng — seeded for reproducible floors).
     // init_world always builds the first floor (floor 0).
-    spawn_chests(&mut world, grid, 0, &mut rng);
+    spawn_chests(&mut world, grid, 0, rng);
     spawn_doors(&mut world, grid);
+    spawn_secret_door_entity(&mut world, grid);
     spawn_braziers(&mut world, grid);
-    spawn_coffins(&mut world, grid, 0, &mut rng);
-    spawn_barrels(&mut world, grid, &mut rng);
+    spawn_coffins(&mut world, grid, 0, rng);
+    let oil_positions = spawn_oil_barrels(&mut world, grid, rng);
+    spawn_barrels(&mut world, grid, &oil_positions, rng);
     spawn_water_entities(&mut world, grid);
-    spawn_shop_decorations(&mut world, grid, &mut rng);
+    spawn_shop_decorations(&mut world, grid, rng);
+    spawn_dungeon_traps(&mut world, grid, rng);
+    spawn_furniture_pieces(&mut world, grid, rng);
     spawn_vendor(&mut world, grid, 0); // Floor 0 for initial world
 
     // Spawn wizard NPC
@@ -449,7 +681,7 @@ pub fn init_world(grid: &Grid, player_class: PlayerClass) -> (World, Entity, Pos
         &walkable_tiles,
         &[(player_start.x, player_start.y)],
         grid.starting_room.as_ref(),
-        &mut rng,
+        rng,
     );
 
     (world, player_entity, player_start)
@@ -507,7 +739,8 @@ pub fn initialize_single_ai_actor(
     );
 }
 
-/// Spawn floor entities for a new (unsaved) floor.
+/// Spawn floor entities for a new (unsaved) floor. `rng` drives all loot and
+/// spawn rolls; pass a per-floor seeded rng for reproducible floors.
 pub fn spawn_floor_entities(
     world: &mut World,
     grid: &Grid,
@@ -519,6 +752,7 @@ pub fn spawn_floor_entities(
     active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
     spatial_cache: &crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) {
     // Update player position
     if let Ok(mut pos) = world.get::<&mut Position>(player_entity) {
@@ -530,12 +764,16 @@ pub fn spawn_floor_entities(
         vis_pos.y = player_spawn_pos.1 as f32;
     }
 
-    // Spawn chests, doors, braziers, and shop
-    let mut rng = rand::thread_rng();
-    spawn_chests(world, grid, floor_num, &mut rng);
+    // Spawn chests, doors, braziers, barrels, and shop from the per-floor rng
+    spawn_chests(world, grid, floor_num, rng);
     spawn_doors(world, grid);
+    spawn_secret_door_entity(world, grid);
     spawn_braziers(world, grid);
-    spawn_shop_decorations(world, grid, &mut rng);
+    let oil_positions = spawn_oil_barrels(world, grid, rng);
+    spawn_barrels(world, grid, &oil_positions, rng);
+    spawn_shop_decorations(world, grid, rng);
+    spawn_dungeon_traps(world, grid, rng);
+    spawn_furniture_pieces(world, grid, rng);
     spawn_vendor(world, grid, floor_num);
 
     // Spawn enemies
@@ -550,9 +788,12 @@ pub fn spawn_floor_entities(
         &walkable_tiles,
         &[player_spawn_pos],
         grid.starting_room.as_ref(),
-        &mut rng,
+        rng,
     );
 
+    // Every 3rd floor: a named boss guarding a Rare+ chest in the largest room.
+    spawn_boss_encounter(world, grid, floor_num, rng);
+
     // Initialize AI
-    initialize_ai_actors(world, grid, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, &mut rng);
+    initialize_ai_actors(world, grid, player_entity, clock, scheduler, active_ai_tracker, spatial_cache, events, rng);
 }

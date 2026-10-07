@@ -267,6 +267,10 @@ mod tests {
             barrel_positions: vec![],
             shop_position: None,
             shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
         }
     }
 
@@ -296,6 +300,10 @@ mod tests {
             barrel_positions: vec![],
             shop_position: None,
             shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
         }
     }
 
@@ -399,6 +407,10 @@ mod tests {
             barrel_positions: vec![],
             shop_position: None,
             shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());
@@ -427,6 +439,10 @@ mod tests {
             barrel_positions: vec![],
             shop_position: None,
             shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
         };
 
         let path = find_path(&grid, (0, 0), (2, 2), &HashSet::new());

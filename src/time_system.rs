@@ -175,6 +175,17 @@ pub fn start_action_with_events(
     let has_speed_boost = effects::entity_has_effect(world, entity, EffectType::SpeedBoost);
     let has_slow = effects::entity_has_effect(world, entity, EffectType::Slowed);
     let is_sneaking = world.get::<&crate::components::Sneaking>(entity).is_ok();
+    // CursedHeavy gear slows all actions (like Slowed, but from worn items).
+    // Applies whether or not the curse has been identified.
+    let cursed_heavy = world
+        .get::<&crate::components::Equipment>(entity)
+        .map(|e| e.cursed_heavy_total())
+        .unwrap_or(0.0);
+    // Exhausted (fatigue meter maxed, player-only): every action is slower.
+    let exhausted = world
+        .get::<&crate::components::Fatigue>(entity)
+        .map(|f| f.is_exhausted())
+        .unwrap_or(false);
 
     // Get actor component
     let mut actor = world
@@ -207,6 +218,14 @@ pub fn start_action_with_events(
     // sneak attack itself isn't penalized).
     if is_sneaking && matches!(action_type, ActionType::Move { .. }) {
         effective_speed *= SNEAK_SPEED_MULT;
+    }
+    // Cursed-heavy gear: a total of 0.2 means all actions take 20% longer.
+    if cursed_heavy > 0.0 {
+        effective_speed /= 1.0 + cursed_heavy;
+    }
+    // Exhaustion drags every action out (0.75x speed).
+    if exhausted {
+        effective_speed *= EXHAUSTED_SPEED_MULT;
     }
 
     // Calculate completion time
@@ -296,12 +315,14 @@ fn apply_action_effects(
 ) -> ActionResult {
     match action_type {
         ActionType::Move { dx, dy, .. } => actions::apply_move(world, grid, entity, *dx, *dy, spatial_cache, events),
-        ActionType::Attack { target } => actions::apply_attack(world, entity, *target, events),
+        ActionType::Attack { target } => {
+            actions::apply_attack(world, grid, spatial_cache, entity, *target, events)
+        }
         ActionType::AttackDirection { dx, dy } => {
-            actions::apply_attack_direction(world, entity, *dx, *dy, events)
+            actions::apply_attack_direction(world, grid, spatial_cache, entity, *dx, *dy, events)
         }
         ActionType::InteractDirection { dx, dy } => {
-            actions::apply_interact_direction(world, entity, *dx, *dy, spatial_cache, events)
+            actions::apply_interact_direction(world, grid, entity, *dx, *dy, spatial_cache, events)
         }
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
@@ -337,7 +358,7 @@ fn apply_action_effects(
             actions::apply_drop_equipped_weapon(world, entity, events)
         }
         ActionType::Cleave => {
-            actions::apply_cleave(world, entity, events)
+            actions::apply_cleave(world, grid, spatial_cache, entity, events)
         }
         ActionType::ActivateSprint => {
             actions::apply_activate_sprint(world, entity, events)
@@ -372,6 +393,12 @@ fn apply_action_effects(
         ActionType::ShootCripplingShot { target_x, target_y } => {
             actions::apply_shoot_crippling_shot(world, grid, entity, *target_x, *target_y, events, current_time)
         }
+        ActionType::CastLearnedSpell { ability, target_x, target_y } => {
+            actions::apply_cast_learned_spell(world, grid, entity, *ability, *target_x, *target_y, spatial_cache, events)
+        }
+        ActionType::StartRaiseDead { target } => {
+            actions::apply_start_raise_dead(world, entity, *target, events)
+        }
         ActionType::Recover => {
             // Recovery is just a time delay, no effects
             ActionResult::Completed
@@ -403,9 +430,17 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
     // Collect regen info first to avoid borrow issues
     let mut regen_events: Vec<(Entity, i32)> = Vec::new();
 
-    for (id, health) in world.query_mut::<&mut Health>() {
+    for (id, (health, hunger)) in
+        world.query_mut::<(&mut Health, Option<&crate::components::Hunger>)>()
+    {
         // Check if this entity has boosted regen from Regenerating effect
         let has_regen_boost = regenerating.contains(&id);
+
+        // Hungry (player-only Hunger meter below threshold): natural HP regen
+        // stops. Potion-boosted Regenerating still works — it's not "natural".
+        if !has_regen_boost && hunger.map(|h| h.is_hungry()).unwrap_or(false) {
+            continue;
+        }
 
         // Determine regen parameters (boosted if Regenerating effect active)
         let (regen_amount, regen_interval) = if has_regen_boost {
@@ -459,12 +494,36 @@ pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&m
         })
         .collect();
 
+    // Exhausted actors (fatigue meter maxed, player-only) stop regenerating
+    // energy — unless they're asleep: sleep is the recovery path and must
+    // stay affordable (Wait steps require the actor to be able to act).
+    let exhausted_awake: HashSet<Entity> = world
+        .query::<(
+            &Actor,
+            &crate::components::Fatigue,
+            Option<&crate::components::Asleep>,
+        )>()
+        .iter()
+        .filter_map(|(id, (_, fatigue, asleep))| {
+            if fatigue.is_exhausted() && asleep.is_none() {
+                Some(id)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Second pass: process energy regen
     let mut regen_events: Vec<(Entity, i32)> = Vec::new();
 
     for (id, actor) in world.query_mut::<&mut Actor>() {
         // Skip if no regen interval set, or already at max
         if actor.energy_regen_interval <= 0.0 || actor.energy >= actor.max_energy {
+            continue;
+        }
+
+        // Exhausted while awake: no energy regen until you sleep.
+        if exhausted_awake.contains(&id) {
             continue;
         }
 
@@ -516,7 +575,7 @@ pub fn tick_status_effects(world: &mut World, elapsed: f32) {
 
 /// Process ability cooldown ticks
 pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
-    use crate::components::{ClassAbility, RangerAbilities, SecondaryAbility};
+    use crate::components::{ClassAbility, LearnedAbilities, RangerAbilities, SecondaryAbility};
 
     if elapsed <= 0.0 {
         return;
@@ -540,6 +599,15 @@ pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
         for (_, cooldown_remaining, _) in ra.abilities.iter_mut() {
             if *cooldown_remaining > 0.0 {
                 *cooldown_remaining = (*cooldown_remaining - elapsed).max(0.0);
+            }
+        }
+    }
+
+    // Also tick learned spells (studied scrolls + Raise Dead)
+    for (_, learned) in world.query_mut::<&mut LearnedAbilities>() {
+        for spell in learned.spells.iter_mut() {
+            if spell.cooldown_remaining > 0.0 {
+                spell.cooldown_remaining = (spell.cooldown_remaining - elapsed).max(0.0);
             }
         }
     }
