@@ -106,6 +106,10 @@ pub const CAVERN_MUSHROOMS_MAX: usize = 4;
 /// Crystal clusters per cavern (light sources).
 pub const CAVERN_CRYSTALS_MIN: usize = 1;
 pub const CAVERN_CRYSTALS_MAX: usize = 3;
+/// Per-step chance that fire on or next to a mushroom patch consumes it.
+/// Lower than a web's 0.8: fungus is damp, and a cave strung with it should
+/// burn along rather than go up all at once.
+pub const MUSHROOM_IGNITE_CHANCE: f64 = 0.35;
 
 // =============================================================================
 // CAVE ECOLOGY (what lives in a cavern instead of the floor roster)
