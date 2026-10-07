@@ -101,7 +101,7 @@ pub fn apply_move(
     }
 
     // Check for any other blocking entity
-    if queries::is_position_blocked(world, target_x, target_y, Some(entity)) {
+    if queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity)) {
         return ActionResult::Blocked;
     }
 

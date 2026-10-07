@@ -792,6 +792,22 @@ impl GameEngine {
             state.fov_dirty = false;
         }
 
+        // The spatial cache is now the single source of truth for "is this tile
+        // blocked" — both AI pathfinding and player/entity movement read it. It
+        // is maintained incrementally, so any spawn/move/despawn path that
+        // forgets to update it silently reintroduces phantom blockers. Verify
+        // it against a fresh rebuild once per tick; compiled out in release.
+        debug_assert!(
+            {
+                let fresh =
+                    crate::spatial_cache::SpatialCache::rebuild_from_world(&state.world);
+                state.spatial_cache.get_blocking_positions() == fresh.get_blocking_positions()
+                    && state.spatial_cache.get_vision_blocking() == fresh.get_vision_blocking()
+            },
+            "SpatialCache drifted from world state — some spawn/move/despawn path \
+             failed to update it"
+        );
+
         // First-sighting boss announcements ("... glares at you!"). Cheap:
         // at most one boss per floor; the event is picked up by the message
         // log on the next event-processing pass.

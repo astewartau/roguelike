@@ -217,7 +217,7 @@ fn try_knockback(
     if !grid.is_walkable(dest.0, dest.1) {
         return;
     }
-    if crate::queries::is_position_blocked(world, dest.0, dest.1, Some(target)) {
+    if crate::queries::is_position_blocked(spatial_cache, dest.0, dest.1, Some(target)) {
         return;
     }
 

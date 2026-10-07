@@ -46,7 +46,7 @@ pub fn apply_blink(
     }
 
     // Check no blocking entity at target
-    if queries::is_position_blocked(world, target_x, target_y, Some(entity)) {
+    if queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity)) {
         return ActionResult::Blocked;
     }
 

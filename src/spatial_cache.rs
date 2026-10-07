@@ -207,10 +207,34 @@ impl SpatialCache {
         self.blocking_positions.contains(&pos)
     }
 
-    /// Check if a position blocks vision.
-    #[inline]
-    pub fn blocks_vision(&self, pos: (i32, i32)) -> bool {
-        self.vision_blocking.contains(&pos)
+    /// Check if a position is blocked for movement, ignoring one entity
+    /// (normally the entity trying to move there).
+    ///
+    /// `blocking_positions` is a set, so co-located blockers collapse to one
+    /// entry and the set alone cannot say *who* blocks a tile. The exclusion is
+    /// resolved through `entity_positions` instead of rescanning the world:
+    ///
+    /// - tile not in the set: nothing blocks it, regardless of `exclude`;
+    /// - excluded entity is not standing on the tile: the blocker is somebody
+    ///   else, so the tile is blocked. This is the case every real move takes,
+    ///   since a mover's target tile is never its current tile;
+    /// - excluded entity *is* standing on the tile: only then do we check
+    ///   whether another tracked blocker shares it.
+    pub fn is_blocked_excluding(&self, pos: (i32, i32), exclude: Option<Entity>) -> bool {
+        if !self.is_blocked(pos) {
+            return false;
+        }
+        let Some(excluded) = exclude else {
+            return true;
+        };
+        if self.entity_positions.get(&excluded) != Some(&pos) {
+            return true;
+        }
+        self.entity_positions.iter().any(|(&entity, &entity_pos)| {
+            entity != excluded
+                && entity_pos == pos
+                && self.entity_flags.get(&entity).is_some_and(|&(moves, _)| moves)
+        })
     }
 
     /// Test-only coherence check: the incrementally-maintained blocking sets
@@ -317,6 +341,102 @@ mod tests {
             secret_room: None,
             secret_door_pos: None,
         }
+    }
+
+    #[test]
+    fn test_is_blocked_excluding_matches_a_world_scan() {
+        // The cache is now the single source of truth for movement blocking, so
+        // its exclude-aware answer must match what a linear world scan (the old
+        // `queries::is_position_blocked` implementation) would have returned.
+        let mut world = World::new();
+        let mover = world.spawn((Position { x: 2, y: 1 }, BlocksMovement));
+        let other = world.spawn((Position { x: 5, y: 1 }, BlocksMovement));
+        // A non-blocking entity must never make a tile look blocked.
+        world.spawn((Position { x: 7, y: 1 },));
+
+        let cache = SpatialCache::rebuild_from_world(&world);
+
+        /// The pre-fix implementation, kept here as the oracle.
+        fn world_scan(world: &World, pos: (i32, i32), exclude: Option<Entity>) -> bool {
+            world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .any(|(id, (p, _))| {
+                    (p.x, p.y) == pos && exclude.map_or(true, |ex| id != ex)
+                })
+        }
+
+        for x in 0..10 {
+            for exclude in [None, Some(mover), Some(other)] {
+                let pos = (x, 1);
+                assert_eq!(
+                    cache.is_blocked_excluding(pos, exclude),
+                    world_scan(&world, pos, exclude),
+                    "cache and world scan disagree at {pos:?} excluding {exclude:?}"
+                );
+            }
+        }
+
+        // Spot-check the semantics the loop above encodes.
+        assert!(!cache.is_blocked_excluding((0, 1), None), "empty tile");
+        assert!(cache.is_blocked_excluding((2, 1), None), "blocker, no exclusion");
+        assert!(
+            !cache.is_blocked_excluding((2, 1), Some(mover)),
+            "a tile blocked only by the excluded entity is passable for it"
+        );
+        assert!(
+            cache.is_blocked_excluding((5, 1), Some(mover)),
+            "excluding the mover must not unblock somebody else's tile"
+        );
+        assert!(
+            !cache.is_blocked_excluding((7, 1), None),
+            "entity without BlocksMovement must not block"
+        );
+    }
+
+    #[test]
+    fn test_co_located_blockers_stay_blocked_when_one_is_excluded() {
+        // blocking_positions is a set, so two blockers on one tile collapse to a
+        // single entry. Excluding one of them must still report the tile blocked
+        // by the other, which is why is_blocked_excluding consults
+        // entity_positions instead of trusting the set alone.
+        let mut world = World::new();
+        let first = world.spawn((Position { x: 4, y: 1 }, BlocksMovement));
+        let second = world.spawn((Position { x: 4, y: 1 }, BlocksMovement));
+
+        let cache = SpatialCache::rebuild_from_world(&world);
+
+        assert!(cache.is_blocked_excluding((4, 1), Some(first)));
+        assert!(cache.is_blocked_excluding((4, 1), Some(second)));
+        assert!(cache.is_blocked_excluding((4, 1), None));
+    }
+
+    #[test]
+    fn test_despawned_blocker_unblocks_tile_for_movement_and_pathfinding() {
+        // Bug 1 + Bug 2 together: because movement now reads the cache, a
+        // despawn that forgets remove_entity would block the *player* too, not
+        // just AI pathfinding. Removing it properly must free the tile for both.
+        let mut world = World::new();
+        let blocker = world.spawn((Position { x: 5, y: 1 }, BlocksMovement));
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+
+        assert!(crate::queries::is_position_blocked(&cache, 5, 1, None));
+
+        cache.remove_entity(blocker);
+        let _ = world.despawn(blocker);
+
+        assert!(
+            !crate::queries::is_position_blocked(&cache, 5, 1, None),
+            "movement must see the despawned blocker's tile as free"
+        );
+        cache.assert_coherent_with_world(&world, "after despawning a blocker");
+
+        let grid = make_corridor_grid();
+        assert!(
+            pathfinding::find_path(&grid, (1, 1), (8, 1), cache.get_blocking_positions())
+                .is_some(),
+            "pathfinding must also see the tile as free"
+        );
     }
 
     #[test]
