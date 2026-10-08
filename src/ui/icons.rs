@@ -176,9 +176,4 @@ impl UiIcons {
             _ => egui::Color32::WHITE,
         }
     }
-
-    /// Get the texture ID for items (weapons, potions, scrolls)
-    pub fn items_texture(&self) -> egui::TextureId {
-        self.items_texture_id
-    }
 }

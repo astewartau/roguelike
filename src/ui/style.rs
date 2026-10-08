@@ -7,7 +7,11 @@ use egui::epaint::Shadow;
 use egui::style::{WidgetVisuals, Widgets};
 use egui::{Color32, FontData, FontDefinitions, FontFamily, Frame, Margin, Rounding, Stroke, Style, Visuals};
 
-/// Dungeon color palette
+/// Dungeon color palette.
+///
+/// A complete set rather than only the shades currently drawn - the unused
+/// `*_BG` entries are the background halves of bar colour pairs.
+#[allow(dead_code)]
 pub mod colors {
     use egui::Color32;
 

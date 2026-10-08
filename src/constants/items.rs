@@ -95,9 +95,14 @@ pub const FIRE_TRAP_BURST_DAMAGE: i32 = 15;
 pub const ARROW_WEIGHT: f32 = 0.05;
 /// Starting arrow count for Ranger
 pub const STARTING_ARROW_COUNT: u32 = 20;
+// Stacking limits are not enforced yet. `FIRE_ARROW_STACK_MAX` below documents
+// itself against ARROW_STACK_MAX and FIRE_ARROW_BUNDLE_COUNT is live, so these
+// two stay as the plain-arrow half of the same pair.
 /// Maximum arrows in a single stack
+#[allow(dead_code)]
 pub const ARROW_STACK_MAX: u32 = 50;
 /// Arrows in a bundle pickup
+#[allow(dead_code)]
 pub const ARROW_BUNDLE_COUNT: u32 = 10;
 
 // Fire arrows (ammunition)

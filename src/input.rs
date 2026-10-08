@@ -139,11 +139,6 @@ impl InputState {
     pub fn is_targeting(&self) -> bool {
         self.targeting_mode.is_some() || self.ability_targeting_mode.is_some()
     }
-
-    /// Check if in ability targeting mode
-    pub fn is_ability_targeting(&self) -> bool {
-        self.ability_targeting_mode.is_some()
-    }
 }
 
 impl Default for InputState {

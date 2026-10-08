@@ -347,16 +347,6 @@ impl GameEngine {
             .truncate(crate::run_history::PAST_RUNS_SHOWN);
     }
 
-    /// Get a reference to the UI state (panics if not playing).
-    pub fn ui_state(&self) -> &GameUiState {
-        self.ui_state.as_ref().expect("UI state not initialized - game not started")
-    }
-
-    /// Get a mutable reference to the UI state (panics if not playing).
-    pub fn ui_state_mut(&mut self) -> &mut GameUiState {
-        self.ui_state.as_mut().expect("UI state not initialized - game not started")
-    }
-
     /// Handle the Escape key. Escape never quits the game directly; instead it
     /// backs out of whatever is open (targeting, dev menu, UI windows), and if
     /// nothing is open it opens the pause menu. From the pause menu it resumes;

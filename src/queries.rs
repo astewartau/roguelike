@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, BlocksVision, EffectType, Equipment, Position, Stats,
+    Actor, Attackable, BlocksMovement, EffectType, Equipment, Position, Stats,
 };
 use crate::spatial_cache::SpatialCache;
 use crate::systems::effects;
@@ -20,15 +20,6 @@ pub fn get_blocking_positions(world: &World, exclude: Option<Entity>) -> HashSet
         .query::<(&Position, &BlocksMovement)>()
         .iter()
         .filter(|(id, _)| exclude != Some(*id))
-        .map(|(_, (pos, _))| (pos.x, pos.y))
-        .collect()
-}
-
-/// Get all positions that block vision (for FOV calculations).
-pub fn get_vision_blocking_positions(world: &World) -> HashSet<(i32, i32)> {
-    world
-        .query::<(&Position, &BlocksVision)>()
-        .iter()
         .map(|(_, (pos, _))| (pos.x, pos.y))
         .collect()
 }

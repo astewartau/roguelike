@@ -178,11 +178,6 @@ impl MultiTileset {
         }
     }
 
-    /// Get the tile size (32 for 32rogues)
-    pub fn tile_size(&self) -> u32 {
-        self.tile_size
-    }
-
     /// Get UV rect for egui (note: egui uses top-left origin, OpenGL uses bottom-left)
     pub fn get_egui_uv(&self, sheet: SpriteSheet, tile_id: u32) -> egui::Rect {
         let sheet_data = self
@@ -209,14 +204,6 @@ impl MultiTileset {
             .get(&sheet)
             .expect("Sheet not loaded")
             .texture
-    }
-
-    /// Get column count for a sheet (needed for some calculations)
-    pub fn columns(&self, sheet: SpriteSheet) -> u32 {
-        self.sheets
-            .get(&sheet)
-            .expect("Sheet not loaded")
-            .columns
     }
 
     /// Get row count for a sheet
