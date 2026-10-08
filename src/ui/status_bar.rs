@@ -142,12 +142,17 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
         + hunger_label_height
         + fatigue_label_height;
 
-    egui::Window::new("Status")
-        .fixed_pos([10.0, 10.0])
-        .fixed_size([220.0, window_height])
-        .title_bar(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Status",
+        |window| {
+            window
+                .fixed_pos([10.0, 10.0])
+                .fixed_size([220.0, window_height])
+                .title_bar(false)
+        },
+        |ui| {
             let health_percent = if data.health_max > 0 {
                 data.health_current as f32 / data.health_max as f32
             } else {
@@ -368,5 +373,6 @@ pub fn draw_status_bar(ctx: &egui::Context, data: &StatusBarData, icons: &UiIcon
                     }
                 });
             }
-        });
+        },
+    );
 }

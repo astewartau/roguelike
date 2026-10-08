@@ -69,16 +69,21 @@ pub fn draw_inventory_window(
     ui_state: &mut GameUiState,
     actions: &mut UiActions,
 ) {
-    egui::Window::new("Character")
-        .default_pos([
-            data.viewport_width / 2.0 - 300.0,
-            data.viewport_height / 2.0 - 250.0,
-        ])
-        .default_size([600.0, 500.0])
-        .collapsible(false)
-        .resizable(true)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Character",
+        |window| {
+            window
+                .default_pos([
+                    data.viewport_width / 2.0 - 300.0,
+                    data.viewport_height / 2.0 - 250.0,
+                ])
+                .default_size([600.0, 500.0])
+                .collapsible(false)
+                .resizable(true)
+        },
+        |ui| {
             if let Ok(stats) = world.get::<&Stats>(player_entity) {
                 ui.columns(2, |columns| {
                     // Left column: Stats + Equipment
@@ -123,7 +128,8 @@ pub fn draw_inventory_window(
                     }
                 });
             }
-        });
+        },
+    );
 
     // Draw context menu popup (outside the main window)
     draw_item_context_menu(ctx, world, player_entity, ui_state, actions);
@@ -142,8 +148,7 @@ fn draw_stats_column(
     actions: &mut UiActions,
 ) {
     ui.vertical(|ui| {
-        ui.heading("CHARACTER STATS");
-        ui.separator();
+        style::panel_header(ui, "CHARACTER STATS");
         ui.add_space(10.0);
         // Effective stats include stat affixes on equipped gear; show the
         // gear contribution alongside the base value.
@@ -189,8 +194,7 @@ fn draw_stats_column(
         }
 
         ui.add_space(20.0);
-        ui.heading("EQUIPMENT");
-        ui.separator();
+        style::panel_header(ui, "EQUIPMENT");
         ui.add_space(10.0);
 
         if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
@@ -371,8 +375,7 @@ fn draw_inventory_column(
     actions: &mut UiActions,
 ) {
     ui.vertical(|ui| {
-        ui.heading("INVENTORY");
-        ui.separator();
+        style::panel_header(ui, "INVENTORY");
         ui.add_space(10.0);
 
         // Which ammo the bow currently loads (for the tooltip marker)
@@ -523,8 +526,7 @@ fn draw_spellbook_column(
     icons: &UiIcons,
 ) {
     ui.vertical(|ui| {
-        ui.heading("SPELLBOOK");
-        ui.separator();
+        style::panel_header(ui, "SPELLBOOK");
         ui.add_space(10.0);
 
         // Collect the player's abilities (class, then secondary, then ranger).

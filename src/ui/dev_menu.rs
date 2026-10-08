@@ -204,17 +204,22 @@ pub fn draw_dev_menu(
         return;
     }
 
-    egui::Window::new("Developer Tools")
-        .fixed_pos([10.0, 120.0])
-        .min_width(200.0)
-        .max_height(500.0)
-        .title_bar(true)
-        .collapsible(true)
-        .scroll([false, true])
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Developer Tools",
+        |window| {
+            window
+                .fixed_pos([10.0, 120.0])
+                .min_width(200.0)
+                .max_height(500.0)
+                .title_bar(true)
+                .collapsible(true)
+                .scroll([false, true])
+        },
+        |ui| {
             // === PLACEMENT TOOLS ===
-            ui.heading("Placement (click map)");
+            style::panel_header(ui, "Placement (click map)");
             for tool in DevTool::ALL {
                 let is_selected = dev_menu.selected_tool == Some(tool);
                 let sprite = tool.sprite();
@@ -241,7 +246,7 @@ pub fn draw_dev_menu(
             ui.separator();
 
             // === ITEMS (click to add to inventory) ===
-            ui.heading("Items (click to add)");
+            style::panel_header(ui, "Items (click to add)");
 
             // Potions
             ui.label("Potions:");
@@ -270,5 +275,6 @@ pub fn draw_dev_menu(
                     dev_menu.item_to_give = Some(*item);
                 }
             }
-        });
+        },
+    );
 }

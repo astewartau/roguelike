@@ -151,12 +151,17 @@ pub fn draw_hotbars(
     let mut pending_drop: Option<(SlotAddr, HotbarDrag)> = None;
     let mut pending_clear: Option<SlotAddr> = None;
 
-    egui::Window::new("Hotbars")
-        .fixed_pos([pos_x, pos_y])
-        .title_bar(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Hotbars",
+        |window| {
+            window
+                .fixed_pos([pos_x, pos_y])
+                .title_bar(false)
+                .resizable(false)
+        },
+        |ui| {
             ui.horizontal(|ui| {
                 draw_bar(
                     ui, world, player, icons, &qer[..], Bar::Qe,
@@ -174,7 +179,8 @@ pub fn draw_hotbars(
                     actions, &mut pending_drop, &mut pending_clear,
                 );
             });
-        });
+        },
+    );
 
     // Apply deferred mutations.
     if let Some((tgt, drag)) = pending_drop {

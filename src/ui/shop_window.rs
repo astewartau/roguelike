@@ -69,21 +69,25 @@ pub fn draw_shop_window(
     icons: &UiIcons,
     actions: &mut UiActions,
 ) {
-    egui::Window::new(format!("{}'s Shop", data.vendor_name))
-        .default_pos([
-            data.viewport_width / 2.0 - 250.0,
-            data.viewport_height / 2.0 - 175.0,
-        ])
-        .default_size([500.0, 350.0])
-        .collapsible(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        &format!("{}'s Shop", data.vendor_name),
+        |window| {
+            window
+                .default_pos([
+                    data.viewport_width / 2.0 - 250.0,
+                    data.viewport_height / 2.0 - 175.0,
+                ])
+                .default_size([500.0, 350.0])
+                .collapsible(false)
+                .resizable(false)
+        },
+        |ui| {
             // Two columns: Buy (left) and Sell (right)
             ui.columns(2, |columns| {
                 // === BUY COLUMN ===
-                columns[0].heading("Buy");
-                columns[0].separator();
+                style::panel_header(&mut columns[0], "Buy");
 
                 if data.vendor_items.is_empty() {
                     columns[0].label(
@@ -140,8 +144,7 @@ pub fn draw_shop_window(
                 }
 
                 // === SELL COLUMN ===
-                columns[1].heading("Sell");
-                columns[1].separator();
+                style::panel_header(&mut columns[1], "Sell");
 
                 if data.player_items.is_empty() {
                     columns[1].label(
@@ -219,5 +222,6 @@ pub fn draw_shop_window(
                     }
                 });
             });
-        });
+        },
+    );
 }

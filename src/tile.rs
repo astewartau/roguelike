@@ -249,6 +249,10 @@ pub mod tile_ids {
     pub const SHRINE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 6, ITEMS_COLS)); // items 17.g ankh
 
     // UI Icons (using items that work as icons)
+    /// Panel corner rivet: the buckler, which is a round studded plate and at
+    /// icon size reads as a domed metal rivet. Brass-tinted (see
+    /// `style::colors::PANEL_RIVET_TINT`) to pull it into the panel palette.
+    pub const PANEL_RIVET: (SpriteSheet, u32) = (SpriteSheet::Items, rc(12, 5, ITEMS_COLS)); // 12.f buckler 2
     pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
     pub const DIAMOND: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant
 

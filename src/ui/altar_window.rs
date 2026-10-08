@@ -42,17 +42,22 @@ pub fn draw_altar_window(
     icons: &UiIcons,
     actions: &mut UiActions,
 ) {
-    egui::Window::new("Altar")
-        .default_pos([
-            data.viewport_width / 2.0 - 160.0,
-            data.viewport_height / 2.0 - 120.0,
-        ])
-        .default_size([320.0, 240.0])
-        .collapsible(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
-            ui.heading("Offer a sacrifice");
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Altar",
+        |window| {
+            window
+                .default_pos([
+                    data.viewport_width / 2.0 - 160.0,
+                    data.viewport_height / 2.0 - 120.0,
+                ])
+                .default_size([320.0, 240.0])
+                .collapsible(false)
+                .resizable(false)
+        },
+        |ui| {
+            style::panel_header(ui, "Offer a sacrifice");
             ui.label(
                 egui::RichText::new("The altar hungers. Finer offerings earn finer blessings.")
                     .italics()
@@ -110,5 +115,6 @@ pub fn draw_altar_window(
             if ui.button("Cancel").clicked() {
                 actions.close_altar = true;
             }
-        });
+        },
+    );
 }

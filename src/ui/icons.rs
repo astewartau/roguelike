@@ -41,6 +41,8 @@ pub struct UiIcons {
     pub bread_uv: egui::Rect,
     pub apple_uv: egui::Rect,
     pub fire_trap_uv: egui::Rect,
+    /// Corner rivet for panel chrome (see `style::dungeon_window`)
+    pub panel_rivet_uv: egui::Rect,
     pub arrow_uv: egui::Rect,
     pub water_flask_uv: egui::Rect,
     // Ability icons
@@ -97,6 +99,7 @@ impl UiIcons {
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
             fire_trap_uv: tileset.get_egui_uv(tile_ids::FIRE_TRAP.0, tile_ids::FIRE_TRAP.1),
+            panel_rivet_uv: tileset.get_egui_uv(tile_ids::PANEL_RIVET.0, tile_ids::PANEL_RIVET.1),
             arrow_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
             water_flask_uv: tileset.get_egui_uv(tile_ids::BOTTLE_WATER.0, tile_ids::BOTTLE_WATER.1),
             // Ability icons: AXE for Cleave; the rest are custom-drawn
