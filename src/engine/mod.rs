@@ -2264,7 +2264,7 @@ mod tests {
     /// Same caveat: expected to fail on intentional balance changes.
     #[test]
     fn test_fixed_seed_replays_identically_across_a_floor() {
-        const EXPECTED: &str = "t=263.8041 floor=1 kills=17 hp=99840/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=90 roster=c88b0e1c";
+        const EXPECTED: &str = "t=263.8041 floor=1 kills=17 hp=99840/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=95 roster=5a0dd920";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -2341,6 +2341,163 @@ mod tests {
             "only {blockers_checked} blockers seen — the scan is not covering the floors"
         );
     }
+
+    /// Crypt is a required room theme on every floor, so every floor rolls
+    /// coffin positions — but `spawn_floor_entities` never spawned them, so
+    /// only floor 0 (built by `init_world`) actually had coffins. Below that,
+    /// crypts were decorated rooms with nothing in them.
+    #[test]
+    fn coffins_spawn_on_floors_below_the_first() {
+        use crate::components::{Container, ContainerType};
+
+        let mut deep_floors_with_coffins = 0;
+        let mut deep_floors_rolling_coffins = 0;
+
+        for seed in 0..25u64 {
+            let mut camera = crate::camera::Camera::new(800.0, 600.0);
+            let mut engine = GameEngine::new();
+            engine.start_game(PlayerClass::Fighter, seed, &mut camera);
+
+            for _ in 1..4 {
+                engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+                let state = engine.state.as_ref().expect("run started");
+
+                // Only floors whose generation actually rolled coffin spots can
+                // be expected to have any.
+                if state.grid.coffin_positions.is_empty() {
+                    continue;
+                }
+                deep_floors_rolling_coffins += 1;
+
+                let coffins = state
+                    .world
+                    .query::<&Container>()
+                    .iter()
+                    .filter(|(_, c)| c.container_type == ContainerType::Coffin)
+                    .count();
+                if coffins > 0 {
+                    deep_floors_with_coffins += 1;
+                }
+            }
+        }
+
+        assert!(
+            deep_floors_rolling_coffins > 0,
+            "no floor below the first rolled any coffin positions — this test \
+             cannot say anything"
+        );
+        assert_eq!(
+            deep_floors_with_coffins, deep_floors_rolling_coffins,
+            "every floor that rolled coffin positions should have spawned coffins"
+        );
+    }
+
+    /// Leaving a floor and coming back must restore containers as what they
+    /// were.
+    ///
+    /// `save_floor` used to flatten every non-corpse `Container` into a
+    /// `Chest`, dropping `container_type` and `spawn_chance`. A revisited crypt
+    /// came back full of chests that could never release their skeletons, a
+    /// storage room came back with chest-sprited barrels, and a pile of dropped
+    /// loot came back as a blocking chest.
+    #[test]
+    fn container_kinds_survive_a_floor_round_trip() {
+        use crate::components::{Container, ContainerType, GroundItemPile, ItemInstance, ItemType, Position};
+
+        /// Counts per container kind, in a fixed order so two censuses compare
+        /// directly. `ContainerType` is not `Hash`, and this is not a reason to
+        /// make it so.
+        const KINDS: [ContainerType; 5] = [
+            ContainerType::Chest,
+            ContainerType::Coffin,
+            ContainerType::Barrel,
+            ContainerType::Corpse,
+            ContainerType::GroundPile,
+        ];
+        fn census(world: &hecs::World) -> [usize; 5] {
+            let mut counts = [0usize; 5];
+            for (_, container) in world.query::<&Container>().iter() {
+                if let Some(i) = KINDS.iter().position(|k| *k == container.container_type) {
+                    counts[i] += 1;
+                }
+            }
+            counts
+        }
+        let kind_index = |kind: ContainerType| {
+            KINDS.iter().position(|k| *k == kind).expect("known kind")
+        };
+
+        let mut checked_coffins = 0;
+        let mut checked_piles = 0;
+
+        for seed in 0..25u64 {
+            let mut camera = crate::camera::Camera::new(800.0, 600.0);
+            let mut engine = GameEngine::new();
+            engine.start_game(PlayerClass::Fighter, seed, &mut camera);
+
+            // Drop a pile of loot on the player's tile, so the walkable
+            // container kind is covered too.
+            {
+                let state = engine.state.as_mut().expect("run started");
+                let at = state
+                    .world
+                    .get::<&Position>(state.player_entity)
+                    .map(|p| (p.x, p.y))
+                    .expect("player has a position");
+                let pos = Position::new(at.0, at.1);
+                state.world.spawn((
+                    pos,
+                    crate::components::VisualPosition::from_position(&pos),
+                    crate::components::Sprite::from_ref(crate::tile::tile_ids::COINS),
+                    Container::ground_pile(vec![ItemInstance::plain(ItemType::Apple)]),
+                    GroundItemPile,
+                ));
+            }
+
+            let before = census(&engine.state.as_ref().expect("run").world);
+
+            // Down and back up: floor 0 is saved on the way down and reloaded
+            // on the way back.
+            engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+            engine.handle_floor_transition(crate::events::StairDirection::Up, &mut camera);
+
+            let state = engine.state.as_ref().expect("run started");
+            assert_eq!(state.current_floor, 0, "seed {seed}: should be back on floor 0");
+            let after = census(&state.world);
+
+            assert_eq!(
+                before, after,
+                "seed {seed}: container kinds changed across a floor round trip \
+                 (counts in order {KINDS:?})"
+            );
+
+            checked_coffins += before[kind_index(ContainerType::Coffin)];
+            checked_piles += before[kind_index(ContainerType::GroundPile)];
+
+            // The restored pile must still be walkable and still be findable as
+            // a pile, not a blocking chest.
+            let piles = state
+                .world
+                .query::<(&Container, &GroundItemPile)>()
+                .iter()
+                .count();
+            assert!(piles > 0, "seed {seed}: the dropped pile came back as something else");
+            for (id, (container, _)) in state.world.query::<(&Container, &GroundItemPile)>().iter() {
+                assert_eq!(container.container_type, ContainerType::GroundPile);
+                assert!(
+                    state.world.get::<&crate::components::BlocksMovement>(id).is_err(),
+                    "seed {seed}: a dropped pile must not block movement"
+                );
+            }
+        }
+
+        assert!(
+            checked_coffins > 0,
+            "no coffins were round-tripped — the coffin half of this is untested"
+        );
+        assert!(checked_piles > 0, "no ground piles were round-tripped");
+    }
+
 
     fn run_fixed_script(scenario: &Scenario) -> String {
         use crate::systems::player_input::PlayerIntent;

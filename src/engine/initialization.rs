@@ -848,11 +848,16 @@ pub fn spawn_floor_entities(
     // clears the floor's entities but keeps the player and their companions.
     let mut occupancy = TileOccupancy::from_world(world);
 
-    // Spawn chests, doors, braziers, barrels, and shop from the per-floor rng
+    // Spawn chests, doors, braziers, coffins, barrels, and shop from the
+    // per-floor rng. Same passes and same order as `init_world`: Crypt is a
+    // required room theme on every floor, so every floor rolls coffin
+    // positions, and this pass used to leave them unspawned — crypts below
+    // floor 0 were decorated rooms with nothing in them.
     spawn_chests(world, grid, floor_num, &mut occupancy, rng);
     spawn_doors(world, grid, &mut occupancy);
     spawn_secret_door_entity(world, grid, &mut occupancy);
     spawn_braziers(world, grid);
+    spawn_coffins(world, grid, floor_num, &mut occupancy, rng);
     spawn_oil_barrels(world, grid, &mut occupancy, rng);
     spawn_barrels(world, grid, &mut occupancy, rng);
     spawn_shop_decorations(world, grid, &mut occupancy, rng);

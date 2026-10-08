@@ -1,8 +1,8 @@
 //! Floor transition and save/load logic for multi-floor dungeons.
 
 use crate::components::{
-    BlocksMovement, BlocksVision, ChaseAI, Container, Door, Health, ItemInstance,
-    Position, Sprite, VisualPosition,
+    BlocksMovement, BlocksVision, ChaseAI, Container, ContainerType, Door, GroundItemPile, Health,
+    ItemInstance, Position, Sprite, VisualPosition,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -49,10 +49,22 @@ pub enum SavedEntityType {
         /// Present if this enemy is the floor boss.
         boss: Option<SavedBoss>,
     },
-    Chest {
+    /// Any container that is not a corpse: chest, coffin, barrel or a pile of
+    /// dropped items.
+    ///
+    /// This used to be a `Chest` variant holding only `is_open`/`gold`/`items`,
+    /// which meant a revisited floor restored *every* container as a chest — a
+    /// coffin came back as a chest that could no longer release its skeleton
+    /// (`spawn_chance` was gone), a barrel came back wearing a chest sprite,
+    /// and a pile of dropped loot came back as a blocking chest.
+    Container {
+        container_type: ContainerType,
         is_open: bool,
         gold: u32,
         items: Vec<ItemInstance>,
+        /// Chance to release an enemy when opened. Only coffins set it, and
+        /// losing it was what defanged a revisited crypt.
+        spawn_chance: f32,
     },
     Door {
         is_open: bool,
@@ -131,15 +143,17 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
         });
     }
 
-    // Save containers
+    // Save containers. Corpses keep their own variant because they restore
+    // with different semantics (always open, never blocking); everything else
+    // round-trips through `Container` with its kind intact. The corpse test
+    // reads the component rather than sniffing for the bones sprite, which is
+    // what it used to do.
     for (id, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
         if id == player_entity {
             continue;
         }
-        let sprite = world.get::<&Sprite>(id).ok();
-        let is_bones = sprite.map(|s| (s.sheet, s.tile_id) == tile_ids::BONES_4).unwrap_or(false);
 
-        if is_bones {
+        if container.container_type == ContainerType::Corpse {
             entities.push(SavedEntity {
                 pos: (pos.x, pos.y),
                 entity_type: SavedEntityType::Bones {
@@ -150,10 +164,12 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
         } else {
             entities.push(SavedEntity {
                 pos: (pos.x, pos.y),
-                entity_type: SavedEntityType::Chest {
+                entity_type: SavedEntityType::Container {
+                    container_type: container.container_type,
                     is_open: container.is_open,
                     gold: container.gold,
                     items: container.items.clone(),
+                    spawn_chance: container.spawn_chance,
                 },
             });
         }
@@ -231,6 +247,42 @@ pub fn clear_floor_entities(world: &mut World, player_entity: Entity, scheduler:
     }
 }
 
+/// Sprite for a restored container.
+///
+/// Mirrors what each spawn pass uses and what `handle_container_opened` swaps
+/// to, so a container looks the same after a revisit as it did when the player
+/// left. A pile of dropped items wears its first item, like the code that
+/// creates one.
+fn container_sprite(
+    container_type: ContainerType,
+    is_open: bool,
+    items: &[ItemInstance],
+) -> (crate::tile::SpriteSheet, u32) {
+    match container_type {
+        ContainerType::Chest => {
+            if is_open {
+                tile_ids::CHEST_OPEN
+            } else {
+                tile_ids::CHEST_CLOSED
+            }
+        }
+        ContainerType::Coffin => {
+            if is_open {
+                tile_ids::COFFIN_OPEN
+            } else {
+                tile_ids::COFFIN_CLOSED
+            }
+        }
+        // Barrels keep one sprite open or shut.
+        ContainerType::Barrel => tile_ids::BARREL,
+        ContainerType::Corpse => tile_ids::BONES_4,
+        ContainerType::GroundPile => items
+            .first()
+            .map(|item| crate::systems::item_defs::get_def(item.kind).sprite)
+            .unwrap_or(tile_ids::COINS),
+    }
+}
+
 /// Load a saved floor, spawning entities.
 pub fn load_floor(
     ctx: &mut ActorCtx,
@@ -270,26 +322,36 @@ pub fn load_floor(
                 }
                 crate::systems::ai::decide_action(ctx, enemy);
             }
-            SavedEntityType::Chest { is_open, gold, items } => {
-                let sprite_ref = if *is_open { tile_ids::CHEST_OPEN } else { tile_ids::CHEST_CLOSED };
-                let mut container = Container::chest(items.clone(), *gold);
-                container.is_open = *is_open;
+            SavedEntityType::Container {
+                container_type,
+                is_open,
+                gold,
+                items,
+                spawn_chance,
+            } => {
+                let container = Container {
+                    container_type: *container_type,
+                    items: items.clone(),
+                    gold: *gold,
+                    is_open: *is_open,
+                    spawn_chance: *spawn_chance,
+                };
+                let sprite_ref = container_sprite(*container_type, *is_open, items);
+                let entity = ctx.world.spawn((
+                    pos,
+                    VisualPosition::from_position(&pos),
+                    Sprite::from_ref(sprite_ref),
+                    container,
+                ));
 
-                if *is_open && container.is_empty() {
-                    ctx.world.spawn((
-                        pos,
-                        VisualPosition::from_position(&pos),
-                        Sprite::from_ref(sprite_ref),
-                        container,
-                    ));
-                } else {
-                    ctx.world.spawn((
-                        pos,
-                        VisualPosition::from_position(&pos),
-                        Sprite::from_ref(sprite_ref),
-                        container,
-                        BlocksMovement,
-                    ));
+                // A pile of dropped items is walkable and needs its marker so
+                // the pickup prompt still finds it.
+                if *container_type == ContainerType::GroundPile {
+                    let _ = ctx.world.insert_one(entity, GroundItemPile);
+                } else if !(*is_open && items.is_empty()) {
+                    // Looted-and-empty containers restore walkable, as chests
+                    // have always done here.
+                    let _ = ctx.world.insert_one(entity, BlocksMovement);
                 }
             }
             SavedEntityType::Door { is_open } => {
