@@ -1,5 +1,6 @@
 use crate::camera::Camera;
 use crate::constants::MAX_SCENE_LIGHTS as MAX_LIGHTS;
+use crate::constants::LIGHT_AMBIENT_TINT;
 use crate::grid::Grid;
 use crate::multi_tileset::MultiTileset;
 use crate::systems::RenderEntity;
@@ -60,6 +61,7 @@ uniform sampler2D uTileset;
 uniform vec2 uPlayerPos;
 uniform float uPlayerLightRadius;
 uniform vec3 uPlayerLightColor;
+uniform float uAmbientTint;
 uniform int uLightCount;
 uniform vec4 uLights[MAX_LIGHTS];       // x, y, radius, intensity per light
 uniform vec3 uLightColors[MAX_LIGHTS];  // linear RGB tint per light
@@ -83,8 +85,13 @@ void main() {
         // Calculate smooth per-pixel lighting from player
         float distToPlayer = distance(vWorldPos, uPlayerPos);
         float t = clamp(1.0 - distToPlayer / uPlayerLightRadius, 0.0, 1.0);
-        // Quadratic falloff with ambient, tinted by the player's own light.
-        light = uPlayerLightColor * (0.3 + 0.7 * t * t);
+        // The focused falloff always carries the light's full colour; the
+        // flat ambient term only takes `uAmbientTint` of it. Tinting the
+        // ambient fully washes every surface in the room with the light's
+        // hue, and a warm wash over this tileset's blue-grey stone reads as
+        // khaki rather than as firelight.
+        light = mix(vec3(1.0), uPlayerLightColor, uAmbientTint) * 0.3
+              + uPlayerLightColor * (0.7 * t * t);
 
         // Add smooth contributions from other light sources (braziers, campfires)
         for (int i = 0; i < uLightCount && i < MAX_LIGHTS; i++) {
@@ -95,11 +102,13 @@ void main() {
             if (distToLight < lightRadius) {
                 float lt = 1.0 - distToLight / lightRadius;
                 // Match player light intensity (0.7 contribution at center),
-                // plus an ambient boost near the source (like player's 0.3
-                // base), both carrying the light's colour.
-                float falloff = 0.7 * lightIntensity * lt * lt
-                              + 0.3 * lightIntensity * lt;
-                light += uLightColors[i] * falloff;
+                // carrying the light's colour, plus a neutral ambient boost
+                // near the source (like the player's 0.3 base). Only the
+                // focused term is tinted, so a brazier lays a warm pool over
+                // stone that still reads as stone further out.
+                light += uLightColors[i] * (0.7 * lightIntensity * lt * lt);
+                light += mix(vec3(1.0), uLightColors[i], uAmbientTint)
+                       * (0.3 * lightIntensity * lt);
             }
         }
 
@@ -336,6 +345,7 @@ pub struct Renderer {
     player_pos_loc: NativeUniformLocation,
     player_light_radius_loc: NativeUniformLocation,
     player_light_color_loc: NativeUniformLocation,
+    ambient_tint_loc: NativeUniformLocation,
     light_count_loc: NativeUniformLocation,
     lights_loc: NativeUniformLocation,
     light_colors_loc: NativeUniformLocation,
@@ -408,6 +418,9 @@ impl Renderer {
             let player_light_color_loc = gl
                 .get_uniform_location(program, "uPlayerLightColor")
                 .ok_or("Failed to get player light color uniform location")?;
+            let ambient_tint_loc = gl
+                .get_uniform_location(program, "uAmbientTint")
+                .ok_or("Failed to get ambient tint uniform location")?;
             let light_count_loc = gl
                 .get_uniform_location(program, "uLightCount")
                 .ok_or("Failed to get light count uniform location")?;
@@ -722,6 +735,7 @@ impl Renderer {
                 player_pos_loc,
                 player_light_radius_loc,
                 player_light_color_loc,
+                ambient_tint_loc,
                 light_count_loc,
                 lights_loc,
                 light_colors_loc,
@@ -781,6 +795,8 @@ impl Renderer {
             // MAX_LIGHTS). `light_sources` is already sorted nearest-first, so
             // truncating here drops the far lights.
             let light_count = light_sources.len().min(MAX_LIGHTS);
+            self.gl
+                .uniform_1_f32(Some(&self.ambient_tint_loc), LIGHT_AMBIENT_TINT);
             self.gl.uniform_1_i32(Some(&self.light_count_loc), light_count as i32);
 
             if light_count > 0 {

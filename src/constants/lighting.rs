@@ -56,10 +56,17 @@ pub const MAX_SCENE_LIGHTS: usize = 64;
 
 /// Firelight: campfires, braziers, burning grass, burning oil, burning webs.
 ///
-/// Warm orange at roughly 82% of white's luma, which is what turns "evenly lit
-/// dark" into "lit by fire". Push green and blue down toward 0.5 for a deeper,
-/// redder, dimmer flame; raise them toward 1.0 to wash back out to white.
-pub const LIGHT_COLOR_FIRE: (f32, f32, f32) = (1.0, 0.76, 0.48);
+/// A true flame colour, near the ~2100K of a real wood fire, rather than the
+/// pale amber of a warm light bulb. The saturation matters more than it looks:
+/// this tileset's stone is a desaturated blue-*green* grey whose green channel
+/// sits well above its red, so a pale warm light pulls blue down, leaves green
+/// on top, and the room goes khaki instead of warm. Red has to clearly
+/// dominate for the pool to read as fire.
+///
+/// Push green and blue down together for a deeper, redder, dimmer ember;
+/// raise them toward 1.0 and the flame washes out to white, passing back
+/// through khaki on the way.
+pub const LIGHT_COLOR_FIRE: (f32, f32, f32) = (1.0, 0.60, 0.30);
 
 /// The player's own light - a neutral cream, not white.
 ///
@@ -171,3 +178,21 @@ pub const LIGHT_FLICKER_SCALE_PLAYER: f32 = 0.5;
 /// phase that is not zero, or it would start every run at the exact peak of
 /// both sines. Any constant off the peaks does the job.
 pub const LIGHT_PLAYER_FLICKER_PHASE: f32 = 1.3;
+
+/// How much of a light's colour reaches its flat ambient term, from `0.0`
+/// (ambient stays neutral white) to `1.0` (ambient fully tinted).
+///
+/// Each light contributes twice: a focused quadratic falloff, which always
+/// carries the light's full colour, and a wide flat term that lifts the whole
+/// area around it. This dial applies only to the second.
+///
+/// It exists because tinting both is what makes a warm dungeon look dirty
+/// rather than lit. The wide term reaches far more pixels than the focused
+/// one, so at `1.0` every stone surface in the room takes the light's hue -
+/// and a warm wash over blue-grey stone is khaki, not firelight. At `0.0` the
+/// stone keeps its own colour and only the pools of light are tinted, which
+/// reads as a torch in a grey dungeon.
+///
+/// `0.25` keeps a trace of warmth in the air around a brazier while leaving
+/// the walls reading as stone. Past about `0.4` the khaki comes back.
+pub const LIGHT_AMBIENT_TINT: f32 = 0.25;
