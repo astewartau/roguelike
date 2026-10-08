@@ -140,6 +140,10 @@ pub struct StatusBarAnim {
     damaged_at: Instant,
     /// Fixed origin for looping pulses, so their phase stays continuous.
     born: Instant,
+    /// Slide-in state for the two bars that hide while they have nothing to
+    /// say.
+    hunger_reveal: Reveal,
+    fatigue_reveal: Reveal,
 }
 
 impl Default for StatusBarAnim {
@@ -158,6 +162,8 @@ impl StatusBarAnim {
             // Far enough back that the first frame finds no drain in progress.
             damaged_at: now,
             born: now,
+            hunger_reveal: Reveal::new(),
+            fatigue_reveal: Reveal::new(),
         }
     }
 
@@ -186,6 +192,48 @@ impl StatusBarAnim {
     /// A 0..1 pulse at `rate` full cycles per second, for a brightness wobble.
     fn pulse(&self, rate: f32) -> f32 {
         ease::ping_pong(self.born.elapsed().as_secs_f32() * rate)
+    }
+}
+
+/// Slide-in state for a bar that stays hidden until it has something to say.
+///
+/// Kept per bar rather than derived from the meter, because the animation has
+/// to run on for a moment after the state flips back.
+struct Reveal {
+    /// Whether the bar should currently be on screen.
+    shown: bool,
+    /// When `shown` last flipped. `None` until it first does, so a bar that
+    /// starts hidden does not slide away on the opening frame.
+    changed_at: Option<Instant>,
+}
+
+impl Reveal {
+    fn new() -> Self {
+        Self {
+            shown: false,
+            changed_at: None,
+        }
+    }
+
+    /// How far in the bar is: 0.0 fully hidden, 1.0 fully in place.
+    fn factor(&mut self, shown: bool) -> f32 {
+        if shown != self.shown {
+            self.shown = shown;
+            self.changed_at = Some(Instant::now());
+        }
+        let t = match self.changed_at {
+            Some(at) => {
+                (at.elapsed().as_secs_f32() / SURVIVAL_BAR_SLIDE_DURATION).clamp(0.0, 1.0)
+            }
+            // Never flipped: already settled wherever it started.
+            None => 1.0,
+        };
+        let eased = ease::out_cubic(t);
+        if self.shown {
+            eased
+        } else {
+            1.0 - eased
+        }
     }
 }
 
@@ -328,21 +376,37 @@ fn paint_bar(painter: &egui::Painter, rect: egui::Rect, spec: &BarSpec) {
 }
 
 /// Lay out and paint one icon-plus-bar row.
-fn bar_row(ui: &mut egui::Ui, icon: BarIcon, spec: &BarSpec) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(HUD_STATUS_WIDTH, HUD_BAR_HEIGHT),
+///
+/// `reveal` is how far the row has slid in, 0.0..=1.0. A partly revealed row
+/// takes only its share of the vertical space and the full-height bar is
+/// clipped to it, so the bar appears to slide down out of the gap it is
+/// opening rather than being squashed into it.
+fn bar_row(ui: &mut egui::Ui, icon: BarIcon, spec: &BarSpec, reveal: f32) {
+    if reveal <= 0.0 {
+        return;
+    }
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(HUD_STATUS_WIDTH, HUD_BAR_HEIGHT * reveal),
         egui::Sense::hover(),
     );
+    // The row the bar would occupy at full height, bottom-aligned to the space
+    // actually allocated.
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(row.left(), row.bottom() - HUD_BAR_HEIGHT),
+        egui::vec2(HUD_STATUS_WIDTH, HUD_BAR_HEIGHT),
+    );
+    let painter = ui.painter().with_clip_rect(row);
+
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(rect.left() + HUD_BAR_ICON_SIZE / 2.0, rect.center().y),
         egui::Vec2::splat(HUD_BAR_ICON_SIZE),
     );
     match icon {
         BarIcon::Sprite(tex, uv) => {
-            ui.painter().image(tex, icon_rect, uv, egui::Color32::WHITE);
+            painter.image(tex, icon_rect, uv, egui::Color32::WHITE);
         }
         BarIcon::Glyph(text, color) => {
-            ui.painter().text(
+            painter.text(
                 icon_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 text,
@@ -355,7 +419,7 @@ fn bar_row(ui: &mut egui::Ui, icon: BarIcon, spec: &BarSpec) {
         egui::pos2(icon_rect.right() + HUD_BAR_ICON_GAP, rect.top()),
         rect.right_bottom(),
     );
-    paint_bar(ui.painter(), bar_rect, spec);
+    paint_bar(&painter, bar_rect, spec);
 }
 
 /// Short name for a status effect, for the text fallback.
@@ -396,6 +460,12 @@ pub fn draw_status_bar(
     } else {
         0.0
     };
+    let hunger_reveal = anim
+        .hunger_reveal
+        .factor(data.hunger_state != HungerState::Fed);
+    let fatigue_reveal = anim
+        .fatigue_reveal
+        .factor(data.fatigue_state != FatigueState::Rested);
     // Under the threshold the fill breathes, so a dangerous HP bar is loud even
     // in peripheral vision.
     let hp_glow = if health_percent < HP_LOW_PULSE_THRESHOLD {
@@ -429,6 +499,7 @@ pub fn draw_status_bar(
                 ui,
                 BarIcon::Sprite(icons.items_texture_id, icons.heart_uv),
                 &hp,
+                1.0,
             );
 
             bar_row(
@@ -440,9 +511,13 @@ pub fn draw_status_bar(
                     colors::XP_BAR_BG,
                     format!("Lv {} - {:.0}%", data.xp_level, data.xp_progress * 100.0),
                 ),
+                1.0,
             );
 
-            // Hunger drains over time; food refills it.
+            // Hunger and fatigue stay off the HUD entirely while they have
+            // nothing to say, and slide in when they start to matter. Less
+            // clutter in the normal case, and the bar showing up at all is
+            // itself the warning.
             bar_row(
                 ui,
                 BarIcon::Sprite(icons.items_texture_id, icons.cheese_uv),
@@ -452,9 +527,9 @@ pub fn draw_status_bar(
                     colors::HUNGER_BAR_BG,
                     format!("{:.0}/{:.0}", data.hunger, HUNGER_MAX),
                 ),
+                hunger_reveal,
             );
 
-            // Fatigue fills up as the player gets more tired.
             bar_row(
                 ui,
                 BarIcon::Glyph("Zz", colors::FATIGUE_ICON),
@@ -464,6 +539,7 @@ pub fn draw_status_bar(
                     colors::FATIGUE_BAR_BG,
                     format!("{:.0}/{:.0}", data.fatigue, FATIGUE_MAX),
                 ),
+                fatigue_reveal,
             );
 
             // Gold with coins icon
