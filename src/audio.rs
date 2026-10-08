@@ -66,33 +66,33 @@ impl AudioManager {
         Some(manager)
     }
 
-    /// Open an output stream, preferring a device that routes through the system
-    /// sound server (PipeWire/PulseAudio). cpal's raw ALSA default grabs the
-    /// first hardware card directly (`hw:0`), which bypasses PipeWire entirely —
-    /// so audio comes out of the built-in analog jack and never follows the
-    /// user's chosen default sink (e.g. a Bluetooth speaker). Routing through the
-    /// "pipewire"/"pulse" PCM lets the OS send our audio wherever it's pointed.
+    /// Open an output stream on the host's default device, and nothing else.
+    ///
+    /// On Linux the ALSA "default" PCM is the system sound server
+    /// (PipeWire/PulseAudio), so audio follows the user's chosen sink and
+    /// shares the card with everything else.
+    ///
+    /// Never enumerate devices here: cpal's ALSA backend opens every PCM it
+    /// lists — including raw `hw:` HDMI/analog devices — for both playback and
+    /// capture while probing them, which steals the hardware from PipeWire and
+    /// makes the user's outputs vanish. For the same reason we avoid rodio's
+    /// `OutputStream::try_default()`, which enumerates when the default fails.
+    /// If the default device doesn't work, we just run silently.
     fn open_output_stream() -> Option<(OutputStream, OutputStreamHandle)> {
         use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-        let host = rodio::cpal::default_host();
-        if let Ok(devices) = host.output_devices() {
-            let devices: Vec<_> = devices.collect();
-            for target in ["pipewire", "pulse"] {
-                for dev in &devices {
-                    if dev.name().map(|n| n == target).unwrap_or(false) {
-                        if let Ok(stream) = OutputStream::try_from_device(dev) {
-                            eprintln!("[audio] output via '{target}' (follows system default sink)");
-                            return Some(stream);
-                        }
-                    }
-                }
+        let device = rodio::cpal::default_host().default_output_device()?;
+        match OutputStream::try_from_device(&device) {
+            Ok(stream) => {
+                let name = device.name().unwrap_or_default();
+                eprintln!("[audio] output via '{name}'");
+                Some(stream)
+            }
+            Err(e) => {
+                eprintln!("[audio] default output unavailable ({e}); running without sound");
+                None
             }
         }
-
-        // Fall back to cpal's default device (raw ALSA / other platforms).
-        eprintln!("[audio] no PipeWire/Pulse device found; using cpal default");
-        OutputStream::try_default().ok()
     }
 
     /// Load all sound file paths

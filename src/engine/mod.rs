@@ -163,7 +163,9 @@ pub struct GameEngine {
 impl GameEngine {
     /// Create a new game engine on the start screen.
     pub fn new() -> Self {
-        let audio = AudioManager::new();
+        // Tests build many engines in parallel; opening a real output stream
+        // for each one churns the system sound server for no benefit.
+        let audio = if cfg!(test) { None } else { AudioManager::new() };
         if audio.is_none() {
             eprintln!("Warning: Could not initialize audio system");
         }
