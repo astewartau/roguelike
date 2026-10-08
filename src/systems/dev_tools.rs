@@ -50,13 +50,13 @@ pub fn execute_dev_spawn(
     }
 
     // Check if something is already blocking this tile (except for stairs/fire)
-    let needs_clear_tile = matches!(tool, DevTool::SpawnChest | DevTool::SpawnEnemy);
+    let needs_clear_tile = matches!(tool, DevTool::Chest | DevTool::Enemy);
     if needs_clear_tile && queries::is_position_blocked(ctx.spatial, tile_x, tile_y, None) {
         return DevSpawnResult::Blocked;
     }
 
     match tool {
-        DevTool::SpawnChest => {
+        DevTool::Chest => {
             let pos = Position::new(tile_x, tile_y);
             let entity = ctx.world.spawn((
                 pos,
@@ -67,7 +67,7 @@ pub fn execute_dev_spawn(
             ));
             DevSpawnResult::Spawned(entity)
         }
-        DevTool::SpawnEnemy => {
+        DevTool::Enemy => {
             // Dev spawns roll from a fresh entropy-seeded rng rather than the
             // run rng, so poking the dev menu can never shift a seeded run's
             // stream. Covers both the sleep roll and the AI's first action.
@@ -77,18 +77,18 @@ pub fn execute_dev_spawn(
             engine::initialize_single_ai_actor(&mut dev_ctx, enemy);
             DevSpawnResult::Spawned(enemy)
         }
-        DevTool::SpawnFire => {
+        DevTool::Fire => {
             // Fire is a VFX effect, not an ECS entity
             DevSpawnResult::VfxRequested
         }
-        DevTool::SpawnStairsDown => {
+        DevTool::StairsDown => {
             if let Some(tile) = ctx.grid.get_mut(tile_x, tile_y) {
                 tile.tile_type = tile::TileType::StairsDown;
             }
             ctx.grid.stairs_down_pos = Some((tile_x, tile_y));
             DevSpawnResult::TileModified
         }
-        DevTool::SpawnStairsUp => {
+        DevTool::StairsUp => {
             if let Some(tile) = ctx.grid.get_mut(tile_x, tile_y) {
                 tile.tile_type = tile::TileType::StairsUp;
             }

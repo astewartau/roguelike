@@ -628,14 +628,16 @@ impl GameEngine {
             profile_scope!("tick_fire");
             let game_dt = state.game_clock.time - clock_t0;
             systems::fire::tick_fire(
-                &mut state.world,
-                &mut state.grid,
-                &mut state.spatial_cache,
-                &mut self.events,
+                &mut EffectCtx {
+                    world: &mut state.world,
+                    grid: &mut state.grid,
+                    spatial: &mut state.spatial_cache,
+                    events: &mut self.events,
+                    rng: &mut state.rng,
+                },
                 game_dt,
                 &mut state.fire_accumulator,
                 &mut state.fov_dirty,
-                &mut state.rng,
             );
 
             // Passive identification of carried/equipped items, paced by the
@@ -2379,14 +2381,16 @@ mod tests {
             // game-time the turns generate; drive them the way `tick` does.
             let state = engine.state.as_mut().expect("run started");
             crate::systems::fire::tick_fire(
-                &mut state.world,
-                &mut state.grid,
-                &mut state.spatial_cache,
-                &mut engine.events,
+                &mut EffectCtx {
+                    world: &mut state.world,
+                    grid: &mut state.grid,
+                    spatial: &mut state.spatial_cache,
+                    events: &mut engine.events,
+                    rng: &mut state.rng,
+                },
                 crate::constants::ACTION_WAIT_DURATION,
                 &mut state.fire_accumulator,
                 &mut state.fov_dirty,
-                &mut state.rng,
             );
             let _ = crate::systems::survival::tick_survival(
                 &mut state.world,

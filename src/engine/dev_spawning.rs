@@ -28,7 +28,7 @@ pub fn spawn_at_cursor(
 
 /// Handle VFX spawning after a dev tool action.
 pub fn spawn_vfx_for_tool(tool: DevTool, tile_x: i32, tile_y: i32, vfx: &mut VfxManager) {
-    if matches!(tool, DevTool::SpawnFire) {
+    if matches!(tool, DevTool::Fire) {
         vfx.spawn_fire(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
     }
 }

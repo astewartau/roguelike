@@ -77,6 +77,12 @@ fn transform(octant: u8, row: i32, col: i32) -> (i32, i32) {
 /// - `row`: current row being scanned (distance from origin)
 /// - `start_slope`: slope of the left edge of the visible area (1.0 = 45°)
 /// - `end_slope`: slope of the right edge of the visible area (0.0 = straight)
+// Recursive shadowcasting: every parameter is algorithm state for one octant
+// sweep (origin, radius, current row, the slope pair bounding the visible wedge,
+// which octant, and the vision-blocking test). There is no caller-independent
+// bundle to extract here - splitting it would only move the same values behind
+// a struct nothing else uses.
+#[allow(clippy::too_many_arguments)]
 fn cast_light<F>(
     grid: &Grid,
     visible: &mut HashSet<(i32, i32)>,
