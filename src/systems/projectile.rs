@@ -325,10 +325,14 @@ pub fn lerp_projectiles_realtime(world: &mut World, real_time_elapsed: f32, arro
     }
 }
 
+/// Where a spent arrow came to rest, and whether it hit an enemy on the way.
+pub type ArrowRecovery = ((i32, i32), bool);
+
 /// Clean up finished projectiles whose visuals have caught up.
-/// Returns (entities to despawn, arrow recovery info: (position, hit_enemy)).
-/// Arrows that missed are always recoverable; arrows that hit have 50% chance (handled by caller).
-pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<((i32, i32), bool)>) {
+/// Returns (entities to despawn, arrow recovery info).
+/// Arrows that missed are always recoverable; arrows that hit have a chance
+/// (rolled by the caller, see `ARROW_RECOVERY_CHANCE_ON_HIT`).
+pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<ArrowRecovery>) {
     let mut to_despawn = Vec::new();
     let mut arrow_recovery_info = Vec::new();
 

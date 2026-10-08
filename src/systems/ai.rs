@@ -1258,6 +1258,13 @@ fn has_line_of_sight(
 // STATE MACHINE
 // =============================================================================
 
+/// What one state-machine step decided: the new state, where to move toward
+/// this turn, and the target's last known position carried forward.
+///
+/// The two positions are easy to transpose - they have the same type and the
+/// same meaning most of the time. Keep them in this order.
+type StateUpdate = (AIState, Option<(i32, i32)>, Option<(i32, i32)>);
+
 /// Update the AI state machine based on perception (target-agnostic).
 fn update_state_machine(
     current_state: AIState,
@@ -1265,7 +1272,7 @@ fn update_state_machine(
     target_pos: Option<(i32, i32)>,
     last_known: Option<(i32, i32)>,
     can_see_target: bool,
-) -> (AIState, Option<(i32, i32)>, Option<(i32, i32)>) {
+) -> StateUpdate {
     // No target at all
     if target_pos.is_none() && !can_see_target {
         return match current_state {

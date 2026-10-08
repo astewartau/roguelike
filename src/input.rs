@@ -857,7 +857,7 @@ pub fn process_frame(
                         AbilityType::CripplingShot => {
                             // Crippling shot requires line of sight and explored tile
                             use crate::components::BlocksVision;
-                            use crate::fov::FOV;
+                            use crate::fov::Fov;
 
                             // Check if target tile is explored
                             let is_explored = grid
@@ -873,7 +873,7 @@ pub fn process_frame(
                                     .map(|(_, (epos, _))| (epos.x, epos.y))
                                     .collect();
 
-                                let visible = FOV::calculate(
+                                let visible = Fov::calculate(
                                     grid,
                                     pos.x,
                                     pos.y,

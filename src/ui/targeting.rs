@@ -117,7 +117,7 @@ pub fn get_ability_targeting_overlay_data(
     let visible_tiles = if requires_los {
         grid.map(|g| {
             use crate::components::BlocksVision;
-            use crate::fov::FOV;
+            use crate::fov::Fov;
 
             // Collect positions of entities that block vision (closed doors, etc.)
             let blocking_positions: HashSet<(i32, i32)> = world
@@ -127,7 +127,7 @@ pub fn get_ability_targeting_overlay_data(
                 .collect();
 
             // Calculate FOV with vision-blocking entities
-            let visible_vec = FOV::calculate(
+            let visible_vec = Fov::calculate(
                 g,
                 player_pos.x,
                 player_pos.y,

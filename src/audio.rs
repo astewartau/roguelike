@@ -7,7 +7,7 @@ use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::events::GameEvent;
 
@@ -182,7 +182,7 @@ impl AudioManager {
     }
 
     /// Find sound files that exist
-    fn find_sounds(dir: &PathBuf, filenames: &[&str]) -> Vec<PathBuf> {
+    fn find_sounds(dir: &Path, filenames: &[&str]) -> Vec<PathBuf> {
         filenames
             .iter()
             .map(|f| dir.join(f))

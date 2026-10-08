@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 
 use crate::components::{ActiveEffect, ChaseAI, EffectType, Position, StatusEffects};
-use crate::fov::FOV;
+use crate::fov::Fov;
 use crate::grid::Grid;
 
 // =============================================================================
@@ -90,7 +90,7 @@ pub fn apply_effect_to_visible_enemies(
     duration: f32,
 ) {
     // Calculate visible tiles from caster's perspective
-    let visible_tiles: HashSet<(i32, i32)> = FOV::calculate(
+    let visible_tiles: HashSet<(i32, i32)> = Fov::calculate(
         grid,
         caster_pos.0,
         caster_pos.1,

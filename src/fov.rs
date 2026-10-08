@@ -7,9 +7,9 @@ use std::collections::HashSet;
 /// row-by-row, tracking which portions are blocked by obstacles. It's more
 /// accurate than raycasting (no missed corners) and faster (O(visible tiles)
 /// instead of O(rays × radius)).
-pub struct FOV;
+pub struct Fov;
 
-impl FOV {
+impl Fov {
     /// Calculate visible tiles from a given position with a radius.
     /// `entity_blocks_vision` is an optional callback to check if an entity at (x,y) blocks vision.
     pub fn calculate<F>(
@@ -228,14 +228,14 @@ mod tests {
     #[test]
     fn test_origin_always_visible() {
         let grid = make_grid(10, 10, &[]);
-        let visible = FOV::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
         assert!(visible.contains(&(5, 5)));
     }
 
     #[test]
     fn test_adjacent_tiles_visible() {
         let grid = make_grid(10, 10, &[]);
-        let visible = FOV::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
         // All 4 adjacent tiles should be visible
         assert!(visible.contains(&(5, 6)));
         assert!(visible.contains(&(5, 4)));
@@ -247,7 +247,7 @@ mod tests {
     fn test_wall_blocks_vision() {
         // Wall at (5, 6), should block (5, 7) and beyond
         let grid = make_grid(10, 10, &[(5, 6)]);
-        let visible = FOV::calculate(&grid, 5, 5, 5, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 5, 5, 5, None::<fn(i32, i32) -> bool>);
 
         // Wall itself is visible
         assert!(visible.contains(&(5, 6)));
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn test_radius_limit() {
         let grid = make_grid(20, 20, &[]);
-        let visible = FOV::calculate(&grid, 10, 10, 3, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 10, 10, 3, None::<fn(i32, i32) -> bool>);
 
         // Tile at distance 3 should be visible
         assert!(visible.contains(&(10, 13)));

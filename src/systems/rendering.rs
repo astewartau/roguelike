@@ -2,7 +2,7 @@
 
 use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::tile::{SpriteSheet, tile_ids};
-use crate::fov::FOV;
+use crate::fov::Fov;
 use crate::grid::Grid;
 use hecs::{Entity, World};
 use std::collections::HashSet;
@@ -77,7 +77,7 @@ pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius:
         .collect();
 
     // 1. Player's personal light - use shadowcasting for efficiency
-    let player_lit_tiles = FOV::calculate(
+    let player_lit_tiles = Fov::calculate(
         grid,
         player_x,
         player_y,

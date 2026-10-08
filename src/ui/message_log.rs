@@ -254,14 +254,12 @@ impl MessageLog {
             }
             GameEvent::ProjectileHit {
                 source,
-                target,
+                target: Some(target),
                 damage,
                 kind,
                 ..
             } => {
-                if let Some(target) = target {
-                    self.record_projectile(world, *source, *target, *damage, *kind);
-                }
+                self.record_projectile(world, *source, *target, *damage, *kind);
             }
             GameEvent::EntityDied { entity, .. } => {
                 if *entity == me {
