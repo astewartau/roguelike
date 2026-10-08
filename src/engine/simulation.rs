@@ -421,7 +421,7 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
     let mut shake_requests = Vec::new();
 
     for event in event_list {
-        vfx.handle_event(&event, grid);
+        vfx.handle_event(&event, grid, player_entity);
         ui_state.handle_event(&event);
         ui_state.message_log.record_event(&event, &*world);
 

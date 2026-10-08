@@ -170,6 +170,31 @@ impl UiIcons {
         }
     }
 
+    /// Icon for a status effect, or `None` when the sheets have nothing that
+    /// reads as that effect.
+    ///
+    /// Not every `EffectType` gets one — there is no sprite that says
+    /// "invisible", "slowed" or "invulnerable" without inventing custom art,
+    /// which CLAUDE.md asks us to exhaust the other options before doing. The
+    /// HUD falls back to the coloured text label for those.
+    pub fn effect_uv(&self, effect: crate::components::EffectType) -> Option<(egui::TextureId, egui::Rect)> {
+        use crate::components::EffectType as E;
+        let (tex, uv) = match effect {
+            E::SpeedBoost => (self.items_texture_id, self.sprint_uv),
+            E::Regenerating => (self.items_texture_id, self.green_potion_uv),
+            E::Strengthened => (self.items_texture_id, self.amber_potion_uv),
+            E::Protected => (self.items_texture_id, self.helmet_uv),
+            E::Barkskin => (self.items_texture_id, self.barkskin_uv),
+            E::Confused => (self.items_texture_id, self.blue_potion_uv),
+            E::Feared => (self.tiles_texture_id, self.fear_uv),
+            E::Burning => (self.items_texture_id, self.fire_trap_uv),
+            E::Rooted => (self.tiles_texture_id, self.snare_trap_uv),
+            E::Stunned => (self.items_texture_id, self.stun_uv),
+            E::Invisible | E::Slowed | E::Invulnerable => return None,
+        };
+        Some((tex, uv))
+    }
+
     /// UI icon tint for an item type (fire arrows render as orange arrows,
     /// empty water flasks render grayed out).
     pub fn item_ui_tint(item_type: ItemType) -> egui::Color32 {

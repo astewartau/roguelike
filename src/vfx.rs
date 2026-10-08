@@ -46,12 +46,52 @@ impl VisualEffect {
     }
 }
 
+/// How a floating damage number should read.
+///
+/// Damage taken and damage dealt are the same event to the simulation and
+/// completely different news to the player, so they do not get to look alike.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DamageTier {
+    /// An ordinary hit the player landed.
+    Dealt,
+    /// A heavy hit the player landed.
+    Big,
+    /// A critical hit the player landed.
+    Crit,
+    /// Damage the player took.
+    Taken,
+}
+
+/// Pick a tier from who took the hit and how hard it was.
+fn damage_tier(
+    victim: Option<hecs::Entity>,
+    player: hecs::Entity,
+    damage: i32,
+    crit: bool,
+) -> DamageTier {
+    if victim == Some(player) {
+        DamageTier::Taken
+    } else if crit {
+        DamageTier::Crit
+    } else if damage >= DAMAGE_NUMBER_BIG_THRESHOLD {
+        DamageTier::Big
+    } else {
+        DamageTier::Dealt
+    }
+}
+
 #[derive(Clone)]
 pub enum VfxType {
     /// Diagonal slash mark (for melee hits)
     Slash { angle: f32 },
     /// Floating damage number
-    DamageNumber { amount: i32 },
+    DamageNumber {
+        amount: i32,
+        tier: DamageTier,
+        /// Sideways offset in tiles, rolled per instance so several hits on
+        /// one tile do not stack into an unreadable pile.
+        jitter: f32,
+    },
     /// Floating heal number (green, positive)
     HealNumber { amount: i32 },
     /// Fire particle effect (looping)
@@ -194,9 +234,15 @@ impl VfxManager {
         self.spawn(x, y, VfxType::Slash { angle: SLASH_VFX_ANGLE });
     }
 
-    /// Spawn a floating damage number
-    pub fn spawn_damage_number(&mut self, x: f32, y: f32, amount: i32) {
-        self.spawn(x, y, VfxType::DamageNumber { amount });
+    /// Spawn a floating damage number.
+    ///
+    /// The jitter is rolled from the thread RNG, not the seeded game RNG:
+    /// where a number happens to sit is presentation, and drawing from the
+    /// game RNG here would make the simulation depend on how many hits were
+    /// on screen. `spawn_fire` does the same for the same reason.
+    pub fn spawn_damage_number(&mut self, x: f32, y: f32, amount: i32, tier: DamageTier) {
+        let jitter = (rand::random::<f32>() * 2.0 - 1.0) * DAMAGE_NUMBER_JITTER;
+        self.spawn(x, y, VfxType::DamageNumber { amount, tier, jitter });
     }
 
     /// Spawn an alert indicator "!" above an entity
@@ -283,22 +329,32 @@ impl VfxManager {
 
     /// Handle a game event, spawning appropriate VFX.
     /// Only spawns VFX for positions visible to the player (not in fog of war).
-    pub fn handle_event(&mut self, event: &GameEvent, grid: &Grid) {
+    pub fn handle_event(&mut self, event: &GameEvent, grid: &Grid, player: hecs::Entity) {
         match event {
-            GameEvent::AttackHit { target_pos, damage, .. } => {
+            GameEvent::AttackHit { target, target_pos, damage, crit, .. } => {
                 // Only show VFX if the position is visible to the player
                 let tile_x = target_pos.0 as i32;
                 let tile_y = target_pos.1 as i32;
                 if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
                     self.spawn_slash(target_pos.0, target_pos.1);
-                    self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
+                    self.spawn_damage_number(
+                        target_pos.0,
+                        target_pos.1,
+                        *damage,
+                        damage_tier(Some(*target), player, *damage, *crit),
+                    );
                 }
             }
             GameEvent::ProjectileHit { position, damage, target, .. }
                 // Only show damage number if we hit an enemy (not a wall) AND position is visible
                 if target.is_some()
                     && grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) => {
-                        self.spawn_damage_number(position.0 as f32, position.1 as f32, *damage);
+                        self.spawn_damage_number(
+                            position.0 as f32,
+                            position.1 as f32,
+                            *damage,
+                            damage_tier(*target, player, *damage, false),
+                        );
                     }
             GameEvent::EntityDied { position, .. } => {
                 // Could spawn death particles here in the future
@@ -331,18 +387,23 @@ impl VfxManager {
                     }
                 }
             }
-            GameEvent::BurnDamage { position, damage, .. } => {
+            GameEvent::BurnDamage { entity, position, damage } => {
                 // Show damage number for burn damage
                 let tile_x = position.0 as i32;
                 let tile_y = position.1 as i32;
                 if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
-                    self.spawn_damage_number(position.0, position.1, *damage);
+                    self.spawn_damage_number(
+                        position.0,
+                        position.1,
+                        *damage,
+                        damage_tier(Some(*entity), player, *damage, false),
+                    );
                 }
             }
             GameEvent::StarvationDamage { position, damage, .. } => {
                 // Starvation damage floats a number like burn damage does
                 // (it's always the player, so always on a visible tile).
-                self.spawn_damage_number(position.0, position.1, *damage);
+                self.spawn_damage_number(position.0, position.1, *damage, DamageTier::Taken);
             }
             GameEvent::TamingStarted { tamer, target } => {
                 // Start the taming channel visual
@@ -383,12 +444,17 @@ impl VfxManager {
                         crate::constants::BOSS_SLAM_RADIUS,
                     );
                 }
-            GameEvent::LifeDrainTick { target_pos, caster_pos, damage, healed, .. } => {
+            GameEvent::LifeDrainTick { target, target_pos, caster_pos, damage, healed, .. } => {
                 // Show damage number on target
                 let tile_x = target_pos.0 as i32;
                 let tile_y = target_pos.1 as i32;
                 if grid.get(tile_x, tile_y).map(|t| t.visible).unwrap_or(false) {
-                    self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
+                    self.spawn_damage_number(
+                        target_pos.0,
+                        target_pos.1,
+                        *damage,
+                        damage_tier(Some(*target), player, *damage, false),
+                    );
                 }
                 // Show heal number on caster (green/positive)
                 let caster_tile_x = caster_pos.0 as i32;

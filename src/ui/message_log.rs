@@ -7,11 +7,14 @@
 //! corner.
 
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use egui::Color32;
 use hecs::{Entity, World};
 
-use super::style::colors;
+use super::style::{self, colors};
+use crate::constants::*;
+use crate::ease;
 use crate::components::{AbilityType, Equipment, Name};
 use crate::events::{DamageKind, GameEvent, StairDirection};
 
@@ -41,6 +44,12 @@ struct LogMessage {
     text: String,
     color: Color32,
     count: u32,
+    /// When the line was first pushed, for the fade-and-slide entrance.
+    /// Real time: the log is presentation, and a line frozen half-way in
+    /// because the game clock stopped would be worse than no animation.
+    arrived: Instant,
+    /// When `count` last went up, for the badge flare.
+    counted_at: Instant,
 }
 
 /// Rolling buffer of log messages.
@@ -78,13 +87,17 @@ impl MessageLog {
         if let Some(last) = self.messages.back_mut() {
             if last.text == text && last.color == color {
                 last.count += 1;
+                last.counted_at = Instant::now();
                 return;
             }
         }
+        let now = Instant::now();
         self.messages.push_back(LogMessage {
             text,
             color,
             count: 1,
+            arrived: now,
+            counted_at: now,
         });
         while self.messages.len() > MAX_MESSAGES {
             self.messages.pop_front();
@@ -672,22 +685,81 @@ pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
                 .stroke(egui::Stroke::new(super::style::BORDER_WIDTH, colors::PANEL_BORDER))
                 .inner_margin(egui::Margin::symmetric(8.0, 6.0))
                 .show(ui, |ui| {
-                    ui.set_min_width(360.0);
+                    ui.set_min_width(LOG_WIDTH);
                     ui.spacing_mut().item_spacing.y = 1.0;
+
+                    let font = egui::TextStyle::Monospace.resolve(ui.style());
+                    let line_height = ui.fonts(|f| f.row_height(&font));
+
                     // Oldest of the visible window first, newest at the bottom.
                     let start = log.messages.len().saturating_sub(VISIBLE_MESSAGES);
                     for (i, msg) in log.messages.iter().enumerate().skip(start) {
-                        // Fade older lines so the newest reads as most prominent.
                         let age = log.messages.len() - 1 - i;
-                        let alpha = 1.0 - (age as f32) * 0.11;
-                        let color = msg.color.gamma_multiply(alpha.max(0.35));
-                        let text = if msg.count > 1 {
-                            format!("{} (x{})", msg.text, msg.count)
-                        } else {
-                            msg.text.clone()
-                        };
-                        ui.label(egui::RichText::new(text).color(color).monospace());
+                        draw_line(ui, msg, age, &font, line_height);
                     }
                 });
         });
+}
+
+/// Draw one log line: faded by how many lines sit below it, and — if it only
+/// just arrived — sliding up into place, brighter than it will settle at.
+fn draw_line(
+    ui: &mut egui::Ui,
+    msg: &LogMessage,
+    age: usize,
+    font: &egui::FontId,
+    line_height: f32,
+) {
+    // How far through its entrance the line is.
+    let t = (msg.arrived.elapsed().as_secs_f32() / LOG_LINE_ARRIVE_DURATION).clamp(0.0, 1.0);
+    let settled = ease::out_cubic(t);
+
+    // Older lines dim, so the newest always reads as the newest.
+    let age_alpha =
+        (1.0 - age as f32 * LOG_LINE_AGE_FADE).max(LOG_LINE_MIN_ALPHA);
+    // An arriving line flares above its resting colour and fades back down.
+    let color = style::brighten(msg.color, 1.0 + LOG_LINE_ARRIVE_LIFT * (1.0 - settled))
+        .gamma_multiply(age_alpha * settled);
+
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), line_height),
+        egui::Sense::hover(),
+    );
+    // Clipped to its own row so the slide never spills onto the line above.
+    let painter = ui.painter().with_clip_rect(row);
+    let rise = (1.0 - settled) * LOG_LINE_SLIDE_DISTANCE;
+    let origin = row.left_top() + egui::vec2(0.0, rise);
+
+    let galley = painter.layout_no_wrap(msg.text.clone(), font.clone(), color);
+    let text_width = galley.size().x;
+    painter.galley(origin, galley, color);
+
+    if msg.count > 1 {
+        draw_count_badge(&painter, origin + egui::vec2(text_width, 0.0), msg, font, color);
+    }
+}
+
+/// Draw the "(xN)" repeat badge, hopping and flaring for a moment each time
+/// the counter ticks.
+///
+/// The pop is in brightness and position rather than font size: egui caches
+/// rasterized glyphs per distinct size, and a badge that scaled smoothly would
+/// feed the atlas a new set every frame for no visual gain over this.
+fn draw_count_badge(
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    msg: &LogMessage,
+    font: &egui::FontId,
+    base: egui::Color32,
+) {
+    let t = (msg.counted_at.elapsed().as_secs_f32() / LOG_COUNT_POP_DURATION).clamp(0.0, 1.0);
+    let pop = 1.0 - ease::out_cubic(t);
+    let color = style::brighten(base, 1.0 + LOG_COUNT_POP_LIFT * pop);
+    painter.text(
+        origin + egui::vec2(LOG_COUNT_GAP, -LOG_COUNT_POP_RISE * pop),
+        egui::Align2::LEFT_TOP,
+        format!("(x{})", msg.count),
+        font.clone(),
+        color,
+    );
 }
