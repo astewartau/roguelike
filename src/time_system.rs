@@ -346,7 +346,7 @@ fn apply_action_effects(
             actions::apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
         }
         ActionType::UseStairs { x, y, direction } => {
-            actions::apply_use_stairs(world, entity, *x, *y, *direction, events)
+            actions::apply_use_stairs(world, spatial_cache, entity, *x, *y, *direction, events)
         }
         ActionType::TalkTo { npc } => actions::apply_talk_to(entity, *npc, events),
         ActionType::ThrowPotion { potion_type, target_x, target_y } => {
