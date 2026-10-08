@@ -176,70 +176,69 @@ impl GameState {
 
 #[cfg(test)]
 mod tests {
-    /// The stacking the `SpatialCache` counts exist for is not an edge case:
-    /// spawn placement checks tile walkability but not whether something
-    /// already blocks the tile, so enemies land on chests, coffins, barrels and
-    /// furniture, and containers land on each other. Across 400 generated
-    /// floor-0 worlds, 372 had at least one tile with two or more movement
-    /// blockers (970 such tiles in all, up to three deep).
+    use super::*;
+
+    /// Stacked blockers on a real generated floor, created the way the game
+    /// still creates them.
     ///
-    /// So this walks a real generated floor rather than a hand-built world:
-    /// find a genuinely stacked tile, move one of its blockers off, and require
-    /// the cache to stay coherent. With a set of positions the tile went
-    /// walkable the moment the first of the two left — which is what the tick's
-    /// `debug_assert` was tripping over in ordinary play.
+    /// Floor *construction* no longer stacks: every blocker-placing pass claims
+    /// its tile through `TileOccupancy`, and both construction paths assert
+    /// one-blocker-per-tile when they finish. What remains is the runtime path —
+    /// an opened coffin keeps its `BlocksMovement` and the skeleton it releases
+    /// spawns on the container's own tile (`apply_deferred_spawns` calls
+    /// `register_entity(skeleton, pos, true, false)`).
+    ///
+    /// So this takes a real generated floor, stacks a second blocker on an
+    /// existing one exactly as that path does, moves one off, and requires the
+    /// cache to stay coherent. With a set of positions the tile went walkable
+    /// the moment the first of the two left.
     #[test]
     fn stacked_blockers_on_a_generated_floor_survive_one_of_them_moving() {
-        use crate::components::{BlocksMovement, PlayerClass, Position};
-        use std::collections::HashMap;
+        use crate::components::{BlocksMovement, PlayerClass, Position, VisualPosition};
 
-        let mut floors_with_a_stack = 0;
-
-        for seed in 0..40u64 {
+        for seed in 0..20u64 {
             let mut state = GameState::new(PlayerClass::Fighter, seed);
 
-            // Group this floor's movement blockers by tile.
-            let mut by_tile: HashMap<(i32, i32), Vec<hecs::Entity>> = HashMap::new();
-            for (id, (pos, _)) in state.world.query::<(&Position, &BlocksMovement)>().iter() {
-                by_tile.entry((pos.x, pos.y)).or_default().push(id);
-            }
-            let Some((&tile, stacked)) = by_tile.iter().find(|(_, ids)| ids.len() > 1) else {
-                continue;
-            };
-            floors_with_a_stack += 1;
+            // Any blocker the generator placed will do as the thing being stood on.
+            let (host_tile, _host) = state
+                .world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .map(|(id, (pos, _))| ((pos.x, pos.y), id))
+                .next()
+                .expect("a generated floor has at least one blocker");
 
-            // Sanity: the cache built from this world agrees the tile is blocked.
-            assert!(
-                state.spatial_cache.is_blocked(tile),
-                "seed {seed}: generated floor should block {tile:?}"
-            );
+            // Stack a second blocker on it, as the coffin-skeleton path does.
+            let pos = Position::new(host_tile.0, host_tile.1);
+            let stacked = state.world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                BlocksMovement,
+            ));
+            state
+                .spatial_cache
+                .register_entity(stacked, host_tile, true, false);
+            state
+                .spatial_cache
+                .assert_coherent_with_world(&state.world, &format!("seed {seed}: stacked"));
 
-            // Walk one of them off to an empty tile, the way apply_move does.
-            let leaving = stacked[0];
+            // Walk it off to an empty tile, the way apply_move does.
             let free = (-5, -5); // off-map, and certainly unoccupied
-            if let Ok(mut pos) = state.world.get::<&mut Position>(leaving) {
-                pos.x = free.0;
-                pos.y = free.1;
+            if let Ok(mut p) = state.world.get::<&mut Position>(stacked) {
+                p.x = free.0;
+                p.y = free.1;
             }
-            state.spatial_cache.update_position(leaving, tile, free);
+            state.spatial_cache.update_position(stacked, host_tile, free);
 
             assert!(
-                state.spatial_cache.is_blocked(tile),
-                "seed {seed}: {tile:?} still has a blocker standing on it"
+                state.spatial_cache.is_blocked(host_tile),
+                "seed {seed}: {host_tile:?} still has the original blocker on it"
             );
             state
                 .spatial_cache
-                .assert_coherent_with_world(&state.world, &format!("seed {seed}"));
+                .assert_coherent_with_world(&state.world, &format!("seed {seed}: one left"));
         }
-
-        assert!(
-            floors_with_a_stack > 0,
-            "no generated floor stacked two blockers on a tile — if spawn placement \
-             learned to avoid occupied tiles, this test is no longer testing anything"
-        );
     }
-
-    use super::*;
 
     #[test]
     fn test_floor_seed_is_stable() {

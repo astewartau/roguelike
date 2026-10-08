@@ -2244,7 +2244,7 @@ mod tests {
     /// numbers, check the diff moved the way you meant, then re-record.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        const EXPECTED: &str = "t=355.8580 floor=0 kills=6 hp=-1/50 pos=15,10 hunger=83.3344 fatigue=10.0000 n=91 roster=78b70589";
+        const EXPECTED: &str = "t=356.4720 floor=0 kills=11 hp=-2/50 pos=10,10 hunger=83.3344 fatigue=10.0000 n=98 roster=51253ceb";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2264,7 +2264,7 @@ mod tests {
     /// Same caveat: expected to fail on intentional balance changes.
     #[test]
     fn test_fixed_seed_replays_identically_across_a_floor() {
-        const EXPECTED: &str = "t=265.7901 floor=1 kills=7 hp=99966/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=87 roster=9dc0dd9e";
+        const EXPECTED: &str = "t=263.8041 floor=1 kills=17 hp=99840/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=90 roster=c88b0e1c";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -2276,27 +2276,31 @@ mod tests {
     }
 
     /// Drive a fixed script of player turns and return a digest of the world.
-    /// No enemy may share a tile with another movement blocker on a real
-    /// generated floor.
+    /// No tile may finish floor construction with two movement blockers on it.
     ///
-    /// `walkable_tiles` describes terrain, so before `spawn_all` consulted the
-    /// world the floor roster dropped enemies straight onto the chests,
-    /// coffins, barrels, doorways and furniture the prop passes had just
-    /// spawned. Measured over these 200 floors it was 652 stacked tiles, on 196
-    /// of them; doorways alone accounted for about 260.
+    /// This is the invariant `TileOccupancy` exists to hold, checked here on
+    /// real generated floors rather than a hand-built world. Two blockers on a
+    /// tile is a tile neither occupant can be pushed off and a monster standing
+    /// inside the scenery.
     ///
-    /// Known remaining gap, deliberately not asserted here: generation can
-    /// still put a chest on a barrel spot inside a Storage room (two
-    /// containers, ~53 tiles over the same 200 floors). That is an overlap
-    /// between `Grid::chest_positions` and `Grid::barrel_positions` in
-    /// `dungeon_gen`, not a spawn-placement check, so it is a separate fix.
-    /// The `SpatialCache` reference counts represent it correctly either way.
+    /// Nothing in the grid's position lists used to guarantee it. `spawn_all`
+    /// picked from walkable *terrain*, so the floor roster dropped enemies onto
+    /// the chests, coffins, barrels, doorways and furniture the prop passes had
+    /// just spawned; and generation could roll a chest and a barrel onto the
+    /// same Storage-room tile. Measured over these 200 floors before the fix:
+    /// 698 stacked tiles on 196 of them, 652 of those an enemy on a prop or in
+    /// a doorway (doorways alone about 260) and 46 a chest on a barrel.
+    ///
+    /// Both construction paths also assert this themselves via
+    /// `tile_occupancy::assert_one_blocker_per_tile`, so a regression trips in
+    /// any debug run rather than waiting for this test; this pins it across far
+    /// more floors than a normal session touches.
     #[test]
-    fn no_enemy_shares_a_tile_with_another_blocker_on_generated_floors() {
-        use crate::components::{BlocksMovement, ChaseAI, Position};
+    fn floor_construction_never_stacks_two_blockers_on_a_tile() {
+        use crate::components::{BlocksMovement, Position};
         use std::collections::HashMap;
 
-        let mut enemies_checked = 0usize;
+        let mut blockers_checked = 0usize;
 
         for seed in 0..50u64 {
             let mut camera = crate::camera::Camera::new(800.0, 600.0);
@@ -2314,28 +2318,27 @@ mod tests {
                 }
                 let state = engine.state.as_ref().expect("run started");
 
-                let mut blockers: HashMap<(i32, i32), usize> = HashMap::new();
+                let mut per_tile: HashMap<(i32, i32), usize> = HashMap::new();
                 for (_, (pos, _)) in state.world.query::<(&Position, &BlocksMovement)>().iter() {
-                    *blockers.entry((pos.x, pos.y)).or_default() += 1;
+                    blockers_checked += 1;
+                    *per_tile.entry((pos.x, pos.y)).or_default() += 1;
                 }
 
-                for (id, (pos, _)) in state.world.query::<(&Position, &ChaseAI)>().iter() {
-                    enemies_checked += 1;
-                    let tile = (pos.x, pos.y);
-                    let count = blockers.get(&tile).copied().unwrap_or(0);
-                    assert!(
-                        count <= 1,
-                        "seed {seed} floor {depth}: enemy {id:?} shares {tile:?} with \
-                         {} other blocker(s)",
-                        count - 1
-                    );
-                }
+                let mut stacked: Vec<((i32, i32), usize)> =
+                    per_tile.into_iter().filter(|&(_, n)| n > 1).collect();
+                stacked.sort_unstable();
+                assert!(
+                    stacked.is_empty(),
+                    "seed {seed} floor {depth}: {} tile(s) hold more than one blocker\n  \
+                     (tile, blockers): {stacked:?}",
+                    stacked.len()
+                );
             }
         }
 
         assert!(
-            enemies_checked > 1000,
-            "only {enemies_checked} enemies seen — the scan is not covering the floors"
+            blockers_checked > 10_000,
+            "only {blockers_checked} blockers seen — the scan is not covering the floors"
         );
     }
 
