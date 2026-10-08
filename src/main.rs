@@ -101,12 +101,7 @@ impl ApplicationHandler for App {
         let size = window.inner_size();
 
         // Create render context
-        let render_ctx = RenderContext::new(
-            gl.clone(),
-            &mut egui_glow,
-            size.width as f32,
-            size.height as f32,
-        );
+        let render_ctx = RenderContext::new(gl.clone(), &mut egui_glow, size.width, size.height);
 
         // Create game engine (starts in StartScreen mode)
         let engine = GameEngine::new();
@@ -138,8 +133,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 app::resize_surface(&state.gl_surface, &state.gl_context, size.width, size.height);
-                state.render_ctx.camera.viewport_width = size.width as f32;
-                state.render_ctx.camera.viewport_height = size.height as f32;
+                // Camera viewport and the post-process targets both track the
+                // surface size; a minimised window reports 0x0 and is handled
+                // inside, not filtered out here.
+                state.render_ctx.resize(size.width, size.height);
             }
             WindowEvent::RedrawRequested => {
                 if state.update_and_render() {

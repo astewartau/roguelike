@@ -12,6 +12,7 @@ mod effects;
 mod enemies;
 mod gameplay;
 mod items;
+mod post;
 mod time;
 mod ui;
 
@@ -25,5 +26,6 @@ pub use effects::*;
 pub use enemies::*;
 pub use gameplay::*;
 pub use items::*;
+pub use post::*;
 pub use time::*;
 pub use ui::*;
