@@ -112,6 +112,21 @@ pub struct GameEngine {
     /// Accumulated real time (for animations)
     pub real_time: f32,
 
+    /// Clock driving light flicker, advanced by real frame time but only while
+    /// actually playing - so torches gutter smoothly in play and stand still
+    /// behind the pause and game-over overlays.
+    ///
+    /// Deliberately *not* the game clock. `GameClock` is event-driven: it
+    /// jumps straight to the next action completion and stands completely
+    /// still while waiting on player input, which in a turn-based game is most
+    /// of the wall clock. Sampling a sine off it would strobe - frozen while
+    /// you think, snapping to a new brightness the instant you move - and
+    /// during rest/sleep fast-forward it races ahead by whole seconds per
+    /// frame, which aliases the flicker into noise. Flicker is cosmetic
+    /// animation, so it rides real time like the fire sprite it sits under,
+    /// the camera shake and the hit flashes.
+    light_flicker_time: f32,
+
     /// Highlighted option index in the pause menu (keyboard navigation)
     pause_selected: usize,
 
@@ -163,6 +178,7 @@ impl GameEngine {
             ui_state: None,
             dev_menu: DevMenu::new(),
             real_time: 0.0,
+            light_flicker_time: 0.0,
             pause_selected: 0,
             audio,
             resting: false,
@@ -477,6 +493,13 @@ impl GameEngine {
 
         // Accumulate real time for animations
         self.real_time += dt;
+
+        // Light flicker only advances while the dungeon is live, so the lit
+        // scene behind a menu is as frozen as the simulation. See the field's
+        // doc comment for why this is real time and not the game clock.
+        if self.game_mode == GameMode::Playing {
+            self.light_flicker_time += dt;
+        }
 
         // Transition to the game over screen once the player dies. State is kept
         // alive so the dungeon keeps rendering (frozen) behind the retry overlay.
@@ -869,13 +892,36 @@ impl GameEngine {
         }).unwrap_or((0.0, 0.0))
     }
 
-    /// Get player light radius (FOV radius).
+    /// Get player light radius (FOV radius), breathing very slightly so the
+    /// edge of the visible area does not read as a circle drawn on the floor.
+    ///
+    /// This feeds the tile shader's brightness falloff only - the actual FOV
+    /// used for visibility and gameplay comes from
+    /// [`crate::constants::FOV_RADIUS`] directly, so the flicker here cannot
+    /// change what the player can see.
     pub fn player_light_radius(&self) -> f32 {
+        let flicker = crate::render::flicker_offset(
+            self.light_flicker_time,
+            crate::constants::LIGHT_PLAYER_FLICKER_PHASE,
+            crate::constants::LIGHT_FLICKER_SCALE_PLAYER,
+        );
         crate::constants::FOV_RADIUS as f32
+            * (1.0 + flicker * crate::constants::LIGHT_FLICKER_RADIUS_AMPLITUDE)
+    }
+
+    /// Tint of the player's own light.
+    pub fn player_light_color(&self) -> (f32, f32, f32) {
+        crate::constants::LIGHT_COLOR_PLAYER
     }
 
     /// Collect light sources for rendering, sorted by distance to player.
-    pub fn light_sources(&self) -> Vec<(f32, f32, f32, f32)> {
+    ///
+    /// Each light arrives already coloured and already flickered: the two-sine
+    /// modulation is evaluated here, once per light per frame, rather than per
+    /// fragment in the shader. See [`crate::render::SceneLight`] for why.
+    pub fn light_sources(&self) -> Vec<crate::render::SceneLight> {
+        use crate::constants::*;
+
         let Some(ref state) = self.state else {
             return Vec::new();
         };
@@ -886,16 +932,31 @@ impl GameEngine {
             .map(|vp| (vp.x, vp.y))
             .unwrap_or((0.0, 0.0));
 
-        let mut sources: Vec<_> = state.world
+        let time = self.light_flicker_time;
+        let mut sources: Vec<crate::render::SceneLight> = state.world
             .query::<(&crate::components::Position, &crate::components::LightSource)>()
             .iter()
-            .map(|(_, (pos, light))| (pos.x as f32 + 0.5, pos.y as f32 + 0.5, light.radius, light.intensity))
+            .map(|(_, (pos, light))| {
+                let flicker = crate::render::flicker_offset(time, light.phase, light.flicker);
+                crate::render::SceneLight {
+                    pos: (pos.x as f32 + 0.5, pos.y as f32 + 0.5),
+                    // Clamped at zero so a hand-authored amplitude over 1.0
+                    // cannot invert a light into a pool of darkness.
+                    radius: (light.radius * (1.0 + flicker * LIGHT_FLICKER_RADIUS_AMPLITUDE))
+                        .max(0.0),
+                    intensity: (light.intensity
+                        * (1.0 + flicker * LIGHT_FLICKER_INTENSITY_AMPLITUDE))
+                        .max(0.0),
+                    color: light.color_or_default(),
+                }
+            })
             .collect();
 
-        // Sort by distance to player so nearby lights are prioritized (MAX_LIGHTS limit)
+        // Sort by distance to player so nearby lights are prioritized
+        // (MAX_SCENE_LIGHTS limit)
         sources.sort_by(|a, b| {
-            let dist_a = (a.0 - player_pos.0).powi(2) + (a.1 - player_pos.1).powi(2);
-            let dist_b = (b.0 - player_pos.0).powi(2) + (b.1 - player_pos.1).powi(2);
+            let dist_a = (a.pos.0 - player_pos.0).powi(2) + (a.pos.1 - player_pos.1).powi(2);
+            let dist_b = (b.pos.0 - player_pos.0).powi(2) + (b.pos.1 - player_pos.1).powi(2);
             dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
         });
 

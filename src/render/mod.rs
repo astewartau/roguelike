@@ -14,15 +14,65 @@ use post::PostProcess;
 
 use std::sync::Arc;
 
+/// One light source as the tile shader wants it: already flickered, already
+/// coloured, ready to pack straight into the uniform arrays.
+///
+/// The flicker is evaluated on the CPU, in [`flicker_offset`], rather than in
+/// the fragment shader. Both give pixel-identical results, because the light
+/// array is uploaded once per frame and the sine is per *light*, not per
+/// pixel - but on the CPU it costs two `sin` calls per light per frame instead
+/// of two per light per fragment, and it leaves the per-light-type flicker
+/// scale free rather than needing a uniform channel of its own.
+#[derive(Debug, Clone, Copy)]
+pub struct SceneLight {
+    /// Tile-space centre of the light.
+    pub pos: (f32, f32),
+    /// Reach in tiles, with flicker already applied.
+    pub radius: f32,
+    /// Brightness multiplier, with flicker already applied.
+    pub intensity: f32,
+    /// Linear RGB tint of the light.
+    pub color: (f32, f32, f32),
+}
+
 /// How a frame is lit: the player's own light and every other light source.
 ///
 /// Shared by `RenderContext::render_frame` and `Renderer::render`, which both
-/// need the whole trio.
+/// need the whole set.
 pub struct SceneLighting<'a> {
     pub player_pos: (f32, f32),
+    /// The player's light reach, with its own flicker already applied.
     pub player_light_radius: f32,
-    /// `(x, y, radius, intensity)` per source.
-    pub light_sources: &'a [(f32, f32, f32, f32)],
+    /// Tint of the player's own light. Multiplies the ambient floor as well as
+    /// the falloff, so it colours everything the player can see.
+    pub player_light_color: (f32, f32, f32),
+    pub light_sources: &'a [SceneLight],
+}
+
+/// The flicker signal for one light at one instant, in `[-scale, scale]`.
+///
+/// Two sines at incommensurable frequencies (see
+/// [`crate::constants::LIGHT_FLICKER_FREQ_SECONDARY`]), summed with weights
+/// that add to 1.0 so the result stays inside `[-1, 1]` before `scale` is
+/// applied. Because the ratio of the two frequencies is irrational the sum has
+/// no period, so a torch never visibly repeats itself.
+///
+/// `phase` is the light's own seed, which keeps two adjacent braziers from
+/// guttering in unison; it is applied to both sines, with the second scaled by
+/// [`crate::constants::LIGHT_FLICKER_PHASE_SPREAD`] so the lights differ in
+/// waveform and not just in offset.
+pub fn flicker_offset(time: f32, phase: f32, scale: f32) -> f32 {
+    use crate::constants::*;
+
+    if scale == 0.0 {
+        return 0.0;
+    }
+    let primary = (time * LIGHT_FLICKER_FREQ_PRIMARY + phase).sin();
+    let secondary =
+        (time * LIGHT_FLICKER_FREQ_SECONDARY + phase * LIGHT_FLICKER_PHASE_SPREAD).sin();
+    let combined = primary * LIGHT_FLICKER_PRIMARY_WEIGHT
+        + secondary * (1.0 - LIGHT_FLICKER_PRIMARY_WEIGHT);
+    combined * scale
 }
 
 /// What a frame draws: the floor plus everything standing on or over it.
@@ -183,6 +233,95 @@ impl RenderContext {
         if post_bound == Some(true) {
             if let Some(post) = &self.post {
                 post.resolve();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::*;
+
+    /// The two weights sum to 1.0, so the combined signal has to stay inside
+    /// `[-scale, scale]` - that is what lets the amplitude constants be read
+    /// as "+/- this fraction".
+    #[test]
+    fn flicker_stays_within_its_scale() {
+        for step in 0..20_000 {
+            let t = step as f32 * 0.01;
+            for phase in [0.0, 1.3, 2.7, 4.9, 6.1] {
+                let f = flicker_offset(t, phase, 1.0);
+                assert!(
+                    (-1.0..=1.0).contains(&f),
+                    "flicker {f} out of range at t={t} phase={phase}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zero_scale_means_dead_steady() {
+        for step in 0..100 {
+            assert_eq!(flicker_offset(step as f32 * 0.1, 2.0, 0.0), 0.0);
+        }
+    }
+
+    /// A per-light phase seed is only worth having if it actually decorrelates
+    /// two lights, so check that two seeds disagree across a whole sweep
+    /// rather than merely at one instant.
+    #[test]
+    fn different_phases_do_not_gutter_in_unison() {
+        let mut max_divergence: f32 = 0.0;
+        for step in 0..1_000 {
+            let t = step as f32 * 0.01;
+            let a = flicker_offset(t, 0.4, 1.0);
+            let b = flicker_offset(t, 3.9, 1.0);
+            max_divergence = max_divergence.max((a - b).abs());
+        }
+        assert!(
+            max_divergence > 0.5,
+            "two phase seeds stayed within {max_divergence} of each other"
+        );
+    }
+
+    /// The frequency ratio is irrational, so the sum has no period: a sample
+    /// one primary-period later should not match the sample at t.
+    #[test]
+    fn flicker_does_not_repeat_on_the_primary_period() {
+        let period = std::f32::consts::TAU / LIGHT_FLICKER_FREQ_PRIMARY;
+        let mut matched_everywhere = true;
+        for cycle in 1..50 {
+            let t = 0.37;
+            let later = t + period * cycle as f32;
+            if (flicker_offset(t, 1.0, 1.0) - flicker_offset(later, 1.0, 1.0)).abs() > 1e-3 {
+                matched_everywhere = false;
+                break;
+            }
+        }
+        assert!(!matched_everywhere, "flicker repeated on the primary period");
+    }
+
+    /// The bloom bright pass measures `max(r, g, b)`, so every light colour
+    /// must peg one channel at 1.0 or it will quietly stop feeding the bloom
+    /// that BLOOM_THRESHOLD was tuned for. See the invariant note in
+    /// src/constants/lighting.rs.
+    #[test]
+    fn every_light_colour_pegs_a_channel_at_one() {
+        for (name, (r, g, b)) in [
+            ("fire", LIGHT_COLOR_FIRE),
+            ("player", LIGHT_COLOR_PLAYER),
+            ("fungus", LIGHT_COLOR_FUNGUS),
+            ("crystal", LIGHT_COLOR_CRYSTAL),
+            ("default", LIGHT_COLOR_DEFAULT),
+        ] {
+            let max = r.max(g).max(b);
+            assert!(
+                (max - 1.0).abs() < 1e-6,
+                "{name} peaks at {max}, not 1.0, so it will under-feed the bloom"
+            );
+            for c in [r, g, b] {
+                assert!((0.0..=1.0).contains(&c), "{name} has an out-of-range channel {c}");
             }
         }
     }

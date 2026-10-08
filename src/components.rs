@@ -1954,13 +1954,41 @@ impl Vendor {
 // LIGHT SOURCE
 // =============================================================================
 
-/// Light source component - emits light in a radius
+/// Light source component - emits light in a radius, in a colour, with a
+/// flicker of its own.
+///
+/// `color` and `flicker`/`phase` exist so the dungeon reads as *lit by
+/// something* rather than evenly lit: see `src/constants/lighting.rs` for the
+/// palette and the flicker shaping, and `Engine::light_sources` for where the
+/// flicker is actually evaluated.
 #[derive(Debug, Clone, Copy)]
 pub struct LightSource {
     /// Radius of light emission (in tiles)
     pub radius: f32,
     /// Light intensity (0.0 to 1.0, multiplied with falloff)
     pub intensity: f32,
+    /// Linear RGB tint of the emitted light. `(1.0, 1.0, 1.0)` is the old
+    /// untinted white. Read through [`LightSource::color_or_default`], never
+    /// directly, so an unset or nonsense colour degrades to white instead of
+    /// rendering a black pool.
+    pub color: (f32, f32, f32),
+    /// How strongly this light flickers, as a multiplier on the global
+    /// amplitudes. `1.0` is full firelight, `0.0` is dead steady.
+    pub flicker: f32,
+    /// Per-light phase offset, in radians, so no two lights flicker in step.
+    /// Follows the `FireEffect { seed }` pattern in src/vfx.rs: a cosmetic
+    /// seed drawn from the thread rng, deliberately *not* the seeded game rng,
+    /// so it cannot desync a seeded run.
+    pub phase: f32,
+}
+
+/// A fresh cosmetic phase offset for a light, in radians.
+///
+/// Thread rng rather than the game rng: flicker phase is pure decoration, and
+/// drawing from the seeded run rng would make a cosmetic detail part of
+/// simulation determinism. src/vfx.rs seeds `FireEffect` the same way.
+fn random_light_phase() -> f32 {
+    rand::random::<f32>() * std::f32::consts::TAU
 }
 
 impl LightSource {
@@ -1969,6 +1997,9 @@ impl LightSource {
         Self {
             radius: 8.0,
             intensity: 1.0,
+            color: crate::constants::LIGHT_COLOR_FIRE,
+            flicker: crate::constants::LIGHT_FLICKER_SCALE_FIRE,
+            phase: random_light_phase(),
         }
     }
 
@@ -1977,6 +2008,9 @@ impl LightSource {
         Self {
             radius: 6.0,
             intensity: 0.95,
+            color: crate::constants::LIGHT_COLOR_FIRE,
+            flicker: crate::constants::LIGHT_FLICKER_SCALE_FIRE,
+            phase: random_light_phase(),
         }
     }
 
@@ -1985,6 +2019,9 @@ impl LightSource {
         Self {
             radius: 3.5,
             intensity: 0.55,
+            color: crate::constants::LIGHT_COLOR_FUNGUS,
+            flicker: crate::constants::LIGHT_FLICKER_SCALE_FUNGUS,
+            phase: random_light_phase(),
         }
     }
 
@@ -1993,6 +2030,43 @@ impl LightSource {
         Self {
             radius: 4.5,
             intensity: 0.7,
+            color: crate::constants::LIGHT_COLOR_CRYSTAL,
+            flicker: crate::constants::LIGHT_FLICKER_SCALE_CRYSTAL,
+            phase: random_light_phase(),
+        }
+    }
+
+    /// This light's colour, falling back to
+    /// [`crate::constants::LIGHT_COLOR_DEFAULT`] when the stored one is
+    /// unusable.
+    ///
+    /// "Unusable" means a non-finite channel, a negative channel, or all three
+    /// at zero - the last of which would render as a pool of pure black rather
+    /// than as no light at all. A `LightSource` built with struct literal
+    /// syntax and no colour therefore lights white instead of going wrong, in
+    /// keeping with the house rule that content-shaped data degrades rather
+    /// than panics.
+    pub fn color_or_default(&self) -> (f32, f32, f32) {
+        let (r, g, b) = self.color;
+        let usable = [r, g, b].iter().all(|c| c.is_finite() && *c >= 0.0) && (r + g + b) > 0.0;
+        if usable {
+            self.color
+        } else {
+            crate::constants::LIGHT_COLOR_DEFAULT
+        }
+    }
+}
+
+impl Default for LightSource {
+    /// A steady white light of brazier reach - the behaviour every light had
+    /// before colour and flicker existed.
+    fn default() -> Self {
+        Self {
+            radius: 6.0,
+            intensity: 1.0,
+            color: crate::constants::LIGHT_COLOR_DEFAULT,
+            flicker: 0.0,
+            phase: 0.0,
         }
     }
 }
@@ -2421,5 +2495,75 @@ mod tests {
         eq.ring = Some(instance(ItemType::Ring, vec![Affix::Damage(1)]));
         eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::Damage(3)]));
         assert_eq!(eq.affix_damage_bonus(), 6);
+    }
+}
+
+#[cfg(test)]
+mod light_source_tests {
+    use super::*;
+
+    #[test]
+    fn constructors_carry_their_palette_colour() {
+        assert_eq!(LightSource::campfire().color, LIGHT_COLOR_FIRE);
+        assert_eq!(LightSource::brazier().color, LIGHT_COLOR_FIRE);
+        assert_eq!(LightSource::mushroom().color, LIGHT_COLOR_FUNGUS);
+        assert_eq!(LightSource::crystal().color, LIGHT_COLOR_CRYSTAL);
+    }
+
+    /// Fire gutters, crystal barely moves. If these ever equalise the whole
+    /// point of per-type flicker is gone.
+    #[test]
+    fn fire_flickers_harder_than_crystal() {
+        assert!(LightSource::brazier().flicker > LightSource::mushroom().flicker);
+        assert!(LightSource::mushroom().flicker > LightSource::crystal().flicker);
+    }
+
+    /// Phase seeds come from the thread rng, so two lights spawned back to
+    /// back should not share a phase. (Vanishingly unlikely to collide; this
+    /// is really guarding against the field being left at a constant.)
+    #[test]
+    fn each_light_gets_its_own_phase() {
+        let phases: Vec<f32> = (0..16).map(|_| LightSource::brazier().phase).collect();
+        let distinct = phases.iter().filter(|p| **p != phases[0]).count();
+        assert!(distinct > 10, "phases barely varied: {phases:?}");
+        for p in phases {
+            assert!(p.is_finite() && (0.0..=std::f32::consts::TAU).contains(&p));
+        }
+    }
+
+    /// A light whose colour was never set, or was set to something unusable,
+    /// has to degrade to white rather than panic or render a black pool.
+    #[test]
+    fn unusable_colours_fall_back_to_white() {
+        let unusable = [
+            (0.0, 0.0, 0.0),
+            (f32::NAN, 1.0, 1.0),
+            (1.0, f32::INFINITY, 1.0),
+            (-1.0, 0.5, 0.5),
+        ];
+        for color in unusable {
+            let light = LightSource { color, ..LightSource::default() };
+            assert_eq!(
+                light.color_or_default(),
+                LIGHT_COLOR_DEFAULT,
+                "{color:?} should have degraded to white"
+            );
+        }
+    }
+
+    #[test]
+    fn usable_colours_pass_straight_through() {
+        for color in [LIGHT_COLOR_FIRE, LIGHT_COLOR_FUNGUS, LIGHT_COLOR_CRYSTAL] {
+            let light = LightSource { color, ..LightSource::default() };
+            assert_eq!(light.color_or_default(), color);
+        }
+    }
+
+    /// The default is the pre-colour behaviour: steady and white.
+    #[test]
+    fn default_light_is_steady_and_white() {
+        let light = LightSource::default();
+        assert_eq!(light.color_or_default(), LIGHT_COLOR_DEFAULT);
+        assert_eq!(light.flicker, 0.0);
     }
 }
