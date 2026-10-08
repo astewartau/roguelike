@@ -11,6 +11,25 @@ use crate::vfx::{FireEffect, VisualEffect};
 
 use std::sync::Arc;
 
+/// How a frame is lit: the player's own light and every other light source.
+///
+/// Shared by `RenderContext::render_frame` and `Renderer::render`, which both
+/// need the whole trio.
+pub struct SceneLighting<'a> {
+    pub player_pos: (f32, f32),
+    pub player_light_radius: f32,
+    /// `(x, y, radius, intensity)` per source.
+    pub light_sources: &'a [(f32, f32, f32, f32)],
+}
+
+/// What a frame draws: the floor plus everything standing on or over it.
+pub struct SceneContents<'a> {
+    pub grid: &'a Grid,
+    pub entities: &'a [RenderEntity],
+    pub vfx_effects: &'a [VisualEffect],
+    pub fires: &'a [FireEffect],
+}
+
 /// Rendering resources - lives in the application shell (main.rs).
 /// Separate from game state to maintain clear boundaries.
 pub struct RenderContext {
@@ -64,16 +83,13 @@ impl RenderContext {
     pub fn render_frame(
         &mut self,
         gl: &glow::Context,
-        grid: &Grid,
-        entities: &[RenderEntity],
-        vfx_effects: &[VisualEffect],
-        fires: &[FireEffect],
-        player_pos: (f32, f32),
-        player_light_radius: f32,
-        light_sources: &[(f32, f32, f32, f32)],
+        scene: SceneContents<'_>,
+        lighting: SceneLighting<'_>,
         show_grid_lines: bool,
     ) {
         profile_function!();
+
+        let SceneContents { grid, entities, vfx_effects, fires } = scene;
 
         unsafe {
             use glow::HasContext;
@@ -84,15 +100,7 @@ impl RenderContext {
         {
             profile_scope!("render_tiles");
             self.renderer
-                .render(
-                    &self.camera,
-                    grid,
-                    &self.tileset,
-                    player_pos,
-                    player_light_radius,
-                    light_sources,
-                    show_grid_lines,
-                )
+                .render(&self.camera, grid, &self.tileset, lighting, show_grid_lines)
                 .unwrap();
         }
         {

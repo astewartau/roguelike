@@ -247,13 +247,17 @@ impl AppState {
             let light_sources = self.engine.light_sources();
             self.render_ctx.render_frame(
                 &self.gl,
-                grid,
-                &tick_result.entities,
-                self.engine.vfx_effects(),
-                self.engine.fires(),
-                self.engine.player_visual_pos(),
-                self.engine.player_light_radius(),
-                &light_sources,
+                crate::render::SceneContents {
+                    grid,
+                    entities: &tick_result.entities,
+                    vfx_effects: self.engine.vfx_effects(),
+                    fires: self.engine.fires(),
+                },
+                crate::render::SceneLighting {
+                    player_pos: self.engine.player_visual_pos(),
+                    player_light_radius: self.engine.player_light_radius(),
+                    light_sources: &light_sources,
+                },
                 self.engine.show_grid_lines(),
             );
         }

@@ -435,15 +435,21 @@ mod tests {
 
         let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
         tracker.register_entity(rat);
+        let mut clock = crate::time_system::GameClock::new();
+        let mut scheduler = crate::time_system::ActionScheduler::new();
         let kills = crate::systems::combat::remove_dead_entities(
-            &mut world,
-            player,
+            &mut crate::engine::ActorCtx {
+                world: &mut world,
+                grid: &mut grid,
+                player,
+                clock: &mut clock,
+                scheduler: &mut scheduler,
+                tracker: &mut tracker,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
             0,
-            &mut rng,
-            &mut events,
-            None,
-            &mut cache,
-            &mut tracker,
         );
         assert_eq!(kills, 1, "hostile death increments the kill counter");
 

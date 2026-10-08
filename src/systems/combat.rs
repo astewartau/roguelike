@@ -6,13 +6,12 @@ use crate::components::{
     Weapon,
 };
 use crate::constants::*;
-use crate::engine::EffectCtx;
+use crate::engine::{ActorCtx, EffectCtx};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
 use crate::systems::experience::{calculate_xp_value, grant_xp};
 use crate::tile::tile_ids;
-use crate::time_system::ActionScheduler;
 use hecs::{Entity, World};
 use rand::Rng;
 
@@ -389,16 +388,13 @@ pub fn handle_door_closed(world: &mut World, door_id: Entity) {
 /// Returns the number of hostile enemies (ChaseAI) that died, so the engine
 /// can keep the run's kill counter (companion deaths don't count).
 /// `floor` scales corpse gold with depth (see `ENEMY_GOLD_PER_FLOOR`).
-pub fn remove_dead_entities(
-    world: &mut World,
-    player_entity: Entity,
-    floor: u32,
-    rng: &mut impl Rng,
-    events: &mut EventQueue,
-    mut scheduler: Option<&mut ActionScheduler>,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    active_ai_tracker: &mut crate::active_ai_tracker::ActiveAITracker,
-) -> u32 {
+pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
+    let ActorCtx { world, player: player_entity, rng, events, scheduler, spatial, tracker, .. } = ctx;
+    let (world, player_entity) = (&mut **world, *player_entity);
+    let (rng, events) = (&mut **rng, &mut **events);
+    let mut scheduler = Some(&mut **scheduler);
+    let (spatial_cache, active_ai_tracker) = (&mut **spatial, &mut **tracker);
+
     let mut to_convert = Vec::new();
     let mut hostile_kills: u32 = 0;
 
@@ -608,16 +604,20 @@ mod tests {
         tracker.update_on_player_move(&world, (3, 3));
         assert!(tracker.is_tracked(rat), "live enemy should be tracked");
 
-        remove_dead_entities(
-            &mut world,
-            player,
-            0,
-            &mut rng,
-            &mut events,
-            None,
-            &mut cache,
-            &mut tracker,
-        );
+        let mut clock = crate::time_system::GameClock::new();
+        let mut scheduler = crate::time_system::ActionScheduler::new();
+        let mut grid = crate::grid::Grid::new_floor(10, 10, 0, &mut rng);
+        remove_dead_entities(&mut crate::engine::ActorCtx {
+                world: &mut world,
+                grid: &mut grid,
+                player,
+                clock: &mut clock,
+                scheduler: &mut scheduler,
+                tracker: &mut tracker,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            }, 0);
 
         assert!(
             !tracker.is_tracked(rat),

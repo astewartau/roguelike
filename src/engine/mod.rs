@@ -555,16 +555,9 @@ impl GameEngine {
         // hostile deaths feed the run's kill counter.
         {
             profile_scope!("remove_dead");
-            state.kills += systems::remove_dead_entities(
-                &mut state.world,
-                state.player_entity,
-                state.current_floor,
-                &mut state.rng,
-                &mut self.events,
-                Some(&mut state.action_scheduler),
-                &mut state.spatial_cache,
-                &mut state.active_ai_tracker,
-            );
+            let floor = state.current_floor;
+            state.kills +=
+                systems::remove_dead_entities(&mut state.actor_ctx(&mut self.events), floor);
         }
 
         // Process events from remove_dead_entities
@@ -992,22 +985,26 @@ impl GameEngine {
                 crate::ui::run_ui(
                     egui_glow,
                     window,
-                    &state.world,
-                    state.player_entity,
-                    &state.grid,
                     ui_state,
                     &mut self.dev_menu,
-                    camera,
-                    tileset,
-                    ui_icons,
-                    &self.vfx.effects,
-                    self.vfx.resting_bubble.as_ref(),
-                    &life_drain_beams,
-                    &taming_beams,
-                    self.input.targeting_mode.as_ref(),
-                    self.input.ability_targeting_mode.as_ref(),
-                    self.input.mouse_pos,
-                    state.game_clock.time,
+                    crate::ui::UiFrame {
+                        game: crate::ui::UiWorld {
+                            world: &state.world,
+                            player_entity: state.player_entity,
+                            grid: &state.grid,
+                        },
+                        resources: crate::ui::UiResources { camera, tileset, icons: ui_icons },
+                        overlays: crate::ui::UiOverlays {
+                            vfx_effects: &self.vfx.effects,
+                            resting_bubble: self.vfx.resting_bubble.as_ref(),
+                            life_drain_beams: &life_drain_beams,
+                            taming_beams: &taming_beams,
+                            targeting_mode: self.input.targeting_mode.as_ref(),
+                            ability_targeting_mode: self.input.ability_targeting_mode.as_ref(),
+                        },
+                        mouse_pos: self.input.mouse_pos,
+                        game_time: state.game_clock.time,
+                    },
                 )
             }
         }
@@ -2403,16 +2400,9 @@ mod tests {
                 },
                 &mut engine.events,
             );
-            let kills = systems::remove_dead_entities(
-                &mut state.world,
-                state.player_entity,
-                state.current_floor,
-                &mut state.rng,
-                &mut engine.events,
-                Some(&mut state.action_scheduler),
-                &mut state.spatial_cache,
-                &mut state.active_ai_tracker,
-            );
+            let floor = state.current_floor;
+            let kills =
+                systems::remove_dead_entities(&mut state.actor_ctx(&mut engine.events), floor);
             state.kills += kills;
         }
 
