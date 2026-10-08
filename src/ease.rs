@@ -66,7 +66,6 @@ pub fn out_elastic(t: f32) -> f32 {
 
 /// Symmetric quadratic: accelerates out of rest, decelerates back into it.
 /// For motion with a still point at each end, like a window sliding open.
-#[allow(dead_code)] // No caller yet; part of the curve palette (see module docs).
 pub fn in_out_quad(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     if t < 0.5 {
@@ -82,6 +81,23 @@ pub fn in_out_quad(t: f32) -> f32 {
 /// overshoot. Multiply a size by this to make something punch out and settle.
 pub fn pop(t: f32) -> f32 {
     POP_PEAK + (1.0 - POP_PEAK) * out_back(t)
+}
+
+/// Smooth 0 -> 1 -> 0 ping-pong over one unit of `phase`, for a pulse that has
+/// to loop forever without a visible seam.
+///
+/// Unlike the `out_*` curves this takes an unbounded phase and wraps it, so a
+/// caller can hand it `elapsed_seconds * rate` directly. The underlying shape
+/// is a triangle wave put through [`in_out_quad`], which is flat at both
+/// turning points — a raw triangle would visibly kink there.
+pub fn ping_pong(phase: f32) -> f32 {
+    let wrapped = phase.rem_euclid(1.0);
+    let triangle = if wrapped < 0.5 {
+        wrapped * 2.0
+    } else {
+        (1.0 - wrapped) * 2.0
+    };
+    in_out_quad(triangle)
 }
 
 #[cfg(test)]
@@ -150,6 +166,30 @@ mod tests {
             assert!(
                 close(in_out_quad(t), 1.0 - in_out_quad(1.0 - t)),
                 "in_out_quad is not symmetric at {t}"
+            );
+        }
+    }
+
+    #[test]
+    fn ping_pong_loops_seamlessly() {
+        // Rests at 0 at every integer phase and peaks at 1 halfway between.
+        for cycle in 0..4 {
+            let base = cycle as f32;
+            assert!(close(ping_pong(base), 0.0), "ping_pong({base}) left its floor");
+            assert!(
+                close(ping_pong(base + 0.5), 1.0),
+                "ping_pong({}) missed its peak",
+                base + 0.5
+            );
+        }
+        // Negative phases wrap the same way, so a caller need not clamp.
+        assert!(close(ping_pong(-0.5), 1.0));
+        // Symmetric about the peak.
+        for step in 0..=10 {
+            let t = step as f32 / 20.0;
+            assert!(
+                close(ping_pong(t), ping_pong(1.0 - t)),
+                "ping_pong is not symmetric at {t}"
             );
         }
     }

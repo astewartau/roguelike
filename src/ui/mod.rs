@@ -33,7 +33,7 @@ pub use message_log::{draw_message_log, MessageLog};
 pub use pause_screen::{run_pause_screen, PauseChoice};
 pub use shop_window::{draw_shop_window, get_shop_window_data};
 pub use start_screen::run_start_screen;
-pub use status_bar::{draw_status_bar, get_status_bar_data};
+pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
@@ -147,6 +147,9 @@ pub struct GameUiState {
     pub hotbar_qer: [Option<HotbarEntry>; 3],
     /// Scrolling combat/message log
     pub message_log: MessageLog,
+    /// Frame-to-frame animation state for the status bar (the HP chip bar and
+    /// the low-HP pulse). Presentation only; see [`StatusBarAnim`].
+    status_anim: StatusBarAnim,
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -168,6 +171,7 @@ impl GameUiState {
             hotbar_shift: [None; 5],
             hotbar_qer: [None; 3],
             message_log: MessageLog::new(player_entity),
+            status_anim: StatusBarAnim::new(),
             player_entity,
         }
     }
@@ -407,7 +411,7 @@ pub fn run_ui(
         }
 
         // Status bar (always visible)
-        draw_status_bar(ctx, &status_data, icons, game_time);
+        draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time);
 
         // Scrolling combat/message log (bottom-left)
         draw_message_log(ctx, &ui_state.message_log);

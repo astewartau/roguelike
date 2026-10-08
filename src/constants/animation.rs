@@ -86,3 +86,30 @@ pub const CAMERA_SHAKE_BOSS_ABILITY: f32 = 0.30;
 /// small and directional — a kick along the swing, not a rattle — so the
 /// player's own attacks never fight their aim.
 pub const CAMERA_SHAKE_PLAYER_SWING: f32 = 0.12;
+
+// =============================================================================
+// HUD ANIMATION
+// =============================================================================
+// These are paced by *real* time, not game time, for the same reason camera
+// shake is (see the note in `engine::tick` beside `camera.update`): the HUD is
+// presentation, nothing in the simulation can be reached from it, and the game
+// clock stops to wait for input — which is precisely when the player is
+// reading the HUD. Pacing these by game time would freeze them mid-animation.
+
+/// How long the HP chip ("ghost") bar holds station after a hit before it
+/// starts draining, in seconds. The pause is what makes the lost chunk
+/// readable; too long and the bar feels laggy.
+pub const HP_CHIP_HOLD: f32 = 0.12;
+/// How long the HP chip bar takes to catch up to the real HP once it starts
+/// draining, in seconds. Longer reads as a heavier wound and lets rapid hits
+/// overlap; shorter approaches no chip bar at all.
+pub const HP_CHIP_DRAIN_DURATION: f32 = 0.4;
+/// HP fraction below which the HP bar pulses. Up makes the warning start
+/// earlier (and nag more); down makes it a last-gasp signal only.
+pub const HP_LOW_PULSE_THRESHOLD: f32 = 0.25;
+/// Full bright-dim-bright cycles per second of the low-HP pulse. Up is a
+/// panicky flutter, down a slow heartbeat.
+pub const HP_LOW_PULSE_RATE: f32 = 1.3;
+/// How far the low-HP pulse lifts the fill brightness at its peak, as a
+/// fraction above normal. Up is more alarming, 0.0 disables the pulse.
+pub const HP_LOW_PULSE_DEPTH: f32 = 0.55;

@@ -9,9 +9,10 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, Frame, Margin, Roundi
 
 /// Dungeon color palette.
 ///
-/// A complete set rather than only the shades currently drawn - the unused
-/// `*_BG` entries are the background halves of bar colour pairs.
-#[allow(dead_code)]
+/// Everything the UI paints picks its colour from here. An inlined
+/// `Color32::from_rgb` in a panel is a design decision nobody can find or
+/// retune globally, so new shades belong in this module even when only one
+/// call site wants them.
 pub mod colors {
     use egui::Color32;
 
@@ -30,11 +31,40 @@ pub mod colors {
     pub const TEXT_MUTED: Color32 = Color32::from_rgb(150, 140, 125);
     pub const TEXT_ACCENT: Color32 = Color32::from_rgb(210, 180, 100);
 
-    // Progress bars
+    // Resource bars. Each is a (fill, recess) pair: the recess is the dark
+    // inset the fill sits in, tinted toward the fill so an empty bar still
+    // says which resource it is.
     pub const HP_BAR: Color32 = Color32::from_rgb(140, 35, 35);
     pub const HP_BAR_BG: Color32 = Color32::from_rgb(40, 20, 20);
+    /// Pale ghost drained behind the HP fill after a hit, so the lost chunk is
+    /// visible for a moment as an event rather than just a smaller number.
+    pub const HP_CHIP: Color32 = Color32::from_rgb(205, 125, 110);
     pub const XP_BAR: Color32 = Color32::from_rgb(70, 100, 140);
     pub const XP_BAR_BG: Color32 = Color32::from_rgb(25, 35, 50);
+    pub const HUNGER_BAR: Color32 = Color32::from_rgb(190, 130, 55);
+    pub const HUNGER_BAR_BG: Color32 = Color32::from_rgb(45, 32, 16);
+    pub const FATIGUE_BAR: Color32 = Color32::from_rgb(110, 100, 185);
+    pub const FATIGUE_BAR_BG: Color32 = Color32::from_rgb(28, 25, 48);
+    /// The "Zz" glyph standing in for a fatigue icon.
+    pub const FATIGUE_ICON: Color32 = Color32::from_rgb(150, 140, 210);
+
+    // Bar frame. The recess is drawn with a 1px bevel: dark along the top and
+    // left, light along the bottom and right, which is what makes it read as
+    // sunk into the panel rather than painted on it.
+    pub const BAR_BEVEL_DARK: Color32 = Color32::from_rgb(14, 12, 11);
+    pub const BAR_BEVEL_LIGHT: Color32 = Color32::from_rgb(68, 60, 52);
+    /// Hairline border around a bar, between the recess and the panel.
+    pub const BAR_FRAME: Color32 = Color32::from_rgb(52, 45, 39);
+    /// Segment notches scored across a bar so it can be counted at a glance.
+    pub const BAR_NOTCH: Color32 = Color32::from_rgb(10, 9, 8);
+
+    // Survival and stealth state labels
+    pub const HUNGER_WARNING: Color32 = Color32::from_rgb(220, 160, 70);
+    pub const HUNGER_CRITICAL: Color32 = Color32::from_rgb(230, 80, 70);
+    pub const FATIGUE_WARNING: Color32 = Color32::from_rgb(200, 190, 110);
+    pub const FATIGUE_CRITICAL: Color32 = Color32::from_rgb(170, 120, 220);
+    pub const CONCEALED: Color32 = Color32::from_rgb(120, 200, 120);
+    pub const SNEAKING: Color32 = Color32::from_rgb(150, 120, 210);
 
     // Selection/Highlight
     pub const SELECTED: Color32 = Color32::from_rgb(70, 90, 110);
@@ -49,6 +79,56 @@ pub mod colors {
     pub const RARITY_MAGIC: Color32 = Color32::from_rgb(110, 160, 230);
     pub const RARITY_RARE: Color32 = Color32::from_rgb(230, 200, 90);
     pub const RARITY_LEGENDARY: Color32 = Color32::from_rgb(255, 145, 40);
+
+    // Status effects. Used for the effect pips and for the text fallback of
+    // any effect that has no icon.
+    pub const EFFECT_INVISIBLE: Color32 = Color32::from_rgb(180, 180, 255);
+    pub const EFFECT_SPEED: Color32 = Color32::from_rgb(255, 220, 100);
+    pub const EFFECT_REGEN: Color32 = Color32::from_rgb(100, 255, 100);
+    pub const EFFECT_STRENGTH: Color32 = Color32::from_rgb(255, 150, 50);
+    pub const EFFECT_PROTECTED: Color32 = Color32::from_rgb(150, 150, 255);
+    pub const EFFECT_BARKSKIN: Color32 = Color32::from_rgb(139, 90, 43);
+    pub const EFFECT_CONFUSED: Color32 = Color32::from_rgb(200, 100, 200);
+    pub const EFFECT_FEARED: Color32 = Color32::from_rgb(255, 100, 100);
+    pub const EFFECT_SLOWED: Color32 = Color32::from_rgb(100, 150, 200);
+    pub const EFFECT_BURNING: Color32 = Color32::from_rgb(255, 100, 50);
+    pub const EFFECT_ROOTED: Color32 = Color32::from_rgb(139, 90, 43);
+    pub const EFFECT_INVULNERABLE: Color32 = Color32::from_rgb(255, 215, 0);
+    pub const EFFECT_STUNNED: Color32 = Color32::from_rgb(255, 230, 120);
+}
+
+/// Color for a status effect, used by both the HUD pips and the text fallback
+/// for effects with no icon.
+pub fn effect_color(effect: crate::components::EffectType) -> Color32 {
+    use crate::components::EffectType as E;
+    match effect {
+        E::Invisible => colors::EFFECT_INVISIBLE,
+        E::SpeedBoost => colors::EFFECT_SPEED,
+        E::Regenerating => colors::EFFECT_REGEN,
+        E::Strengthened => colors::EFFECT_STRENGTH,
+        E::Protected => colors::EFFECT_PROTECTED,
+        E::Barkskin => colors::EFFECT_BARKSKIN,
+        E::Confused => colors::EFFECT_CONFUSED,
+        E::Feared => colors::EFFECT_FEARED,
+        E::Slowed => colors::EFFECT_SLOWED,
+        E::Burning => colors::EFFECT_BURNING,
+        E::Rooted => colors::EFFECT_ROOTED,
+        E::Invulnerable => colors::EFFECT_INVULNERABLE,
+        E::Stunned => colors::EFFECT_STUNNED,
+    }
+}
+
+/// Lift a colour's brightness by `factor`, saturating at white and leaving
+/// alpha alone. Used for the bright leading edge on a resource bar and for the
+/// flare on a freshly arrived log line.
+pub fn brighten(color: Color32, factor: f32) -> Color32 {
+    let lift = |c: u8| ((c as f32 * factor).round() as i32).clamp(0, 255) as u8;
+    Color32::from_rgba_unmultiplied(
+        lift(color.r()),
+        lift(color.g()),
+        lift(color.b()),
+        color.a(),
+    )
 }
 
 /// Color for an item rarity tier (for tooltips and item names).
