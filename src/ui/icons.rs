@@ -41,6 +41,8 @@ pub struct UiIcons {
     pub bread_uv: egui::Rect,
     pub apple_uv: egui::Rect,
     pub fire_trap_uv: egui::Rect,
+    /// Corner rivet for panel chrome (see `style::dungeon_window`)
+    pub panel_rivet_uv: egui::Rect,
     pub arrow_uv: egui::Rect,
     pub water_flask_uv: egui::Rect,
     // Ability icons
@@ -97,6 +99,7 @@ impl UiIcons {
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
             fire_trap_uv: tileset.get_egui_uv(tile_ids::FIRE_TRAP.0, tile_ids::FIRE_TRAP.1),
+            panel_rivet_uv: tileset.get_egui_uv(tile_ids::PANEL_RIVET.0, tile_ids::PANEL_RIVET.1),
             arrow_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
             water_flask_uv: tileset.get_egui_uv(tile_ids::BOTTLE_WATER.0, tile_ids::BOTTLE_WATER.1),
             // Ability icons: AXE for Cleave; the rest are custom-drawn
@@ -165,6 +168,31 @@ impl UiIcons {
             // grayed out via item_ui_tint
             ItemType::WaterFlaskEmpty | ItemType::WaterFlaskFull => self.water_flask_uv,
         }
+    }
+
+    /// Icon for a status effect, or `None` when the sheets have nothing that
+    /// reads as that effect.
+    ///
+    /// Not every `EffectType` gets one — there is no sprite that says
+    /// "invisible", "slowed" or "invulnerable" without inventing custom art,
+    /// which CLAUDE.md asks us to exhaust the other options before doing. The
+    /// HUD falls back to the coloured text label for those.
+    pub fn effect_uv(&self, effect: crate::components::EffectType) -> Option<(egui::TextureId, egui::Rect)> {
+        use crate::components::EffectType as E;
+        let (tex, uv) = match effect {
+            E::SpeedBoost => (self.items_texture_id, self.sprint_uv),
+            E::Regenerating => (self.items_texture_id, self.green_potion_uv),
+            E::Strengthened => (self.items_texture_id, self.amber_potion_uv),
+            E::Protected => (self.items_texture_id, self.helmet_uv),
+            E::Barkskin => (self.items_texture_id, self.barkskin_uv),
+            E::Confused => (self.items_texture_id, self.blue_potion_uv),
+            E::Feared => (self.tiles_texture_id, self.fear_uv),
+            E::Burning => (self.items_texture_id, self.fire_trap_uv),
+            E::Rooted => (self.tiles_texture_id, self.snare_trap_uv),
+            E::Stunned => (self.items_texture_id, self.stun_uv),
+            E::Invisible | E::Slowed | E::Invulnerable => return None,
+        };
+        Some((tex, uv))
     }
 
     /// UI icon tint for an item type (fire arrows render as orange arrows,

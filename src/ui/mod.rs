@@ -25,7 +25,10 @@ pub use altar_window::{draw_altar_window, get_altar_window_data};
 pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data};
 pub use game_over_screen::{run_game_over_screen, GameOverChoice, GameOverStats};
-pub use hotbar::{ability_icon, ability_status, draw_drag_ghost, draw_hotbars, HotbarDrag, HotbarEntry};
+pub use hotbar::{
+    ability_icon, ability_status, draw_drag_ghost, draw_hotbars, HotbarAnim, HotbarDrag,
+    HotbarEntry,
+};
 pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data};
@@ -33,7 +36,7 @@ pub use message_log::{draw_message_log, MessageLog};
 pub use pause_screen::{run_pause_screen, PauseChoice};
 pub use shop_window::{draw_shop_window, get_shop_window_data};
 pub use start_screen::run_start_screen;
-pub use status_bar::{draw_status_bar, get_status_bar_data};
+pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
     draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
@@ -145,8 +148,14 @@ pub struct GameUiState {
     pub hotbar_shift: [Option<HotbarEntry>; 5],
     /// Q/E/R hotbar (keys Q, E and R). The R slot is pre-filled with Rest.
     pub hotbar_qer: [Option<HotbarEntry>; 3],
+    /// Frame-to-frame animation state for the hotbar slots (cooldown sweeps,
+    /// ready and denied flashes). Presentation only; see [`HotbarAnim`].
+    hotbar_anim: HotbarAnim,
     /// Scrolling combat/message log
     pub message_log: MessageLog,
+    /// Frame-to-frame animation state for the status bar (the HP chip bar and
+    /// the low-HP pulse). Presentation only; see [`StatusBarAnim`].
+    status_anim: StatusBarAnim,
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -167,7 +176,9 @@ impl GameUiState {
             hotbar_main: [None; 5],
             hotbar_shift: [None; 5],
             hotbar_qer: [None; 3],
+            hotbar_anim: HotbarAnim::new(),
             message_log: MessageLog::new(player_entity),
+            status_anim: StatusBarAnim::new(),
             player_entity,
         }
     }
@@ -407,7 +418,7 @@ pub fn run_ui(
         }
 
         // Status bar (always visible)
-        draw_status_bar(ctx, &status_data, icons, game_time);
+        draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time);
 
         // Scrolling combat/message log (bottom-left)
         draw_message_log(ctx, &ui_state.message_log);
@@ -421,6 +432,7 @@ pub fn run_ui(
             &mut ui_state.hotbar_main,
             &mut ui_state.hotbar_shift,
             &mut ui_state.hotbar_qer,
+            &mut ui_state.hotbar_anim,
             &mut actions,
         );
 

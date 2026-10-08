@@ -1030,6 +1030,10 @@ pub struct ActiveEffect {
     pub effect_type: EffectType,
     /// Remaining duration in game-time seconds
     pub remaining_duration: f32,
+    /// The duration this effect was last applied or refreshed with, so the HUD
+    /// can draw how much of it is left. Presentation only — nothing in the
+    /// simulation reads it, and a refresh resets it along with the remainder.
+    pub total_duration: f32,
     /// Last time damage was dealt (for DoT effects like Burning)
     pub last_damage_tick: f32,
 }

@@ -41,18 +41,22 @@ pub fn draw_loot_window(
     icons: &UiIcons,
     actions: &mut UiActions,
 ) {
-    egui::Window::new("Loot")
-        .default_pos([
-            data.viewport_width / 2.0 - 150.0,
-            data.viewport_height / 2.0 - 100.0,
-        ])
-        .default_size([300.0, 200.0])
-        .collapsible(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
-            ui.heading("Contents");
-            ui.separator();
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Loot",
+        |window| {
+            window
+                .default_pos([
+                    data.viewport_width / 2.0 - 150.0,
+                    data.viewport_height / 2.0 - 100.0,
+                ])
+                .default_size([300.0, 200.0])
+                .collapsible(false)
+                .resizable(false)
+        },
+        |ui| {
+            style::panel_header(ui, "Contents");
             ui.add_space(10.0);
 
             let has_contents = !data.items.is_empty() || data.gold > 0;
@@ -143,5 +147,6 @@ pub fn draw_loot_window(
                     actions.close_chest = true;
                 }
             });
-        });
+        },
+    );
 }
