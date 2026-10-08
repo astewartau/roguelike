@@ -530,7 +530,13 @@ pub fn draw_status_bar(
         .title_bar(false)
         .frame(style::dungeon_window_frame())
         .show(ctx, |ui| {
-            ui.set_min_width(HUD_STATUS_WIDTH);
+            // Pin the width rather than just flooring it. The window
+            // auto-sizes to its content, and `ui.separator()` claims
+            // `available_width()` — which in an auto-sizing window is
+            // effectively unbounded, so the panel would stretch to fit a rule
+            // nobody asked to be that wide and stay stretched. Pinning also
+            // stops the panel twitching as status labels come and go.
+            ui.set_width(HUD_STATUS_WIDTH);
 
             // HP, with the chip ghost, a notch per HUD_BAR_HP_PER_NOTCH of max
             // HP, and the low-HP pulse.
