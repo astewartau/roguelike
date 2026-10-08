@@ -13,8 +13,10 @@ use hecs::{Entity, World};
 /// Data needed to render the shop window
 pub struct ShopWindowData {
     pub vendor_name: String,
-    /// Vendor items: (item type, price, stock count)
-    pub vendor_items: Vec<(ItemType, u32, u32)>,
+    /// Vendor items: (index in `Vendor::inventory`, item type, price, stock count).
+    /// Sold-out entries are filtered out, so the row position is not the
+    /// inventory index — buy actions must use the stored index.
+    pub vendor_items: Vec<(usize, ItemType, u32, u32)>,
     pub vendor_gold: u32,
     /// Player items that can be sold: (item type, sell value)
     pub player_items: Vec<(ItemType, u32)>,
@@ -37,11 +39,12 @@ pub fn get_shop_window_data(
     let player_inv = world.get::<&Inventory>(player_entity).ok()?;
 
     // Build vendor items with prices
-    let vendor_items: Vec<(ItemType, u32, u32)> = vendor
+    let vendor_items: Vec<(usize, ItemType, u32, u32)> = vendor
         .inventory
         .iter()
-        .filter(|(_, stock)| *stock > 0)
-        .map(|(item, stock)| (*item, get_price(*item), *stock))
+        .enumerate()
+        .filter(|(_, (_, stock))| *stock > 0)
+        .map(|(idx, (item, stock))| (idx, *item, get_price(*item), *stock))
         .collect();
 
     // Build player sellable items with sell prices
@@ -100,7 +103,7 @@ pub fn draw_shop_window(
                         .id_salt("shop_buy")
                         .max_height(200.0)
                         .show(&mut columns[0], |ui| {
-                            for (i, (item_type, price, stock)) in data.vendor_items.iter().enumerate() {
+                            for (inv_idx, item_type, price, stock) in data.vendor_items.iter() {
                                 ui.horizontal(|ui| {
                                     // Item icon
                                     let uv = icons.get_item_uv(*item_type);
@@ -134,7 +137,7 @@ pub fn draw_shop_window(
                                             })
                                             .clicked()
                                         {
-                                            actions.buy_item = Some(i);
+                                            actions.buy_item = Some(*inv_idx);
                                         }
                                     });
                                 });
@@ -224,4 +227,38 @@ pub fn draw_shop_window(
             });
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sold-out entry is hidden from the list, so rows after it must still
+    /// carry their real `Vendor::inventory` index or the wrong item is bought.
+    #[test]
+    fn vendor_rows_keep_inventory_index_past_sold_out_items() {
+        let mut world = World::new();
+        let vendor = world.spawn((
+            Vendor::new(
+                vec![
+                    (ItemType::HealthPotion, 0),
+                    (ItemType::Dagger, 2),
+                    (ItemType::Arrow, 5),
+                ],
+                100,
+            ),
+            Dialogue::new("Dwarf", Vec::new()),
+        ));
+        let player = world.spawn((Inventory::new(),));
+
+        let data = get_shop_window_data(&world, Some(vendor), player, 800.0, 600.0)
+            .expect("shop data for a vendor with dialogue");
+
+        let rows: Vec<(usize, ItemType)> = data
+            .vendor_items
+            .iter()
+            .map(|(idx, item, _, _)| (*idx, *item))
+            .collect();
+        assert_eq!(rows, vec![(1, ItemType::Dagger), (2, ItemType::Arrow)]);
+    }
 }
