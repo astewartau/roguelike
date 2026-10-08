@@ -20,8 +20,8 @@ cargo run --release --features profiling   # puffin on 127.0.0.1:8585
 Run from the repo root: asset paths resolve against the process working
 directory, not the executable.
 
-`cargo test` prints ALSA `unable to open slave` warnings when no audio device is
-available. Noise, not failures.
+Tests never open an audio stream (`GameEngine::new()` skips `AudioManager` under
+`cfg(test)`), so they can run in parallel without touching the sound card.
 
 ## Conventions
 
