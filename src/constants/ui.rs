@@ -70,3 +70,9 @@ pub const EFFECT_PIP_SWEEP_SEGMENTS: usize = 24;
 pub const EFFECT_PIP_SWEEP_ALPHA: u8 = 165;
 /// Font size for the remaining-seconds readout on a pip, in points.
 pub const EFFECT_PIP_FONT_SIZE: f32 = 10.0;
+
+/// Minimum width of the message-log panel, in points. Wide enough that a
+/// typical combat line does not wrap, so lines keep a stable height.
+pub const LOG_WIDTH: f32 = 360.0;
+/// Gap between a log line's text and its "(xN)" repeat badge, in points.
+pub const LOG_COUNT_GAP: f32 = 6.0;

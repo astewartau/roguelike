@@ -154,3 +154,29 @@ pub const HOTBAR_READY_GLOW_WIDTH: f32 = 3.0;
 /// The sweep's *shape* now carries the information, so it does not need to be
 /// as dark as the flat dim it replaces.
 pub const HOTBAR_COOLDOWN_SWEEP_ALPHA: u8 = 170;
+
+/// How long a new message-log line takes to fade and slide into place, in
+/// seconds. Long enough to read as motion, short enough that a burst of
+/// combat lines does not visibly queue up.
+pub const LOG_LINE_ARRIVE_DURATION: f32 = 0.15;
+/// How far, in points, a new log line rises from as it arrives. Up for a more
+/// pronounced entrance; the line is clipped to its own row, so anything much
+/// past a line height just delays its appearance.
+pub const LOG_LINE_SLIDE_DISTANCE: f32 = 8.0;
+/// How far above its resting colour a log line is over-brightened on arrival,
+/// as a fraction. Up makes new lines flare; 0.0 removes the flare.
+pub const LOG_LINE_ARRIVE_LIFT: f32 = 0.7;
+/// Alpha lost per line of age in the log, so the newest line reads as newest.
+/// Up fades history away faster.
+pub const LOG_LINE_AGE_FADE: f32 = 0.11;
+/// Floor on a faded log line's alpha, so the oldest visible line stays
+/// readable instead of vanishing.
+pub const LOG_LINE_MIN_ALPHA: f32 = 0.35;
+/// How long the repeat-count badge flares and hops for when its counter
+/// ticks, in seconds.
+pub const LOG_COUNT_POP_DURATION: f32 = 0.25;
+/// How far, in points, the repeat-count badge hops when it ticks.
+pub const LOG_COUNT_POP_RISE: f32 = 3.0;
+/// How far the count badge is over-brightened at the peak of a tick, as a
+/// fraction above its line's colour.
+pub const LOG_COUNT_POP_LIFT: f32 = 1.1;
