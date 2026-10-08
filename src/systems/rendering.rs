@@ -387,7 +387,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     let mut animated_entities: Vec<_> = world
         .query::<(&Position, &VisualPosition, &AnimatedSprite)>()
         .iter()
-        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, anim.clone()))
+        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, *anim))
         .collect();
     animated_entities.sort_by_key(|(_, _, _, _, anim)| anim.z_order);
 

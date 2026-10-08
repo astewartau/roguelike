@@ -694,11 +694,10 @@ fn determine_action(
                     };
                     if let Some(tp) = aim {
                         let distance = (entity_pos.0 - tp.0).abs().max((entity_pos.1 - tp.1).abs());
-                        if distance >= ranged_min && distance <= ranged_max {
-                            if has_clear_shot(entity_pos, tp, blocking_positions) {
+                        if distance >= ranged_min && distance <= ranged_max
+                            && has_clear_shot(entity_pos, tp, blocking_positions) {
                                 return ActionType::ShootBow { target_x: tp.0, target_y: tp.1 };
                             }
-                        }
                     }
                 }
             }

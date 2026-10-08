@@ -78,6 +78,7 @@ const ALL_ITEMS: [ItemType; 18] = [
 ];
 
 /// State for the developer menu
+#[derive(Default)]
 pub struct DevMenu {
     pub visible: bool,
     pub selected_tool: Option<DevTool>,
@@ -85,15 +86,6 @@ pub struct DevMenu {
     pub item_to_give: Option<ItemType>,
 }
 
-impl Default for DevMenu {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            selected_tool: None,
-            item_to_give: None,
-        }
-    }
-}
 
 impl DevMenu {
     pub fn new() -> Self {

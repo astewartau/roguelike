@@ -275,29 +275,27 @@ impl VfxManager {
                     self.spawn_damage_number(target_pos.0, target_pos.1, *damage);
                 }
             }
-            GameEvent::ProjectileHit { position, damage, target, .. } => {
+            GameEvent::ProjectileHit { position, damage, target, .. }
                 // Only show damage number if we hit an enemy (not a wall) AND position is visible
-                if target.is_some() {
-                    if grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) {
+                if target.is_some()
+                    && grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) => {
                         self.spawn_damage_number(position.0 as f32, position.1 as f32, *damage);
                     }
-                }
-            }
             GameEvent::EntityDied { position, .. } => {
                 // Could spawn death particles here in the future
                 let _ = position;
             }
-            GameEvent::FireballExplosion { x, y, radius } => {
-                // Spawn explosion at center
-                if grid.get(*x, *y).map(|t| t.visible).unwrap_or(false) {
-                    self.spawn_explosion(*x as f32 + 0.5, *y as f32 + 0.5, *radius);
-                }
+            // Spawn explosion at center
+            GameEvent::FireballExplosion { x, y, radius }
+                if grid.get(*x, *y).map(|t| t.visible).unwrap_or(false) =>
+            {
+                self.spawn_explosion(*x as f32 + 0.5, *y as f32 + 0.5, *radius);
             }
-            GameEvent::PotionSplash { x, y, potion_type } => {
-                // Spawn potion splash at impact location
-                if grid.get(*x, *y).map(|t| t.visible).unwrap_or(false) {
-                    self.spawn_potion_splash(*x as f32 + 0.5, *y as f32 + 0.5, *potion_type);
-                }
+            // Spawn potion splash at impact location
+            GameEvent::PotionSplash { x, y, potion_type }
+                if grid.get(*x, *y).map(|t| t.visible).unwrap_or(false) =>
+            {
+                self.spawn_potion_splash(*x as f32 + 0.5, *y as f32 + 0.5, *potion_type);
             }
             GameEvent::CleavePerformed { center } => {
                 // Spawn slashes on all tiles within radius 2 (5x5 area)
@@ -343,30 +341,29 @@ impl VfxManager {
                 // Stop the life drain beam visual
                 self.stop_life_drain_beam(*caster);
             }
-            GameEvent::EnemyHealed { amount, position, .. } => {
-                // Green heal number over the mended ally (event is only
-                // emitted when the tile is visible, but double-check).
-                if grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) {
-                    self.spawn(
-                        position.0 as f32 + 0.5,
-                        position.1 as f32 + 0.5,
-                        VfxType::HealNumber { amount: *amount },
-                    );
-                }
+            // Green heal number over the mended ally (event is only
+            // emitted when the tile is visible, but double-check).
+            GameEvent::EnemyHealed { amount, position, .. }
+                if grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false) =>
+            {
+                self.spawn(
+                    position.0 as f32 + 0.5,
+                    position.1 as f32 + 0.5,
+                    VfxType::HealNumber { amount: *amount },
+                );
             }
-            GameEvent::BossAbilityUsed { ability, position, .. } => {
+            GameEvent::BossAbilityUsed { ability, position, .. }
                 // Gnash's slam gets an explosion ring; other boss casts read
                 // through their spawned effects (spiders, skeletons).
                 if *ability == crate::components::BossAbility::GroundSlam
                     && grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false)
-                {
+                => {
                     self.spawn_explosion(
                         position.0 as f32 + 0.5,
                         position.1 as f32 + 0.5,
                         crate::constants::BOSS_SLAM_RADIUS,
                     );
                 }
-            }
             GameEvent::LifeDrainTick { target_pos, caster_pos, damage, healed, .. } => {
                 // Show damage number on target
                 let tile_x = target_pos.0 as i32;

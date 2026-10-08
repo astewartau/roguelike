@@ -120,54 +120,44 @@ pub fn resolve_weapon_on_hit(
 
     for affix in &affixes {
         match affix {
-            Affix::OnHitIgnite(chance) => {
-                // Same Burning status the fire system applies (see
-                // fire::try_combat_ignite); the fire system then handles
-                // spread, grass ignition, and dousing.
-                if !target_died && rng.gen::<f32>() < *chance {
-                    crate::systems::effects::add_effect_to_entity(
-                        world,
-                        target,
-                        EffectType::Burning,
-                        BURNING_DURATION,
-                    );
-                    if let Some(pos) = crate::queries::get_entity_position(world, target) {
-                        events.push(GameEvent::CaughtFire { entity: target, position: pos });
-                    }
+            // Same Burning status the fire system applies (see
+            // fire::try_combat_ignite); the fire system then handles
+            // spread, grass ignition, and dousing.
+            Affix::OnHitIgnite(chance) if !target_died && rng.gen::<f32>() < *chance => {
+                crate::systems::effects::add_effect_to_entity(
+                    world,
+                    target,
+                    EffectType::Burning,
+                    BURNING_DURATION,
+                );
+                if let Some(pos) = crate::queries::get_entity_position(world, target) {
+                    events.push(GameEvent::CaughtFire { entity: target, position: pos });
                 }
             }
-            Affix::OnHitSlow(chance) => {
-                if !target_died && rng.gen::<f32>() < *chance {
-                    crate::systems::effects::add_effect_to_entity(
-                        world,
-                        target,
-                        EffectType::Slowed,
-                        ON_HIT_SLOW_DURATION,
-                    );
-                }
+            Affix::OnHitSlow(chance) if !target_died && rng.gen::<f32>() < *chance => {
+                crate::systems::effects::add_effect_to_entity(
+                    world,
+                    target,
+                    EffectType::Slowed,
+                    ON_HIT_SLOW_DURATION,
+                );
             }
-            Affix::OnHitFear(chance) => {
-                if !target_died && rng.gen::<f32>() < *chance {
-                    crate::systems::effects::add_effect_to_entity(
-                        world,
-                        target,
-                        EffectType::Feared,
-                        ON_HIT_FEAR_DURATION,
-                    );
-                }
+            Affix::OnHitFear(chance) if !target_died && rng.gen::<f32>() < *chance => {
+                crate::systems::effects::add_effect_to_entity(
+                    world,
+                    target,
+                    EffectType::Feared,
+                    ON_HIT_FEAR_DURATION,
+                );
             }
             Affix::OnHitLifesteal(fraction) => {
                 heal_entity(world, attacker, lifesteal_heal(damage, *fraction));
             }
-            Affix::OnHitKnockback => {
-                if !target_died {
-                    try_knockback(world, grid, spatial_cache, attacker, target, events, rng);
-                }
+            Affix::OnHitKnockback if !target_died => {
+                try_knockback(world, grid, spatial_cache, attacker, target, events, rng);
             }
-            Affix::KillHeal(amount) => {
-                if target_died {
-                    heal_entity(world, attacker, *amount);
-                }
+            Affix::KillHeal(amount) if target_died => {
+                heal_entity(world, attacker, *amount);
             }
             // Attacker-side conditional, applied pre-damage via
             // attacker_conditional_damage_mult.

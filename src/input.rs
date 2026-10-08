@@ -153,6 +153,7 @@ impl Default for InputState {
 }
 
 /// Result of processing keyboard input
+#[derive(Default)]
 pub struct InputResult {
     /// Player wants to toggle fullscreen
     pub toggle_fullscreen: bool,
@@ -174,21 +175,6 @@ pub struct InputResult {
     pub wait: bool,
 }
 
-impl Default for InputResult {
-    fn default() -> Self {
-        Self {
-            toggle_fullscreen: false,
-            toggle_inventory: false,
-            toggle_grid_lines: false,
-            toggle_sneak: false,
-            enter_pressed: false,
-            movement: None,
-            attack_direction: None,
-            interact_direction: None,
-            wait: false,
-        }
-    }
-}
 
 /// Process keyboard input and return actions to take.
 /// Does NOT execute any game logic - just returns intents.
@@ -606,6 +592,7 @@ pub fn get_shoot_target(
 ///
 /// Combines keyboard, mouse, and path-following into a unified result.
 /// main.rs uses this to apply UI toggles and execute player intents.
+#[derive(Default)]
 pub struct FrameInput {
     /// Player wants to toggle fullscreen
     pub toggle_fullscreen: bool,
@@ -627,21 +614,6 @@ pub struct FrameInput {
     pub item_to_remove: Option<usize>,
 }
 
-impl Default for FrameInput {
-    fn default() -> Self {
-        Self {
-            toggle_fullscreen: false,
-            toggle_inventory: false,
-            toggle_grid_lines: false,
-            toggle_sneak: false,
-            enter_pressed: false,
-            player_dead: false,
-            player_intent: None,
-            from_keyboard: false,
-            item_to_remove: None,
-        }
-    }
-}
 
 /// Process all input for a frame and return unified results.
 ///

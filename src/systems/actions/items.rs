@@ -288,6 +288,57 @@ pub fn apply_drop_item(
     ActionResult::Completed
 }
 
+/// Apply drop equipped weapon action - unequips and drops weapon on ground
+pub fn apply_drop_equipped_weapon(
+    world: &mut World,
+    entity: Entity,
+    events: &mut EventQueue,
+) -> ActionResult {
+    // Get entity position
+    let (x, y) = match queries::get_entity_position(world, entity) {
+        Some(p) => p,
+        None => return ActionResult::Invalid,
+    };
+
+    // Get the currently equipped weapon's source instance (with affixes), or
+    // reconstruct a plain instance for the starting weapon.
+    let weapon_instance = {
+        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
+            return ActionResult::Invalid;
+        };
+        if equipment.weapon.is_none() {
+            return ActionResult::Invalid; // Nothing to drop
+        }
+        match equipment.weapon_source.take() {
+            Some(inst) => inst,
+            None => match equipment.weapon.as_ref().and_then(equipped_weapon_to_instance) {
+                Some(inst) => inst,
+                None => return ActionResult::Invalid,
+            },
+        }
+    };
+    let item_kind = weapon_instance.kind;
+
+    adjust_max_health(world, entity, -weapon_instance.max_health_bonus());
+
+    // Remove weapon from equipment
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
+        equipment.weapon = None;
+    }
+
+    // Spawn on ground
+    crate::systems::inventory::spawn_ground_item(world, x, y, weapon_instance);
+
+    // Emit event
+    events.push(GameEvent::ItemDropped {
+        entity,
+        item: item_kind,
+        position: (x, y),
+    });
+
+    ActionResult::Completed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,55 +396,4 @@ mod tests {
             assert_eq!(h.current, 30);
         }
     }
-}
-
-/// Apply drop equipped weapon action - unequips and drops weapon on ground
-pub fn apply_drop_equipped_weapon(
-    world: &mut World,
-    entity: Entity,
-    events: &mut EventQueue,
-) -> ActionResult {
-    // Get entity position
-    let (x, y) = match queries::get_entity_position(world, entity) {
-        Some(p) => p,
-        None => return ActionResult::Invalid,
-    };
-
-    // Get the currently equipped weapon's source instance (with affixes), or
-    // reconstruct a plain instance for the starting weapon.
-    let weapon_instance = {
-        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
-            return ActionResult::Invalid;
-        };
-        if equipment.weapon.is_none() {
-            return ActionResult::Invalid; // Nothing to drop
-        }
-        match equipment.weapon_source.take() {
-            Some(inst) => inst,
-            None => match equipment.weapon.as_ref().and_then(equipped_weapon_to_instance) {
-                Some(inst) => inst,
-                None => return ActionResult::Invalid,
-            },
-        }
-    };
-    let item_kind = weapon_instance.kind;
-
-    adjust_max_health(world, entity, -weapon_instance.max_health_bonus());
-
-    // Remove weapon from equipment
-    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
-        equipment.weapon = None;
-    }
-
-    // Spawn on ground
-    crate::systems::inventory::spawn_ground_item(world, x, y, weapon_instance);
-
-    // Emit event
-    events.push(GameEvent::ItemDropped {
-        entity,
-        item: item_kind,
-        position: (x, y),
-    });
-
-    ActionResult::Completed
 }

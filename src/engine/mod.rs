@@ -408,22 +408,20 @@ impl GameEngine {
         egui_consumed: bool,
     ) -> Option<WindowAction> {
         match event {
-            WindowEvent::KeyboardInput { event: key_event, .. } => {
-                if !egui_consumed {
-                    if let PhysicalKey::Code(key) = key_event.physical_key {
-                        match key_event.state {
-                            ElementState::Pressed => {
-                                if key == KeyCode::Escape {
-                                    return self.handle_escape();
-                                }
-                                if key == KeyCode::Backquote {
-                                    self.dev_menu.toggle();
-                                }
-                                self.input.keys_pressed.insert(key);
+            WindowEvent::KeyboardInput { event: key_event, .. } if !egui_consumed => {
+                if let PhysicalKey::Code(key) = key_event.physical_key {
+                    match key_event.state {
+                        ElementState::Pressed => {
+                            if key == KeyCode::Escape {
+                                return self.handle_escape();
                             }
-                            ElementState::Released => {
-                                self.input.keys_pressed.remove(&key);
+                            if key == KeyCode::Backquote {
+                                self.dev_menu.toggle();
                             }
+                            self.input.keys_pressed.insert(key);
+                        }
+                        ElementState::Released => {
+                            self.input.keys_pressed.remove(&key);
                         }
                     }
                 }
@@ -465,24 +463,21 @@ impl GameEngine {
                         }
                     }
                 }
-                if !egui_consumed && *button == MouseButton::Right {
-                    if *btn_state == ElementState::Released {
+                if !egui_consumed && *button == MouseButton::Right
+                    && *btn_state == ElementState::Released {
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
                         } else {
                             self.input.pending_right_click = true;
                         }
                     }
-                }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                if !egui_consumed {
-                    let scroll = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => *y * 2.0,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
-                    };
-                    camera.add_zoom_impulse(scroll, self.input.mouse_pos.0, self.input.mouse_pos.1);
-                }
+            WindowEvent::MouseWheel { delta, .. } if !egui_consumed => {
+                let scroll = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y * 2.0,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
+                };
+                camera.add_zoom_impulse(scroll, self.input.mouse_pos.0, self.input.mouse_pos.1);
             }
             _ => {}
         }

@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Profiling is opt-in (cargo feature `profiling`); without it this does
     // nothing and no local port is opened. Held for the process lifetime: the
     // server stops when the handle drops.
-    let _puffin_server = profiling::start();
+    profiling::start();
 
     let event_loop = EventLoop::new()?;
     let mut app = App::new();

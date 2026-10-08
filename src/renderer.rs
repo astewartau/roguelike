@@ -4,7 +4,6 @@ use crate::multi_tileset::MultiTileset;
 use crate::systems::RenderEntity;
 use crate::tile::SpriteSheet;
 use glow::*;
-use std::mem;
 use std::sync::Arc;
 
 const VERTEX_SHADER_SRC: &str = r#"#version 330 core
@@ -1262,7 +1261,7 @@ fn as_u8_slice<T>(data: &[T]) -> &[u8] {
     unsafe {
         std::slice::from_raw_parts(
             data.as_ptr() as *const u8,
-            data.len() * mem::size_of::<T>(),
+            std::mem::size_of_val(data),
         )
     }
 }

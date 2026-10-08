@@ -19,7 +19,7 @@ pub fn get_blocking_positions(world: &World, exclude: Option<Entity>) -> HashSet
     world
         .query::<(&Position, &BlocksMovement)>()
         .iter()
-        .filter(|(id, _)| exclude.map_or(true, |ex| *id != ex))
+        .filter(|(id, _)| exclude != Some(*id))
         .map(|(_, (pos, _))| (pos.x, pos.y))
         .collect()
 }
@@ -45,7 +45,7 @@ pub fn get_attackable_at(
         .query::<(&Position, &Attackable)>()
         .iter()
         .find(|(id, (pos, _))| {
-            pos.x == x && pos.y == y && exclude.map_or(true, |ex| *id != ex)
+            pos.x == x && pos.y == y && (exclude != Some(*id))
         })
         .map(|(id, _)| id)
 }

@@ -175,40 +175,32 @@ impl GameUiState {
     /// Handle a game event, updating UI state as needed
     pub fn handle_event(&mut self, event: &GameEvent) {
         match event {
-            GameEvent::ContainerOpened { container, opener, .. } => {
-                // Only open loot window if player opened the container
-                if *opener == self.player_entity {
-                    self.open_chest = Some(*container);
-                }
+            // Only open loot window if player opened the container
+            GameEvent::ContainerOpened { container, opener, .. }
+                if *opener == self.player_entity =>
+            {
+                self.open_chest = Some(*container);
             }
-            GameEvent::DialogueStarted { npc, player } => {
-                // Open dialogue window if player started the conversation
-                if *player == self.player_entity {
-                    self.talking_to = Some(*npc);
-                    self.dialogue_selected = 0;
-                }
+            // Open dialogue window if player started the conversation
+            GameEvent::DialogueStarted { npc, player } if *player == self.player_entity => {
+                self.talking_to = Some(*npc);
+                self.dialogue_selected = 0;
             }
-            GameEvent::ShopOpened { vendor, player } => {
-                // Open shop window if player started shopping
-                if *player == self.player_entity {
-                    self.shopping_at = Some(*vendor);
-                    self.talking_to = None; // Close dialogue when shop opens
-                }
+            // Open shop window if player started shopping
+            GameEvent::ShopOpened { vendor, player } if *player == self.player_entity => {
+                self.shopping_at = Some(*vendor);
+                self.talking_to = None; // Close dialogue when shop opens
             }
-            GameEvent::AltarOpened { altar, player } => {
-                // Open the sacrifice window if the player used the altar
-                if *player == self.player_entity {
-                    self.open_altar = Some(*altar);
-                }
+            // Open the sacrifice window if the player used the altar
+            GameEvent::AltarOpened { altar, player } if *player == self.player_entity => {
+                self.open_altar = Some(*altar);
             }
-            GameEvent::EntityMoved { entity, .. } => {
-                // Close windows when player moves away
-                if *entity == self.player_entity {
-                    self.open_chest = None;
-                    self.talking_to = None;
-                    self.shopping_at = None;
-                    self.open_altar = None;
-                }
+            // Close windows when player moves away
+            GameEvent::EntityMoved { entity, .. } if *entity == self.player_entity => {
+                self.open_chest = None;
+                self.talking_to = None;
+                self.shopping_at = None;
+                self.open_altar = None;
             }
             _ => {}
         }
