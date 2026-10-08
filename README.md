@@ -135,9 +135,9 @@ cargo run --release
 
 ### Tests
 
-158 tests in `#[cfg(test)]` modules across 32 source files — dungeon
-generation, combat, abilities, AI, survival, fire, identification, pathfinding,
-FOV and run-history parsing. They run without opening a window.
+`#[cfg(test)]` modules throughout the tree cover dungeon generation, combat,
+abilities, AI, survival, fire, identification, pathfinding, FOV and run-history
+parsing. They run without opening a window.
 
 ```bash
 cargo test

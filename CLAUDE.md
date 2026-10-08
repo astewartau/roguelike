@@ -102,6 +102,25 @@ by calling each other. Emit an event and let audio, VFX and UI react; that is
 why [src/audio.rs](src/audio.rs) and [src/vfx.rs](src/vfx.rs) have no
 knowledge of combat.
 
+### Simulation state travels in a context struct
+
+Simulation functions take one of the context structs in
+[src/engine/context.rs](src/engine/context.rs) rather than a long list of
+individual borrows. They exist because the mutable state is split across two
+owners — `GameState` holds the world, grid, clock, scheduler, caches and rng,
+`GameEngine` holds the event queue, vfx, UI state, input state and audio — and
+spelling that split out by hand had grown signatures to 10-14 parameters.
+
+- `ActorCtx` — scheduling and driving actors: AI decisions, spawn
+  initialisation, floor loading, time advancement. No presentation state.
+- `SimCtx` — `ActorCtx` plus the presentation state player-facing paths need
+  (event vfx, message log, targeting mode, sound). `SimCtx::actors` reborrows
+  it as an `ActorCtx`.
+- `EffectCtx` — for applying effects.
+
+Take the narrowest context that does the job: that is what keeps AI and
+spawning code from reaching into vfx, UI or audio.
+
 ### Never `.unwrap()` a data-driven lookup — degrade gracefully
 
 Anything that depends on content — an asset file, a loot table entry, a
@@ -168,20 +187,8 @@ between a fresh clone and a panic on launch.
 New gameplay goes in `src/systems/`. New tuning goes in `src/constants/`. Never
 in `src/main.rs` or `src/app.rs`.
 
-## In flux
+## Deliberately deferred
 
-**How simulation state is threaded through function signatures is being
-reworked right now** on the `claude/refactor-state-threading` branch, which is
-also splitting up `src/engine/mod.rs` and `src/components.rs`. Check that
-branch before writing anything that depends on the current parameter lists, the
-layout of those two files, or where a given component is declared. The
-conventions above are unaffected.
-
-Also deliberately deferred, so don't treat either as a quick win:
-
-- The clippy and rustc warning backlog. A large share of it is
-  `too_many_arguments` and dead-code lints in exactly the files the refactor is
-  rewriting, so it waits for that to land.
 - `runs_history.jsonl` is written to the working directory. A user-data
   directory via the `dirs` crate would be better, but it adds a dependency and
   orphans existing history files.

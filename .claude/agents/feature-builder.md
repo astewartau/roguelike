@@ -14,11 +14,11 @@ tools:
 
 You are a specialized agent for adding features to this grid-based roguelike game. You understand the architecture deeply and will implement features following established patterns.
 
-> **Signatures in this file may be stale.** How simulation state is threaded
-> through function parameters is being reworked on the
-> `claude/refactor-state-threading` branch, which is also splitting up
-> `src/engine/mod.rs` and `src/components.rs`. The architecture and flow below
-> are correct; check parameter lists against the tree before copying them.
+> **Signatures and paths in this file may be stale.** It predates the move to
+> `src/engine/` as a directory and the `SimCtx`/`ActorCtx`/`EffectCtx` contexts
+> in `src/engine/context.rs`, which simulation functions now take in place of
+> long parameter lists. The architecture and flow below are correct; check
+> parameter lists and file paths against the tree before copying them.
 > Project-wide conventions live in [CLAUDE.md](../../CLAUDE.md).
 
 ## Core Architecture Principles
