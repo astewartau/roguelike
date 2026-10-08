@@ -205,23 +205,19 @@ impl GameEngine {
         // Initialize AI actors
         state.initialize_ai(&mut self.events);
 
-        // Spawn campfire in starting room near wizard
-        if let Some(starting_room) = &state.grid.starting_room {
-            // Find a position for the campfire (offset from center)
-            let (cx, cy) = starting_room.center();
-            // Try to place it to the right of center, or find first available spot
-            let campfire_positions = [
-                (cx + 2, cy),
-                (cx - 2, cy),
-                (cx, cy + 2),
-                (cx, cy - 2),
-                (cx + 1, cy + 1),
-            ];
-            for (x, y) in campfire_positions {
-                if state.grid.is_walkable(x, y) {
-                    spawning::spawn_campfire(&mut state.world, x, y);
-                    break;
-                }
+        // Spawn campfire in starting room near wizard.
+        //
+        // The candidates below are centre-offsets, and in a small starting room
+        // an offset of 2 lands on the room edge — frequently right in the
+        // doorway. A campfire carries CausesBurning but not BlocksMovement, so
+        // one sitting there is not an obstacle you route around, it is a tile
+        // that sets you alight on the way out. Skip any candidate in a
+        // doorway's approach, and fall back to scanning the room interior
+        // rather than silently leaving the starting room dark.
+        if let Some(starting_room) = state.grid.starting_room {
+            let player_start = state.player_start_position().map(|(x, y)| (x as i32, y as i32));
+            if let Some((x, y)) = pick_campfire_spot(&state.grid, &starting_room, player_start) {
+                spawning::spawn_campfire(&mut state.world, x, y);
             }
         }
 
@@ -1755,6 +1751,44 @@ fn player_too_hungry_to_recover(world: &hecs::World, player: Entity) -> bool {
 /// infrastructure: no hostile AI, walkable (no BlocksMovement), `TamedBy` +
 /// `CompanionAI` for defensive follow behavior, plus the `RaisedUndead`
 /// marker that counts against the caster's INT-scaled control cap.
+/// Pick where the starting-room campfire goes, or `None` if the room has
+/// nowhere safe for it.
+///
+/// Prefers a ring of centre-offsets (so the fire reads as placed, not dumped in
+/// a corner) and falls back to scanning the room interior. Every candidate must
+/// be walkable, outside any doorway's approach, and not the player's own tile.
+fn pick_campfire_spot(
+    grid: &crate::grid::Grid,
+    room: &crate::dungeon_gen::Rect,
+    player_start: Option<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    let usable = |x: i32, y: i32| {
+        grid.is_walkable(x, y) && !grid.blocks_a_doorway(x, y) && player_start != Some((x, y))
+    };
+
+    let (cx, cy) = room.center();
+    let preferred = [
+        (cx + 2, cy),
+        (cx - 2, cy),
+        (cx, cy + 2),
+        (cx, cy - 2),
+        (cx + 1, cy + 1),
+    ];
+
+    preferred
+        .into_iter()
+        .find(|&(x, y)| usable(x, y))
+        .or_else(|| {
+            // Nothing in the preferred ring works (small room, or doors on
+            // several sides). Take any interior tile that does, rather than
+            // leaving the starting room unlit.
+            (1..room.height - 1)
+                .flat_map(|dy| (1..room.width - 1).map(move |dx| (dx, dy)))
+                .map(|(dx, dy)| (room.x + dx, room.y + dy))
+                .find(|&(x, y)| usable(x, y))
+        })
+}
+
 fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
     let ActorCtx { world, player: owner, clock, scheduler, tracker: active_ai_tracker, spatial: spatial_cache, rng, .. } = ctx;
     let (world, owner) = (&mut **world, *owner);
@@ -3062,4 +3096,75 @@ mod tests {
             "the new companion counts against the raise cap"
         );
     }
+
+    /// The starting-room campfire used to be placed purely on centre-offsets
+    /// with only a walkability check. In a small starting room an offset of 2
+    /// lands on the edge column, one tile from the door — and a campfire is
+    /// CausesBurning without BlocksMovement, so it reads as scenery and then
+    /// sets you alight on the way out. There is no walk-around in a one-tile
+    /// doorway.
+    #[test]
+    fn the_starting_campfire_never_sits_in_a_doorway() {
+        use rand::SeedableRng;
+
+        let mut checked = 0;
+        let mut would_have_offended = 0;
+
+        for seed in 0..80u64 {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let grid = crate::grid::Grid::new_floor(50, 50, 0, &mut rng);
+            let Some(room) = grid.starting_room else { continue };
+
+            // What the old code would have chosen: first walkable centre-offset.
+            let (cx, cy) = room.center();
+            let old_choice = [
+                (cx + 2, cy),
+                (cx - 2, cy),
+                (cx, cy + 2),
+                (cx, cy - 2),
+                (cx + 1, cy + 1),
+            ]
+            .into_iter()
+            .find(|&(x, y)| grid.is_walkable(x, y));
+            if let Some((x, y)) = old_choice {
+                if grid.blocks_a_doorway(x, y) {
+                    would_have_offended += 1;
+                }
+            }
+
+            if let Some((x, y)) = pick_campfire_spot(&grid, &room, None) {
+                checked += 1;
+                assert!(
+                    !grid.blocks_a_doorway(x, y),
+                    "seed {seed}: campfire at {:?} is in a doorway approach",
+                    (x, y)
+                );
+                assert!(grid.is_walkable(x, y), "seed {seed}: campfire on an unwalkable tile");
+            }
+        }
+
+        assert!(checked > 40, "expected most seeds to place a campfire, got {checked}");
+        // Proves the filter is load-bearing rather than vacuous.
+        assert!(
+            would_have_offended > 0,
+            "the old centre-offset placement never hit a doorway in {checked} floors, \
+             so this test would not have caught the reported bug"
+        );
+    }
+
+    /// The campfire must not land on the player's own tile either.
+    #[test]
+    fn the_starting_campfire_avoids_the_player_tile() {
+        use rand::SeedableRng;
+        for seed in 0..40u64 {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let grid = crate::grid::Grid::new_floor(50, 50, 0, &mut rng);
+            let Some(room) = grid.starting_room else { continue };
+            let start = room.center();
+            if let Some(spot) = pick_campfire_spot(&grid, &room, Some(start)) {
+                assert_ne!(spot, start, "seed {seed}: campfire spawned on the player");
+            }
+        }
+    }
+
 }

@@ -110,4 +110,10 @@ impl Grid {
     pub fn is_walkable(&self, x: i32, y: i32) -> bool {
         self.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false)
     }
+
+    /// Whether `(x, y)` is in a doorway's approach, and so must stay clear of
+    /// standing fire sources. See `dungeon_gen::blocks_a_doorway`.
+    pub fn blocks_a_doorway(&self, x: i32, y: i32) -> bool {
+        crate::dungeon_gen::blocks_a_doorway(x, y, &self.door_positions)
+    }
 }

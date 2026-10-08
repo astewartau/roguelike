@@ -87,6 +87,24 @@ pub enum RoomTheme {
     Cavern,
 }
 
+/// Whether `(x, y)` sits in a doorway's approach, and so must stay clear of
+/// standing fire sources.
+///
+/// Braziers and the starting-room campfire carry `CausesBurning` but not
+/// `BlocksMovement`: one placed in a doorway reads as scenery, cannot be
+/// pushed aside, and has no walk-around in a one-tile opening, so the only way
+/// through is to set yourself on fire. Room corners and the campfire's
+/// centre-offset candidates both land beside doors often enough that this has
+/// to be filtered rather than left to chance.
+///
+/// See `DOORWAY_FIRE_CLEARANCE` for the radius.
+pub fn blocks_a_doorway(x: i32, y: i32, doors: &[((i32, i32), RoomTheme)]) -> bool {
+    let r = crate::constants::DOORWAY_FIRE_CLEARANCE;
+    doors
+        .iter()
+        .any(|&((dx, dy), _)| (x - dx).abs() <= r && (y - dy).abs() <= r)
+}
+
 /// A room with its theme
 #[derive(Clone, Copy, Debug)]
 pub struct ThemedRoom {
@@ -533,7 +551,7 @@ impl DungeonGenerator {
             .collect();
 
         // Generate brazier positions in room corners (skip starting room)
-        let brazier_positions = gen.generate_brazier_positions(&rooms, &mut rng);
+        let brazier_positions = gen.generate_brazier_positions(&rooms, &door_positions, &mut rng);
 
         // Generate coffin positions in Crypt rooms
         let coffin_positions = gen.generate_coffin_positions(&themed_rooms, &mut rng);
@@ -1788,7 +1806,12 @@ impl DungeonGenerator {
 
     /// Generate brazier positions in rooms.
     /// Places braziers in corners of larger rooms (not the starting room).
-    fn generate_brazier_positions(&self, rooms: &[Rect], rng: &mut impl Rng) -> Vec<(i32, i32)> {
+    fn generate_brazier_positions(
+        &self,
+        rooms: &[Rect],
+        doors: &[((i32, i32), RoomTheme)],
+        rng: &mut impl Rng,
+    ) -> Vec<(i32, i32)> {
         let mut positions = Vec::new();
 
         for (i, room) in rooms.iter().enumerate() {
@@ -1826,6 +1849,9 @@ impl DungeonGenerator {
                     .filter(|&&(x, y)| {
                         self.get_tile(x, y) == Some(TileType::Floor)
                     })
+                    // A room corner is often right beside a doorway, and a
+                    // brazier there has to be walked into to get through.
+                    .filter(|&&(x, y)| !blocks_a_doorway(x, y, doors))
                     .copied()
                     .collect();
 
@@ -2841,4 +2867,42 @@ mod tests {
         // Should remain a leaf
         assert!(node.is_leaf());
     }
+
+    /// Braziers carry `CausesBurning` but not `BlocksMovement`, so one in a
+    /// doorway is a tile you have to set yourself on fire to pass. Room corners
+    /// sit beside doorways often, so this needs filtering, not luck.
+    #[test]
+    fn no_brazier_sits_in_a_doorway() {
+        use rand::SeedableRng;
+        let mut offenders = Vec::new();
+        for seed in 0..60u64 {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let result = DungeonGenerator::generate_with_rng(60, 60, 1, &mut rng);
+            for &(bx, by) in &result.brazier_positions {
+                if blocks_a_doorway(bx, by, &result.door_positions) {
+                    offenders.push((seed, (bx, by)));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "braziers placed in a doorway approach: {:?}",
+            offenders
+        );
+    }
+
+    /// Guard against the filter being so strict that braziers vanish entirely —
+    /// a test that passes because nothing is ever placed is worthless.
+    #[test]
+    fn braziers_are_still_placed_after_doorway_filtering() {
+        use rand::SeedableRng;
+        let total: usize = (0..30u64)
+            .map(|seed| {
+                let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+                DungeonGenerator::generate_with_rng(60, 60, 1, &mut rng).brazier_positions.len()
+            })
+            .sum();
+        assert!(total > 20, "expected braziers across 30 floors, got {total}");
+    }
+
 }

@@ -121,3 +121,18 @@ pub const CAVERN_SPIDERS_MIN: usize = 1;
 pub const CAVERN_SPIDERS_MAX: usize = 3;
 /// From this floor on, one venomous giant spider also lairs in each cavern.
 pub const CAVERN_GIANT_SPIDER_FLOOR: u32 = 3;
+
+// =============================================================================
+// DOORWAY CLEARANCE (keep hazards out of chokepoints)
+// =============================================================================
+
+/// Chebyshev radius around a door kept clear of standing fire sources
+/// (braziers, the starting-room campfire).
+///
+/// Those carry `CausesBurning` but not `BlocksMovement`, so one sitting in a
+/// doorway doesn't look like an obstacle — you simply walk into it and catch
+/// fire, with no way around in a one-tile opening. 1 clears the door tile and
+/// the eight tiles around it, which is the whole approach to a doorway. Raising
+/// this pushes fire further from doors but leaves small rooms with nowhere
+/// valid to put it.
+pub const DOORWAY_FIRE_CLEARANCE: i32 = 1;
