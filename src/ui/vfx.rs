@@ -5,7 +5,11 @@
 
 use crate::camera::Camera;
 use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, ItemType, StatusEffects, VisualPosition};
-use crate::constants::{DAMAGE_NUMBER_RISE, POTION_SPLASH_RADIUS};
+use crate::constants::{
+    DAMAGE_NUMBER_FONT_SIZE, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
+    POTION_SPLASH_RADIUS,
+};
+use crate::ease;
 use crate::grid::Grid;
 use crate::systems::effects;
 use crate::vfx::{VfxType, VisualEffect};
@@ -145,8 +149,10 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         let progress = effect.progress();
 
         // Convert world position to screen position
-        // The effect position is already centered on the tile
-        let rise_offset = progress * DAMAGE_NUMBER_RISE;
+        // The effect position is already centered on the tile.
+        // Eased rather than linear: the number leaps away from the hit and
+        // settles, instead of drifting at a constant speed.
+        let rise_offset = ease::out_cubic(progress) * DAMAGE_NUMBER_RISE;
         let world_x = effect.x;
         let world_y = effect.y + rise_offset; // Rise up (positive Y is up in world space)
 
@@ -173,7 +179,13 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         } else {
             format!("{}", amount)
         };
-        let font_id = egui::FontId::monospace(20.0);
+        // Punch out oversized and settle back, so a hit lands rather than
+        // merely appearing. Rounded to a step because egui caches rasterized
+        // glyphs per distinct font size.
+        let popped = DAMAGE_NUMBER_FONT_SIZE * ease::pop(progress);
+        let font_size =
+            (popped / DAMAGE_NUMBER_POP_SIZE_STEP).round() * DAMAGE_NUMBER_POP_SIZE_STEP;
+        let font_id = egui::FontId::monospace(font_size);
 
         painter.text(
             egui::pos2(egui_x, egui_y),

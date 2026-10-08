@@ -1859,6 +1859,19 @@ pub struct SpriteTint {
     pub b: f32,
 }
 
+/// Present only while a sprite is flashing from a hit it just took, counting
+/// down to zero. Added by `systems::animation::flash_on_damage` from damage
+/// events and removed by `systems::animation::update_hit_flashes`; rendering
+/// lifts the sprite's tint toward the flash colour while it is alive.
+///
+/// Counts down in *real* time, not game time, like the other per-entity
+/// animation components here — see `update_hit_flashes` for why.
+#[derive(Debug, Clone, Copy)]
+pub struct HitFlash {
+    /// Seconds of flash left, starting at `HIT_FLASH_DURATION`.
+    pub remaining: f32,
+}
+
 // =============================================================================
 // NPC / DIALOGUE COMPONENTS
 // =============================================================================

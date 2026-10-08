@@ -416,10 +416,20 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
         &mut *ctx.ui,
     );
 
+    // Camera shakes asked for by this batch of events, handed to the vfx
+    // manager below (the camera itself is not reachable from here).
+    let mut shake_requests = Vec::new();
+
     for event in event_list {
         vfx.handle_event(&event, grid);
         ui_state.handle_event(&event);
         ui_state.message_log.record_event(&event, &*world);
+
+        // Presentation reactions that need world access, driven off the same
+        // events as everything else above: flash whatever just took damage,
+        // and shake the view if the event was worth shaking it for.
+        systems::flash_on_damage(world, &event);
+        systems::camera_shake::queue_for_event(world, player_entity, &event, &mut shake_requests);
 
         match &event {
             GameEvent::DoorOpened { door, .. } => {
@@ -493,6 +503,14 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
             }
             _ => {}
         }
+    }
+
+    // Park the shakes with the vfx manager; the engine tick drains them into
+    // the camera. Going through the manager rather than the return value means
+    // the paths that discard a `TurnExecutionResult` (ability casts, for
+    // instance) still get their shake.
+    for request in shake_requests {
+        vfx.request_shake(request);
     }
 
     result
