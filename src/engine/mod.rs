@@ -1763,9 +1763,11 @@ fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
     // still draws, so it stays on the run's seeded stream like every other spawn.
     let skeleton = spawning::enemies::SKELETON.spawn(world, x, y, rng);
 
-    // Convert the hostile stat block into an ally (same path as taming).
+    // Convert the hostile stat block into an ally. Unlike a tamed animal, a
+    // raised skeleton KEEPS BlocksMovement: it is a construct you put between
+    // yourself and something else, so it has to body-block enemies. Its owner
+    // can still walk through it (see `apply_move`'s companion exception).
     let _ = world.remove_one::<crate::components::ChaseAI>(skeleton);
-    let _ = world.remove_one::<crate::components::BlocksMovement>(skeleton);
     let _ = world.remove_one::<crate::components::Asleep>(skeleton);
     let _ = world.insert(
         skeleton,
@@ -1783,8 +1785,8 @@ fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
         ),
     );
 
-    // Companions don't block movement or vision.
-    spatial_cache.register_entity(skeleton, (x, y), false, false);
+    // Blocks movement (so it screens for its owner), never vision.
+    spatial_cache.register_entity(skeleton, (x, y), true, false);
 
     // Track and schedule so the companion AI starts acting.
     active_ai_tracker.register_entity(skeleton);
@@ -3036,8 +3038,23 @@ mod tests {
         assert!(world.get::<&crate::components::TamedBy>(skeleton).is_ok());
         // ... and no hostile leftovers.
         assert!(world.get::<&crate::components::ChaseAI>(skeleton).is_err());
-        assert!(world.get::<&crate::components::BlocksMovement>(skeleton).is_err());
         assert!(world.get::<&crate::components::Asleep>(skeleton).is_err());
+        // Unlike a tamed animal, a raised skeleton KEEPS BlocksMovement: it is
+        // a screen you put between yourself and something else. Its owner walks
+        // through it anyway (see apply_move's companion exception).
+        assert!(
+            world.get::<&crate::components::BlocksMovement>(skeleton).is_ok(),
+            "a raised skeleton body-blocks for its owner"
+        );
+        assert!(
+            cache.is_blocked((2, 1)),
+            "and the SpatialCache agrees, so enemies path around it"
+        );
+        assert!(
+            !cache.blocks_vision((2, 1)),
+            "but it never blocks line of sight"
+        );
+        cache.assert_coherent_with_world(&world, "after raising a skeleton");
         // It keeps the skeleton stat block (alive, counted against the cap).
         assert_eq!(
             crate::systems::actions::raised_undead_count(&world),

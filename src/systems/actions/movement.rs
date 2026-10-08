@@ -38,6 +38,7 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
     }
 
     // Check for attackable entity at target - block movement unless it's our own companion
+    let mut passing_through_own_companion = false;
     if let Some(target_entity) = queries::get_attackable_at(world, target_x, target_y, Some(entity)) {
         // Allow walking through our own tamed companions
         let is_our_companion = world
@@ -47,6 +48,7 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         if !is_our_companion {
             return ActionResult::Blocked;
         }
+        passing_through_own_companion = true;
     }
 
     // Check for closed door at target
@@ -97,8 +99,14 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         }
     }
 
-    // Check for any other blocking entity
-    if queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity)) {
+    // Check for any other blocking entity. A raised skeleton keeps
+    // BlocksMovement so it screens enemies, so the cache reports its tile as
+    // blocked — but its owner walks through it, same as any other companion.
+    // Without this exception a Necromancer trailing skeletons at follow
+    // distance 2 would wall itself into any corridor it backed down.
+    if !passing_through_own_companion
+        && queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity))
+    {
         return ActionResult::Blocked;
     }
 
@@ -360,7 +368,8 @@ pub fn apply_use_stairs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::VisualPosition;
+    use crate::components::{Attackable, CompanionAI, TamedBy, VisualPosition};
+    use rand::SeedableRng;
 
     /// Walking onto a staircase is a real move, and the entity can end up
     /// standing there: `can_transition_floor` refuses `Up` on floor 0, so
@@ -412,5 +421,73 @@ mod tests {
         }
         cache.update_position(player, (7, 9), (7, 10));
         cache.assert_coherent_with_world(&world, "after stepping off the stairs");
+    }
+
+    /// A raised skeleton keeps `BlocksMovement` so it screens enemies, which
+    /// means the SpatialCache reports its tile as blocked. Its owner still has
+    /// to be able to walk through it — a Necromancer trailing skeletons at
+    /// follow distance 2 would otherwise wall itself into any corridor it
+    /// backed down.
+    #[test]
+    fn owner_walks_through_a_blocking_companion_but_a_stranger_does_not() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut grid = crate::grid::Grid::new_floor(20, 20, 0, &mut rng);
+        // Carve a clear strip so walkability isn't what's under test.
+        for x in 1..6 {
+            if let Some(tile) = grid.get_mut(x, 1) {
+                tile.tile_type = crate::tile::TileType::Floor;
+            }
+        }
+
+        let mut world = World::new();
+        let owner_pos = Position::new(1, 1);
+        let owner = world.spawn((owner_pos, VisualPosition::from_position(&owner_pos)));
+        let comp_pos = Position::new(2, 1);
+        let companion = world.spawn((
+            comp_pos,
+            VisualPosition::from_position(&comp_pos),
+            BlocksMovement,
+            Attackable,
+            TamedBy { owner },
+            CompanionAI { owner, follow_distance: 2, threat_table: Vec::new() },
+        ));
+        let stranger_pos = Position::new(3, 1);
+        let stranger = world.spawn((stranger_pos, VisualPosition::from_position(&stranger_pos)));
+
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        assert!(cache.is_blocked((2, 1)), "companion blocks its tile");
+
+        let mut events = crate::events::EventQueue::new();
+        let result = apply_move(
+            &mut EffectCtx {
+                world: &mut world,
+                grid: &mut grid,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
+            owner,
+            1,
+            0,
+        );
+        assert_eq!(result, ActionResult::Completed, "the owner walks through its own companion");
+        let moved = world.get::<&Position>(owner).map(|p| (p.x, p.y)).unwrap();
+        assert_eq!(moved, (2, 1));
+
+        // Someone else is still stopped by it — that is the whole point.
+        let result = apply_move(
+            &mut EffectCtx {
+                world: &mut world,
+                grid: &mut grid,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
+            stranger,
+            -1,
+            0,
+        );
+        assert_eq!(result, ActionResult::Blocked, "a non-owner is screened by the companion");
+        let _ = companion;
     }
 }
