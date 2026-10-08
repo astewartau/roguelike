@@ -114,11 +114,6 @@ pub const HP_LOW_PULSE_RATE: f32 = 1.3;
 /// fraction above normal. Up is more alarming, 0.0 disables the pulse.
 pub const HP_LOW_PULSE_DEPTH: f32 = 0.55;
 
-/// How long a hunger or fatigue bar takes to slide into place once it starts
-/// mattering, in seconds. The bar appearing at all *is* the warning, so the
-/// slide has to read as motion — too fast and it looks like a layout glitch.
-pub const SURVIVAL_BAR_SLIDE_DURATION: f32 = 0.35;
-
 /// How long before a status effect expires that its pip starts flashing, in
 /// seconds. Up gives more warning; down makes the flash a final jolt.
 pub const EFFECT_PIP_FLASH_LEAD: f32 = 3.0;
