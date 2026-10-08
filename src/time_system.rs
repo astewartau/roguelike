@@ -340,7 +340,7 @@ fn apply_action_effects(
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
         ActionType::Wait => {
-            actions::apply_wait(world, entity, events, rng)
+            actions::apply_wait(&mut effects(world, grid, spatial_cache, events, rng), entity)
         }
         ActionType::ShootBow { target_x, target_y } => {
             actions::apply_shoot_bow(world, grid, entity, *target_x, *target_y, events, current_time)
