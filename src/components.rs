@@ -429,10 +429,6 @@ pub struct OverlaySprite {
 }
 
 impl OverlaySprite {
-    pub fn new(sheet: SpriteSheet, tile_id: u32) -> Self {
-        Self { sheet, tile_id }
-    }
-
     /// Create from a (SpriteSheet, u32) tuple
     pub fn from_ref(sprite_ref: (SpriteSheet, u32)) -> Self {
         Self {
@@ -459,23 +455,6 @@ pub struct AnimatedSprite {
 }
 
 impl AnimatedSprite {
-    pub fn new(sheet: SpriteSheet, base_tile_id: u32, frame_count: u32, frame_duration: f32) -> Self {
-        Self {
-            sheet,
-            base_tile_id,
-            frame_count,
-            frame_duration,
-            phase_offset: 0.0,
-            z_order: 1,
-        }
-    }
-
-    /// Create with a random phase offset
-    pub fn with_random_phase(mut self) -> Self {
-        self.phase_offset = rand::random();
-        self
-    }
-
     /// Get the current tile ID based on real time
     pub fn current_tile_id(&self, real_time: f32) -> u32 {
         let total_duration = self.frame_duration * self.frame_count as f32;
@@ -1393,11 +1372,6 @@ impl ChaseAI {
         }
     }
 
-    /// Get the highest-threat entry.
-    pub fn highest_threat(&self) -> Option<&ThreatEntry> {
-        self.threat_table.iter().max_by(|a, b| a.threat.partial_cmp(&b.threat).unwrap_or(std::cmp::Ordering::Equal))
-    }
-
     /// Remove a target from the threat table (e.g., on death).
     pub fn remove_target(&mut self, target: Entity) {
         self.threat_table.retain(|e| e.entity != target);
@@ -1418,10 +1392,9 @@ impl ChaseAI {
         self.threat_table.iter().find(|e| e.entity == target).and_then(|e| e.last_known_pos)
     }
 
-    /// Clear all threat (for floor transitions).
-    pub fn clear_threat(&mut self) {
-        self.threat_table.clear();
-        self.current_target = None;
+    /// Get the highest-threat entry.
+    pub fn highest_threat(&self) -> Option<&ThreatEntry> {
+        self.threat_table.iter().max_by(|a, b| a.threat.partial_cmp(&b.threat).unwrap_or(std::cmp::Ordering::Equal))
     }
 }
 
@@ -1643,14 +1616,6 @@ pub struct Equipment {
 }
 
 impl Equipment {
-    pub fn with_melee(weapon: Weapon) -> Self {
-        Self { weapon: Some(EquippedWeapon::Melee(weapon)), ..Self::empty() }
-    }
-
-    pub fn with_ranged(ranged: RangedWeapon) -> Self {
-        Self { weapon: Some(EquippedWeapon::Ranged(ranged)), ..Self::empty() }
-    }
-
     /// Create equipment with an already-constructed EquippedWeapon
     pub fn with_equipped(weapon: EquippedWeapon) -> Self {
         Self { weapon: Some(weapon), ..Self::empty() }
@@ -2089,7 +2054,13 @@ pub struct PlacedFireTrap {
 // GENERALIZED TRAP SYSTEM
 // =============================================================================
 
-/// Types of placed traps
+/// Types of placed traps.
+///
+/// `Fire` is not constructed yet: it is the unbuilt half of the migration this
+/// enum exists for. Fire traps still use the older `PlacedFireTrap` component
+/// (live in rendering, AI fire-avoidance and trap triggering); only `Snare` has
+/// moved across so far.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrapType {
     /// Fire trap: deals burst damage and applies Burning
@@ -2191,16 +2162,6 @@ impl RangerAbilities {
         self.abilities.get(index)
     }
 
-    /// Get mutable reference to ability at given index
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut (AbilityType, f32, f32)> {
-        self.abilities.get_mut(index)
-    }
-
-    /// Check if ability at index is ready (cooldown <= 0)
-    pub fn is_ready(&self, index: usize) -> bool {
-        self.abilities.get(index).map(|(_, cd, _)| *cd <= 0.0).unwrap_or(false)
-    }
-
     /// Start cooldown for ability at index
     pub fn start_cooldown(&mut self, index: usize) {
         if let Some((_, cooldown_remaining, cooldown_total)) = self.abilities.get_mut(index) {
@@ -2286,11 +2247,6 @@ impl CompanionAI {
                 time_at_minimum: 0.0,
             });
         }
-    }
-
-    /// Get the highest-threat entry.
-    pub fn highest_threat(&self) -> Option<&ThreatEntry> {
-        self.threat_table.iter().max_by(|a, b| a.threat.partial_cmp(&b.threat).unwrap_or(std::cmp::Ordering::Equal))
     }
 
     /// Remove a target from the threat table (e.g., on death).

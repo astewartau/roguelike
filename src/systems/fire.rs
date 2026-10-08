@@ -22,6 +22,7 @@ use crate::components::{
     StatusEffects, Web, WetGrass,
 };
 use crate::constants::*;
+use crate::engine::EffectCtx;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
@@ -36,15 +37,15 @@ const NEIGHBORS: [(i32, i32); 8] = [
 /// elapsed game-time this frame; `accumulator` carries fractional game-time
 /// between discrete spread steps.
 pub fn tick_fire(
-    world: &mut World,
-    grid: &mut Grid,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
+    ctx: &mut EffectCtx,
     game_dt: f32,
     accumulator: &mut f32,
     fov_dirty: &mut bool,
-    rng: &mut impl Rng,
 ) {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     if game_dt <= 0.0 {
         return;
     }
@@ -818,7 +819,16 @@ mod tests {
         while remaining > 0.0 {
             let dt = remaining.min(FIRE_STEP_INTERVAL);
             tick_fire(
-                world, grid, &mut cache, &mut events, dt, &mut acc, &mut fov_dirty, &mut rng,
+                &mut EffectCtx {
+                    world,
+                    grid,
+                    spatial: &mut cache,
+                    events: &mut events,
+                    rng: &mut rng,
+                },
+                dt,
+                &mut acc,
+                &mut fov_dirty,
             );
             remaining -= dt;
         }
@@ -835,19 +845,29 @@ mod tests {
         let mut events = EventQueue::new();
         let mut acc = 0.0;
         let mut fov_dirty = false;
+        // Fresh entropy per call, as `thread_rng` gave before `EffectCtx` fixed
+        // the rng type: these helpers drive probabilistic spread tests that
+        // loop until fire catches, so the stream must differ between steps.
+        // `run_fire_seeded` is the deterministic variant.
+        let mut rng = {
+            use rand::SeedableRng;
+            rand::rngs::StdRng::from_entropy()
+        };
         // Advance in FIRE_STEP_INTERVAL chunks so spread steps actually run.
         let mut remaining = seconds;
         while remaining > 0.0 {
             let dt = remaining.min(FIRE_STEP_INTERVAL);
             tick_fire(
-                world,
-                grid,
-                cache,
-                &mut events,
+                &mut EffectCtx {
+                    world,
+                    grid,
+                    spatial: cache,
+                    events: &mut events,
+                    rng: &mut rng,
+                },
                 dt,
                 &mut acc,
                 &mut fov_dirty,
-                &mut rand::thread_rng(),
             );
             remaining -= dt;
         }

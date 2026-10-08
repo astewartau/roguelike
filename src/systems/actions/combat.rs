@@ -1,5 +1,6 @@
 //! Melee attacks, cleave, and stun.
 
+use crate::engine::EffectCtx;
 use hecs::{Entity, World};
 use rand::Rng;
 
@@ -9,22 +10,16 @@ use crate::components::{
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
-use crate::grid::Grid;
 use crate::queries;
-use crate::spatial_cache::SpatialCache;
 
 use super::{interrupt_life_drain_on_damage, ActionResult};
 
 /// Apply attack effect
-pub fn apply_attack(
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut SpatialCache,
-    attacker: Entity,
-    target: Entity,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) -> ActionResult {
+pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> ActionResult {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     // Get target position for VFX
     let target_pos = match queries::get_entity_position(world, target) {
         Some(p) => (p.0 as f32, p.1 as f32),
@@ -83,7 +78,10 @@ pub fn apply_attack(
 
     // Resolve weapon on-hit affixes (ignite/slow/fear/lifesteal/knockback/kill-heal)
     crate::systems::combat::resolve_weapon_on_hit(
-        world, grid, spatial_cache, attacker, target, damage, events, rng,
+        &mut EffectCtx { world, grid, spatial: spatial_cache, events, rng },
+        attacker,
+        target,
+        damage,
     );
 
     // Venomous natural attacks (Giant Spider): a connecting bite Slows the
@@ -148,15 +146,15 @@ pub fn apply_attack(
 
 /// Apply attack direction effect - attacks whatever is at the target tile, or whiffs
 pub fn apply_attack_direction(
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut SpatialCache,
+    ctx: &mut EffectCtx,
     attacker: Entity,
     dx: i32,
     dy: i32,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) -> ActionResult {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     // Get attacker position
     let attacker_pos = match queries::get_entity_position(world, attacker) {
         Some(p) => p,
@@ -168,7 +166,11 @@ pub fn apply_attack_direction(
 
     // Find any Attackable entity at the target position
     if let Some(target) = queries::get_attackable_at(world, target_x, target_y, Some(attacker)) {
-        apply_attack(world, grid, spatial_cache, attacker, target, events, rng)
+        apply_attack(
+            &mut EffectCtx { world, grid, spatial: spatial_cache, events, rng },
+            attacker,
+            target,
+        )
     } else {
         // No target - whiff (swing at air), but still add lunge animation
         let _ = world.insert_one(
@@ -180,14 +182,11 @@ pub fn apply_attack_direction(
 }
 
 /// Apply cleave attack - attacks all enemies within radius 2 (24 tiles)
-pub fn apply_cleave(
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut SpatialCache,
-    attacker: Entity,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) -> ActionResult {
+pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     // Get attacker position
     let attacker_pos = match queries::get_entity_position(world, attacker) {
         Some(p) => p,
@@ -253,7 +252,10 @@ pub fn apply_cleave(
 
         // Resolve weapon on-hit affixes through the shared chokepoint
         crate::systems::combat::resolve_weapon_on_hit(
-            world, grid, spatial_cache, attacker, *target, damage, events, rng,
+            &mut EffectCtx { world, grid, spatial: spatial_cache, events, rng },
+            attacker,
+            *target,
+            damage,
         );
 
         // Interrupt life drain if target was channeling
@@ -395,7 +397,7 @@ mod tests {
     #[test]
     fn test_melee_kill_leaves_lootable_bones() {
         let mut world = World::new();
-        let grid = make_grid(10, 10);
+        let mut grid = make_grid(10, 10);
         let mut events = EventQueue::new();
 
         let ppos = Position::new(1, 1);
@@ -417,21 +419,37 @@ mod tests {
         world.get::<&mut Health>(rat).unwrap().current = 1;
 
         let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
-        let result = apply_attack(&mut world, &grid, &mut cache, player, rat, &mut events, &mut rng);
+        let result = apply_attack(
+            &mut EffectCtx {
+                world: &mut world,
+                grid: &mut grid,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
+            player,
+            rat,
+        );
         assert_eq!(result, ActionResult::Completed);
         assert!(world.get::<&Health>(rat).unwrap().current <= 0, "hit is lethal");
 
         let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
         tracker.register_entity(rat);
+        let mut clock = crate::time_system::GameClock::new();
+        let mut scheduler = crate::time_system::ActionScheduler::new();
         let kills = crate::systems::combat::remove_dead_entities(
-            &mut world,
-            player,
+            &mut crate::engine::ActorCtx {
+                world: &mut world,
+                grid: &mut grid,
+                player,
+                clock: &mut clock,
+                scheduler: &mut scheduler,
+                tracker: &mut tracker,
+                spatial: &mut cache,
+                events: &mut events,
+                rng: &mut rng,
+            },
             0,
-            &mut rng,
-            &mut events,
-            None,
-            &mut cache,
-            &mut tracker,
         );
         assert_eq!(kills, 1, "hostile death increments the kill counter");
 

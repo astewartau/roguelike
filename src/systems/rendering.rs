@@ -2,7 +2,7 @@
 
 use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::tile::{SpriteSheet, tile_ids};
-use crate::fov::FOV;
+use crate::fov::Fov;
 use crate::grid::Grid;
 use hecs::{Entity, World};
 use std::collections::HashSet;
@@ -77,7 +77,7 @@ pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius:
         .collect();
 
     // 1. Player's personal light - use shadowcasting for efficiency
-    let player_lit_tiles = FOV::calculate(
+    let player_lit_tiles = Fov::calculate(
         grid,
         player_x,
         player_y,
@@ -387,7 +387,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     let mut animated_entities: Vec<_> = world
         .query::<(&Position, &VisualPosition, &AnimatedSprite)>()
         .iter()
-        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, anim.clone()))
+        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, *anim))
         .collect();
     animated_entities.sort_by_key(|(_, _, _, _, anim)| anim.z_order);
 

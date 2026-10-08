@@ -10,8 +10,6 @@ pub const DUNGEON_ROOM_MARGIN: i32 = 1;
 pub const DUNGEON_DEFAULT_WIDTH: usize = 40;
 /// Default dungeon height
 pub const DUNGEON_DEFAULT_HEIGHT: usize = 40;
-/// Chance for a room to have a special theme (Overgrown, Flooded, etc.)
-pub const THEMED_ROOM_CHANCE: f32 = 0.25;
 
 // =============================================================================
 // FLOOR TRAPS (hidden, placed by generation — see systems::discovery)

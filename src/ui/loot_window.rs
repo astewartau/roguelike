@@ -135,11 +135,10 @@ pub fn draw_loot_window(
             ui.add_space(10.0);
             ui.separator();
             ui.horizontal(|ui| {
-                if has_contents {
-                    if ui.button("Take All").clicked() {
+                if has_contents
+                    && ui.button("Take All").clicked() {
                         actions.chest_take_all = true;
                     }
-                }
                 if ui.button("Close").clicked() {
                     actions.close_chest = true;
                 }

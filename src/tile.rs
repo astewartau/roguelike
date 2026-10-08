@@ -22,6 +22,11 @@ const fn rc(row: u32, col: u32, columns: u32) -> u32 {
 /// - Rogues: 7 columns (rogues.png 224x224)
 /// - Monsters: 12 columns (monsters.png 384x416)
 /// - Items: 11 columns (items.png 352x832)
+// A catalogue of what the sprite sheets contain, not a list of what the game
+// currently draws. Entries for art nothing spawns yet (and alternates like
+// SKELETON_ARCHER, superseded by SKELETON plus a BOW overlay) are kept so the
+// available tiles stay discoverable from code.
+#[allow(dead_code)]
 pub mod tile_ids {
     use super::{rc, SpriteSheet};
 
@@ -289,11 +294,6 @@ impl TileType {
             TileType::StairsDown => tile_ids::STAIRS_DOWN,
             TileType::StairsUp => tile_ids::STAIRS_UP,
         }
-    }
-
-    /// Get just the tile ID (for backwards compatibility during migration)
-    pub fn tile_id(&self) -> u32 {
-        self.sprite_ref().1
     }
 
     pub fn is_walkable(&self) -> bool {

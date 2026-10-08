@@ -7,7 +7,7 @@ use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::events::GameEvent;
 
@@ -182,7 +182,7 @@ impl AudioManager {
     }
 
     /// Find sound files that exist
-    fn find_sounds(dir: &PathBuf, filenames: &[&str]) -> Vec<PathBuf> {
+    fn find_sounds(dir: &Path, filenames: &[&str]) -> Vec<PathBuf> {
         filenames
             .iter()
             .map(|f| dir.join(f))
@@ -283,12 +283,12 @@ impl AudioManager {
                     let dist = Self::distance(player_pos, *position);
                     self.play_at_distance(SoundType::DoorOpen, dist);
                 }
-                GameEvent::ContainerOpened { container_type, position, .. } => {
-                    // Only play sound for actual chests, not bodies or ground items
-                    if *container_type == Some(crate::components::ContainerType::Chest) {
-                        let dist = Self::distance(player_pos, *position);
-                        self.play_at_distance(SoundType::DoorOpen, dist);
-                    }
+                // Only play sound for actual chests, not bodies or ground items
+                GameEvent::ContainerOpened { container_type, position, .. }
+                    if *container_type == Some(crate::components::ContainerType::Chest) =>
+                {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::DoorOpen, dist);
                 }
                 // Player-only sounds (always full volume since they're at player position)
                 GameEvent::ItemPickedUp { item, .. } => {

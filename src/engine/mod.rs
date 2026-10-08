@@ -18,7 +18,7 @@ mod game_state;
 pub mod initialization;
 mod simulation;
 
-pub use context::{ActorCtx, SimCtx};
+pub use context::{ActorCtx, EffectCtx, SimCtx};
 pub use floor_transition::{can_transition_floor, handle_floor_transition};
 pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
@@ -347,16 +347,6 @@ impl GameEngine {
             .truncate(crate::run_history::PAST_RUNS_SHOWN);
     }
 
-    /// Get a reference to the UI state (panics if not playing).
-    pub fn ui_state(&self) -> &GameUiState {
-        self.ui_state.as_ref().expect("UI state not initialized - game not started")
-    }
-
-    /// Get a mutable reference to the UI state (panics if not playing).
-    pub fn ui_state_mut(&mut self) -> &mut GameUiState {
-        self.ui_state.as_mut().expect("UI state not initialized - game not started")
-    }
-
     /// Handle the Escape key. Escape never quits the game directly; instead it
     /// backs out of whatever is open (targeting, dev menu, UI windows), and if
     /// nothing is open it opens the pause menu. From the pause menu it resumes;
@@ -408,22 +398,20 @@ impl GameEngine {
         egui_consumed: bool,
     ) -> Option<WindowAction> {
         match event {
-            WindowEvent::KeyboardInput { event: key_event, .. } => {
-                if !egui_consumed {
-                    if let PhysicalKey::Code(key) = key_event.physical_key {
-                        match key_event.state {
-                            ElementState::Pressed => {
-                                if key == KeyCode::Escape {
-                                    return self.handle_escape();
-                                }
-                                if key == KeyCode::Backquote {
-                                    self.dev_menu.toggle();
-                                }
-                                self.input.keys_pressed.insert(key);
+            WindowEvent::KeyboardInput { event: key_event, .. } if !egui_consumed => {
+                if let PhysicalKey::Code(key) = key_event.physical_key {
+                    match key_event.state {
+                        ElementState::Pressed => {
+                            if key == KeyCode::Escape {
+                                return self.handle_escape();
                             }
-                            ElementState::Released => {
-                                self.input.keys_pressed.remove(&key);
+                            if key == KeyCode::Backquote {
+                                self.dev_menu.toggle();
                             }
+                            self.input.keys_pressed.insert(key);
+                        }
+                        ElementState::Released => {
+                            self.input.keys_pressed.remove(&key);
                         }
                     }
                 }
@@ -465,24 +453,21 @@ impl GameEngine {
                         }
                     }
                 }
-                if !egui_consumed && *button == MouseButton::Right {
-                    if *btn_state == ElementState::Released {
+                if !egui_consumed && *button == MouseButton::Right
+                    && *btn_state == ElementState::Released {
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
                         } else {
                             self.input.pending_right_click = true;
                         }
                     }
-                }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                if !egui_consumed {
-                    let scroll = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => *y * 2.0,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
-                    };
-                    camera.add_zoom_impulse(scroll, self.input.mouse_pos.0, self.input.mouse_pos.1);
-                }
+            WindowEvent::MouseWheel { delta, .. } if !egui_consumed => {
+                let scroll = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y * 2.0,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
+                };
+                camera.add_zoom_impulse(scroll, self.input.mouse_pos.0, self.input.mouse_pos.1);
             }
             _ => {}
         }
@@ -570,16 +555,9 @@ impl GameEngine {
         // hostile deaths feed the run's kill counter.
         {
             profile_scope!("remove_dead");
-            state.kills += systems::remove_dead_entities(
-                &mut state.world,
-                state.player_entity,
-                state.current_floor,
-                &mut state.rng,
-                &mut self.events,
-                Some(&mut state.action_scheduler),
-                &mut state.spatial_cache,
-                &mut state.active_ai_tracker,
-            );
+            let floor = state.current_floor;
+            state.kills +=
+                systems::remove_dead_entities(&mut state.actor_ctx(&mut self.events), floor);
         }
 
         // Process events from remove_dead_entities
@@ -643,14 +621,16 @@ impl GameEngine {
             profile_scope!("tick_fire");
             let game_dt = state.game_clock.time - clock_t0;
             systems::fire::tick_fire(
-                &mut state.world,
-                &mut state.grid,
-                &mut state.spatial_cache,
-                &mut self.events,
+                &mut EffectCtx {
+                    world: &mut state.world,
+                    grid: &mut state.grid,
+                    spatial: &mut state.spatial_cache,
+                    events: &mut self.events,
+                    rng: &mut state.rng,
+                },
                 game_dt,
                 &mut state.fire_accumulator,
                 &mut state.fov_dirty,
-                &mut state.rng,
             );
 
             // Passive identification of carried/equipped items, paced by the
@@ -1005,22 +985,26 @@ impl GameEngine {
                 crate::ui::run_ui(
                     egui_glow,
                     window,
-                    &state.world,
-                    state.player_entity,
-                    &state.grid,
                     ui_state,
                     &mut self.dev_menu,
-                    camera,
-                    tileset,
-                    ui_icons,
-                    &self.vfx.effects,
-                    self.vfx.resting_bubble.as_ref(),
-                    &life_drain_beams,
-                    &taming_beams,
-                    self.input.targeting_mode.as_ref(),
-                    self.input.ability_targeting_mode.as_ref(),
-                    self.input.mouse_pos,
-                    state.game_clock.time,
+                    crate::ui::UiFrame {
+                        game: crate::ui::UiWorld {
+                            world: &state.world,
+                            player_entity: state.player_entity,
+                            grid: &state.grid,
+                        },
+                        resources: crate::ui::UiResources { camera, tileset, icons: ui_icons },
+                        overlays: crate::ui::UiOverlays {
+                            vfx_effects: &self.vfx.effects,
+                            resting_bubble: self.vfx.resting_bubble.as_ref(),
+                            life_drain_beams: &life_drain_beams,
+                            taming_beams: &taming_beams,
+                            targeting_mode: self.input.targeting_mode.as_ref(),
+                            ability_targeting_mode: self.input.ability_targeting_mode.as_ref(),
+                        },
+                        mouse_pos: self.input.mouse_pos,
+                        game_time: state.game_clock.time,
+                    },
                 )
             }
         }
@@ -2394,14 +2378,16 @@ mod tests {
             // game-time the turns generate; drive them the way `tick` does.
             let state = engine.state.as_mut().expect("run started");
             crate::systems::fire::tick_fire(
-                &mut state.world,
-                &mut state.grid,
-                &mut state.spatial_cache,
-                &mut engine.events,
+                &mut EffectCtx {
+                    world: &mut state.world,
+                    grid: &mut state.grid,
+                    spatial: &mut state.spatial_cache,
+                    events: &mut engine.events,
+                    rng: &mut state.rng,
+                },
                 crate::constants::ACTION_WAIT_DURATION,
                 &mut state.fire_accumulator,
                 &mut state.fov_dirty,
-                &mut state.rng,
             );
             let _ = crate::systems::survival::tick_survival(
                 &mut state.world,
@@ -2414,16 +2400,9 @@ mod tests {
                 },
                 &mut engine.events,
             );
-            let kills = systems::remove_dead_entities(
-                &mut state.world,
-                state.player_entity,
-                state.current_floor,
-                &mut state.rng,
-                &mut engine.events,
-                Some(&mut state.action_scheduler),
-                &mut state.spatial_cache,
-                &mut state.active_ai_tracker,
-            );
+            let floor = state.current_floor;
+            let kills =
+                systems::remove_dead_entities(&mut state.actor_ctx(&mut engine.events), floor);
             state.kills += kills;
         }
 

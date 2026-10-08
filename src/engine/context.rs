@@ -39,6 +39,17 @@ use crate::vfx::VfxManager;
 use hecs::{Entity, World};
 use rand::rngs::StdRng;
 
+/// The narrowest bundle: what it takes to apply an action's effects to the
+/// world. No clock, scheduler, tracker or player, so effect code cannot reach
+/// for turn scheduling - that stays the caller's job.
+pub struct EffectCtx<'a> {
+    pub world: &'a mut World,
+    pub grid: &'a mut Grid,
+    pub spatial: &'a mut SpatialCache,
+    pub events: &'a mut EventQueue,
+    pub rng: &'a mut StdRng,
+}
+
 /// Everything needed to make actors act: decide AI actions, complete actions,
 /// advance the clock, and spawn/initialize new actors.
 pub struct ActorCtx<'a> {
@@ -55,6 +66,17 @@ pub struct ActorCtx<'a> {
 }
 
 impl ActorCtx<'_> {
+    /// Reborrow just the effect-applying subset.
+    pub fn effects(&mut self) -> EffectCtx<'_> {
+        EffectCtx {
+            world: self.world,
+            grid: self.grid,
+            spatial: self.spatial,
+            events: self.events,
+            rng: self.rng,
+        }
+    }
+
     /// Shorten the borrow so a context can be handed to a nested call without
     /// moving it.
     pub fn reborrow(&mut self) -> ActorCtx<'_> {

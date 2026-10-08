@@ -175,40 +175,32 @@ impl GameUiState {
     /// Handle a game event, updating UI state as needed
     pub fn handle_event(&mut self, event: &GameEvent) {
         match event {
-            GameEvent::ContainerOpened { container, opener, .. } => {
-                // Only open loot window if player opened the container
-                if *opener == self.player_entity {
-                    self.open_chest = Some(*container);
-                }
+            // Only open loot window if player opened the container
+            GameEvent::ContainerOpened { container, opener, .. }
+                if *opener == self.player_entity =>
+            {
+                self.open_chest = Some(*container);
             }
-            GameEvent::DialogueStarted { npc, player } => {
-                // Open dialogue window if player started the conversation
-                if *player == self.player_entity {
-                    self.talking_to = Some(*npc);
-                    self.dialogue_selected = 0;
-                }
+            // Open dialogue window if player started the conversation
+            GameEvent::DialogueStarted { npc, player } if *player == self.player_entity => {
+                self.talking_to = Some(*npc);
+                self.dialogue_selected = 0;
             }
-            GameEvent::ShopOpened { vendor, player } => {
-                // Open shop window if player started shopping
-                if *player == self.player_entity {
-                    self.shopping_at = Some(*vendor);
-                    self.talking_to = None; // Close dialogue when shop opens
-                }
+            // Open shop window if player started shopping
+            GameEvent::ShopOpened { vendor, player } if *player == self.player_entity => {
+                self.shopping_at = Some(*vendor);
+                self.talking_to = None; // Close dialogue when shop opens
             }
-            GameEvent::AltarOpened { altar, player } => {
-                // Open the sacrifice window if the player used the altar
-                if *player == self.player_entity {
-                    self.open_altar = Some(*altar);
-                }
+            // Open the sacrifice window if the player used the altar
+            GameEvent::AltarOpened { altar, player } if *player == self.player_entity => {
+                self.open_altar = Some(*altar);
             }
-            GameEvent::EntityMoved { entity, .. } => {
-                // Close windows when player moves away
-                if *entity == self.player_entity {
-                    self.open_chest = None;
-                    self.talking_to = None;
-                    self.shopping_at = None;
-                    self.open_altar = None;
-                }
+            // Close windows when player moves away
+            GameEvent::EntityMoved { entity, .. } if *entity == self.player_entity => {
+                self.open_chest = None;
+                self.talking_to = None;
+                self.shopping_at = None;
+                self.open_altar = None;
             }
             _ => {}
         }
@@ -298,26 +290,59 @@ impl GameUiState {
 ///
 /// This function orchestrates drawing all UI elements and collects
 /// any actions the player triggered through the UI.
+/// The read-only game state the UI reads to draw itself.
+pub struct UiWorld<'a> {
+    pub world: &'a World,
+    pub player_entity: Entity,
+    pub grid: &'a Grid,
+}
+
+/// Shared drawing resources, owned by the application shell.
+pub struct UiResources<'a> {
+    pub camera: &'a Camera,
+    pub tileset: &'a MultiTileset,
+    pub icons: &'a UiIcons,
+}
+
+/// What this frame has to draw over the world, and what the player is aiming at.
+pub struct UiOverlays<'a> {
+    pub vfx_effects: &'a [VisualEffect],
+    pub resting_bubble: Option<&'a crate::vfx::RestingBubble>,
+    pub life_drain_beams: &'a [LifeDrainBeamData],
+    pub taming_beams: &'a [TamingBeamData],
+    pub targeting_mode: Option<&'a TargetingMode>,
+    pub ability_targeting_mode: Option<&'a AbilityTargetingMode>,
+}
+
+/// Everything about the frame being drawn, as opposed to the egui host and the
+/// mutable UI state that outlives it.
+pub struct UiFrame<'a> {
+    pub game: UiWorld<'a>,
+    pub resources: UiResources<'a>,
+    pub overlays: UiOverlays<'a>,
+    pub mouse_pos: (f32, f32),
+    pub game_time: f32,
+}
+
 pub fn run_ui(
     egui_glow: &mut EguiGlow,
     window: &Window,
-    world: &World,
-    player_entity: Entity,
-    grid: &Grid,
     ui_state: &mut GameUiState,
     dev_menu: &mut DevMenu,
-    camera: &Camera,
-    tileset: &MultiTileset,
-    icons: &UiIcons,
-    vfx_effects: &[VisualEffect],
-    resting_bubble: Option<&crate::vfx::RestingBubble>,
-    life_drain_beams: &[LifeDrainBeamData],
-    taming_beams: &[TamingBeamData],
-    targeting_mode: Option<&TargetingMode>,
-    ability_targeting_mode: Option<&AbilityTargetingMode>,
-    mouse_pos: (f32, f32),
-    game_time: f32,
+    frame: UiFrame<'_>,
 ) -> UiActions {
+    let UiFrame { game, resources, overlays, mouse_pos, game_time } = frame;
+    let UiWorld { world, player_entity, grid } = game;
+    let UiResources { camera, tileset, icons } = resources;
+    let UiOverlays {
+        vfx_effects,
+        resting_bubble,
+        life_drain_beams,
+        taming_beams,
+        targeting_mode,
+        ability_targeting_mode,
+    } = overlays;
+
     let mut actions = UiActions::default();
 
     // Get status bar data

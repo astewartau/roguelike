@@ -783,7 +783,7 @@ pub fn apply_disengage(
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
 ) -> ActionResult {
-    use crate::fov::FOV;
+    use crate::fov::Fov;
     use crate::constants::{DISENGAGE_DISTANCE, FOV_RADIUS};
 
     // Get entity position
@@ -798,7 +798,7 @@ pub fn apply_disengage(
     });
 
     // Find visible enemies
-    let visible_tiles = FOV::calculate(grid, pos.0, pos.1, FOV_RADIUS, None::<fn(i32, i32) -> bool>);
+    let visible_tiles = Fov::calculate(grid, pos.0, pos.1, FOV_RADIUS, None::<fn(i32, i32) -> bool>);
     let visible_set: std::collections::HashSet<(i32, i32)> = visible_tiles.into_iter().collect();
 
     // Find nearest enemy

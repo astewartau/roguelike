@@ -13,40 +13,40 @@ use crate::tile::SpriteSheet;
 /// Placement tools - click on map to spawn
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DevTool {
-    SpawnChest,
-    SpawnEnemy,
-    SpawnFire,
-    SpawnStairsDown,
-    SpawnStairsUp,
+    Chest,
+    Enemy,
+    Fire,
+    StairsDown,
+    StairsUp,
 }
 
 impl DevTool {
     pub fn name(&self) -> &'static str {
         match self {
-            DevTool::SpawnChest => "Chest",
-            DevTool::SpawnEnemy => "Enemy",
-            DevTool::SpawnFire => "Fire",
-            DevTool::SpawnStairsDown => "Stairs Down",
-            DevTool::SpawnStairsUp => "Stairs Up",
+            DevTool::Chest => "Chest",
+            DevTool::Enemy => "Enemy",
+            DevTool::Fire => "Fire",
+            DevTool::StairsDown => "Stairs Down",
+            DevTool::StairsUp => "Stairs Up",
         }
     }
 
     pub fn sprite(&self) -> (SpriteSheet, u32) {
         match self {
-            DevTool::SpawnChest => tile_ids::CHEST_CLOSED,
-            DevTool::SpawnEnemy => tile_ids::SKELETON,
-            DevTool::SpawnFire => tile_ids::RED_POTION,
-            DevTool::SpawnStairsDown => tile_ids::STAIRS_DOWN,
-            DevTool::SpawnStairsUp => tile_ids::STAIRS_UP,
+            DevTool::Chest => tile_ids::CHEST_CLOSED,
+            DevTool::Enemy => tile_ids::SKELETON,
+            DevTool::Fire => tile_ids::RED_POTION,
+            DevTool::StairsDown => tile_ids::STAIRS_DOWN,
+            DevTool::StairsUp => tile_ids::STAIRS_UP,
         }
     }
 
     pub const ALL: [DevTool; 5] = [
-        DevTool::SpawnChest,
-        DevTool::SpawnEnemy,
-        DevTool::SpawnFire,
-        DevTool::SpawnStairsDown,
-        DevTool::SpawnStairsUp,
+        DevTool::Chest,
+        DevTool::Enemy,
+        DevTool::Fire,
+        DevTool::StairsDown,
+        DevTool::StairsUp,
     ];
 }
 
@@ -78,6 +78,7 @@ const ALL_ITEMS: [ItemType; 18] = [
 ];
 
 /// State for the developer menu
+#[derive(Default)]
 pub struct DevMenu {
     pub visible: bool,
     pub selected_tool: Option<DevTool>,
@@ -85,15 +86,6 @@ pub struct DevMenu {
     pub item_to_give: Option<ItemType>,
 }
 
-impl Default for DevMenu {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            selected_tool: None,
-            item_to_give: None,
-        }
-    }
-}
 
 impl DevMenu {
     pub fn new() -> Self {

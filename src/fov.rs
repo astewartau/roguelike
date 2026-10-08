@@ -7,9 +7,9 @@ use std::collections::HashSet;
 /// row-by-row, tracking which portions are blocked by obstacles. It's more
 /// accurate than raycasting (no missed corners) and faster (O(visible tiles)
 /// instead of O(rays × radius)).
-pub struct FOV;
+pub struct Fov;
 
-impl FOV {
+impl Fov {
     /// Calculate visible tiles from a given position with a radius.
     /// `entity_blocks_vision` is an optional callback to check if an entity at (x,y) blocks vision.
     pub fn calculate<F>(
@@ -77,6 +77,12 @@ fn transform(octant: u8, row: i32, col: i32) -> (i32, i32) {
 /// - `row`: current row being scanned (distance from origin)
 /// - `start_slope`: slope of the left edge of the visible area (1.0 = 45°)
 /// - `end_slope`: slope of the right edge of the visible area (0.0 = straight)
+// Recursive shadowcasting: every parameter is algorithm state for one octant
+// sweep (origin, radius, current row, the slope pair bounding the visible wedge,
+// which octant, and the vision-blocking test). There is no caller-independent
+// bundle to extract here - splitting it would only move the same values behind
+// a struct nothing else uses.
+#[allow(clippy::too_many_arguments)]
 fn cast_light<F>(
     grid: &Grid,
     visible: &mut HashSet<(i32, i32)>,
@@ -228,14 +234,14 @@ mod tests {
     #[test]
     fn test_origin_always_visible() {
         let grid = make_grid(10, 10, &[]);
-        let visible = FOV::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
         assert!(visible.contains(&(5, 5)));
     }
 
     #[test]
     fn test_adjacent_tiles_visible() {
         let grid = make_grid(10, 10, &[]);
-        let visible = FOV::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 5, 5, 3, None::<fn(i32, i32) -> bool>);
         // All 4 adjacent tiles should be visible
         assert!(visible.contains(&(5, 6)));
         assert!(visible.contains(&(5, 4)));
@@ -247,7 +253,7 @@ mod tests {
     fn test_wall_blocks_vision() {
         // Wall at (5, 6), should block (5, 7) and beyond
         let grid = make_grid(10, 10, &[(5, 6)]);
-        let visible = FOV::calculate(&grid, 5, 5, 5, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 5, 5, 5, None::<fn(i32, i32) -> bool>);
 
         // Wall itself is visible
         assert!(visible.contains(&(5, 6)));
@@ -258,7 +264,7 @@ mod tests {
     #[test]
     fn test_radius_limit() {
         let grid = make_grid(20, 20, &[]);
-        let visible = FOV::calculate(&grid, 10, 10, 3, None::<fn(i32, i32) -> bool>);
+        let visible = Fov::calculate(&grid, 10, 10, 3, None::<fn(i32, i32) -> bool>);
 
         // Tile at distance 3 should be visible
         assert!(visible.contains(&(10, 13)));

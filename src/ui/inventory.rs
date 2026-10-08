@@ -703,12 +703,11 @@ fn draw_item_context_menu(
                         }
 
                         // Ammo stacks: select which ammo the bow loads
-                        if item_type.is_ammo() {
-                            if ui.button("Use as ammo").clicked() {
+                        if item_type.is_ammo()
+                            && ui.button("Use as ammo").clicked() {
                                 actions.set_active_ammo = Some(item_type);
                                 ui_state.item_context_menu = None;
                             }
-                        }
 
                         // Learnable scrolls: Study (consumes the scroll and
                         // permanently learns its spell if INT allows; trying

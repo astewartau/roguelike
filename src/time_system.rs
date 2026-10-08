@@ -3,13 +3,12 @@
 //! Manages game time progression through an event-driven loop where time
 //! jumps forward to the next action completion rather than ticking.
 
-use rand::Rng;
 
 use crate::components::{
     ActionInProgress, ActionType, Actor, EffectType, Health, RangedCooldown, StatusEffects,
 };
 use crate::constants::*;
-use crate::engine::ActorCtx;
+use crate::engine::{ActorCtx, EffectCtx};
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
@@ -282,16 +281,8 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
     );
 
     // Apply action effects
-    let result = apply_action_effects(
-        ctx.world,
-        ctx.grid,
-        entity,
-        &action.action_type,
-        ctx.spatial,
-        ctx.events,
-        ctx.clock.time,
-        ctx.rng,
-    );
+    let now = ctx.clock.time;
+    let result = apply_action_effects(&mut ctx.effects(), entity, &action.action_type, now);
 
     // Clear action (energy regen is now time-based, not action-based)
     if let Ok(mut actor) = ctx.world.get::<&mut Actor>(entity) {
@@ -306,28 +297,45 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
     result
 }
 
+/// Rebuild an `EffectCtx` from the unpacked locals, so the dispatch arms below
+/// stay one line each.
+fn effects<'a>(
+    world: &'a mut World,
+    grid: &'a mut Grid,
+    spatial: &'a mut SpatialCache,
+    events: &'a mut EventQueue,
+    rng: &'a mut rand::rngs::StdRng,
+) -> EffectCtx<'a> {
+    EffectCtx { world, grid, spatial, events, rng }
+}
+
 /// Apply the effects of a completed action.
 /// Dispatches to the appropriate action implementation in systems::actions.
 fn apply_action_effects(
-    world: &mut World,
-    grid: &Grid,
+    ctx: &mut EffectCtx,
     entity: Entity,
     action_type: &ActionType,
-    spatial_cache: &mut SpatialCache,
-    events: &mut EventQueue,
     current_time: f32,
-    rng: &mut impl Rng,
 ) -> ActionResult {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
     match action_type {
-        ActionType::Move { dx, dy, .. } => actions::apply_move(world, grid, entity, *dx, *dy, spatial_cache, events, rng),
+        ActionType::Move { dx, dy, .. } => actions::apply_move(&mut effects(world, grid, spatial_cache, events, rng), entity, *dx, *dy),
         ActionType::Attack { target } => {
-            actions::apply_attack(world, grid, spatial_cache, entity, *target, events, rng)
+            actions::apply_attack(
+                &mut effects(world, grid, spatial_cache, events, rng), entity, *target,
+            )
         }
         ActionType::AttackDirection { dx, dy } => {
-            actions::apply_attack_direction(world, grid, spatial_cache, entity, *dx, *dy, events, rng)
+            actions::apply_attack_direction(
+                &mut effects(world, grid, spatial_cache, events, rng), entity, *dx, *dy,
+            )
         }
         ActionType::InteractDirection { dx, dy } => {
-            actions::apply_interact_direction(world, grid, entity, *dx, *dy, spatial_cache, events, rng)
+            actions::apply_interact_direction(
+                &mut effects(world, grid, spatial_cache, events, rng), entity, *dx, *dy,
+            )
         }
         ActionType::OpenDoor { door } => actions::apply_open_door(world, entity, *door, events),
         ActionType::OpenChest { chest } => actions::apply_open_chest(world, entity, *chest, events),
@@ -342,7 +350,7 @@ fn apply_action_effects(
         }
         ActionType::TalkTo { npc } => actions::apply_talk_to(entity, *npc, events),
         ActionType::ThrowPotion { potion_type, target_x, target_y } => {
-            actions::apply_throw_potion(world, grid, entity, *potion_type, *target_x, *target_y, events, current_time)
+            actions::apply_throw_potion(world, entity, *potion_type, *target_x, *target_y, events, current_time)
         }
         ActionType::Blink { target_x, target_y } => {
             actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events)
@@ -363,7 +371,7 @@ fn apply_action_effects(
             actions::apply_drop_equipped_weapon(world, entity, events)
         }
         ActionType::Cleave => {
-            actions::apply_cleave(world, grid, spatial_cache, entity, events, rng)
+            actions::apply_cleave(&mut effects(world, grid, spatial_cache, events, rng), entity)
         }
         ActionType::ActivateSprint => {
             actions::apply_activate_sprint(world, entity, events)

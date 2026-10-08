@@ -87,7 +87,7 @@ pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExec
     if time_system::start_action(
         ctx.world,
         player_entity,
-        action_type.clone(),
+        action_type,
         ctx.clock,
         ctx.scheduler,
     )
@@ -367,14 +367,7 @@ pub fn wait_for_energy(ctx: &mut ActorCtx, required_energy: i32) -> bool {
 
 /// Update projectiles at current time.
 fn update_projectiles_at_time(ctx: &mut ActorCtx, current_time: f32) {
-    systems::update_projectiles(
-        ctx.world,
-        ctx.grid,
-        ctx.spatial,
-        current_time,
-        ctx.events,
-        ctx.rng,
-    );
+    systems::update_projectiles(&mut ctx.effects(), current_time);
 }
 
 /// Display name of an entity for damage attribution ("Goblin", ...).
@@ -455,11 +448,11 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
                     record_player_damage_source(world, player_entity, source);
                 }
             }
-            GameEvent::ProjectileHit { source, target: Some(target), damage, .. } => {
-                if *target == player_entity && *damage > 0 {
-                    let source = entity_display_name(world, *source);
-                    record_player_damage_source(world, player_entity, source);
-                }
+            GameEvent::ProjectileHit { source, target: Some(target), damage, .. }
+                if *target == player_entity && *damage > 0 =>
+            {
+                let source = entity_display_name(world, *source);
+                record_player_damage_source(world, player_entity, source);
             }
             GameEvent::BurnDamage { entity, .. } if *entity == player_entity => {
                 record_player_damage_source(world, player_entity, "burning".to_string());
@@ -481,13 +474,13 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
                 };
                 record_player_damage_source(world, player_entity, source.to_string());
             }
-            GameEvent::AIStateChanged { entity, new_state } => {
-                if *new_state == crate::components::AIState::Chasing {
-                    if let Ok(pos) = world.get::<&crate::components::Position>(*entity) {
-                        vfx.spawn_alert(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
-                    }
-                    result.enemy_spotted_player = true;
+            GameEvent::AIStateChanged { entity, new_state }
+                if *new_state == crate::components::AIState::Chasing =>
+            {
+                if let Ok(pos) = world.get::<&crate::components::Position>(*entity) {
+                    vfx.spawn_alert(pos.x as f32 + 0.5, pos.y as f32 + 0.5);
                 }
+                result.enemy_spotted_player = true;
             }
             GameEvent::CoffinSkeletonSpawn { position } => {
                 result.skeleton_spawns.push(*position);
@@ -835,102 +828,6 @@ fn study_scroll(
     Some(ability)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::{
-        AbilityType, Affix, Equipment, ItemInstance, LearnedAbilities, Rarity, Stats,
-    };
-
-    /// Spawn a bare player with one Scroll of Blink and the given base INT.
-    fn player_with_blink_scroll(world: &mut World, int: i32) -> Entity {
-        let mut inv = Inventory::new();
-        inv.items.push(ItemInstance::plain(ItemType::ScrollOfBlink));
-        world.spawn((inv, Stats::new(10, int, 10), LearnedAbilities::default()))
-    }
-
-    #[test]
-    fn test_study_fails_below_int_threshold() {
-        let mut world = World::new();
-        let player = player_with_blink_scroll(&mut world, 13); // Blink needs 14
-        let mut events = EventQueue::new();
-
-        let learned = study_scroll(&mut world, player, 0, &mut events);
-
-        assert!(learned.is_none());
-        // The scroll is kept and nothing was learned.
-        assert_eq!(world.get::<&Inventory>(player).unwrap().items.len(), 1);
-        assert!(!world
-            .get::<&LearnedAbilities>(player)
-            .unwrap()
-            .knows(AbilityType::LearnedBlink));
-        // Feedback event carries the requirement.
-        assert!(events.drain().any(|e| matches!(
-            e,
-            GameEvent::SpellStudyFailed { required_int: 14, current_int: 13, .. }
-        )));
-    }
-
-    #[test]
-    fn test_study_success_consumes_scroll_and_learns_spell() {
-        let mut world = World::new();
-        let player = player_with_blink_scroll(&mut world, 14);
-        let mut events = EventQueue::new();
-
-        let learned = study_scroll(&mut world, player, 0, &mut events);
-
-        assert_eq!(learned, Some(AbilityType::LearnedBlink));
-        assert!(world.get::<&Inventory>(player).unwrap().items.is_empty());
-        assert!(world
-            .get::<&LearnedAbilities>(player)
-            .unwrap()
-            .knows(AbilityType::LearnedBlink));
-        assert!(events
-            .drain()
-            .any(|e| matches!(e, GameEvent::SpellLearned { .. })));
-    }
-
-    #[test]
-    fn test_study_uses_effective_int_from_gear() {
-        let mut world = World::new();
-        // Base INT 12, +2 from an identified helmet affix = 14 (meets Blink).
-        let player = player_with_blink_scroll(&mut world, 12);
-        let mut equipment = Equipment::empty();
-        equipment.head = Some(ItemInstance {
-            kind: ItemType::Helmet,
-            rarity: Rarity::Magic,
-            affixes: vec![Affix::Intelligence(2)],
-            name: None,
-            identified: true,
-            identify_progress: 0.0,
-        });
-        world.insert_one(player, equipment).expect("insert equipment");
-
-        let mut events = EventQueue::new();
-        let learned = study_scroll(&mut world, player, 0, &mut events);
-        assert_eq!(learned, Some(AbilityType::LearnedBlink));
-    }
-
-    #[test]
-    fn test_study_known_spell_keeps_scroll() {
-        let mut world = World::new();
-        let player = player_with_blink_scroll(&mut world, 18);
-        world
-            .get::<&mut LearnedAbilities>(player)
-            .expect("learned abilities")
-            .learn(AbilityType::LearnedBlink);
-
-        let mut events = EventQueue::new();
-        let learned = study_scroll(&mut world, player, 0, &mut events);
-
-        assert!(learned.is_none());
-        assert_eq!(world.get::<&Inventory>(player).unwrap().items.len(), 1);
-        assert!(events
-            .drain()
-            .any(|e| matches!(e, GameEvent::SpellAlreadyKnown { .. })));
-    }
-}
-
 // =============================================================================
 // SHOP HELPER FUNCTIONS
 // =============================================================================
@@ -1055,4 +952,100 @@ fn sell_item_to_vendor(
         item: item_type,
         value: sell_price,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{
+        AbilityType, Affix, Equipment, ItemInstance, LearnedAbilities, Rarity, Stats,
+    };
+
+    /// Spawn a bare player with one Scroll of Blink and the given base INT.
+    fn player_with_blink_scroll(world: &mut World, int: i32) -> Entity {
+        let mut inv = Inventory::new();
+        inv.items.push(ItemInstance::plain(ItemType::ScrollOfBlink));
+        world.spawn((inv, Stats::new(10, int, 10), LearnedAbilities::default()))
+    }
+
+    #[test]
+    fn test_study_fails_below_int_threshold() {
+        let mut world = World::new();
+        let player = player_with_blink_scroll(&mut world, 13); // Blink needs 14
+        let mut events = EventQueue::new();
+
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+
+        assert!(learned.is_none());
+        // The scroll is kept and nothing was learned.
+        assert_eq!(world.get::<&Inventory>(player).unwrap().items.len(), 1);
+        assert!(!world
+            .get::<&LearnedAbilities>(player)
+            .unwrap()
+            .knows(AbilityType::LearnedBlink));
+        // Feedback event carries the requirement.
+        assert!(events.drain().any(|e| matches!(
+            e,
+            GameEvent::SpellStudyFailed { required_int: 14, current_int: 13, .. }
+        )));
+    }
+
+    #[test]
+    fn test_study_success_consumes_scroll_and_learns_spell() {
+        let mut world = World::new();
+        let player = player_with_blink_scroll(&mut world, 14);
+        let mut events = EventQueue::new();
+
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+
+        assert_eq!(learned, Some(AbilityType::LearnedBlink));
+        assert!(world.get::<&Inventory>(player).unwrap().items.is_empty());
+        assert!(world
+            .get::<&LearnedAbilities>(player)
+            .unwrap()
+            .knows(AbilityType::LearnedBlink));
+        assert!(events
+            .drain()
+            .any(|e| matches!(e, GameEvent::SpellLearned { .. })));
+    }
+
+    #[test]
+    fn test_study_uses_effective_int_from_gear() {
+        let mut world = World::new();
+        // Base INT 12, +2 from an identified helmet affix = 14 (meets Blink).
+        let player = player_with_blink_scroll(&mut world, 12);
+        let mut equipment = Equipment::empty();
+        equipment.head = Some(ItemInstance {
+            kind: ItemType::Helmet,
+            rarity: Rarity::Magic,
+            affixes: vec![Affix::Intelligence(2)],
+            name: None,
+            identified: true,
+            identify_progress: 0.0,
+        });
+        world.insert_one(player, equipment).expect("insert equipment");
+
+        let mut events = EventQueue::new();
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+        assert_eq!(learned, Some(AbilityType::LearnedBlink));
+    }
+
+    #[test]
+    fn test_study_known_spell_keeps_scroll() {
+        let mut world = World::new();
+        let player = player_with_blink_scroll(&mut world, 18);
+        world
+            .get::<&mut LearnedAbilities>(player)
+            .expect("learned abilities")
+            .learn(AbilityType::LearnedBlink);
+
+        let mut events = EventQueue::new();
+        let learned = study_scroll(&mut world, player, 0, &mut events);
+
+        assert!(learned.is_none());
+        assert_eq!(world.get::<&Inventory>(player).unwrap().items.len(), 1);
+        assert!(events
+            .drain()
+            .any(|e| matches!(e, GameEvent::SpellAlreadyKnown { .. })));
+    }
 }

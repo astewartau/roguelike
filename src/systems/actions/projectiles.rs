@@ -97,7 +97,7 @@ pub fn apply_shoot_bow(
     // Apply range band modifier (only for player)
     let damage = if is_player {
         let distance = (target_x - start_x).abs().max((target_y - start_y).abs());
-        let range_mult = if distance >= RANGE_OPTIMAL_MIN && distance <= RANGE_OPTIMAL_MAX {
+        let range_mult = if (RANGE_OPTIMAL_MIN..=RANGE_OPTIMAL_MAX).contains(&distance) {
             RANGE_OPTIMAL_MULT
         } else if distance <= 2 {
             RANGE_CLOSE_MULT
@@ -251,7 +251,6 @@ pub fn calculate_throw_path(
 /// Apply throw potion action - throws a potion at target with splash effect
 pub fn apply_throw_potion(
     world: &mut World,
-    _grid: &Grid,
     thrower: Entity,
     potion_type: ItemType,
     target_x: i32,
@@ -369,11 +368,10 @@ pub fn apply_potion_splash(
         for (entity, (pos, _)) in world.query::<(&Position, &Health)>().iter() {
             let dx = (pos.x - center_x).abs();
             let dy = (pos.y - center_y).abs();
-            if dx <= POTION_SPLASH_RADIUS && dy <= POTION_SPLASH_RADIUS {
-                if !affected.contains(&entity) {
+            if dx <= POTION_SPLASH_RADIUS && dy <= POTION_SPLASH_RADIUS
+                && !affected.contains(&entity) {
                     affected.push(entity);
                 }
-            }
         }
     }
 
@@ -391,11 +389,9 @@ pub fn apply_potion_splash(
             ItemType::StrengthPotion => {
                 effects::add_effect_to_entity(world, entity, EffectType::Strengthened, STRENGTH_DURATION);
             }
-            ItemType::ConfusionPotion => {
-                // Confusion only affects enemies (entities with ChaseAI)
-                if world.get::<&ChaseAI>(entity).is_ok() {
-                    effects::add_effect_to_entity(world, entity, EffectType::Confused, confusion_duration);
-                }
+            // Confusion only affects enemies (entities with ChaseAI)
+            ItemType::ConfusionPotion if world.get::<&ChaseAI>(entity).is_ok() => {
+                effects::add_effect_to_entity(world, entity, EffectType::Confused, confusion_duration);
             }
             _ => {}
         }

@@ -835,7 +835,7 @@ pub fn draw_life_drain_beams(
         let len = (dx * dx + dy * dy).sqrt();
 
         if len > 5.0 {
-            let num_particles = ((len / 15.0) as usize).max(3).min(8);
+            let num_particles = ((len / 15.0) as usize).clamp(3, 8);
             for i in 0..num_particles {
                 // Particle moves from target to caster over time
                 let base_t = i as f32 / num_particles as f32;

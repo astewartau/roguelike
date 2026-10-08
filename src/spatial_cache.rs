@@ -310,7 +310,7 @@ mod tests {
         let height = 3;
         let mut tiles = Vec::with_capacity(width * height);
         for y in 0..height {
-            for x in 0..width {
+            for _x in 0..width {
                 if y == 0 || y == 2 {
                     tiles.push(Tile::new(TileType::Wall));
                 } else {
@@ -365,7 +365,7 @@ mod tests {
                 .query::<(&Position, &BlocksMovement)>()
                 .iter()
                 .any(|(id, (p, _))| {
-                    (p.x, p.y) == pos && exclude.map_or(true, |ex| id != ex)
+                    (p.x, p.y) == pos && (exclude != Some(id))
                 })
         }
 
