@@ -180,3 +180,25 @@ pub const LOG_COUNT_POP_RISE: f32 = 3.0;
 /// How far the count badge is over-brightened at the peak of a tick, as a
 /// fraction above its line's colour.
 pub const LOG_COUNT_POP_LIFT: f32 = 1.1;
+
+/// Horizontal jitter applied to a damage number, in tiles either side of the
+/// tile centre. Up spreads stacked hits further apart (and further off their
+/// tile); 0.0 stacks them back into an illegible pile.
+pub const DAMAGE_NUMBER_JITTER: f32 = 0.3;
+/// Offset of the black outline drawn behind a floating number, in egui points.
+/// The number is drawn four times at plus and minus this on each axis. Up
+/// thickens the outline and starts to choke the glyphs.
+pub const DAMAGE_NUMBER_OUTLINE_OFFSET: f32 = 1.0;
+/// Damage at or above which a hit is drawn larger and brighter. Down tiers
+/// more hits as big and flattens the distinction; up reserves the treatment
+/// for genuinely heavy blows.
+pub const DAMAGE_NUMBER_BIG_THRESHOLD: i32 = 10;
+/// Font-size multiplier for a big hit. Up makes heavy hits dominate; 1.0
+/// removes size tiering.
+pub const DAMAGE_NUMBER_BIG_SCALE: f32 = 1.3;
+/// Font-size multiplier for a critical hit, which also gets its own colour and
+/// a trailing `!`.
+pub const DAMAGE_NUMBER_CRIT_SCALE: f32 = 1.55;
+/// Font-size multiplier for damage the *player* takes, so a hit landing on you
+/// never reads the same as a hit you landed.
+pub const DAMAGE_NUMBER_TAKEN_SCALE: f32 = 1.25;

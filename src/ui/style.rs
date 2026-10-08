@@ -74,6 +74,20 @@ pub mod colors {
     /// Sweep over the part of a cooldown still to run.
     pub const HOTBAR_COOLDOWN_SWEEP: Color32 = Color32::from_rgb(6, 5, 5);
 
+    // Floating damage and heal numbers
+    /// An ordinary hit the player landed.
+    pub const DAMAGE_DEALT: Color32 = Color32::from_rgb(255, 228, 198);
+    /// A heavy hit the player landed.
+    pub const DAMAGE_BIG: Color32 = Color32::from_rgb(255, 172, 62);
+    /// A critical hit, which also gets a bigger punch and a `!`.
+    pub const DAMAGE_CRIT: Color32 = Color32::from_rgb(255, 242, 115);
+    /// Damage the player takes. Deliberately the one red in the set, so a hit
+    /// on you is never confused with a hit you landed.
+    pub const DAMAGE_TAKEN: Color32 = Color32::from_rgb(255, 64, 56);
+    pub const HEAL_NUMBER: Color32 = Color32::from_rgb(105, 255, 105);
+    /// Outline behind a floating number, so it survives a light floor.
+    pub const NUMBER_OUTLINE: Color32 = Color32::BLACK;
+
     // Selection/Highlight
     pub const SELECTED: Color32 = Color32::from_rgb(70, 90, 110);
     pub const HOVERED: Color32 = Color32::from_rgb(45, 40, 35);
