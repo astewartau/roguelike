@@ -118,3 +118,13 @@ pub const HP_LOW_PULSE_DEPTH: f32 = 0.55;
 /// mattering, in seconds. The bar appearing at all *is* the warning, so the
 /// slide has to read as motion — too fast and it looks like a layout glitch.
 pub const SURVIVAL_BAR_SLIDE_DURATION: f32 = 0.35;
+
+/// How long before a status effect expires that its pip starts flashing, in
+/// seconds. Up gives more warning; down makes the flash a final jolt.
+pub const EFFECT_PIP_FLASH_LEAD: f32 = 3.0;
+/// Flash cycles per second for an about-to-expire status pip. Up is more
+/// urgent and harder to ignore.
+pub const EFFECT_PIP_FLASH_RATE: f32 = 3.0;
+/// How far the flash lifts an expiring pip's icon and border brightness at its
+/// peak, as a fraction above normal.
+pub const EFFECT_PIP_FLASH_DEPTH: f32 = 0.9;

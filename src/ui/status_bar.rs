@@ -47,8 +47,18 @@ pub struct StatusBarData {
     pub fatigue: f32,
     /// Coarse fatigue state for the warning label
     pub fatigue_state: FatigueState,
-    /// Active status effects with remaining duration
-    pub active_effects: Vec<(StatusEffectType, f32)>,
+    /// Active status effects, newest application order
+    pub active_effects: Vec<EffectPip>,
+}
+
+/// One active status effect, as the HUD needs to draw it.
+pub struct EffectPip {
+    pub effect: StatusEffectType,
+    /// Game-time seconds left before it expires.
+    pub remaining: f32,
+    /// Seconds it was applied (or last refreshed) with, so the sweep knows
+    /// what fraction has been spent.
+    pub total: f32,
 }
 
 /// Extract status bar data from the world
@@ -100,7 +110,11 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
             effects
                 .effects
                 .iter()
-                .map(|e| (e.effect_type, e.remaining_duration))
+                .map(|e| EffectPip {
+                    effect: e.effect_type,
+                    remaining: e.remaining_duration,
+                    total: e.total_duration,
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -422,6 +436,107 @@ fn bar_row(ui: &mut egui::Ui, icon: BarIcon, spec: &BarSpec, reveal: f32) {
     paint_bar(&painter, bar_rect, spec);
 }
 
+/// Paint a clockwise wedge from 12 o'clock covering `spent` of a full turn.
+///
+/// Drawn as a triangle fan rather than a path because the wedge is concave
+/// past a half turn. The radius overshoots the rect so the wedge reaches into
+/// the corners; the caller's clip rect trims it back to the square.
+fn paint_radial_sweep(painter: &egui::Painter, rect: egui::Rect, spent: f32, color: egui::Color32) {
+    let spent = spent.clamp(0.0, 1.0);
+    if spent <= 0.0 {
+        return;
+    }
+    let centre = rect.center();
+    // Longer than the half-diagonal, so every corner is inside the fan.
+    let radius = rect.size().length();
+    let sweep = spent * std::f32::consts::TAU;
+
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(centre, color);
+    for i in 0..=EFFECT_PIP_SWEEP_SEGMENTS {
+        // Start at 12 o'clock. Screen y grows downward, so increasing the
+        // angle sweeps clockwise.
+        let angle = -std::f32::consts::FRAC_PI_2
+            + sweep * i as f32 / EFFECT_PIP_SWEEP_SEGMENTS as f32;
+        mesh.colored_vertex(
+            centre + radius * egui::vec2(angle.cos(), angle.sin()),
+            color,
+        );
+    }
+    for i in 1..=EFFECT_PIP_SWEEP_SEGMENTS as u32 {
+        mesh.add_triangle(0, i, i + 1);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Draw one status effect as an icon pip with a radial cooldown sweep.
+///
+/// `flash` is the 0..1 phase of the about-to-expire pulse; 0.0 for an effect
+/// with plenty of time left.
+fn effect_pip(
+    ui: &mut egui::Ui,
+    tex: egui::TextureId,
+    uv: egui::Rect,
+    pip: &EffectPip,
+    flash: f32,
+) {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::Vec2::splat(EFFECT_PIP_SIZE),
+        egui::Sense::hover(),
+    );
+    let color = style::effect_color(pip.effect);
+    let lift = 1.0 + EFFECT_PIP_FLASH_DEPTH * flash;
+    let painter = ui.painter().with_clip_rect(rect);
+
+    painter.rect_filled(rect, 0.0, colors::BUTTON_BG);
+    painter.image(tex, rect, uv, style::brighten(egui::Color32::WHITE, lift));
+
+    // Darken the part of the duration already spent.
+    let spent = if pip.total > 0.0 {
+        1.0 - (pip.remaining / pip.total).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    paint_radial_sweep(
+        &painter,
+        rect,
+        spent,
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, EFFECT_PIP_SWEEP_ALPHA),
+    );
+
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(style::BORDER_WIDTH, style::brighten(color, lift)),
+    );
+
+    // Seconds left, small and in the corner — the sweep says how much of the
+    // effect is gone, not how long you have.
+    let text = format!("{:.0}", pip.remaining.max(0.0));
+    let font = egui::FontId::proportional(EFFECT_PIP_FONT_SIZE);
+    let corner = rect.right_bottom() + egui::vec2(-1.0, -1.0);
+    painter.text(
+        corner + egui::vec2(1.0, 1.0),
+        egui::Align2::RIGHT_BOTTOM,
+        &text,
+        font.clone(),
+        egui::Color32::BLACK,
+    );
+    painter.text(
+        corner,
+        egui::Align2::RIGHT_BOTTOM,
+        &text,
+        font,
+        colors::TEXT_PRIMARY,
+    );
+
+    response.on_hover_text(format!(
+        "{} — {:.0}s left",
+        effect_label(pip.effect),
+        pip.remaining.max(0.0)
+    ));
+}
+
 /// Short name for a status effect, for the text fallback.
 fn effect_label(effect: StatusEffectType) -> &'static str {
     match effect {
@@ -466,6 +581,9 @@ pub fn draw_status_bar(
     let fatigue_reveal = anim
         .fatigue_reveal
         .factor(data.fatigue_state != FatigueState::Rested);
+    // One phase for every expiring pip, so they blink together rather than
+    // each on its own beat.
+    let effect_flash = anim.pulse(EFFECT_PIP_FLASH_RATE);
     // Under the threshold the fill breathes, so a dangerous HP bar is loud even
     // in peripheral vision.
     let hp_glow = if health_percent < HP_LOW_PULSE_THRESHOLD {
@@ -618,20 +736,36 @@ pub fn draw_status_bar(
                 );
             });
 
-            // Active status effects
+            // Active status effects, as icon pips with a radial sweep.
+            // Effects the sheets have no icon for keep the old coloured label
+            // rather than borrowing a sprite that means something else.
             if !data.active_effects.is_empty() {
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    for (effect_type, duration) in &data.active_effects {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} ({:.0}s)",
-                                effect_label(*effect_type),
-                                duration
-                            ))
-                            .color(style::effect_color(*effect_type))
-                            .small(),
-                        );
+                    ui.spacing_mut().item_spacing.x = EFFECT_PIP_SPACING;
+                    for pip in &data.active_effects {
+                        let flash = if pip.remaining < EFFECT_PIP_FLASH_LEAD {
+                            effect_flash
+                        } else {
+                            0.0
+                        };
+                        match icons.effect_uv(pip.effect) {
+                            Some((tex, uv)) => effect_pip(ui, tex, uv, pip, flash),
+                            None => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} ({:.0}s)",
+                                        effect_label(pip.effect),
+                                        pip.remaining.max(0.0)
+                                    ))
+                                    .color(style::brighten(
+                                        style::effect_color(pip.effect),
+                                        1.0 + EFFECT_PIP_FLASH_DEPTH * flash,
+                                    ))
+                                    .small(),
+                                );
+                            }
+                        }
                     }
                 });
             }

@@ -51,3 +51,22 @@ pub const HUD_BAR_ICON_SIZE: f32 = 16.0;
 /// [`HUD_BAR_WIDTH`]. Set explicitly because the window otherwise auto-sizes
 /// to its content and would jump about as status labels come and go.
 pub const HUD_STATUS_WIDTH: f32 = HUD_BAR_ICON_SIZE + HUD_BAR_ICON_GAP + HUD_BAR_WIDTH;
+
+// =============================================================================
+// STATUS EFFECT PIPS
+// =============================================================================
+
+/// Side length of a status-effect icon pip, in points. The radial cooldown
+/// sweep covers the whole pip, so bigger pips make the sweep readable at the
+/// cost of HUD width.
+pub const EFFECT_PIP_SIZE: f32 = 24.0;
+/// Gap between adjacent status-effect pips, in points.
+pub const EFFECT_PIP_SPACING: f32 = 4.0;
+/// Number of triangles the radial cooldown sweep is approximated with. Up is
+/// smoother and costs more geometry; below about 12 the arc visibly facets.
+pub const EFFECT_PIP_SWEEP_SEGMENTS: usize = 24;
+/// Opacity of the sweep covering the spent part of an effect, 0-255. Up dims
+/// an almost-expired pip harder.
+pub const EFFECT_PIP_SWEEP_ALPHA: u8 = 165;
+/// Font size for the remaining-seconds readout on a pip, in points.
+pub const EFFECT_PIP_FONT_SIZE: f32 = 10.0;
