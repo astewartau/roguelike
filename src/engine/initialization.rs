@@ -10,6 +10,7 @@ use crate::dungeon_gen::RoomTheme;
 use crate::grid::Grid;
 use crate::spawning;
 use crate::systems::items::item_weight;
+use crate::tile_occupancy::TileOccupancy;
 use crate::tile::tile_ids;
 
 use super::ActorCtx;
@@ -20,8 +21,17 @@ use rand::Rng;
 /// Spawn all chests from grid positions with randomized contents. The chest
 /// inside a sealed hidden room rolls as if it were `SECRET_CHEST_FLOOR_BONUS`
 /// floors deeper and always contains a rolled gear piece.
-fn spawn_chests(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
+fn spawn_chests(
+    world: &mut World,
+    grid: &Grid,
+    floor: u32,
+    occupancy: &mut TileOccupancy,
+    rng: &mut impl Rng,
+) {
     for (x, y) in &grid.chest_positions {
+        if !occupancy.claim((*x, *y)) {
+            continue;
+        }
         let pos = Position::new(*x, *y);
         let in_secret_room = grid
             .secret_room
@@ -69,7 +79,12 @@ fn spawn_dungeon_traps(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
 }
 
 /// Spawn room furniture (fountain / altar / shrine) at rolled positions.
-fn spawn_furniture_pieces(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+fn spawn_furniture_pieces(
+    world: &mut World,
+    grid: &Grid,
+    occupancy: &mut TileOccupancy,
+    rng: &mut impl Rng,
+) {
     use crate::components::FurnitureKind;
 
     let kinds = [
@@ -78,6 +93,9 @@ fn spawn_furniture_pieces(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
         FurnitureKind::Shrine,
     ];
     for (x, y) in &grid.furniture_positions {
+        if !occupancy.claim((*x, *y)) {
+            continue;
+        }
         let Some(&kind) = kinds.choose(rng) else {
             continue;
         };
@@ -107,17 +125,23 @@ pub(crate) fn secret_door_wall_sprite(
 }
 
 /// Spawn the secret door sealing this floor's hidden room, if any.
-fn spawn_secret_door_entity(world: &mut World, grid: &Grid) {
+fn spawn_secret_door_entity(world: &mut World, grid: &Grid, occupancy: &mut TileOccupancy) {
     let Some((x, y)) = grid.secret_door_pos else {
         return;
     };
+    if !occupancy.claim((x, y)) {
+        return;
+    }
     let wall_sprite = secret_door_wall_sprite(grid, x, y);
     spawning::spawn_secret_door(world, x, y, wall_sprite);
 }
 
 /// Spawn all doors from grid positions with theme-appropriate sprites.
-fn spawn_doors(world: &mut World, grid: &Grid) {
+fn spawn_doors(world: &mut World, grid: &Grid, occupancy: &mut TileOccupancy) {
     for ((x, y), theme) in &grid.door_positions {
+        if !occupancy.claim((*x, *y)) {
+            continue;
+        }
         let pos = Position::new(*x, *y);
         let (sprite, door) = match theme {
             RoomTheme::Overgrown => (tile_ids::DOOR_GREEN, Door::green()),
@@ -144,8 +168,17 @@ fn spawn_braziers(world: &mut World, grid: &Grid) {
 }
 
 /// Spawn all coffins from grid positions with randomized contents.
-fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
+fn spawn_coffins(
+    world: &mut World,
+    grid: &Grid,
+    floor: u32,
+    occupancy: &mut TileOccupancy,
+    rng: &mut impl Rng,
+) {
     for (x, y) in &grid.coffin_positions {
+        if !occupancy.claim((*x, *y)) {
+            continue;
+        }
         let pos = Position::new(*x, *y);
 
         // Generate coffin contents - gold and possibly a scroll/potion
@@ -190,8 +223,11 @@ fn spawn_coffins(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng)
 /// you can still shoot over), glowing fungus and crystal clusters (walkable
 /// light sources). All three come straight from generation, which has already
 /// checked they sit on open cave floor.
-fn spawn_cave_features(world: &mut World, grid: &Grid) {
+fn spawn_cave_features(world: &mut World, grid: &Grid, occupancy: &mut TileOccupancy) {
     for &(x, y) in &grid.stalagmite_positions {
+        if !occupancy.claim((x, y)) {
+            continue;
+        }
         spawning::spawn_stalagmites(world, x, y);
     }
     for &(x, y) in &grid.mushroom_positions {
@@ -205,15 +241,29 @@ fn spawn_cave_features(world: &mut World, grid: &Grid) {
 /// Spawn explosive oil barrels: 1-2 hide among the Storage-room food barrels
 /// (their positions are returned so `spawn_barrels` can skip them), and some
 /// floors also get 1-2 out in the corridors.
-fn spawn_oil_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) -> Vec<(i32, i32)> {
+fn spawn_oil_barrels(
+    world: &mut World,
+    grid: &Grid,
+    occupancy: &mut TileOccupancy,
+    rng: &mut impl Rng,
+) {
     let mut oil_positions: Vec<(i32, i32)> = Vec::new();
 
     // Storage rooms: convert 1-2 of the rolled barrel spots into oil barrels.
-    if !grid.barrel_positions.is_empty() {
+    // Both pools are narrowed to free tiles before drawing from them, so a
+    // chest already standing on a barrel spot costs a *candidate* rather than
+    // a barrel; the `claim` at the bottom is what actually holds the invariant.
+    let storage_pool: Vec<(i32, i32)> = grid
+        .barrel_positions
+        .iter()
+        .copied()
+        .filter(|&tile| occupancy.is_free(tile))
+        .collect();
+    if !storage_pool.is_empty() {
         let count = rng
             .gen_range(OIL_BARRELS_STORAGE_MIN..=OIL_BARRELS_STORAGE_MAX)
-            .min(grid.barrel_positions.len());
-        let mut pool: Vec<(i32, i32)> = grid.barrel_positions.clone();
+            .min(storage_pool.len());
+        let mut pool: Vec<(i32, i32)> = storage_pool;
         for _ in 0..count {
             if pool.is_empty() {
                 break;
@@ -240,6 +290,7 @@ fn spawn_oil_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) -> Vec<
                     && !door_tiles.contains(&(x, y))
                     && Some((x, y)) != grid.stairs_up_pos
                     && Some((x, y)) != grid.stairs_down_pos
+                    && occupancy.is_free((x, y))
             })
             .collect();
 
@@ -258,22 +309,26 @@ fn spawn_oil_barrels(world: &mut World, grid: &Grid, rng: &mut impl Rng) -> Vec<
         }
     }
 
-    for &(x, y) in &oil_positions {
-        spawning::spawn_oil_barrel(world, x, y);
+    for (x, y) in oil_positions {
+        if occupancy.claim((x, y)) {
+            spawning::spawn_oil_barrel(world, x, y);
+        }
     }
-    oil_positions
 }
 
-/// Spawn all barrels from grid positions with food items, skipping any spots
-/// already taken by oil barrels.
+/// Spawn all barrels from grid positions with food items.
+///
+/// The oil-barrel pass runs first and claims the spots it converted, so those
+/// are skipped here by the same guard that keeps barrels off chests — this used
+/// to need its own `skip_positions` slice threaded in from the caller.
 fn spawn_barrels(
     world: &mut World,
     grid: &Grid,
-    skip_positions: &[(i32, i32)],
+    occupancy: &mut TileOccupancy,
     rng: &mut impl Rng,
 ) {
     for (x, y) in &grid.barrel_positions {
-        if skip_positions.contains(&(*x, *y)) {
+        if !occupancy.claim((*x, *y)) {
             continue;
         }
         let pos = Position::new(*x, *y);
@@ -311,7 +366,12 @@ fn spawn_water_entities(world: &mut World, grid: &Grid) {
 }
 
 /// Spawn shop decorations (jars, sacks) at shop decor positions.
-fn spawn_shop_decorations(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
+fn spawn_shop_decorations(
+    world: &mut World,
+    grid: &Grid,
+    occupancy: &mut TileOccupancy,
+    rng: &mut impl Rng,
+) {
     let decor_sprites = [
         tile_ids::JAR_CLOSED,
         tile_ids::JAR_OPEN,
@@ -320,6 +380,9 @@ fn spawn_shop_decorations(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
     ];
 
     for (x, y) in &grid.shop_decor_positions {
+        if !occupancy.claim((*x, *y)) {
+            continue;
+        }
         let pos = Position::new(*x, *y);
         // Skip decoration if the sprite pool is somehow empty
         let Some(sprite) = decor_sprites.choose(rng) else {
@@ -335,9 +398,11 @@ fn spawn_shop_decorations(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
 }
 
 /// Spawn the vendor in the shop room.
-fn spawn_vendor(world: &mut World, grid: &Grid, floor_num: u32) {
+fn spawn_vendor(world: &mut World, grid: &Grid, occupancy: &mut TileOccupancy, floor_num: u32) {
     if let Some((x, y)) = grid.shop_position {
-        spawning::vendors::MERCHANT.spawn(world, x, y, floor_num);
+        if occupancy.claim((x, y)) {
+            spawning::vendors::MERCHANT.spawn(world, x, y, floor_num);
+        }
     }
 }
 
@@ -347,9 +412,14 @@ use crate::systems::item_defs::{roll_gear, roll_gear_with_rarity, roll_rarity, G
 
 /// Spawn the floor boss (every 3rd floor) in the largest non-start, non-shop
 /// room, awake, with a guaranteed chest beside it rolled at Rare or better.
-fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut impl Rng) {
+fn spawn_boss_encounter(
+    world: &mut World,
+    grid: &Grid,
+    floor: u32,
+    occupancy: &mut TileOccupancy,
+    rng: &mut impl Rng,
+) {
     use crate::components::Rarity;
-    use std::collections::HashSet;
 
     if !spawning::is_boss_floor(floor) {
         return;
@@ -373,12 +443,10 @@ fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut im
     let rect = lair.rect;
 
     // Free = walkable terrain with no blocking entity (enemies, chests, ...).
-    let blocked: HashSet<(i32, i32)> = world
-        .query::<(&Position, &BlocksMovement)>()
-        .iter()
-        .map(|(_, (p, _))| (p.x, p.y))
-        .collect();
-    let free = |x: i32, y: i32| grid.is_walkable(x, y) && !blocked.contains(&(x, y));
+    // This used to be a one-off `BlocksMovement` query of its own.
+    let free = |occupancy: &TileOccupancy, x: i32, y: i32| {
+        grid.is_walkable(x, y) && occupancy.is_free((x, y))
+    };
 
     // Boss stands as close to the room's center as possible.
     let (cx, cy) = rect.center();
@@ -386,12 +454,13 @@ fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut im
         .flat_map(|dy| (1..rect.width - 1).map(move |dx| (rect.x + dx, rect.y + dy)))
         .collect();
     interior.sort_by_key(|&(x, y)| (x - cx).abs() + (y - cy).abs());
-    let Some(&(bx, by)) = interior.iter().find(|&&(x, y)| free(x, y)) else {
+    let Some(&(bx, by)) = interior.iter().find(|&&(x, y)| free(occupancy, x, y)) else {
         return;
     };
     if spawning::spawn_boss(world, floor, bx, by, rng).is_none() {
         return;
     }
+    occupancy.claim((bx, by));
 
     // Guaranteed hoard next to the boss: a chest whose gear rolls at least
     // Rare (Legendary stays possible via the normal floor-scaled roll).
@@ -401,8 +470,9 @@ fn spawn_boss_encounter(world: &mut World, grid: &Grid, floor: u32, rng: &mut im
     ]
     .iter()
     .map(|(dx, dy)| (bx + dx, by + dy))
-    .find(|&(x, y)| free(x, y) && rect.contains(x, y));
+    .find(|&(x, y)| free(occupancy, x, y) && rect.contains(x, y));
     if let Some((chx, chy)) = chest_spot {
+        occupancy.claim((chx, chy));
         let mut items: Vec<ItemInstance> = Vec::new();
         if let Some(&kind) = GEAR_POOL.choose(rng) {
             let rarity = match roll_rarity(floor, rng) {
@@ -643,19 +713,25 @@ pub fn init_world(
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     // (all rolls come from the caller's rng — seeded for reproducible floors).
     // init_world always builds the first floor (floor 0).
-    spawn_chests(&mut world, grid, 0, rng);
-    spawn_doors(&mut world, grid);
-    spawn_secret_door_entity(&mut world, grid);
+    //
+    // One occupancy map runs the length of floor construction: every pass that
+    // places a movement blocker claims its tile through it, so no two of them
+    // can land on the same tile however generation rolled their positions.
+    // Seeded from the world because the player is already spawned.
+    let mut occupancy = TileOccupancy::from_world(&world);
+    spawn_chests(&mut world, grid, 0, &mut occupancy, rng);
+    spawn_doors(&mut world, grid, &mut occupancy);
+    spawn_secret_door_entity(&mut world, grid, &mut occupancy);
     spawn_braziers(&mut world, grid);
-    spawn_coffins(&mut world, grid, 0, rng);
-    let oil_positions = spawn_oil_barrels(&mut world, grid, rng);
-    spawn_barrels(&mut world, grid, &oil_positions, rng);
+    spawn_coffins(&mut world, grid, 0, &mut occupancy, rng);
+    spawn_oil_barrels(&mut world, grid, &mut occupancy, rng);
+    spawn_barrels(&mut world, grid, &mut occupancy, rng);
     spawn_water_entities(&mut world, grid);
-    spawn_shop_decorations(&mut world, grid, rng);
+    spawn_shop_decorations(&mut world, grid, &mut occupancy, rng);
     spawn_dungeon_traps(&mut world, grid, rng);
-    spawn_furniture_pieces(&mut world, grid, rng);
-    spawn_cave_features(&mut world, grid);
-    spawn_vendor(&mut world, grid, 0); // Floor 0 for initial world
+    spawn_furniture_pieces(&mut world, grid, &mut occupancy, rng);
+    spawn_cave_features(&mut world, grid, &mut occupancy);
+    spawn_vendor(&mut world, grid, &mut occupancy, 0); // Floor 0 for initial world
 
     // Spawn wizard NPC
     if let Some(starting_room) = &grid.starting_room {
@@ -667,7 +743,7 @@ pub fn init_world(
                 if x == player_start.x && y == player_start.y {
                     continue;
                 }
-                if grid.is_walkable(x, y) {
+                if grid.is_walkable(x, y) && occupancy.claim((x, y)) {
                     spawning::npcs::WIZARD.spawn(&mut world, x, y);
                     npc_spawned = true;
                     break 'find_npc_pos;
@@ -678,6 +754,7 @@ pub fn init_world(
             let (cx, cy) = starting_room.center();
             if (cx != player_start.x || cy != player_start.y)
                 && grid.is_walkable(cx, cy)
+                && occupancy.claim((cx, cy))
             {
                 spawning::npcs::WIZARD.spawn(&mut world, cx, cy);
             }
@@ -686,7 +763,7 @@ pub fn init_world(
 
     // Cave ecology: caverns get bats and spiders, and the floor roster stays
     // out of them. init_world always builds the first floor (floor 0).
-    let cavern_tiles = spawning::spawn_cave_fauna(&mut world, grid, 0, rng);
+    let cavern_tiles = spawning::spawn_cave_fauna(&mut world, grid, 0, &mut occupancy, rng);
 
     // Spawn enemies
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
@@ -701,8 +778,14 @@ pub fn init_world(
         &walkable_tiles,
         &[(player_start.x, player_start.y)],
         grid.starting_room.as_ref(),
+        &mut occupancy,
         rng,
     );
+
+    // Floor 0 has no boss (see `is_boss_floor`), so there is no boss pass here.
+
+    #[cfg(debug_assertions)]
+    crate::tile_occupancy::assert_one_blocker_per_tile(&world, "init_world");
 
     (world, player_entity, player_start)
 }
@@ -760,22 +843,32 @@ pub fn spawn_floor_entities(
         vis_pos.y = player_spawn_pos.1 as f32;
     }
 
-    // Spawn chests, doors, braziers, barrels, and shop from the per-floor rng
-    spawn_chests(world, grid, floor_num, rng);
-    spawn_doors(world, grid);
-    spawn_secret_door_entity(world, grid);
+    // One occupancy map for the whole floor, so no two blocker-placing passes
+    // can land on the same tile. Seeded from the world: a floor transition
+    // clears the floor's entities but keeps the player and their companions.
+    let mut occupancy = TileOccupancy::from_world(world);
+
+    // Spawn chests, doors, braziers, coffins, barrels, and shop from the
+    // per-floor rng. Same passes and same order as `init_world`: Crypt is a
+    // required room theme on every floor, so every floor rolls coffin
+    // positions, and this pass used to leave them unspawned — crypts below
+    // floor 0 were decorated rooms with nothing in them.
+    spawn_chests(world, grid, floor_num, &mut occupancy, rng);
+    spawn_doors(world, grid, &mut occupancy);
+    spawn_secret_door_entity(world, grid, &mut occupancy);
     spawn_braziers(world, grid);
-    let oil_positions = spawn_oil_barrels(world, grid, rng);
-    spawn_barrels(world, grid, &oil_positions, rng);
-    spawn_shop_decorations(world, grid, rng);
+    spawn_coffins(world, grid, floor_num, &mut occupancy, rng);
+    spawn_oil_barrels(world, grid, &mut occupancy, rng);
+    spawn_barrels(world, grid, &mut occupancy, rng);
+    spawn_shop_decorations(world, grid, &mut occupancy, rng);
     spawn_dungeon_traps(world, grid, rng);
-    spawn_furniture_pieces(world, grid, rng);
-    spawn_cave_features(world, grid);
-    spawn_vendor(world, grid, floor_num);
+    spawn_furniture_pieces(world, grid, &mut occupancy, rng);
+    spawn_cave_features(world, grid, &mut occupancy);
+    spawn_vendor(world, grid, &mut occupancy, floor_num);
 
     // Cave ecology: caverns get bats and spiders, and the floor roster stays
     // out of them.
-    let cavern_tiles = spawning::spawn_cave_fauna(world, grid, floor_num, rng);
+    let cavern_tiles = spawning::spawn_cave_fauna(world, grid, floor_num, &mut occupancy, rng);
 
     // Spawn enemies
     let walkable_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
@@ -790,11 +883,15 @@ pub fn spawn_floor_entities(
         &walkable_tiles,
         &[player_spawn_pos],
         grid.starting_room.as_ref(),
+        &mut occupancy,
         rng,
     );
 
     // Every 3rd floor: a named boss guarding a Rare+ chest in the largest room.
-    spawn_boss_encounter(world, grid, floor_num, rng);
+    spawn_boss_encounter(world, grid, floor_num, &mut occupancy, rng);
+
+    #[cfg(debug_assertions)]
+    crate::tile_occupancy::assert_one_blocker_per_tile(world, "spawn_floor_entities");
 
     // Initialize AI
     initialize_ai_actors(ctx);

@@ -11,9 +11,11 @@ use crate::components::{
     SecondaryAbility, Sprite, TamedBy, TamingInProgress, VisualPosition,
 };
 use crate::constants::*;
+use crate::engine::EffectCtx;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::queries;
+use crate::spatial_cache::SpatialCache;
 use crate::systems::effects;
 use crate::tile::tile_ids;
 
@@ -281,12 +283,14 @@ pub fn apply_activate_fear(
 }
 
 /// Apply wait action - handles taming and life drain progress if applicable
-pub fn apply_wait(
-    world: &mut World,
-    entity: Entity,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) -> ActionResult {
+///
+/// Takes the full effect context because completing a tame drops the target's
+/// `BlocksMovement`, which has to be mirrored into the `SpatialCache`.
+pub fn apply_wait(ctx: &mut EffectCtx, entity: Entity) -> ActionResult {
+    let EffectCtx { world, grid: _grid, spatial: spatial_cache, events, rng } = ctx;
+    let world = &mut **world;
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     // Check if entity is taming something
     let taming_info = world.get::<&TamingInProgress>(entity)
         .ok()
@@ -306,7 +310,7 @@ pub fn apply_wait(
 
                     if new_progress >= required {
                         // Taming complete!
-                        complete_taming(world, entity, target, events);
+                        complete_taming(world, spatial_cache, entity, target, events);
                     } else {
                         // Update progress
                         if let Ok(mut taming) = world.get::<&mut TamingInProgress>(entity) {
@@ -718,6 +722,7 @@ pub fn interrupt_taming(world: &mut World, entity: Entity, events: &mut EventQue
 /// Complete taming - convert enemy to companion
 fn complete_taming(
     world: &mut World,
+    spatial_cache: &mut SpatialCache,
     tamer: Entity,
     target: Entity,
     events: &mut EventQueue,
@@ -727,8 +732,13 @@ fn complete_taming(
     // Remove hostile AI (but keep Attackable so enemies can still attack the companion)
     let _ = world.remove_one::<ChaseAI>(target);
 
-    // Remove BlocksMovement so player can walk through their companion
+    // Remove BlocksMovement so player can walk through their companion, and
+    // mirror that into the SpatialCache. Without this the cache keeps the
+    // companion's tile blocked, and because the entity is still *tracked*,
+    // `update_position` drags that phantom blocker along every step it takes —
+    // the companion trails an invisible wall that enemies path around.
     let _ = world.remove_one::<BlocksMovement>(target);
+    spatial_cache.clear_blocking_flags(target);
 
     // Add companion components
     let _ = world.insert_one(target, TamedBy { owner: tamer });
@@ -1109,5 +1119,48 @@ mod tests {
             matches!(e, GameEvent::SkeletonRaised { owner, position } if owner == caster && position == (6, 5))
         });
         assert!(raised, "SkeletonRaised event emitted for the engine");
+    }
+
+    /// Taming drops the target's `BlocksMovement` so you can walk through your
+    /// own companion. That has to reach the SpatialCache too: the cache is the
+    /// single source of truth for "is this tile blocked", and a tracked entity
+    /// whose stale flags say it blocks will drag a phantom blocker along behind
+    /// it via `update_position` on every step.
+    #[test]
+    fn taming_clears_the_companion_from_the_spatial_cache() {
+        use crate::components::VisualPosition;
+        use crate::spatial_cache::SpatialCache;
+
+        let mut world = World::new();
+        let pos = Position::new(3, 3);
+        let rat = world.spawn((pos, VisualPosition::from_position(&pos), BlocksMovement));
+        let player = world.spawn((Position::new(2, 3),));
+
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        assert!(cache.is_blocked((3, 3)), "sanity: rat blocks before taming");
+
+        let mut events = EventQueue::new();
+        complete_taming(&mut world, &mut cache, player, rat, &mut events);
+
+        assert!(
+            world.get::<&BlocksMovement>(rat).is_err(),
+            "taming should drop BlocksMovement"
+        );
+        cache.assert_coherent_with_world(&world, "after taming");
+        assert!(
+            !cache.is_blocked((3, 3)),
+            "the companion's tile must no longer be blocked"
+        );
+
+        // And the phantom must not follow the companion as it walks away.
+        if let Ok(mut p) = world.get::<&mut Position>(rat) {
+            p.x = 5;
+            p.y = 5;
+        }
+        cache.update_position(rat, (3, 3), (5, 5));
+        cache.assert_coherent_with_world(
+            &world,
+            "a tamed companion must not drag a blocked tile around with it",
+        );
     }
 }

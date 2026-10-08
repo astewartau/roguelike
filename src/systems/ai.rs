@@ -80,7 +80,7 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
                         ai.sight_radius
                     };
                     is_within_sight(entity_pos, tp, eff)
-                        && has_line_of_sight(grid, spatial_cache.get_vision_blocking(), entity_pos.0, entity_pos.1, tp.0, tp.1)
+                        && has_line_of_sight(grid, spatial_cache, entity_pos.0, entity_pos.1, tp.0, tp.1)
                 })
                 .unwrap_or(false);
             let decay_rate = if target_visible { THREAT_DECAY_VISIBLE } else { THREAT_DECAY_HIDDEN };
@@ -100,7 +100,7 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
         for entry in ai.threat_table.iter_mut() {
             let target_visible = pos_lookup(entry.entity)
                 .map(|tp| is_within_sight(entity_pos, tp, 8) // Companions use fixed sight radius
-                    && has_line_of_sight(grid, spatial_cache.get_vision_blocking(), entity_pos.0, entity_pos.1, tp.0, tp.1))
+                    && has_line_of_sight(grid, spatial_cache, entity_pos.0, entity_pos.1, tp.0, tp.1))
                 .unwrap_or(false);
             let decay_rate = if target_visible { THREAT_DECAY_VISIBLE } else { THREAT_DECAY_HIDDEN };
             entry.threat = (entry.threat - decay_rate * elapsed).max(THREAT_MINIMUM);
@@ -345,9 +345,6 @@ fn determine_action(
         Err(_) => return ActionType::Wait,
     };
 
-    // Get blocking positions from cache
-    let blocking_positions = spatial_cache.get_blocking_positions();
-
     // Check for status effects that override normal AI behavior
     let is_stunned = queries::has_status_effect(world, entity, EffectType::Stunned);
     let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
@@ -361,7 +358,7 @@ fn determine_action(
 
     // Confused: move randomly, ignore everything (including fire hazards)
     if is_confused && !is_rooted {
-        let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, &HashSet::new(), rng);
+        let (dx, dy) = random_wander(grid, entity_pos, spatial_cache, &HashSet::new(), rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -391,7 +388,7 @@ fn determine_action(
             .and_then(|ai| ai.highest_threat().map(|e| e.entity))
             .and_then(|e| queries::get_entity_position(world, e))
             .unwrap_or_else(|| queries::get_entity_position(world, player_entity).unwrap_or(entity_pos));
-        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, blocking_positions, rng);
+        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, spatial_cache, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -485,7 +482,7 @@ fn determine_action(
         } else {
             // Awake but unaware: patrol/wander.
             let fire = fire_positions(world);
-            let (dx, dy) = random_wander(grid, entity_pos, blocking_positions, &fire, rng);
+            let (dx, dy) = random_wander(grid, entity_pos, spatial_cache, &fire, rng);
             if dx == 0 && dy == 0 {
                 return ActionType::Wait;
             }
@@ -695,7 +692,7 @@ fn determine_action(
                     if let Some(tp) = aim {
                         let distance = (entity_pos.0 - tp.0).abs().max((entity_pos.1 - tp.1).abs());
                         if distance >= ranged_min && distance <= ranged_max
-                            && has_clear_shot(entity_pos, tp, blocking_positions) {
+                            && has_clear_shot(entity_pos, tp, spatial_cache) {
                                 return ActionType::ShootBow { target_x: tp.0, target_y: tp.1 };
                             }
                     }
@@ -714,7 +711,7 @@ fn determine_action(
                 .abs()
                 .max((entity_pos.1 - target_pos.1).abs());
             if dist < SHAMAN_KITE_MIN {
-                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, blocking_positions, rng);
+                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, spatial_cache, rng);
                 if fdx == 0 && fdy == 0 {
                     return ActionType::Wait;
                 }
@@ -732,7 +729,7 @@ fn determine_action(
     } else {
         // Idle wandering — avoid wandering into fire hazards.
         let fire = fire_positions(world);
-        random_wander(grid, entity_pos, blocking_positions, &fire, rng)
+        random_wander(grid, entity_pos, spatial_cache, &fire, rng)
     };
 
     if dx == 0 && dy == 0 {
@@ -837,14 +834,13 @@ fn try_boss_ability(
             let want = BOSS_SPIDER_SPAWN_COUNT.min(BOSS_SPIDER_MINION_CAP - alive);
 
             // Free adjacent tiles for the brood to skitter out of.
-            let blocking = spatial_cache.get_blocking_positions();
             let spots: Vec<(i32, i32)> = [
                 (-1, 0), (1, 0), (0, -1), (0, 1),
                 (-1, -1), (-1, 1), (1, -1), (1, 1),
             ]
             .iter()
             .map(|(dx, dy)| (entity_pos.0 + dx, entity_pos.1 + dy))
-            .filter(|&(x, y)| grid.is_walkable(x, y) && !blocking.contains(&(x, y)))
+            .filter(|&(x, y)| grid.is_walkable(x, y) && !spatial_cache.is_blocked((x, y)))
             .take(want)
             .collect();
             if spots.is_empty() {
@@ -928,7 +924,6 @@ fn try_support_cast(
     }
 
     // Visible living allies within support range.
-    let vision_blocking = spatial_cache.get_vision_blocking();
     let allies: Vec<(Entity, (i32, i32), i32, i32)> = world
         .query::<(&Position, &ChaseAI, &Health)>()
         .iter()
@@ -937,7 +932,7 @@ fn try_support_cast(
                 && health.current > 0
                 && (pos.x - entity_pos.0).abs().max((pos.y - entity_pos.1).abs())
                     <= SHAMAN_SUPPORT_RANGE
-                && has_line_of_sight(grid, vision_blocking, entity_pos.0, entity_pos.1, pos.x, pos.y)
+                && has_line_of_sight(grid, spatial_cache, entity_pos.0, entity_pos.1, pos.x, pos.y)
         })
         .map(|(id, (pos, _, health))| (id, (pos.x, pos.y), health.current, health.max))
         .collect();
@@ -1155,12 +1150,12 @@ fn pursue_target(
 // =============================================================================
 
 /// Check if there's a clear line of sight for a projectile (no blocking entities)
-fn has_clear_shot(from: (i32, i32), to: (i32, i32), blocking: &HashSet<(i32, i32)>) -> bool {
+fn has_clear_shot(from: (i32, i32), to: (i32, i32), spatial_cache: &SpatialCache) -> bool {
     for (x, y) in BresenhamLineIter::new(from.0, from.1, to.0, to.1) {
         if (x, y) == from || (x, y) == to {
             continue;
         }
-        if blocking.contains(&(x, y)) {
+        if spatial_cache.is_blocked((x, y)) {
             return false;
         }
     }
@@ -1196,8 +1191,7 @@ fn can_see_target(
         return false;
     }
 
-    let vision_blocking = spatial_cache.get_vision_blocking();
-    has_line_of_sight(grid, vision_blocking, from.0, from.1, target.0, target.1)
+    has_line_of_sight(grid, spatial_cache, from.0, from.1, target.0, target.1)
 }
 
 /// True if the tile at `pos` conceals a target standing on it (tall grass).
@@ -1210,7 +1204,7 @@ fn is_concealed(grid: &Grid, pos: (i32, i32)) -> bool {
 /// Check if there's a clear line of sight between two points.
 fn has_line_of_sight(
     grid: &Grid,
-    blocking_entities: &HashSet<(i32, i32)>,
+    spatial_cache: &SpatialCache,
     x0: i32,
     y0: i32,
     x1: i32,
@@ -1246,7 +1240,7 @@ fn has_line_of_sight(
             }
         }
 
-        if blocking_entities.contains(&(x, y)) {
+        if spatial_cache.blocks_vision((x, y)) {
             return false;
         }
     }
@@ -1332,7 +1326,7 @@ fn ai_pathfinding_blocked(
     spatial_cache: &SpatialCache,
     can_open_doors: bool,
 ) -> HashSet<(i32, i32)> {
-    let mut blocked = spatial_cache.get_blocking_positions().clone();
+    let mut blocked: HashSet<(i32, i32)> = spatial_cache.blocked_tiles().collect();
 
     for (_id, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
         blocked.remove(&(pos.x, pos.y));
@@ -1369,7 +1363,7 @@ fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
 fn random_wander(
     grid: &Grid,
     pos: (i32, i32),
-    blocked: &HashSet<(i32, i32)>,
+    spatial_cache: &SpatialCache,
     fire: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
@@ -1378,7 +1372,7 @@ fn random_wander(
     for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
         let target = (pos.0 + dx, pos.1 + dy);
         if grid.is_walkable(target.0, target.1)
-            && !blocked.contains(&target)
+            && !spatial_cache.is_blocked(target)
             && !fire.contains(&target)
         {
             valid[count] = (dx, dy);
@@ -1398,7 +1392,7 @@ fn flee_from_target(
     grid: &Grid,
     pos: (i32, i32),
     target: (i32, i32),
-    blocked: &HashSet<(i32, i32)>,
+    spatial_cache: &SpatialCache,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
     let flee_dx = (pos.0 - target.0).signum();
@@ -1407,14 +1401,14 @@ fn flee_from_target(
     if flee_dx != 0 || flee_dy != 0 {
         let nx = pos.0 + flee_dx;
         let ny = pos.1 + flee_dy;
-        if grid.is_walkable(nx, ny) && !blocked.contains(&(nx, ny)) {
+        if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
             return (flee_dx, flee_dy);
         }
 
         if flee_dx != 0 {
             let nx = pos.0 + flee_dx;
             let ny = pos.1;
-            if grid.is_walkable(nx, ny) && !blocked.contains(&(nx, ny)) {
+            if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
                 return (flee_dx, 0);
             }
         }
@@ -1422,14 +1416,14 @@ fn flee_from_target(
         if flee_dy != 0 {
             let nx = pos.0;
             let ny = pos.1 + flee_dy;
-            if grid.is_walkable(nx, ny) && !blocked.contains(&(nx, ny)) {
+            if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
                 return (0, flee_dy);
             }
         }
     }
 
     // Panicked flee fallback — desperation overrides fire avoidance.
-    random_wander(grid, pos, blocked, &HashSet::new(), rng)
+    random_wander(grid, pos, spatial_cache, &HashSet::new(), rng)
 }
 
 #[cfg(test)]

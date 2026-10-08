@@ -24,6 +24,7 @@ mod spatial_cache;
 mod spawning;
 mod systems;
 mod tile;
+mod tile_occupancy;
 mod time_system;
 mod ui;
 mod vfx;

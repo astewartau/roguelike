@@ -41,7 +41,7 @@ pub use combat::{handle_container_opened, handle_door_closed, handle_door_opened
 pub use experience::xp_progress;
 pub use inventory::{
     cleanup_empty_ground_piles, find_container_at_player, take_all_from_container,
-    take_gold_from_container, take_item_from_container,
+    take_gold_from_container, take_item_from_container, unblock_emptied_containers,
 };
 pub use items::{item_name, use_item, remove_item_from_inventory, item_targeting_params, ItemUseResult};
 pub use projectile::{cleanup_finished_projectiles, despawn_projectiles, lerp_projectiles_realtime, update_projectiles};

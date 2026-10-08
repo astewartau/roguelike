@@ -522,9 +522,10 @@ pub fn process_ui_actions(
 ) -> UiActionResult {
     let player_entity = ctx.player;
     let game_time = ctx.clock.time;
-    let (world, grid, events, rng, ui_state) = (
+    let (world, grid, spatial_cache, events, rng, ui_state) = (
         &mut *ctx.world,
         &mut *ctx.grid,
+        &mut *ctx.spatial,
         &mut *ctx.events,
         &mut *ctx.rng,
         &*ctx.ui,
@@ -542,16 +543,20 @@ pub fn process_ui_actions(
         if actions.chest_take_all || actions.close_chest {
             if actions.chest_take_all {
                 systems::take_all_from_container(world, player_entity, chest_id, Some(events));
-                // Clean up empty ground item piles
+                // Clean up empty ground item piles, and stop the container
+                // that was just emptied blocking its tile.
                 systems::cleanup_empty_ground_piles(world);
+                systems::unblock_emptied_containers(world, spatial_cache);
             }
             result.close_chest = true;
         } else if actions.chest_take_gold {
             systems::take_gold_from_container(world, player_entity, chest_id, Some(events));
+            systems::unblock_emptied_containers(world, spatial_cache);
         } else if let Some(item_index) = actions.chest_item_to_take {
             systems::take_item_from_container(world, player_entity, chest_id, item_index, Some(events));
             // Clean up empty ground item piles after taking items
             systems::cleanup_empty_ground_piles(world);
+            systems::unblock_emptied_containers(world, spatial_cache);
         }
     }
 

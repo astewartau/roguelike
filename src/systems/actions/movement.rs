@@ -6,6 +6,7 @@ use hecs::{Entity, World};
 use crate::components::{BlocksMovement, Container, Door, EffectType, Player, Position};
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::queries;
+use crate::spatial_cache::SpatialCache;
 use crate::systems::effects;
 
 use super::traps::{check_dungeon_trap_trigger, check_fire_trap_trigger, check_snare_trap_trigger};
@@ -309,8 +310,18 @@ pub fn apply_interact_direction(
 }
 
 /// Apply use stairs effect - moves entity to stairs and emits floor transition event
+///
+/// Takes the `SpatialCache` because this is a real move, not just a transition
+/// trigger: the entity ends up standing on the stairs tile. A floor transition
+/// rebuilds the cache from scratch and would paper over a missed update, but
+/// the transition can be *refused* — `can_transition_floor` turns down
+/// `StairDirection::Up` on floor 0, so walking onto the dungeon entrance
+/// leaves the entity on the stairs with no rebuild coming. Skipping the cache
+/// here left it pointing at the tile the entity had just left, which then
+/// unblocked the wrong tile on the next step.
 pub fn apply_use_stairs(
     world: &mut World,
+    spatial_cache: &mut SpatialCache,
     entity: Entity,
     x: i32,
     y: i32,
@@ -328,6 +339,7 @@ pub fn apply_use_stairs(
         pos.x = x;
         pos.y = y;
     }
+    spatial_cache.update_position(entity, current_pos, (x, y));
 
     // Emit movement event
     events.push(GameEvent::EntityMoved {
@@ -343,4 +355,62 @@ pub fn apply_use_stairs(
     });
 
     ActionResult::Completed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::VisualPosition;
+
+    /// Walking onto a staircase is a real move, and the entity can end up
+    /// standing there: `can_transition_floor` refuses `Up` on floor 0, so
+    /// stepping onto the dungeon entrance moves the player and then *declines*
+    /// the transition that would otherwise have rebuilt the cache.
+    ///
+    /// Before the cache update below, the player's cached tile stayed behind at
+    /// the tile they had left. The next step then released a count the player
+    /// never held there, while the tile they were actually standing on read as
+    /// walkable.
+    #[test]
+    fn using_stairs_moves_the_entity_in_the_spatial_cache() {
+        let mut world = World::new();
+        let start = Position::new(6, 9);
+        let player = world.spawn((
+            start,
+            VisualPosition::from_position(&start),
+            BlocksMovement,
+            Player,
+        ));
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+
+        let result = apply_use_stairs(
+            &mut world,
+            &mut cache,
+            player,
+            7,
+            9,
+            StairDirection::Up,
+            &mut events,
+        );
+        assert_eq!(result, ActionResult::Completed);
+
+        assert!(
+            !cache.is_blocked((6, 9)),
+            "the tile the player left must not keep a phantom blocker"
+        );
+        assert!(
+            cache.is_blocked((7, 9)),
+            "the stairs tile the player now occupies must be blocked"
+        );
+        cache.assert_coherent_with_world(&world, "after stepping onto stairs");
+
+        // The real symptom: the *next* step used to release a count the player
+        // had never taken at its cached tile.
+        if let Ok(mut pos) = world.get::<&mut Position>(player) {
+            pos.y = 10;
+        }
+        cache.update_position(player, (7, 9), (7, 10));
+        cache.assert_coherent_with_world(&world, "after stepping off the stairs");
+    }
 }

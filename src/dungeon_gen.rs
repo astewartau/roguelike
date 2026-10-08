@@ -538,8 +538,20 @@ impl DungeonGenerator {
         // Generate coffin positions in Crypt rooms
         let coffin_positions = gen.generate_coffin_positions(&themed_rooms, &mut rng);
 
-        // Generate barrel positions in Storage rooms
-        let barrel_positions = gen.generate_barrel_positions(&themed_rooms, &mut rng);
+        // Generate barrel positions in Storage rooms.
+        //
+        // Fed the tiles already claimed by chests, braziers and coffins so a
+        // Storage room's barrels do not double-book a tile with the room's
+        // chest. Barrel placement already retries, so avoiding a taken tile
+        // costs a retry rather than a barrel. `TileOccupancy` would refuse the
+        // second placement at spawn time regardless; this keeps the two
+        // position lists from disagreeing in the first place.
+        let mut occupied: Vec<(i32, i32)> = Vec::new();
+        occupied.extend(chest_positions.iter().copied());
+        occupied.extend(brazier_positions.iter().copied());
+        occupied.extend(coffin_positions.iter().copied());
+        let barrel_positions =
+            gen.generate_barrel_positions(&themed_rooms, &occupied, &mut rng);
 
         // Generate shop positions
         let shop_position = gen.generate_shop_position(&themed_rooms);
@@ -559,10 +571,8 @@ impl DungeonGenerator {
 
         // Room furniture (fountains/altars/shrines): roughly one per 3 rooms.
         // Avoid tiles already claimed by chests, braziers, coffins, etc.
-        let mut occupied: Vec<(i32, i32)> = Vec::new();
-        occupied.extend(chest_positions.iter().copied());
-        occupied.extend(brazier_positions.iter().copied());
-        occupied.extend(coffin_positions.iter().copied());
+        // `occupied` already holds the chest, brazier and coffin tiles from the
+        // barrel pass above.
         occupied.extend(barrel_positions.iter().copied());
         occupied.extend(shop_decor_positions.iter().copied());
         occupied.extend(shop_position.iter().copied());
@@ -1878,7 +1888,12 @@ impl DungeonGenerator {
     }
 
     /// Generate barrel positions in Storage rooms
-    fn generate_barrel_positions(&self, themed_rooms: &[ThemedRoom], rng: &mut impl Rng) -> Vec<(i32, i32)> {
+    fn generate_barrel_positions(
+        &self,
+        themed_rooms: &[ThemedRoom],
+        occupied: &[(i32, i32)],
+        rng: &mut impl Rng,
+    ) -> Vec<(i32, i32)> {
         let mut positions = Vec::new();
 
         for room in themed_rooms {
@@ -1901,7 +1916,10 @@ impl DungeonGenerator {
                     let x = rng.gen_range(room.rect.x + 1..room.rect.x + room.rect.width - 1);
                     let y = rng.gen_range(room.rect.y + 1..room.rect.y + room.rect.height - 1);
 
-                    if !used.contains(&(x, y)) && self.get_tile(x, y) == Some(TileType::Floor) {
+                    if !used.contains(&(x, y))
+                        && !occupied.contains(&(x, y))
+                        && self.get_tile(x, y) == Some(TileType::Floor)
+                    {
                         positions.push((x, y));
                         used.push((x, y));
                         break;

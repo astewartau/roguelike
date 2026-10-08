@@ -178,6 +178,68 @@ impl GameState {
 mod tests {
     use super::*;
 
+    /// Stacked blockers on a real generated floor, created the way the game
+    /// still creates them.
+    ///
+    /// Floor *construction* no longer stacks: every blocker-placing pass claims
+    /// its tile through `TileOccupancy`, and both construction paths assert
+    /// one-blocker-per-tile when they finish. What remains is the runtime path —
+    /// an opened coffin keeps its `BlocksMovement` and the skeleton it releases
+    /// spawns on the container's own tile (`apply_deferred_spawns` calls
+    /// `register_entity(skeleton, pos, true, false)`).
+    ///
+    /// So this takes a real generated floor, stacks a second blocker on an
+    /// existing one exactly as that path does, moves one off, and requires the
+    /// cache to stay coherent. With a set of positions the tile went walkable
+    /// the moment the first of the two left.
+    #[test]
+    fn stacked_blockers_on_a_generated_floor_survive_one_of_them_moving() {
+        use crate::components::{BlocksMovement, PlayerClass, Position, VisualPosition};
+
+        for seed in 0..20u64 {
+            let mut state = GameState::new(PlayerClass::Fighter, seed);
+
+            // Any blocker the generator placed will do as the thing being stood on.
+            let (host_tile, _host) = state
+                .world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .map(|(id, (pos, _))| ((pos.x, pos.y), id))
+                .next()
+                .expect("a generated floor has at least one blocker");
+
+            // Stack a second blocker on it, as the coffin-skeleton path does.
+            let pos = Position::new(host_tile.0, host_tile.1);
+            let stacked = state.world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                BlocksMovement,
+            ));
+            state
+                .spatial_cache
+                .register_entity(stacked, host_tile, true, false);
+            state
+                .spatial_cache
+                .assert_coherent_with_world(&state.world, &format!("seed {seed}: stacked"));
+
+            // Walk it off to an empty tile, the way apply_move does.
+            let free = (-5, -5); // off-map, and certainly unoccupied
+            if let Ok(mut p) = state.world.get::<&mut Position>(stacked) {
+                p.x = free.0;
+                p.y = free.1;
+            }
+            state.spatial_cache.update_position(stacked, host_tile, free);
+
+            assert!(
+                state.spatial_cache.is_blocked(host_tile),
+                "seed {seed}: {host_tile:?} still has the original blocker on it"
+            );
+            state
+                .spatial_cache
+                .assert_coherent_with_world(&state.world, &format!("seed {seed}: one left"));
+        }
+    }
+
     #[test]
     fn test_floor_seed_is_stable() {
         // The derivation must never change between calls (or releases would
