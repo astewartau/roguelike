@@ -716,16 +716,14 @@ impl GameEngine {
         // is maintained incrementally, so any spawn/move/despawn path that
         // forgets to update it silently reintroduces phantom blockers. Verify
         // it against a fresh rebuild once per tick; compiled out in release.
-        debug_assert!(
-            {
-                let fresh =
-                    crate::spatial_cache::SpatialCache::rebuild_from_world(&state.world);
-                state.spatial_cache.get_blocking_positions() == fresh.get_blocking_positions()
-                    && state.spatial_cache.get_vision_blocking() == fresh.get_vision_blocking()
-            },
-            "SpatialCache drifted from world state — some spawn/move/despawn path \
-             failed to update it"
-        );
+        //
+        // The check compares per-tile blocker *counts*, so a tile two entities
+        // share has to be accounted for twice — an opened coffin and the
+        // skeleton standing on it, say.
+        #[cfg(debug_assertions)]
+        state
+            .spatial_cache
+            .assert_coherent_with_world(&state.world, "engine tick");
 
         // First-sighting boss announcements ("... glares at you!"). Cheap:
         // at most one boss per floor; the event is picked up by the message

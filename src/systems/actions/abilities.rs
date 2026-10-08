@@ -1137,7 +1137,7 @@ mod tests {
         let player = world.spawn((Position::new(2, 3),));
 
         let mut cache = SpatialCache::rebuild_from_world(&world);
-        assert!(cache.get_blocking_positions().contains(&(3, 3)), "sanity: rat blocks before taming");
+        assert!(cache.is_blocked((3, 3)), "sanity: rat blocks before taming");
 
         let mut events = EventQueue::new();
         complete_taming(&mut world, &mut cache, player, rat, &mut events);
@@ -1146,14 +1146,9 @@ mod tests {
             world.get::<&BlocksMovement>(rat).is_err(),
             "taming should drop BlocksMovement"
         );
-        let fresh = SpatialCache::rebuild_from_world(&world);
-        assert_eq!(
-            cache.get_blocking_positions(),
-            fresh.get_blocking_positions(),
-            "cache must match a fresh rebuild after taming"
-        );
+        cache.assert_coherent_with_world(&world, "after taming");
         assert!(
-            !cache.get_blocking_positions().contains(&(3, 3)),
+            !cache.is_blocked((3, 3)),
             "the companion's tile must no longer be blocked"
         );
 
@@ -1163,11 +1158,9 @@ mod tests {
             p.y = 5;
         }
         cache.update_position(rat, (3, 3), (5, 5));
-        let fresh = SpatialCache::rebuild_from_world(&world);
-        assert_eq!(
-            cache.get_blocking_positions(),
-            fresh.get_blocking_positions(),
-            "a tamed companion must not drag a blocked tile around with it"
+        cache.assert_coherent_with_world(
+            &world,
+            "a tamed companion must not drag a blocked tile around with it",
         );
     }
 }
