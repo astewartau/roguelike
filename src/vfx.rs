@@ -3,6 +3,7 @@
 //! These are separate from entity state - they're spawned, animated, and removed
 //! without affecting game logic.
 
+use crate::camera::ShakeRequest;
 use crate::constants::*;
 use crate::events::GameEvent;
 use crate::grid::Grid;
@@ -152,6 +153,11 @@ pub struct VfxManager {
     pub taming_beams: Vec<TamingBeam>,
     /// Persistent resting indicator, present only while the player is resting.
     pub resting_bubble: Option<RestingBubble>,
+    /// Camera shakes queued by events since the last frame, waiting to be
+    /// handed to the camera. They live here because event handling runs deep
+    /// in the simulation, where the camera is not reachable, while the engine
+    /// tick has both this and the camera in hand.
+    shake_requests: Vec<ShakeRequest>,
 }
 
 impl VfxManager {
@@ -162,7 +168,20 @@ impl VfxManager {
             life_drain_beams: Vec::new(),
             taming_beams: Vec::new(),
             resting_bubble: None,
+            shake_requests: Vec::new(),
         }
+    }
+
+    /// Queue a camera shake for the engine to pass on this frame.
+    pub fn request_shake(&mut self, request: ShakeRequest) {
+        self.shake_requests.push(request);
+    }
+
+    /// Take everything queued since the last call. The engine tick drains this
+    /// every frame, so requests never pile up; a frame with no events hands
+    /// back an empty vec and the camera's own decay carries on untouched.
+    pub fn take_shake_requests(&mut self) -> Vec<ShakeRequest> {
+        std::mem::take(&mut self.shake_requests)
     }
 
     /// Spawn a new effect

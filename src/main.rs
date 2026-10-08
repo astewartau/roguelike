@@ -8,6 +8,7 @@ mod camera;
 mod components;
 mod constants;
 mod dungeon_gen;
+mod ease;
 mod engine;
 mod events;
 mod fov;

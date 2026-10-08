@@ -313,11 +313,13 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         // Check for overlay sprite (e.g., weapon)
         let overlay = world.get::<&OverlaySprite>(id).ok().map(|o| Sprite::new(o.sheet, o.tile_id));
 
-        // Per-entity color tint (e.g., fire arrows)
-        let tint = world
+        // Per-entity color tint (e.g., fire arrows), lifted toward the
+        // hit-flash colour while this entity is still flashing from a hit.
+        let base_tint = world
             .get::<&SpriteTint>(id)
             .map(|t| (t.r, t.g, t.b))
             .unwrap_or(NO_TINT);
+        let tint = super::animation::hit_flash_tint(world, id, id == player_entity, base_tint);
 
         let entity_effects = effects::NONE;
 

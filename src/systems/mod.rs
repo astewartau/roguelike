@@ -5,6 +5,7 @@
 //! - `actions`: Action effect implementations (move, attack, etc.)
 //! - `ai`: AI decision-making and behavior
 //! - `animation`: Visual interpolation and animation updates
+//! - `camera_shake`: Per-event camera shake amplitudes
 //! - `effects`: Status effect application
 //! - `experience`: XP, leveling, and stats calculations
 //! - `items`: Item properties and utilities
@@ -17,6 +18,7 @@ pub mod action_dispatch;
 pub mod actions;
 pub mod ai;
 pub mod animation;
+pub mod camera_shake;
 pub mod combat;
 pub mod dev_tools;
 pub mod dialogue;
@@ -36,7 +38,9 @@ pub mod survival;
 pub mod webs;
 
 // Re-export commonly used items
-pub use animation::{update_lunge_animations, visual_lerp};
+pub use animation::{
+    flash_on_damage, update_hit_flashes, update_lunge_animations, visual_lerp,
+};
 pub use combat::{handle_container_opened, handle_door_closed, handle_door_opened, remove_dead_entities, weapon_damage};
 pub use experience::xp_progress;
 pub use inventory::{
