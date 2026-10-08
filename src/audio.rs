@@ -66,30 +66,47 @@ impl AudioManager {
         Some(manager)
     }
 
-    /// Open an output stream on the host's default device, and nothing else.
+    /// Open an output stream through the system sound server (PipeWire or
+    /// PulseAudio) so audio follows the user's chosen sink and shares the card
+    /// with everything else. Falls back to the host's default device.
     ///
-    /// On Linux the ALSA "default" PCM is the system sound server
-    /// (PipeWire/PulseAudio), so audio follows the user's chosen sink and
-    /// shares the card with everything else.
+    /// We can't just use ALSA's "default": it only points at PipeWire when
+    /// `pipewire-alsa` (or the Pulse equivalent) is installed, and otherwise
+    /// it's `dmix` on a raw card, which fails while PipeWire owns that card.
     ///
-    /// Never enumerate devices here: cpal's ALSA backend opens every PCM it
-    /// lists — including raw `hw:` HDMI/analog devices — for both playback and
-    /// capture while probing them, which steals the hardware from PipeWire and
-    /// makes the user's outputs vanish. For the same reason we avoid rodio's
-    /// `OutputStream::try_default()`, which enumerates when the default fails.
-    /// If the default device doesn't work, we just run silently.
+    /// cpal 0.15 can only reach the "pipewire"/"pulse" PCMs by enumerating, and
+    /// its ALSA enumerator opens every device it yields (playback and capture)
+    /// for as long as that `Device` lives. So walk the list lazily, drop each
+    /// non-match immediately, and stop before the first per-card entry
+    /// (`CARD=...`): ALSA lists the virtual plugin PCMs first, so this never
+    /// touches the HDMI/analog hardware PipeWire is driving. Never `collect()`
+    /// the list, and never use rodio's `OutputStream::try_default()`, which
+    /// enumerates and opens everything when the default fails.
     fn open_output_stream() -> Option<(OutputStream, OutputStreamHandle)> {
         use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-        let device = rodio::cpal::default_host().default_output_device()?;
+        let host = rodio::cpal::default_host();
+
+        // `devices()`, not `output_devices()`: the latter silently skips
+        // input-only cards, which would hide the `CARD=` stop marker.
+        let server = host.devices().ok().and_then(|devices| {
+            devices
+                .take_while(|d| !d.name().is_ok_and(|n| n.contains("CARD=")))
+                .find(|d| matches!(d.name().as_deref(), Ok("pipewire" | "pulse")))
+        });
+
+        let device = match server {
+            Some(dev) => dev,
+            None => host.default_output_device()?,
+        };
+        let name = device.name().unwrap_or_default();
         match OutputStream::try_from_device(&device) {
             Ok(stream) => {
-                let name = device.name().unwrap_or_default();
                 eprintln!("[audio] output via '{name}'");
                 Some(stream)
             }
             Err(e) => {
-                eprintln!("[audio] default output unavailable ({e}); running without sound");
+                eprintln!("[audio] '{name}' output unavailable ({e}); running without sound");
                 None
             }
         }
