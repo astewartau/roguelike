@@ -2,6 +2,7 @@
 
 use crate::components::{BlocksMovement, Container, GroundItemPile, Inventory, ItemInstance, Position, Sprite, VisualPosition};
 use crate::events::{EventQueue, GameEvent};
+use crate::spatial_cache::SpatialCache;
 use crate::systems::item_defs;
 use crate::systems::items::item_weight;
 use hecs::{Entity, World};
@@ -184,6 +185,35 @@ pub fn find_ground_items_at_player(world: &World, player_entity: Entity) -> Opti
     find_ground_items_at_position(world, player_pos.x, player_pos.y)
 }
 
+/// Stop a looted container blocking its tile.
+///
+/// An opened, emptied chest is scenery, and `load_floor` has always restored
+/// one as walkable — but nothing in live play ever dropped the flag, so a floor
+/// the player stayed on kept its looted chests as obstacles while the same
+/// floor revisited let them walk straight over. This is the live half of that,
+/// so both agree.
+///
+/// A sweep rather than a hook inside each take: taking gold, taking one item
+/// and taking everything can each be the call that empties a container, and
+/// `take_*` has no access to the cache. Runs alongside
+/// [`cleanup_empty_ground_piles`] on the same looting paths.
+///
+/// Clearing the flag in the world is only half the job — the `SpatialCache` is
+/// what movement and pathfinding actually read, so it is told too.
+pub fn unblock_emptied_containers(world: &mut World, spatial_cache: &mut SpatialCache) {
+    let emptied: Vec<Entity> = world
+        .query::<(&Container, &BlocksMovement)>()
+        .iter()
+        .filter(|(_, (container, _))| container.is_looted())
+        .map(|(id, _)| id)
+        .collect();
+
+    for id in emptied {
+        let _ = world.remove_one::<BlocksMovement>(id);
+        spatial_cache.clear_blocking_flags(id);
+    }
+}
+
 /// Remove ground item piles that are empty
 pub fn cleanup_empty_ground_piles(world: &mut World) {
     let empty_piles: Vec<Entity> = world
@@ -291,5 +321,77 @@ mod tests {
 
         let success = take_item_from_container(&mut world, player, chest, 5, None);
         assert!(!success);
+    }
+
+    /// Looting a chest dry stops it blocking its tile — in the world *and* in
+    /// the SpatialCache, which is what movement and pathfinding read.
+    #[test]
+    fn looting_a_container_dry_stops_it_blocking() {
+        use crate::spatial_cache::SpatialCache;
+
+        let mut world = World::new();
+        let player = world.spawn((Position::new(0, 0), Inventory::new()));
+        let at = Position::new(1, 1);
+        let chest = world.spawn((
+            at,
+            VisualPosition::from_position(&at),
+            Container::chest(vec![ItemInstance::plain(ItemType::HealthPotion)], 7),
+            BlocksMovement,
+        ));
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        assert!(cache.is_blocked((1, 1)), "a full chest blocks");
+
+        // Opened but still holding gold: not looted yet.
+        if let Ok(mut container) = world.get::<&mut Container>(chest) {
+            container.is_open = true;
+        }
+        unblock_emptied_containers(&mut world, &mut cache);
+        assert!(
+            cache.is_blocked((1, 1)),
+            "an opened chest with gold left in it still blocks"
+        );
+
+        // Now actually empty it.
+        take_all_from_container(&mut world, player, chest, None);
+        assert!(
+            world.get::<&Container>(chest).expect("chest").is_looted(),
+            "take-all should leave it open and empty"
+        );
+        unblock_emptied_containers(&mut world, &mut cache);
+
+        assert!(
+            world.get::<&BlocksMovement>(chest).is_err(),
+            "a looted chest should not keep BlocksMovement"
+        );
+        assert!(!cache.is_blocked((1, 1)), "and the cache should agree");
+        cache.assert_coherent_with_world(&world, "after looting a chest");
+    }
+
+    /// Taking only the gold can be the call that empties a container, so the
+    /// sweep has to cover that path too — it is a sweep rather than a hook
+    /// inside take-all for exactly this reason.
+    #[test]
+    fn taking_the_last_gold_also_unblocks() {
+        use crate::spatial_cache::SpatialCache;
+
+        let mut world = World::new();
+        let player = world.spawn((Position::new(0, 0), Inventory::new()));
+        let at = Position::new(2, 2);
+        let chest = world.spawn((
+            at,
+            VisualPosition::from_position(&at),
+            Container::chest(Vec::new(), 12),
+            BlocksMovement,
+        ));
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        if let Ok(mut container) = world.get::<&mut Container>(chest) {
+            container.is_open = true;
+        }
+
+        take_gold_from_container(&mut world, player, chest, None);
+        unblock_emptied_containers(&mut world, &mut cache);
+
+        assert!(!cache.is_blocked((2, 2)), "gold-only chest should unblock too");
+        cache.assert_coherent_with_world(&world, "after taking the last gold");
     }
 }

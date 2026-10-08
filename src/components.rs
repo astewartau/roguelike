@@ -1470,6 +1470,18 @@ impl Container {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.gold == 0
     }
+
+    /// Opened and stripped of everything it held — scenery rather than a
+    /// container with anything left to give.
+    ///
+    /// A looted container stops blocking its tile. Both the live sweep
+    /// (`systems::unblock_emptied_containers`) and the floor-restore path
+    /// (`load_floor`) decide that from here, so the two cannot drift: they used
+    /// to disagree, and a floor you stayed on kept its looted chests as
+    /// obstacles while the same floor revisited let you walk over them.
+    pub fn is_looted(&self) -> bool {
+        self.is_open && self.is_empty()
+    }
 }
 
 /// Door component - can be open or closed

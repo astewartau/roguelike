@@ -1173,8 +1173,13 @@ impl GameEngine {
             match container_action {
                 crate::game::ContainerAction::TookAll(_) => {
                     ui_state.close_chest();
-                    // Clean up empty ground item piles
+                    // Clean up empty ground item piles, and stop the container
+                    // that was just emptied blocking its tile.
                     systems::cleanup_empty_ground_piles(&mut state.world);
+                    systems::unblock_emptied_containers(
+                        &mut state.world,
+                        &mut state.spatial_cache,
+                    );
                 }
                 crate::game::ContainerAction::Opened(_) => {
                     // Takes the whole of `self`, so the borrows above must end
@@ -2496,6 +2501,102 @@ mod tests {
             "no coffins were round-tripped — the coffin half of this is untested"
         );
         assert!(checked_piles > 0, "no ground piles were round-tripped");
+    }
+
+
+    /// Whether a container blocks its tile must not depend on whether the
+    /// player left the floor and came back.
+    ///
+    /// Live play never dropped `BlocksMovement` from a looted container, but
+    /// `load_floor` restored an open-and-empty one as walkable. So a looted
+    /// chest was an obstacle while you stayed on the floor and scenery once you
+    /// took the stairs down and back. Both sides now decide from
+    /// `Container::is_looted`.
+    #[test]
+    fn whether_a_looted_container_blocks_survives_a_floor_round_trip() {
+        use crate::components::{BlocksMovement, Container, Position};
+
+        let mut looted_containers = 0;
+
+        for seed in 0..25u64 {
+            let mut camera = crate::camera::Camera::new(800.0, 600.0);
+            let mut engine = GameEngine::new();
+            engine.start_game(PlayerClass::Fighter, seed, &mut camera);
+
+            // Loot roughly half of this floor's containers dry, then let the
+            // live sweep react, exactly as a looting turn would.
+            {
+                let state = engine.state.as_mut().expect("run started");
+                let ids: Vec<hecs::Entity> = state
+                    .world
+                    .query::<&Container>()
+                    .iter()
+                    .map(|(id, _)| id)
+                    .collect();
+                for (n, id) in ids.iter().enumerate() {
+                    if n % 2 == 1 {
+                        continue;
+                    }
+                    if let Ok(mut container) = state.world.get::<&mut Container>(*id) {
+                        container.is_open = true;
+                        container.items.clear();
+                        container.gold = 0;
+                    }
+                }
+                systems::unblock_emptied_containers(
+                    &mut state.world,
+                    &mut state.spatial_cache,
+                );
+                state
+                    .spatial_cache
+                    .assert_coherent_with_world(&state.world, "after looting");
+            }
+
+            // Record, per tile, whether a container there blocks.
+            let census = |world: &hecs::World| -> Vec<((i32, i32), bool, bool)> {
+                let mut rows: Vec<((i32, i32), bool, bool)> = world
+                    .query::<(&Position, &Container)>()
+                    .iter()
+                    .map(|(id, (pos, container))| {
+                        (
+                            (pos.x, pos.y),
+                            container.is_looted(),
+                            world.get::<&BlocksMovement>(id).is_ok(),
+                        )
+                    })
+                    .collect();
+                rows.sort_unstable();
+                rows
+            };
+
+            let before = census(&engine.state.as_ref().expect("run").world);
+            looted_containers += before.iter().filter(|(_, looted, _)| *looted).count();
+
+            engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+            engine.handle_floor_transition(crate::events::StairDirection::Up, &mut camera);
+
+            let state = engine.state.as_ref().expect("run started");
+            assert_eq!(state.current_floor, 0, "seed {seed}: should be back on floor 0");
+            assert_eq!(
+                before,
+                census(&state.world),
+                "seed {seed}: a container's blocking changed across a floor round trip \
+                 (tile, looted, blocks)"
+            );
+
+            // And a looted container must be walkable on both sides, not just
+            // consistently wrong.
+            for &(tile, looted, blocks) in &before {
+                if looted {
+                    assert!(!blocks, "seed {seed}: looted container at {tile:?} still blocks");
+                }
+            }
+        }
+
+        assert!(
+            looted_containers > 0,
+            "nothing was looted — this test cannot say anything"
+        );
     }
 
 

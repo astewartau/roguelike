@@ -337,6 +337,10 @@ pub fn load_floor(
                     spawn_chance: *spawn_chance,
                 };
                 let sprite_ref = container_sprite(*container_type, *is_open, items);
+                // Read before the container moves into the world. Same
+                // predicate the live sweep uses, so staying on a floor and
+                // revisiting it agree about what blocks.
+                let looted = container.is_looted();
                 let entity = ctx.world.spawn((
                     pos,
                     VisualPosition::from_position(&pos),
@@ -348,9 +352,7 @@ pub fn load_floor(
                 // the pickup prompt still finds it.
                 if *container_type == ContainerType::GroundPile {
                     let _ = ctx.world.insert_one(entity, GroundItemPile);
-                } else if !(*is_open && items.is_empty()) {
-                    // Looted-and-empty containers restore walkable, as chests
-                    // have always done here.
+                } else if !looted {
                     let _ = ctx.world.insert_one(entity, BlocksMovement);
                 }
             }
