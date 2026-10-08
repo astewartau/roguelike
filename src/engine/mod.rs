@@ -2244,7 +2244,7 @@ mod tests {
     /// numbers, check the diff moved the way you meant, then re-record.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        const EXPECTED: &str = "t=355.3440 floor=0 kills=18 hp=0/50 pos=12,10 hunger=83.3344 fatigue=10.0000 n=97 roster=d9edb117";
+        const EXPECTED: &str = "t=355.8580 floor=0 kills=6 hp=-1/50 pos=15,10 hunger=83.3344 fatigue=10.0000 n=91 roster=78b70589";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2264,7 +2264,7 @@ mod tests {
     /// Same caveat: expected to fail on intentional balance changes.
     #[test]
     fn test_fixed_seed_replays_identically_across_a_floor() {
-        const EXPECTED: &str = "t=264.7901 floor=1 kills=21 hp=99746/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=87 roster=3c7ba545";
+        const EXPECTED: &str = "t=265.7901 floor=1 kills=7 hp=99966/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=87 roster=9dc0dd9e";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -2276,6 +2276,69 @@ mod tests {
     }
 
     /// Drive a fixed script of player turns and return a digest of the world.
+    /// No enemy may share a tile with another movement blocker on a real
+    /// generated floor.
+    ///
+    /// `walkable_tiles` describes terrain, so before `spawn_all` consulted the
+    /// world the floor roster dropped enemies straight onto the chests,
+    /// coffins, barrels, doorways and furniture the prop passes had just
+    /// spawned. Measured over these 200 floors it was 652 stacked tiles, on 196
+    /// of them; doorways alone accounted for about 260.
+    ///
+    /// Known remaining gap, deliberately not asserted here: generation can
+    /// still put a chest on a barrel spot inside a Storage room (two
+    /// containers, ~53 tiles over the same 200 floors). That is an overlap
+    /// between `Grid::chest_positions` and `Grid::barrel_positions` in
+    /// `dungeon_gen`, not a spawn-placement check, so it is a separate fix.
+    /// The `SpatialCache` reference counts represent it correctly either way.
+    #[test]
+    fn no_enemy_shares_a_tile_with_another_blocker_on_generated_floors() {
+        use crate::components::{BlocksMovement, ChaseAI, Position};
+        use std::collections::HashMap;
+
+        let mut enemies_checked = 0usize;
+
+        for seed in 0..50u64 {
+            let mut camera = crate::camera::Camera::new(800.0, 600.0);
+            let mut engine = GameEngine::new();
+            engine.start_game(PlayerClass::Fighter, seed, &mut camera);
+
+            // Floor 0 plus three descents, so cavern fauna and boss floors are
+            // covered as well as the plain roster.
+            for depth in 0..4 {
+                if depth > 0 {
+                    engine.handle_floor_transition(
+                        crate::events::StairDirection::Down,
+                        &mut camera,
+                    );
+                }
+                let state = engine.state.as_ref().expect("run started");
+
+                let mut blockers: HashMap<(i32, i32), usize> = HashMap::new();
+                for (_, (pos, _)) in state.world.query::<(&Position, &BlocksMovement)>().iter() {
+                    *blockers.entry((pos.x, pos.y)).or_default() += 1;
+                }
+
+                for (id, (pos, _)) in state.world.query::<(&Position, &ChaseAI)>().iter() {
+                    enemies_checked += 1;
+                    let tile = (pos.x, pos.y);
+                    let count = blockers.get(&tile).copied().unwrap_or(0);
+                    assert!(
+                        count <= 1,
+                        "seed {seed} floor {depth}: enemy {id:?} shares {tile:?} with \
+                         {} other blocker(s)",
+                        count - 1
+                    );
+                }
+            }
+        }
+
+        assert!(
+            enemies_checked > 1000,
+            "only {enemies_checked} enemies seen — the scan is not covering the floors"
+        );
+    }
+
     fn run_fixed_script(scenario: &Scenario) -> String {
         use crate::systems::player_input::PlayerIntent;
 

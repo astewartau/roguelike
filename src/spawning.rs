@@ -3,6 +3,8 @@
 //! Defines enemy types and their properties, allowing easy addition of new enemies
 //! without modifying spawning code. Also defines NPC types with dialogue.
 
+use std::collections::HashSet;
+
 use crate::components::{
     Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueAction, DialogueNode, DialogueOption,
     Equipment, FriendlyNPC, Health, LightSource, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
@@ -537,6 +539,14 @@ impl SpawnConfig {
     ///
     /// - `excluded_positions`: Individual tiles to exclude (e.g., player spawn)
     /// - `excluded_room`: Optional room rectangle to exclude entirely (e.g., starting room)
+    ///
+    /// Tiles that already hold a blocking entity are excluded too. `walkable_tiles`
+    /// describes the *terrain*, so without that check the roster happily put
+    /// enemies inside the chests, coffins, barrels, doorways and furniture that
+    /// the prop passes spawned moments earlier — two blockers on one tile, which
+    /// is a tile neither of them can be pushed off and which the player sees as
+    /// a monster standing inside the scenery. `spawn_cave_fauna` and
+    /// `spawn_boss_encounter` already filtered this way; the floor roster did not.
     pub fn spawn_all(
         &self,
         world: &mut World,
@@ -546,7 +556,18 @@ impl SpawnConfig {
         rng: &mut impl rand::Rng,
     ) -> usize {
         let mut spawned = 0;
-        let mut used_positions: Vec<(i32, i32)> = excluded_positions.to_vec();
+
+        // Taken tiles: the caller's exclusions, everything already blocking a
+        // tile, and each enemy as it is placed. A set because this is tested
+        // once per candidate tile per enemy.
+        let mut used_positions: HashSet<(i32, i32)> =
+            excluded_positions.iter().copied().collect();
+        used_positions.extend(
+            world
+                .query::<(&Position, &BlocksMovement)>()
+                .iter()
+                .map(|(_, (pos, _))| (pos.x, pos.y)),
+        );
 
         // Helper to check if a position is in the excluded room
         let is_in_excluded_room = |x: i32, y: i32| -> bool {
@@ -568,7 +589,7 @@ impl SpawnConfig {
 
                 let &(x, y) = available[rng.gen_range(0..available.len())];
                 entry.enemy.spawn(world, x, y, rng);
-                used_positions.push((x, y));
+                used_positions.insert((x, y));
                 spawned += 1;
             }
         }
@@ -1285,5 +1306,59 @@ mod tests {
         assert_eq!(shaman_count_for_floor(2), 2);
         assert_eq!(shaman_count_for_floor(3), 3);
         assert_eq!(shaman_count_for_floor(5), 4);
+    }
+
+    /// The floor roster must not drop an enemy onto a tile something already
+    /// blocks. `walkable_tiles` describes terrain, and the prop passes
+    /// (chests, coffins, barrels, doors, furniture) have already run by the
+    /// time the roster spawns, so terrain walkability alone is not enough.
+    #[test]
+    fn spawn_all_skips_tiles_that_already_hold_a_blocker() {
+        use rand::SeedableRng;
+
+        // A 1x6 strip of floor with a blocker parked in the middle of it.
+        let tiles: Vec<(i32, i32)> = (0..6).map(|x| (x, 0)).collect();
+        let occupied = (3, 0);
+
+        let mut world = World::new();
+        let prop_pos = Position::new(occupied.0, occupied.1);
+        world.spawn((
+            prop_pos,
+            VisualPosition::from_position(&prop_pos),
+            BlocksMovement,
+        ));
+
+        // Ask for more enemies than there are free tiles, so the only way to
+        // keep off `occupied` is to actually check for it.
+        let config = SpawnConfig {
+            entries: vec![SpawnEntry {
+                enemy: enemies::RAT.clone(),
+                count: 10,
+            }],
+        };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let spawned = config.spawn_all(&mut world, &tiles, &[], None, &mut rng);
+
+        assert_eq!(
+            spawned, 5,
+            "five free tiles, so five enemies — the sixth is taken by the prop"
+        );
+
+        let on_prop_tile = world
+            .query::<(&Position, &ChaseAI)>()
+            .iter()
+            .filter(|(_, (pos, _))| (pos.x, pos.y) == occupied)
+            .count();
+        assert_eq!(on_prop_tile, 0, "no enemy may stand on the prop's tile");
+
+        // And nothing doubled up anywhere else either.
+        let mut seen = HashSet::new();
+        for (_, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
+            assert!(
+                seen.insert((pos.x, pos.y)),
+                "two enemies on {:?}",
+                (pos.x, pos.y)
+            );
+        }
     }
 }
