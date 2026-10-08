@@ -6,6 +6,7 @@ use crate::components::{
     Weapon,
 };
 use crate::constants::*;
+use crate::engine::EffectCtx;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
@@ -88,15 +89,15 @@ pub fn attack_noise_radius(world: &World, attacker: Entity, base: i32) -> i32 {
 /// re-implement per-ability. No-op for attackers without a `weapon_source`
 /// (enemy claws/bows are not item instances).
 pub fn resolve_weapon_on_hit(
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut SpatialCache,
+    ctx: &mut EffectCtx,
     attacker: Entity,
     target: Entity,
     damage: i32,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     if damage <= 0 {
         return;
     }

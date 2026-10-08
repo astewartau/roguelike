@@ -1,11 +1,10 @@
 //! Movement, doors, stairs, and directional interaction.
 
+use crate::engine::EffectCtx;
 use hecs::{Entity, World};
-use rand::Rng;
 
 use crate::components::{BlocksMovement, Container, Door, EffectType, Player, Position};
 use crate::events::{EventQueue, GameEvent, StairDirection};
-use crate::grid::Grid;
 use crate::queries;
 use crate::systems::effects;
 
@@ -13,16 +12,11 @@ use super::traps::{check_dungeon_trap_trigger, check_fire_trap_trigger, check_sn
 use super::{apply_open_chest, interrupt_raise_dead, interrupt_taming, ActionResult};
 
 /// Apply movement effect
-pub fn apply_move(
-    world: &mut World,
-    grid: &Grid,
-    entity: Entity,
-    dx: i32,
-    dy: i32,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) -> ActionResult {
+pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> ActionResult {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     // Moving breaks any taming channel - the druid must stand still to tame.
     interrupt_taming(world, entity, events);
     // Likewise, moving breaks a Raise Dead channel.
@@ -240,15 +234,15 @@ pub fn apply_close_door(
 /// Checks for doors (open/close), toppleable braziers, and containers at the
 /// target tile.
 pub fn apply_interact_direction(
-    world: &mut World,
-    grid: &Grid,
+    ctx: &mut EffectCtx,
     entity: Entity,
     dx: i32,
     dy: i32,
-    _spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) -> ActionResult {
+    let EffectCtx { world, grid, spatial: _spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (_spatial_cache, events, rng) = (&mut **_spatial_cache, &mut **events, &mut **rng);
+
     // Get entity position
     let pos = match world.get::<&Position>(entity) {
         Ok(p) => (p.x, p.y),

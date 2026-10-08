@@ -367,14 +367,7 @@ pub fn wait_for_energy(ctx: &mut ActorCtx, required_energy: i32) -> bool {
 
 /// Update projectiles at current time.
 fn update_projectiles_at_time(ctx: &mut ActorCtx, current_time: f32) {
-    systems::update_projectiles(
-        ctx.world,
-        ctx.grid,
-        ctx.spatial,
-        current_time,
-        ctx.events,
-        ctx.rng,
-    );
+    systems::update_projectiles(&mut ctx.effects(), current_time);
 }
 
 /// Display name of an entity for damage attribution ("Goblin", ...).

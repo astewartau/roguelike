@@ -9,26 +9,23 @@
 //! 4. Real-time visual lerp animates the arrow to its final position
 //! 5. Once visual catches up, the arrow is despawned
 
-use rand::Rng;
 
 use crate::components::{Attackable, EffectType, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
-use crate::events::{EventQueue, GameEvent};
+use crate::events::GameEvent;
 use crate::grid::Grid;
 use crate::systems::actions::apply_potion_splash;
 use crate::systems::effects;
+use crate::engine::EffectCtx;
 use hecs::{Entity, World};
 
 /// Update all projectiles based on the current game time.
 /// This should be called when game time advances.
 /// Projectiles that finish their journey are marked as "finished" but NOT despawned yet.
-pub fn update_projectiles(
-    world: &mut World,
-    grid: &Grid,
-    spatial_cache: &mut crate::spatial_cache::SpatialCache,
-    current_time: f32,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
+pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &mut **grid);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
+
     // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity, potion_type)
     type Hit = (Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity, Option<ItemType>);
     let mut hits: Vec<Hit> = Vec::new();
@@ -184,14 +181,10 @@ pub fn update_projectiles(
             // chokepoint (potions carry no weapon affixes).
             if potion_type.is_none() {
                 crate::systems::combat::resolve_weapon_on_hit(
-                    world,
-                    grid,
-                    spatial_cache,
+                    &mut EffectCtx { world, grid, spatial: spatial_cache, events, rng },
                     source,
                     target_entity,
                     actual_damage,
-                    events,
-                    rng,
                 );
             }
         }

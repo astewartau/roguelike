@@ -251,7 +251,6 @@ pub fn calculate_throw_path(
 /// Apply throw potion action - throws a potion at target with splash effect
 pub fn apply_throw_potion(
     world: &mut World,
-    _grid: &Grid,
     thrower: Entity,
     potion_type: ItemType,
     target_x: i32,

@@ -18,7 +18,7 @@ mod game_state;
 pub mod initialization;
 mod simulation;
 
-pub use context::{ActorCtx, SimCtx};
+pub use context::{ActorCtx, EffectCtx, SimCtx};
 pub use floor_transition::{can_transition_floor, handle_floor_transition};
 pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
