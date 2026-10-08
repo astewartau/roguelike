@@ -72,6 +72,9 @@ pub enum SavedEntityType {
     Bones {
         gold: u32,
         items: Vec<ItemInstance>,
+        /// What died here, so the loot window can still say "Goblin's
+        /// corpse" after the floor is revisited.
+        name: Option<String>,
     },
     /// An undiscovered secret door (discovered ones are saved as `Door`)
     SecretDoor,
@@ -159,6 +162,10 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
                 entity_type: SavedEntityType::Bones {
                     gold: container.gold,
                     items: container.items.clone(),
+                    name: world
+                        .get::<&crate::components::Name>(id)
+                        .ok()
+                        .map(|n| n.0.clone()),
                 },
             });
         } else {
@@ -377,15 +384,20 @@ pub fn load_floor(
                     ));
                 }
             }
-            SavedEntityType::Bones { gold, items } => {
+            SavedEntityType::Bones { gold, items, name } => {
                 let mut container = Container::corpse(items.clone(), *gold);
                 container.is_open = true;
-                ctx.world.spawn((
+                let corpse = ctx.world.spawn((
                     pos,
                     VisualPosition::from_position(&pos),
                     Sprite::from_ref(tile_ids::BONES_4),
                     container,
                 ));
+                if let Some(name) = name {
+                    let _ = ctx
+                        .world
+                        .insert_one(corpse, crate::components::Name::new(name.clone()));
+                }
             }
             SavedEntityType::SecretDoor => {
                 let wall_sprite =

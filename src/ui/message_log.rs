@@ -490,11 +490,14 @@ impl MessageLog {
                     log_colors::GOOD,
                 );
             }
-            GameEvent::ItemPickedUp { entity, item } if *entity == me => {
-                self.push(
-                    format!("You pick up {}.", crate::systems::item_name(*item)),
-                    log_colors::GOOD,
-                );
+            GameEvent::ItemPickedUp { entity, item, count } if *entity == me => {
+                let name = crate::systems::item_name(*item);
+                let text = if *count > 1 {
+                    format!("You pick up {name} x{count}.")
+                } else {
+                    format!("You pick up {name}.")
+                };
+                self.push(text, log_colors::GOOD);
             }
             GameEvent::GoldPickedUp { entity, amount } if *entity == me => {
                 self.push(format!("You pick up {amount} gold."), log_colors::GOOD);

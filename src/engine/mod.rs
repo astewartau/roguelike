@@ -1244,6 +1244,7 @@ impl GameEngine {
                 &mut state.world,
                 state.player_entity,
                 ui_state.open_chest,
+                ui_state.loot_tile,
                 &mut self.events,
             );
             match container_action {

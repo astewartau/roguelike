@@ -38,10 +38,12 @@ pub fn handle_enter_key_container(
     world: &mut World,
     player_entity: Entity,
     open_chest: Option<Entity>,
+    loot_tile: (i32, i32),
     events: &mut crate::events::EventQueue,
 ) -> ContainerAction {
     if let Some(chest_id) = open_chest {
-        crate::systems::take_all_from_container(world, player_entity, chest_id, Some(events));
+        let sources = crate::systems::loot_sources(world, open_chest, loot_tile);
+        crate::systems::take_all_from_sources(world, player_entity, &sources, Some(events));
         return ContainerAction::TookAll(chest_id);
     }
 

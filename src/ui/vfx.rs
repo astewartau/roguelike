@@ -106,6 +106,78 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
         .collect()
 }
 
+/// Visible tiles holding something the player could loot: a corpse or item
+/// pile with anything in it, or an opened chest left half-emptied. Closed
+/// chests do not count — what is in them is not known yet. The player's own
+/// tile is skipped (the loot window covers that), and each tile appears once
+/// however many containers share it.
+pub fn get_loot_indicator_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<(i32, i32)> {
+    let player_tile = world
+        .get::<&crate::components::Position>(player_entity)
+        .map(|p| (p.x, p.y))
+        .ok();
+    let mut tiles: Vec<(i32, i32)> = world
+        .query::<(&crate::components::Position, &crate::components::Container)>()
+        .iter()
+        .filter(|(id, (_, container))| {
+            !container.is_empty()
+                && (container.is_open
+                    || world.get::<&crate::components::BlocksMovement>(*id).is_err())
+        })
+        .map(|(_, (pos, _))| (pos.x, pos.y))
+        .filter(|&tile| Some(tile) != player_tile)
+        .filter(|&(x, y)| grid.get(x, y).map(|t| t.visible).unwrap_or(false))
+        .collect();
+    tiles.sort_unstable();
+    tiles.dedup();
+    tiles
+}
+
+/// Draw a small gold diamond over each lootable tile.
+pub fn draw_loot_indicators(ctx: &egui::Context, camera: &Camera, tiles: &[(i32, i32)]) {
+    use crate::constants::{
+        LOOT_MARKER_ALPHA, LOOT_MARKER_BOB_AMPLITUDE, LOOT_MARKER_BOB_SPEED,
+        LOOT_MARKER_HALF_SIZE, LOOT_MARKER_HEIGHT,
+    };
+
+    if tiles.is_empty() {
+        return;
+    }
+
+    // Same layer as the enemy health bars: over the world, under the panels.
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("loot_indicators"),
+    ));
+    let ppp = ctx.pixels_per_point();
+    let time = ctx.input(|i| i.time) as f32;
+
+    let fill = style::colors::TEXT_ACCENT.gamma_multiply(LOOT_MARKER_ALPHA as f32 / 255.0);
+    let outline = egui::Stroke::new(
+        1.0,
+        egui::Color32::from_black_alpha(LOOT_MARKER_ALPHA),
+    );
+
+    for &(x, y) in tiles {
+        let (sx, sy) = camera.world_to_screen(x as f32 + 0.5, y as f32 + LOOT_MARKER_HEIGHT);
+        // Offset each tile's phase by its position so a room full of corpses
+        // does not bob in lockstep.
+        let phase = (x * 7 + y * 13) as f32 * 0.37;
+        let bob = (time * LOOT_MARKER_BOB_SPEED + phase).sin() * LOOT_MARKER_BOB_AMPLITUDE;
+        let c = egui::pos2(sx / ppp, sy / ppp + bob);
+        let h = LOOT_MARKER_HALF_SIZE;
+        let diamond = vec![
+            egui::pos2(c.x, c.y - h),
+            egui::pos2(c.x + h, c.y),
+            egui::pos2(c.x, c.y + h),
+            egui::pos2(c.x - h, c.y),
+        ];
+        painter.add(egui::Shape::convex_polygon(diamond, fill, outline));
+    }
+    // Keep the bob moving even when nothing else is asking for a repaint.
+    ctx.request_repaint();
+}
+
 /// Extract health data for visible damaged enemies
 pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<EnemyHealthData> {
     world

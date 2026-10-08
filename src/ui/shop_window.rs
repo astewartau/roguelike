@@ -18,8 +18,9 @@ pub struct ShopWindowData {
     /// inventory index — buy actions must use the stored index.
     pub vendor_items: Vec<(usize, ItemType, u32, u32)>,
     pub vendor_gold: u32,
-    /// Player items that can be sold: (item type, sell value)
-    pub player_items: Vec<(ItemType, u32)>,
+    /// Player items that can be sold, stackables collapsed into one row:
+    /// (inventory index of the first item, item type, sell value, count)
+    pub player_items: Vec<(usize, ItemType, u32, u32)>,
     pub player_gold: u32,
     pub viewport_width: f32,
     pub viewport_height: f32,
@@ -48,11 +49,14 @@ pub fn get_shop_window_data(
         .collect();
 
     // Build player sellable items with sell prices
-    let player_items: Vec<(ItemType, u32)> = player_inv
-        .items
-        .iter()
-        .map(|item| (item.kind, get_sell_price(item.kind)))
-        .collect();
+    let player_items: Vec<(usize, ItemType, u32, u32)> =
+        crate::systems::stack_items(&player_inv.items)
+            .into_iter()
+            .map(|s| {
+                let kind = player_inv.items[s.first_index].kind;
+                (s.first_index, kind, get_sell_price(kind), s.count)
+            })
+            .collect();
 
     Some(ShopWindowData {
         vendor_name: dialogue.name.clone(),
@@ -160,7 +164,7 @@ pub fn draw_shop_window(
                         .id_salt("shop_sell")
                         .max_height(200.0)
                         .show(&mut columns[1], |ui| {
-                            for (i, (item_type, sell_value)) in data.player_items.iter().enumerate() {
+                            for (i, item_type, sell_value, count) in data.player_items.iter() {
                                 ui.horizontal(|ui| {
                                     // Item icon
                                     let uv = icons.get_item_uv(*item_type);
@@ -172,8 +176,12 @@ pub fn draw_shop_window(
                                     .bg_fill(style::colors::PANEL_BG);
                                     ui.add(image);
 
-                                    // Item name
-                                    ui.label(item_name(*item_type));
+                                    // Item name (stacks sell one at a time)
+                                    if *count > 1 {
+                                        ui.label(format!("{} x{}", item_name(*item_type), count));
+                                    } else {
+                                        ui.label(item_name(*item_type));
+                                    }
 
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         let vendor_can_buy = data.vendor_gold >= *sell_value;
@@ -187,7 +195,7 @@ pub fn draw_shop_window(
                                             })
                                             .clicked()
                                         {
-                                            actions.sell_item = Some(i);
+                                            actions.sell_item = Some(*i);
                                         }
                                     });
                                 });

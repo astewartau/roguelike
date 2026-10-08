@@ -615,39 +615,16 @@ fn draw_spellbook_column(
 
 /// Build inventory display slots, grouping stackable items together
 fn build_inventory_slots(items: &[crate::components::ItemInstance]) -> Vec<InventorySlot> {
-    use std::collections::HashMap;
+    let mut slots: Vec<InventorySlot> = crate::systems::stack_items(items)
+        .into_iter()
+        .map(|s| InventorySlot {
+            item_type: items[s.first_index].kind,
+            count: s.count,
+            first_index: s.first_index,
+        })
+        .collect();
 
-    let mut slots = Vec::new();
-    let mut stackable_counts: HashMap<crate::components::ItemType, (u32, usize)> = HashMap::new();
-
-    for (i, instance) in items.iter().enumerate() {
-        let item_type = instance.kind;
-        if item_type.is_stackable() {
-            // Track count and first index for stackable items
-            stackable_counts
-                .entry(item_type)
-                .and_modify(|(count, _)| *count += 1)
-                .or_insert((1, i));
-        } else {
-            // Non-stackable items get their own slot
-            slots.push(InventorySlot {
-                item_type,
-                count: 1,
-                first_index: i,
-            });
-        }
-    }
-
-    // Add stackable items as single slots with counts
-    for (item_type, (count, first_index)) in stackable_counts {
-        slots.push(InventorySlot {
-            item_type,
-            count,
-            first_index,
-        });
-    }
-
-    // Sort slots so stackable items appear at the end (or you could sort differently)
+    // Stackable items (ammo) sit at the end, after the gear and consumables.
     slots.sort_by_key(|s| (s.item_type.is_stackable(), s.first_index));
 
     slots

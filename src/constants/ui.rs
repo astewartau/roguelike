@@ -155,3 +155,25 @@ pub const EFFECT_PIP_FONT_SIZE: f32 = 10.0;
 pub const LOG_WIDTH: f32 = 360.0;
 /// Gap between a log line's text and its "(xN)" repeat badge, in points.
 pub const LOG_COUNT_GAP: f32 = 6.0;
+
+// =============================================================================
+// LOOT MARKERS
+// =============================================================================
+// The small diamond floated over a corpse or item pile that still holds
+// something. See `ui::vfx::draw_loot_indicators`.
+
+/// Half-width of the loot marker diamond, in points. Kept small on purpose:
+/// it is a hint that a tile is worth stepping on, not a label. Past about 5
+/// it starts competing with enemy health bars for attention.
+pub const LOOT_MARKER_HALF_SIZE: f32 = 3.5;
+/// Height of the marker above the tile's bottom edge, in tiles. 1.0 sits it
+/// on the tile's top edge; up floats it higher over the sprite.
+pub const LOOT_MARKER_HEIGHT: f32 = 1.05;
+/// How far the marker bobs up and down, in points. 0.0 holds it still; much
+/// past 2 the movement pulls the eye across the whole screen.
+pub const LOOT_MARKER_BOB_AMPLITUDE: f32 = 1.5;
+/// Bob speed, in radians per second of wall-clock time. Purely presentation,
+/// so it runs off the UI clock rather than game time.
+pub const LOOT_MARKER_BOB_SPEED: f32 = 2.5;
+/// Opacity of the marker, 0-255. Down makes it fade into the floor.
+pub const LOOT_MARKER_ALPHA: u8 = 200;
