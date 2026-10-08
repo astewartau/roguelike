@@ -66,6 +66,14 @@ pub mod colors {
     pub const CONCEALED: Color32 = Color32::from_rgb(120, 200, 120);
     pub const SNEAKING: Color32 = Color32::from_rgb(150, 120, 210);
 
+    // Hotbar feedback
+    /// Flash over a slot whose ability just came off cooldown.
+    pub const HOTBAR_READY_FLASH: Color32 = Color32::from_rgb(255, 250, 235);
+    /// Flash over a slot the player pressed but cannot use right now.
+    pub const HOTBAR_DENIED_FLASH: Color32 = Color32::from_rgb(205, 45, 40);
+    /// Sweep over the part of a cooldown still to run.
+    pub const HOTBAR_COOLDOWN_SWEEP: Color32 = Color32::from_rgb(6, 5, 5);
+
     // Selection/Highlight
     pub const SELECTED: Color32 = Color32::from_rgb(70, 90, 110);
     pub const HOVERED: Color32 = Color32::from_rgb(45, 40, 35);

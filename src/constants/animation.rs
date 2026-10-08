@@ -128,3 +128,29 @@ pub const EFFECT_PIP_FLASH_RATE: f32 = 3.0;
 /// How far the flash lifts an expiring pip's icon and border brightness at its
 /// peak, as a fraction above normal.
 pub const EFFECT_PIP_FLASH_DEPTH: f32 = 0.9;
+
+/// How long a hotbar slot's white "ready" flash lasts after its ability comes
+/// off cooldown, in seconds. This is the cue that saves the player watching
+/// the number; longer is more obvious, shorter easier to miss.
+pub const HOTBAR_READY_FLASH_DURATION: f32 = 0.3;
+/// Peak opacity of that white flash, 0-255.
+pub const HOTBAR_READY_FLASH_ALPHA: u8 = 150;
+/// Peak scale of the icon pop that rides along with the ready flash. The icon
+/// is clipped to its slot, so much above ~1.2 just crops the sprite.
+pub const HOTBAR_READY_POP_SCALE: f32 = 1.1;
+/// How long a hotbar slot flashes red after the player presses its key for
+/// something they cannot use, in seconds. This replaces silence, so it has to
+/// be long enough to notice and short enough not to linger over a spam-press.
+pub const HOTBAR_DENIED_FLASH_DURATION: f32 = 0.22;
+/// Peak opacity of that red flash, 0-255.
+pub const HOTBAR_DENIED_FLASH_ALPHA: u8 = 150;
+/// Opacity of the glow drawn just inside a ready, affordable slot's border,
+/// 0-255. This is the "stronger than a border swap" ready cue; up to make
+/// usable slots shout.
+pub const HOTBAR_READY_GLOW_ALPHA: u8 = 65;
+/// Thickness of that ready glow, in points.
+pub const HOTBAR_READY_GLOW_WIDTH: f32 = 3.0;
+/// Opacity of the cooldown sweep over the un-recovered part of a slot, 0-255.
+/// The sweep's *shape* now carries the information, so it does not need to be
+/// as dark as the flat dim it replaces.
+pub const HOTBAR_COOLDOWN_SWEEP_ALPHA: u8 = 170;
