@@ -194,19 +194,9 @@ pub fn start_action_with_events(
         .get::<&mut Actor>(entity)
         .map_err(|_| "Entity has no Actor component")?;
 
-    let energy_cost = action_type.energy_cost();
-
     if actor.current_action.is_some() {
         return Err("Entity is busy with another action");
     }
-
-    if actor.energy < energy_cost {
-        return Err("Entity doesn't have enough energy");
-    }
-
-    // Spend energy to start (per-action cost)
-    actor.energy -= energy_cost;
-    let remaining = actor.energy;
 
     // Calculate effective speed (base speed modified by effects)
     let mut effective_speed = if has_speed_boost {
@@ -234,6 +224,10 @@ pub fn start_action_with_events(
     let duration = action_dispatch::calculate_action_duration(&action_type, effective_speed);
     let completion_time = clock.time + duration;
 
+    // How tiring this action was. Nothing is spent and nothing is gated on it —
+    // it only feeds the long-term fatigue meter below.
+    let effort = action_type.effort_for_duration(duration);
+
     // Record action in progress
     actor.current_action = Some(ActionInProgress {
         action_type,
@@ -241,18 +235,24 @@ pub fn start_action_with_events(
         completion_time,
     });
 
+    // Release the actor borrow before touching any other component.
+    drop(actor);
+
+    // Effort accumulates into fatigue, which is the only lasting cost of doing
+    // things. It is deliberately a slow meter: a fight should tire you over the
+    // course of a run, not throttle you in the middle of one. Entities without a
+    // Fatigue meter (currently everything but the player) simply skip this — the
+    // mechanism works unchanged if one is added.
+    if effort > 0.0 {
+        if let Ok(mut fatigue) = world.get::<&mut crate::components::Fatigue>(entity) {
+            fatigue.value = (fatigue.value + effort * FATIGUE_PER_EFFORT).min(FATIGUE_MAX);
+        }
+    }
+
     // Schedule completion
     scheduler.schedule(entity, completion_time);
 
-    // Emit energy spent event
-    if let Some(events) = events {
-        events.push(GameEvent::EnergySpent {
-            entity,
-            amount: energy_cost,
-            remaining,
-        });
-    }
-
+    let _ = events;
     Ok(())
 }
 
@@ -492,88 +492,6 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
     }
 }
 
-/// Process time-based energy regeneration for all actors
-pub fn tick_energy_regen(world: &mut World, current_time: f32, events: Option<&mut EventQueue>) {
-    use std::collections::HashSet;
-
-    // First pass: collect entities with speed boost (separate query to avoid borrow issues)
-    let speed_boosted: HashSet<Entity> = world
-        .query::<(&Actor, &StatusEffects)>()
-        .iter()
-        .filter_map(|(id, (_, status_effects))| {
-            if effects::has_effect(status_effects, EffectType::SpeedBoost) {
-                Some(id)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Exhausted actors (fatigue meter maxed, player-only) stop regenerating
-    // energy — unless they're asleep: sleep is the recovery path and must
-    // stay affordable (Wait steps require the actor to be able to act).
-    let exhausted_awake: HashSet<Entity> = world
-        .query::<(
-            &Actor,
-            &crate::components::Fatigue,
-            Option<&crate::components::Asleep>,
-        )>()
-        .iter()
-        .filter_map(|(id, (_, fatigue, asleep))| {
-            if fatigue.is_exhausted() && asleep.is_none() {
-                Some(id)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Second pass: process energy regen
-    let mut regen_events: Vec<(Entity, i32)> = Vec::new();
-
-    for (id, actor) in world.query_mut::<&mut Actor>() {
-        // Skip if no regen interval set, or already at max
-        if actor.energy_regen_interval <= 0.0 || actor.energy >= actor.max_energy {
-            continue;
-        }
-
-        // Exhausted while awake: no energy regen until you sleep.
-        if exhausted_awake.contains(&id) {
-            continue;
-        }
-
-        // Apply speed boost multiplier to regen interval (faster regen = shorter interval)
-        let effective_regen_interval = if speed_boosted.contains(&id) {
-            actor.energy_regen_interval / SPEED_BOOST_MULTIPLIER
-        } else {
-            actor.energy_regen_interval
-        };
-
-        // Calculate how many regen events have occurred
-        let time_since_last = current_time - actor.last_energy_regen_time;
-        if time_since_last >= effective_regen_interval {
-            let regen_ticks = (time_since_last / effective_regen_interval) as i32;
-            let old_energy = actor.energy;
-            actor.energy = (actor.energy + regen_ticks).min(actor.max_energy);
-            let amount = actor.energy - old_energy;
-            // Update last regen time, accounting for partial intervals
-            actor.last_energy_regen_time =
-                current_time - (time_since_last % effective_regen_interval);
-
-            if amount > 0 {
-                regen_events.push((id, amount));
-            }
-        }
-    }
-
-    // Emit events
-    if let Some(events) = events {
-        for (entity, amount) in regen_events {
-            events.push(GameEvent::EnergyRegenerated { entity, amount });
-        }
-    }
-}
-
 /// Process status effect duration ticks, removing expired effects
 pub fn tick_status_effects(world: &mut World, elapsed: f32) {
     if elapsed <= 0.0 {
@@ -697,3 +615,290 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{Effort, Fatigue};
+
+    fn actor(speed: f32) -> (World, Entity) {
+        let mut world = World::new();
+        let entity = world.spawn((Actor::new(speed), Fatigue::new()));
+        (world, entity)
+    }
+
+    fn fatigue_of(world: &World, entity: Entity) -> f32 {
+        world.get::<&Fatigue>(entity).map(|f| f.value).unwrap_or(0.0)
+    }
+
+    fn start(world: &mut World, entity: Entity, action: ActionType, clock: &GameClock) {
+        let mut scheduler = ActionScheduler::new();
+        start_action(world, entity, action, clock, &mut scheduler).expect("should start");
+    }
+
+    /// Nothing gates an action but being busy. An idle actor can always act, in
+    /// any state — this is what makes fighting feel consistent, and what makes
+    /// "press the button and nothing happens" impossible.
+    #[test]
+    fn an_idle_actor_can_always_act() {
+        let (mut world, entity) = actor(1.0);
+        let clock = GameClock::new();
+
+        // Exhausted: the worst state there is.
+        if let Ok(mut f) = world.get::<&mut Fatigue>(entity) {
+            f.value = FATIGUE_MAX;
+        }
+        assert!(world.get::<&Actor>(entity).map(|a| a.can_act()).unwrap_or(false));
+
+        // And a long flurry never runs into a wall.
+        for i in 0..50 {
+            let mut scheduler = ActionScheduler::new();
+            let r = start_action(
+                &mut world,
+                entity,
+                ActionType::AttackDirection { dx: 1, dy: 0 },
+                &clock,
+                &mut scheduler,
+            );
+            assert!(r.is_ok(), "swing {i} was refused: {r:?}");
+            if let Ok(mut a) = world.get::<&mut Actor>(entity) {
+                a.current_action = None;
+            }
+        }
+    }
+
+    /// Being mid-action is the one thing that stops you starting another.
+    #[test]
+    fn an_actor_mid_action_cannot_start_another() {
+        let (mut world, entity) = actor(1.0);
+        let clock = GameClock::new();
+        start(&mut world, entity, ActionType::Wait, &clock);
+
+        let mut scheduler = ActionScheduler::new();
+        assert!(start_action(&mut world, entity, ActionType::Wait, &clock, &mut scheduler).is_err());
+    }
+
+    /// Effort accrues per second of acting, so tiredness tracks the work done
+    /// rather than the actor's speed. A flat amount per action would make a fast
+    /// creature tire in proportion to being fast, which is backwards.
+    #[test]
+    fn effort_per_second_is_the_same_at_every_speed() {
+        let walk = ActionType::Move { dx: 1, dy: 0, is_diagonal: false };
+        let clock = GameClock::new();
+
+        for speed in [0.55f32, 1.0, 2.2] {
+            let (mut world, entity) = actor(speed);
+            start(&mut world, entity, walk, &clock);
+            let duration = world
+                .get::<&Actor>(entity)
+                .ok()
+                .and_then(|a| a.current_action)
+                .map(|a| a.completion_time - a.start_time)
+                .expect("in progress");
+            let rate = fatigue_of(&world, entity) / (duration * FATIGUE_PER_EFFORT);
+            assert!(
+                (rate - EXERTION_LIGHT).abs() < 1e-3,
+                "speed {speed} tired at {rate}/s, expected {EXERTION_LIGHT}"
+            );
+        }
+    }
+
+    /// Fighting must tire you substantially faster than walking, or fatigue
+    /// says nothing about what you have been doing.
+    #[test]
+    fn fighting_tires_much_faster_than_walking() {
+        let clock = GameClock::new();
+
+        let (mut w1, e1) = actor(1.0);
+        start(&mut w1, e1, ActionType::Move { dx: 1, dy: 0, is_diagonal: false }, &clock);
+        let walking = fatigue_of(&w1, e1);
+
+        let (mut w2, e2) = actor(1.0);
+        start(&mut w2, e2, ActionType::AttackDirection { dx: 1, dy: 0 }, &clock);
+        let fighting = fatigue_of(&w2, e2);
+
+        assert!(walking > 0.0 && fighting > 0.0);
+        assert!(
+            fighting > walking * 2.0,
+            "a swing ({fighting}) should tire well beyond a step ({walking})"
+        );
+    }
+
+    /// Waiting is free, so standing still never tires you.
+    #[test]
+    fn waiting_is_not_tiring() {
+        let (mut world, entity) = actor(1.0);
+        let clock = GameClock::new();
+        start(&mut world, entity, ActionType::Wait, &clock);
+        assert_eq!(fatigue_of(&world, entity), 0.0);
+    }
+
+    /// Abilities are a flat effort: casting one quickly does not make it less
+    /// tiring.
+    #[test]
+    fn ability_effort_is_flat_and_speed_independent() {
+        let clock = GameClock::new();
+        let mut values = Vec::new();
+        for speed in [0.5f32, 1.0, 2.0] {
+            let (mut world, entity) = actor(speed);
+            start(&mut world, entity, ActionType::Cleave, &clock);
+            values.push(fatigue_of(&world, entity));
+        }
+        let expected = CLEAVE_ENERGY_COST * FATIGUE_PER_EFFORT;
+        for v in &values {
+            assert!((v - expected).abs() < 1e-4, "got {values:?}, expected {expected}");
+        }
+        assert!(matches!(ActionType::Cleave.effort(), Effort::Flat(_)));
+    }
+
+    /// Fatigue is a long meter: a single fight must not meaningfully move it.
+    /// The whole point of the rework is that effort costs you over a run, not
+    /// inside one exchange.
+    #[test]
+    fn a_short_fight_barely_dents_the_fatigue_meter() {
+        let (mut world, entity) = actor(1.0);
+        let clock = GameClock::new();
+
+        for _ in 0..10 {
+            start(&mut world, entity, ActionType::AttackDirection { dx: 1, dy: 0 }, &clock);
+            if let Ok(mut a) = world.get::<&mut Actor>(entity) {
+                a.current_action = None;
+            }
+        }
+
+        let after = fatigue_of(&world, entity);
+        assert!(
+            after < FATIGUE_MAX * 0.1,
+            "ten swings moved fatigue to {after}; it should stay a long-term meter"
+        );
+    }
+
+    /// The core scheduling property: a short action resolves several times
+    /// while a long one is still running, and the long actor is not touched in
+    /// between.
+    ///
+    /// Three things in one test, because they are one mechanism:
+    ///
+    /// 1. Actions have durations, and the clock jumps to the next *completion*
+    ///    rather than ticking at a fixed rate.
+    /// 2. The actor with the shorter action gets every intervening turn.
+    /// 3. The actor mid-long-action is never reconsidered — its
+    ///    `ActionInProgress` is byte-for-byte the same throughout, and
+    ///    `can_act()` stays false, which is exactly the condition
+    ///    `ai::decide_action` returns on. Its AI does not re-run until its own
+    ///    completion pops.
+    #[test]
+    fn a_short_action_takes_several_turns_while_a_long_one_runs_once() {
+        let walk = ActionType::Move { dx: 1, dy: 0, is_diagonal: false };
+        let mut world = World::new();
+        // Base walk is 1.0s, scaled by 1/speed: 4.5s versus 1.0s.
+        let slow = world.spawn((Actor::new(1.0 / 4.5),));
+        let quick = world.spawn((Actor::new(1.0),));
+
+        let mut clock = GameClock::new();
+        let mut scheduler = ActionScheduler::new();
+        start_action(&mut world, slow, walk, &clock, &mut scheduler).expect("slow starts");
+        start_action(&mut world, quick, walk, &clock, &mut scheduler).expect("quick starts");
+
+        let slow_action = world
+            .get::<&Actor>(slow)
+            .ok()
+            .and_then(|a| a.current_action)
+            .expect("slow is mid-action");
+        assert!(
+            (slow_action.completion_time - 4.5).abs() < 1e-3,
+            "slow action should take 4.5s, got {}",
+            slow_action.completion_time
+        );
+
+        // The quick actor should come round four times before the slow one lands.
+        for turn in 1..=4 {
+            let (entity, time) = scheduler.pop_next().expect("something pending");
+            assert_eq!(entity, quick, "turn {turn} should belong to the quick actor");
+            assert!(
+                (time - turn as f32).abs() < 1e-3,
+                "turn {turn} should complete at t={turn}, got {time}"
+            );
+            clock.advance_to(time);
+
+            // Complete and restart only the actor that actually finished.
+            if let Ok(mut a) = world.get::<&mut Actor>(entity) {
+                a.current_action = None;
+            }
+            start_action(&mut world, entity, walk, &clock, &mut scheduler).expect("restart");
+
+            // The slow actor has not been reconsidered: same action, still busy.
+            {
+                let a = world.get::<&Actor>(slow).expect("slow exists");
+                let current = a.current_action.expect("still mid-action");
+                assert_eq!(
+                    current.start_time, slow_action.start_time,
+                    "turn {turn}: the slow actor's action was restarted"
+                );
+                assert_eq!(
+                    current.completion_time, slow_action.completion_time,
+                    "turn {turn}: the slow actor's completion moved"
+                );
+                assert!(
+                    !a.can_act(),
+                    "turn {turn}: a busy actor must not be eligible to decide again"
+                );
+            }
+        }
+
+        // Only now does the long action land.
+        let (entity, time) = scheduler.pop_next().expect("the slow completion");
+        assert_eq!(entity, slow, "the slow actor should finally come round");
+        assert!((time - 4.5).abs() < 1e-3, "it should land at 4.5s, got {time}");
+    }
+
+    /// The clock jumps to the next completion; it never advances past a pending
+    /// one, so nothing is ever resolved out of order.
+    #[test]
+    fn the_clock_jumps_to_the_next_completion_in_time_order() {
+        let wait = ActionType::Wait;
+        let mut world = World::new();
+        let mut scheduler = ActionScheduler::new();
+        let clock = GameClock::new();
+
+        // Three actors at wildly different speeds, started together.
+        let a = world.spawn((Actor::new(0.25),)); // Wait is 0.5s base -> 2.0s
+        let b = world.spawn((Actor::new(1.0),));  // -> 0.5s
+        let c = world.spawn((Actor::new(0.5),));  // -> 1.0s
+        for e in [a, b, c] {
+            start_action(&mut world, e, wait, &clock, &mut scheduler).expect("starts");
+        }
+
+        let mut popped = Vec::new();
+        while let Some((entity, time)) = scheduler.pop_next() {
+            popped.push((entity, time));
+        }
+
+        assert_eq!(
+            popped.iter().map(|(e, _)| *e).collect::<Vec<_>>(),
+            vec![b, c, a],
+            "completions must come out shortest-first, not in spawn order"
+        );
+        assert!(
+            popped.windows(2).all(|w| w[0].1 <= w[1].1),
+            "times must be non-decreasing, got {popped:?}"
+        );
+    }
+
+    /// Actors with no Fatigue meter (everything but the player today) still act
+    /// normally — the fatigue update is a lookup that has to degrade.
+    #[test]
+    fn actors_without_a_fatigue_meter_act_normally() {
+        let mut world = World::new();
+        let entity = world.spawn((Actor::new(1.0),));
+        let clock = GameClock::new();
+        let mut scheduler = ActionScheduler::new();
+        assert!(start_action(
+            &mut world,
+            entity,
+            ActionType::AttackDirection { dx: 1, dy: 0 },
+            &clock,
+            &mut scheduler
+        )
+        .is_ok());
+    }
+}

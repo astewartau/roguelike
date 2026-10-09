@@ -289,21 +289,14 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
     }
 
     // Check if entity has Actor component
-    let (can_act, energy_regen_interval, last_regen_time) = match world.get::<&Actor>(entity) {
-        Ok(a) => (a.can_act(), a.energy_regen_interval, a.last_energy_regen_time),
+    let can_act = match world.get::<&Actor>(entity) {
+        Ok(a) => a.can_act(),
         Err(_) => return,
     };
 
     // If can't act (usually out of energy), schedule to wake up when energy regens
+    // Busy with an action already; its completion is what will wake this actor.
     if !can_act {
-        if energy_regen_interval > 0.0 {
-            let next_regen_time = last_regen_time + energy_regen_interval;
-            if next_regen_time > clock.time {
-                scheduler.schedule(entity, next_regen_time);
-            } else {
-                scheduler.schedule(entity, clock.time + energy_regen_interval);
-            }
-        }
         return;
     }
 

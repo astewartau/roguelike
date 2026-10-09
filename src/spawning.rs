@@ -36,7 +36,6 @@ pub struct EnemyDef {
     /// Maximum health
     pub health: i32,
     /// Maximum energy pool
-    pub max_energy: i32,
     /// Action speed multiplier (higher = faster)
     pub speed: f32,
     /// Sight radius for chase AI
@@ -78,7 +77,7 @@ impl EnemyDef {
 
         // Build base components
         let sprite = Sprite::from_ref(self.sprite);
-        let actor = Actor::new(self.max_energy, self.speed);
+        let actor = Actor::new(self.speed);
         let health = Health::new(self.health);
         let stats = Stats::new(self.strength, self.intelligence, self.agility);
         let status_effects = StatusEffects::new();
@@ -207,7 +206,6 @@ pub mod enemies {
         sprite: tile_ids::SKELETON,
         overlay_sprite: None,
         health: SKELETON_HEALTH,
-        max_energy: SKELETON_MAX_ENERGY,
         speed: SKELETON_SPEED,
         sight_radius: SKELETON_SIGHT_RADIUS,
         damage: SKELETON_DAMAGE,
@@ -228,7 +226,6 @@ pub mod enemies {
         sprite: tile_ids::RAT,
         overlay_sprite: None,
         health: RAT_HEALTH,
-        max_energy: RAT_MAX_ENERGY,
         speed: RAT_SPEED,
         sight_radius: RAT_SIGHT_RADIUS,
         damage: RAT_DAMAGE,
@@ -249,7 +246,6 @@ pub mod enemies {
         sprite: tile_ids::SKELETON,
         overlay_sprite: Some(tile_ids::BOW),
         health: SKELETON_ARCHER_HEALTH,
-        max_energy: SKELETON_ARCHER_MAX_ENERGY,
         speed: SKELETON_ARCHER_SPEED,
         sight_radius: SKELETON_ARCHER_SIGHT_RADIUS,
         damage: SKELETON_ARCHER_MELEE_DAMAGE,
@@ -274,7 +270,6 @@ pub mod enemies {
         sprite: tile_ids::GOBLIN,
         overlay_sprite: None,
         health: GOBLIN_HEALTH,
-        max_energy: GOBLIN_MAX_ENERGY,
         speed: GOBLIN_SPEED,
         sight_radius: GOBLIN_SIGHT_RADIUS,
         damage: GOBLIN_DAMAGE,
@@ -295,7 +290,6 @@ pub mod enemies {
         sprite: tile_ids::ORC,
         overlay_sprite: None,
         health: ORC_HEALTH,
-        max_energy: ORC_MAX_ENERGY,
         speed: ORC_SPEED,
         sight_radius: ORC_SIGHT_RADIUS,
         damage: ORC_DAMAGE,
@@ -316,7 +310,6 @@ pub mod enemies {
         sprite: tile_ids::ZOMBIE,
         overlay_sprite: None,
         health: ZOMBIE_HEALTH,
-        max_energy: ZOMBIE_MAX_ENERGY,
         speed: ZOMBIE_SPEED,
         sight_radius: ZOMBIE_SIGHT_RADIUS,
         damage: ZOMBIE_DAMAGE,
@@ -337,7 +330,6 @@ pub mod enemies {
         sprite: tile_ids::BAT,
         overlay_sprite: None,
         health: BAT_HEALTH,
-        max_energy: BAT_MAX_ENERGY,
         speed: BAT_SPEED,
         sight_radius: BAT_SIGHT_RADIUS,
         damage: BAT_DAMAGE,
@@ -358,7 +350,6 @@ pub mod enemies {
         sprite: tile_ids::SLIME,
         overlay_sprite: None,
         health: SLIME_HEALTH,
-        max_energy: SLIME_MAX_ENERGY,
         speed: SLIME_SPEED,
         sight_radius: SLIME_SIGHT_RADIUS,
         damage: SLIME_DAMAGE,
@@ -379,7 +370,6 @@ pub mod enemies {
         sprite: tile_ids::GOBLIN_SHAMAN,
         overlay_sprite: None,
         health: GOBLIN_SHAMAN_HEALTH,
-        max_energy: GOBLIN_SHAMAN_MAX_ENERGY,
         speed: GOBLIN_SHAMAN_SPEED,
         sight_radius: GOBLIN_SHAMAN_SIGHT_RADIUS,
         damage: GOBLIN_SHAMAN_DAMAGE,
@@ -400,7 +390,6 @@ pub mod enemies {
         sprite: tile_ids::LESSER_GIANT_SPIDER,
         overlay_sprite: None,
         health: LESSER_SPIDER_HEALTH,
-        max_energy: LESSER_SPIDER_MAX_ENERGY,
         speed: LESSER_SPIDER_SPEED,
         sight_radius: LESSER_SPIDER_SIGHT_RADIUS,
         damage: LESSER_SPIDER_DAMAGE,
@@ -421,7 +410,6 @@ pub mod enemies {
         sprite: tile_ids::GIANT_SPIDER,
         overlay_sprite: None,
         health: GIANT_SPIDER_HEALTH,
-        max_energy: GIANT_SPIDER_MAX_ENERGY,
         speed: GIANT_SPIDER_SPEED,
         sight_radius: GIANT_SPIDER_SIGHT_RADIUS,
         damage: GIANT_SPIDER_DAMAGE,

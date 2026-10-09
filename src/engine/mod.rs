@@ -1630,30 +1630,6 @@ impl GameEngine {
                 return;
             }
 
-            // Sleep only: exhaustion can leave the player at 0 energy (no regen
-            // while awake); Wait needs the actor able to act, so wait for a
-            // point first (regen works while asleep).
-            if mode == TimeSkip::Sleep {
-                let energy = self
-                    .state
-                    .as_ref()
-                    .and_then(|s| s.world.get::<&Actor>(s.player_entity).ok().map(|a| a.energy))
-                    .unwrap_or(0);
-                if energy <= 0 {
-                    let got = {
-                        let Some(mut ctx) = self.sim_ctx() else {
-                            mode.clear_flag(self);
-                            return;
-                        };
-                        simulation::wait_for_energy(&mut ctx.actors(), 1)
-                    };
-                    if !got {
-                        mode.stop(self, "You wake up.");
-                        return;
-                    }
-                }
-            }
-
             // Sleep only: any HP drop while asleep wakes the player (attacks,
             // burning, traps — starvation is handled separately in the survival
             // tick).
@@ -1907,33 +1883,30 @@ enum Targeting {
 }
 
 impl AbilitySlot {
-    /// The ability this slot holds and its energy cost, or `None` if the slot is
-    /// empty, holds something else, or is still on cooldown.
-    fn ready_ability(self, world: &hecs::World, player: Entity) -> Option<(AbilityType, i32)> {
+    /// The ability this slot holds, or `None` if the slot is empty, holds
+    /// something else, or is still on cooldown. The cooldown is the only gate —
+    /// abilities no longer cost a spendable resource.
+    fn ready_ability(self, world: &hecs::World, player: Entity) -> Option<AbilityType> {
         match self {
             AbilitySlot::Class => {
                 let a = world.get::<&ClassAbility>(player).ok()?;
-                a.is_ready()
-                    .then(|| (a.ability_type, a.ability_type.energy_cost()))
+                a.is_ready().then_some(a.ability_type)
             }
             AbilitySlot::Secondary => {
                 let a = world.get::<&SecondaryAbility>(player).ok()?;
-                a.is_ready()
-                    .then(|| (a.ability_type, a.ability_type.energy_cost()))
+                a.is_ready().then_some(a.ability_type)
             }
             AbilitySlot::Learned(ability_type) => {
                 let la = world
                     .get::<&crate::components::LearnedAbilities>(player)
                     .ok()?;
                 let spell = la.get(ability_type)?;
-                (spell.cooldown_remaining <= 0.0)
-                    .then(|| (ability_type, ability_type.energy_cost()))
+                (spell.cooldown_remaining <= 0.0).then_some(ability_type)
             }
             AbilitySlot::Ranger(index) => {
                 let ra = world.get::<&RangerAbilities>(player).ok()?;
                 let &(ability_type, cooldown_remaining, _) = ra.get(index)?;
-                (cooldown_remaining <= 0.0)
-                    .then(|| (ability_type, ability_type.energy_cost()))
+                (cooldown_remaining <= 0.0).then_some(ability_type)
             }
         }
     }
@@ -2041,19 +2014,9 @@ fn activate_ability(ctx: &mut SimCtx, slot: AbilitySlot) -> bool {
     }
 
     // The slot must hold a known ability that is off cooldown...
-    let Some((ability_type, energy_cost)) = slot.ready_ability(ctx.world, player) else {
+    let Some(ability_type) = slot.ready_ability(ctx.world, player) else {
         return false;
     };
-
-    // ...and the player must be able to afford it at all (max_energy >= cost).
-    let can_afford = ctx
-        .world
-        .get::<&Actor>(player)
-        .map(|a| a.max_energy >= energy_cost)
-        .unwrap_or(false);
-    if !can_afford {
-        return false;
-    }
 
     // Targeted abilities enter targeting mode and spend no time.
     match slot.targeting(ctx, ability_type) {
@@ -2071,13 +2034,6 @@ fn activate_ability(ctx: &mut SimCtx, slot: AbilitySlot) -> bool {
     let Some(action_type) = slot.action_for(ability_type) else {
         return false;
     };
-
-    // Wait for enough energy (this advances time, enemies may act).
-    if !simulation::wait_for_energy(&mut ctx.actors(), energy_cost) {
-        // Player died or something went wrong during wait
-        let _ = process_events(ctx);
-        return false;
-    }
 
     let start_result =
         time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
@@ -2309,7 +2265,8 @@ mod tests {
     /// stayed reproducible, they just took a different path.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        const EXPECTED: &str = "t=355.0580 floor=0 kills=13 hp=-2/50 pos=11,10 hunger=83.3344 fatigue=10.0000 n=92 roster=0ed322dd";
+        // Updated for the energy removal; see the note on the test above.
+        const EXPECTED: &str = "t=354.1439 floor=0 kills=14 hp=-9/50 pos=9,10 hunger=83.3344 fatigue=39.0035 n=92 roster=571df8a0";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2317,6 +2274,48 @@ mod tests {
                 descend_at: None,
             }),
             EXPECTED
+        );
+    }
+
+    /// An ability fires on its cooldown alone, with nothing else to fall short
+    /// of.
+    ///
+    /// This replaces a pair of regression tests for a hang that reached the
+    /// player: Stun cost 40 energy, and activating it on a near-empty pool sent
+    /// the engine into `wait_for_energy`, which advanced the clock in ever
+    /// smaller steps until the step was too small to move an `f32` clock and the
+    /// loop span forever. That whole mechanism is gone — abilities are gated by
+    /// cooldown, which cannot be partially satisfied — so the bug is not fixed
+    /// so much as unreachable. What is worth pinning is the property that made
+    /// it unreachable.
+    #[test]
+    fn an_ability_off_cooldown_is_usable_regardless_of_any_other_state() {
+        use crate::components::{ClassAbility, Fatigue, Hunger};
+
+        let mut engine = engine_with_run();
+        let state = engine.state.as_mut().expect("run");
+        let player = state.player_entity;
+
+        // The worst state the player can be in, short of dead.
+        if let Ok(mut f) = state.world.get::<&mut Fatigue>(player) {
+            f.value = crate::constants::FATIGUE_MAX;
+        }
+        if let Ok(mut h) = state.world.get::<&mut Hunger>(player) {
+            h.value = 0.0;
+        }
+
+        let ability = state
+            .world
+            .get::<&ClassAbility>(player)
+            .map(|a| a.ability_type)
+            .expect("the Fighter starts with a class ability");
+
+        let (remaining, _total, usable) =
+            crate::ui::ability_status(&state.world, player, ability);
+        assert_eq!(remaining, 0.0, "a fresh run's ability starts off cooldown");
+        assert!(
+            usable,
+            "exhausted and starving must not make an off-cooldown ability unusable"
         );
     }
 
@@ -2329,7 +2328,12 @@ mod tests {
     /// Same caveat: expected to fail on intentional balance changes.
     #[test]
     fn test_fixed_seed_replays_identically_across_a_floor() {
-        const EXPECTED: &str = "t=263.9901 floor=1 kills=16 hp=99869/100000 pos=10,13 hunger=87.5008 fatigue=7.5000 n=95 roster=d4bbc415";
+        // Updated for the energy removal: actions are paced by their durations
+        // and abilities by their cooldowns, with no spendable pool on top.
+        // Fatigue is now the integral of effort rather than a second clock, so
+        // it is much higher than the original 7.5, and the run is shorter
+        // because no actor ever stalls waiting to afford its next move.
+        const EXPECTED: &str = "t=262.4901 floor=1 kills=16 hp=99733/100000 pos=10,13 hunger=87.5008 fatigue=30.0590 n=95 roster=86f0c6b7";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

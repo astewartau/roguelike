@@ -17,10 +17,9 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{EffectType, Fatigue, Health, Hunger, ItemType, Position};
+use crate::components::{Fatigue, Health, Hunger, ItemType, Position};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
-use crate::systems::effects;
 
 /// What the player was doing while the meters ticked. Resting and sleeping
 /// are engine-level fast-forward states, so the engine passes them in.
@@ -125,7 +124,6 @@ pub fn tick_survival(
     }
 
     // --- Fatigue ----------------------------------------------------------
-    let sprinting = effects::entity_has_effect(world, player, EffectType::SpeedBoost);
     let mut fatigue_change = None;
     if let Ok(mut fatigue) = world.get::<&mut Fatigue>(player) {
         let before = fatigue.state();
@@ -133,9 +131,14 @@ pub fn tick_survival(
         if ctx.sleeping {
             fatigue.value = (fatigue.value - step * SLEEP_FATIGUE_RECOVERY_PER_SECOND).max(0.0);
         } else {
-            let gain_mult = if sprinting { FATIGUE_SPRINT_MULT } else { 1.0 };
-            fatigue.value = (fatigue.value + step * gain_mult / FATIGUE_GAIN_SECONDS_PER_POINT)
-                .min(FATIGUE_MAX);
+            // Only the small "being awake at all" component is charged here.
+            // The bulk of fatigue is effort, and effort is charged where it is
+            // actually spent — `time_system::start_action_with_events` adds
+            // `FATIGUE_PER_ENERGY_SPENT` for every point of energy an action
+            // costs. Fatigue used to grow purely with elapsed time, which made
+            // it a second, slower copy of the hunger clock.
+            fatigue.value =
+                (fatigue.value + step * FATIGUE_IDLE_GAIN_PER_SECOND).min(FATIGUE_MAX);
         }
 
         let after = fatigue.state();
@@ -289,19 +292,29 @@ mod tests {
         assert_eq!(starved.len(), 1);
     }
 
+    /// Being awake at all still tires you, but only barely: fatigue is now
+    /// mostly the integral of effort, charged where energy is spent. This tick
+    /// only applies the small idle component, so a player who does nothing
+    /// should take a very long time to tire.
     #[test]
-    fn test_fatigue_grows_awake_and_triples_while_sprinting() {
+    fn test_being_awake_tires_you_only_slowly() {
         let mut world = World::new();
         let player = spawn_player(&mut world);
         let mut events = EventQueue::new();
 
-        tick(&mut world, player, FATIGUE_GAIN_SECONDS_PER_POINT, SurvivalContext::default(), &mut events);
-        assert!((fatigue(&world, player) - 1.0).abs() < 0.001);
+        tick(&mut world, player, 100.0, SurvivalContext::default(), &mut events);
+        let after = fatigue(&world, player);
+        assert!(
+            (after - 100.0 * FATIGUE_IDLE_GAIN_PER_SECOND).abs() < 0.001,
+            "idle fatigue should be the idle rate times elapsed, got {after}"
+        );
 
-        // With SpeedBoost (Sprint) active, fatigue grows 3x as fast.
-        effects::add_effect_to_entity(&mut world, player, EffectType::SpeedBoost, 100.0);
-        tick(&mut world, player, FATIGUE_GAIN_SECONDS_PER_POINT, SurvivalContext::default(), &mut events);
-        assert!((fatigue(&world, player) - (1.0 + FATIGUE_SPRINT_MULT)).abs() < 0.001);
+        // A hundred game-seconds of standing still must not be a meaningful
+        // dent in the meter; effort is what is supposed to tire you.
+        assert!(
+            after < FATIGUE_MAX * 0.05,
+            "idling alone should barely register, got {after}"
+        );
     }
 
     #[test]

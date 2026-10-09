@@ -231,12 +231,6 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
                     actor.current_action = None;
                     continue; // Re-check if player can act now
                 }
-                // Case 2: Player has 0 energy but no action - grant minimum energy to prevent soft-lock
-                if actor.energy <= 0 {
-                    eprintln!("[WARNING] Scheduler empty and player has 0 energy - granting 1 energy to prevent soft-lock");
-                    actor.energy = 1;
-                    continue; // Re-check if player can act now
-                }
             }
             return;
         };
@@ -249,7 +243,6 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
         update_projectiles_at_time(ctx, now);
 
         time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
-        time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
         time_system::tick_burn_damage(ctx.world, now, ctx.events);
         time_system::tick_status_effects(ctx.world, elapsed);
         time_system::tick_ability_cooldowns(ctx.world, elapsed);
@@ -274,94 +267,6 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
             // Non-player entity: let AI decide next action
             systems::ai::decide_action(ctx, next_entity);
         }
-    }
-}
-
-/// Advance game time until the player has at least the required energy.
-/// This allows enemies to act while the player "waits" for energy.
-/// Returns true if player now has enough energy, false if player died or error.
-pub fn wait_for_energy(ctx: &mut ActorCtx, required_energy: i32) -> bool {
-    let player_entity = ctx.player;
-
-    loop {
-        // Check if player has enough energy
-        let (current_energy, max_energy, regen_interval, last_regen_time) = {
-            let Ok(actor) = ctx.world.get::<&Actor>(player_entity) else {
-                return false; // Player doesn't exist
-            };
-            (actor.energy, actor.max_energy, actor.energy_regen_interval, actor.last_energy_regen_time)
-        };
-
-        // Can never afford this action
-        if max_energy < required_energy {
-            return false;
-        }
-
-        // Already have enough
-        if current_energy >= required_energy {
-            return true;
-        }
-
-        // Calculate when we'll have enough energy
-        let energy_needed = required_energy - current_energy;
-        let time_to_wait = energy_needed as f32 * regen_interval;
-        let target_time = (last_regen_time + regen_interval).max(ctx.clock.time)
-            + (energy_needed - 1) as f32 * regen_interval;
-
-        // Schedule player to "wake up" at that time so the scheduler has something to process
-        ctx.scheduler.schedule(player_entity, target_time);
-
-        // Process any pending actions until we reach target time or player has energy
-        while ctx.clock.time < target_time {
-            let Some((next_entity, completion_time)) = ctx.scheduler.pop_next() else {
-                // Nothing scheduled, just advance time
-                ctx.clock.advance_to(target_time);
-                break;
-            };
-
-            // If this is the player's wakeup, we might be done
-            if next_entity == player_entity && completion_time >= target_time {
-                ctx.clock.advance_to(completion_time);
-                let now = ctx.clock.time;
-                let elapsed = completion_time - now + time_to_wait;
-                time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
-                time_system::tick_ability_cooldowns(ctx.world, elapsed);
-                time_system::tick_ranged_cooldowns(ctx.world, elapsed);
-                break;
-            }
-
-            let previous_time = ctx.clock.time;
-            ctx.clock.advance_to(completion_time);
-            let now = ctx.clock.time;
-            let elapsed = now - previous_time;
-
-            update_projectiles_at_time(ctx, now);
-            time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
-            time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
-            time_system::tick_burn_damage(ctx.world, now, ctx.events);
-            time_system::tick_status_effects(ctx.world, elapsed);
-            time_system::tick_ability_cooldowns(ctx.world, elapsed);
-            time_system::tick_ranged_cooldowns(ctx.world, elapsed);
-            systems::ai::tick_alarms(ctx.world, elapsed);
-            systems::ai::tick_role_cooldowns(ctx.world, elapsed);
-
-            // Complete the action
-            time_system::complete_action(ctx, next_entity);
-
-            // Let AI decide next action
-            if next_entity != player_entity {
-                systems::ai::decide_action(ctx, next_entity);
-            }
-
-            // Check if player died
-            if ctx.world.get::<&Actor>(player_entity).is_err() {
-                return false;
-            }
-        }
-
-        // Final regen tick to ensure energy is updated
-        let now = ctx.clock.time;
-        time_system::tick_energy_regen(ctx.world, now, Some(ctx.events));
     }
 }
 

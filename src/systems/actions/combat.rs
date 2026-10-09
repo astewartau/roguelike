@@ -405,7 +405,7 @@ mod tests {
             ppos,
             VisualPosition::from_position(&ppos),
             Player,
-            Actor::new(3, 1.0),
+            Actor::new(1.0),
             Stats::new(14, 10, 10),
             Health::new(30),
             Equipment::with_weapon(Weapon::claws(50)),

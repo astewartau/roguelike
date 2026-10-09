@@ -649,7 +649,7 @@ pub fn init_world(
         Sprite::from_ref(player_class.sprite()),
         Name::new(player_class.name()),
         Player,
-        Actor::new(PLAYER_MAX_ENERGY, PLAYER_SPEED),
+        Actor::new(PLAYER_SPEED),
         Health::with_regen(
             PLAYER_STARTING_HEALTH,
             PLAYER_HP_REGEN_AMOUNT,

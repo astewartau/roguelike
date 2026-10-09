@@ -4,11 +4,10 @@
 /// Enemies further than this skip their turns entirely for performance
 pub const AI_ACTIVE_RADIUS: i32 = 25;
 
+
 // SKELETON
 /// Skeleton health
 pub const SKELETON_HEALTH: i32 = 40;
-/// Skeleton maximum energy pool
-pub const SKELETON_MAX_ENERGY: i32 = 3;
 /// Skeleton action speed multiplier (1.5 = 50% faster than player)
 pub const SKELETON_SPEED: f32 = 1.5;
 /// Skeleton sight radius for chase AI
@@ -25,8 +24,6 @@ pub const SKELETON_DAMAGE: i32 = 6;
 // RAT
 /// Rat health (weak)
 pub const RAT_HEALTH: i32 = 30;
-/// Rat maximum energy pool
-pub const RAT_MAX_ENERGY: i32 = 4;
 /// Rat action speed multiplier (fast and nimble)
 pub const RAT_SPEED: f32 = 1.5;
 /// Rat sight radius (poor eyesight)
@@ -43,8 +40,6 @@ pub const RAT_DAMAGE: i32 = 5;
 // SKELETON ARCHER
 /// Skeleton archer health (slightly weaker than melee skeleton)
 pub const SKELETON_ARCHER_HEALTH: i32 = 40;
-/// Skeleton archer maximum energy pool
-pub const SKELETON_ARCHER_MAX_ENERGY: i32 = 3;
 /// Skeleton archer action speed (slower than melee skeletons - careful aim)
 pub const SKELETON_ARCHER_SPEED: f32 = 0.7;
 /// Skeleton archer sight radius (good vision for ranged)
@@ -68,7 +63,6 @@ pub const RANGED_ATTACK_COOLDOWN: f32 = 1.5;
 
 // GOBLIN - weak, fast melee swarmer for early floors
 pub const GOBLIN_HEALTH: i32 = 22;
-pub const GOBLIN_MAX_ENERGY: i32 = 4;
 pub const GOBLIN_SPEED: f32 = 1.4;
 pub const GOBLIN_SIGHT_RADIUS: i32 = 7;
 pub const GOBLIN_STRENGTH: i32 = 6;
@@ -78,7 +72,6 @@ pub const GOBLIN_DAMAGE: i32 = 4;
 
 // ORC - slow, heavy-hitting bruiser
 pub const ORC_HEALTH: i32 = 75;
-pub const ORC_MAX_ENERGY: i32 = 3;
 pub const ORC_SPEED: f32 = 0.8;
 pub const ORC_SIGHT_RADIUS: i32 = 8;
 pub const ORC_STRENGTH: i32 = 15;
@@ -88,7 +81,6 @@ pub const ORC_DAMAGE: i32 = 13;
 
 // ZOMBIE - very slow, high HP, relentless
 pub const ZOMBIE_HEALTH: i32 = 60;
-pub const ZOMBIE_MAX_ENERGY: i32 = 2;
 pub const ZOMBIE_SPEED: f32 = 0.55;
 pub const ZOMBIE_SIGHT_RADIUS: i32 = 7;
 pub const ZOMBIE_STRENGTH: i32 = 12;
@@ -98,7 +90,6 @@ pub const ZOMBIE_DAMAGE: i32 = 8;
 
 // GIANT BAT - very fast, fragile harasser
 pub const BAT_HEALTH: i32 = 16;
-pub const BAT_MAX_ENERGY: i32 = 5;
 pub const BAT_SPEED: f32 = 2.2;
 pub const BAT_SIGHT_RADIUS: i32 = 9;
 pub const BAT_STRENGTH: i32 = 3;
@@ -108,7 +99,6 @@ pub const BAT_DAMAGE: i32 = 3;
 
 // SLIME - slow, weak chip-damage fodder
 pub const SLIME_HEALTH: i32 = 24;
-pub const SLIME_MAX_ENERGY: i32 = 3;
 pub const SLIME_SPEED: f32 = 0.7;
 pub const SLIME_SIGHT_RADIUS: i32 = 5;
 pub const SLIME_STRENGTH: i32 = 5;
@@ -118,7 +108,6 @@ pub const SLIME_DAMAGE: i32 = 4;
 
 // GOBLIN SHAMAN - fragile support caster: heals/hastes allies, kites, raises the alarm
 pub const GOBLIN_SHAMAN_HEALTH: i32 = 20;
-pub const GOBLIN_SHAMAN_MAX_ENERGY: i32 = 4;
 /// Slower than the goblins it patches up (1.0 = player-speed).
 pub const GOBLIN_SHAMAN_SPEED: f32 = 1.0;
 pub const GOBLIN_SHAMAN_SIGHT_RADIUS: i32 = 8;
@@ -141,7 +130,6 @@ pub const SHAMAN_KITE_MAX: i32 = 5;
 
 // LESSER GIANT SPIDER - fast, fragile webspinner (early floors)
 pub const LESSER_SPIDER_HEALTH: i32 = 18;
-pub const LESSER_SPIDER_MAX_ENERGY: i32 = 4;
 pub const LESSER_SPIDER_SPEED: f32 = 1.8;
 pub const LESSER_SPIDER_SIGHT_RADIUS: i32 = 8;
 pub const LESSER_SPIDER_STRENGTH: i32 = 4;
@@ -151,7 +139,6 @@ pub const LESSER_SPIDER_DAMAGE: i32 = 4;
 
 // GIANT SPIDER - venomous webspinner (floor 3+); its bite Slows
 pub const GIANT_SPIDER_HEALTH: i32 = 45;
-pub const GIANT_SPIDER_MAX_ENERGY: i32 = 3;
 pub const GIANT_SPIDER_SPEED: f32 = 1.3;
 pub const GIANT_SPIDER_SIGHT_RADIUS: i32 = 8;
 pub const GIANT_SPIDER_STRENGTH: i32 = 10;

@@ -223,8 +223,9 @@ impl AbilityType {
         }
     }
 
-    /// Energy cost to use this ability
-    pub fn energy_cost(&self) -> i32 {
+    /// How tiring this ability is (feeds fatigue; nothing is gated on it)
+    /// How tiring this ability is, as a flat amount. See `Effort`.
+    pub fn energy_cost(&self) -> f32 {
         match self {
             AbilityType::Cleave => CLEAVE_ENERGY_COST,
             AbilityType::Sprint => SPRINT_ENERGY_COST,
@@ -237,8 +238,8 @@ impl AbilityType {
             AbilityType::SnareTrap => SNARE_TRAP_ENERGY_COST,
             AbilityType::CripplingShot => CRIPPLING_SHOT_ENERGY_COST,
             AbilityType::Stun => STUN_ENERGY_COST,
-            AbilityType::Rest => 0,
-            AbilityType::Sleep => 0,
+            AbilityType::Rest => 0.0,
+            AbilityType::Sleep => 0.0,
             AbilityType::LearnedBlink => LEARNED_BLINK_ENERGY_COST,
             AbilityType::LearnedFireball => LEARNED_FIREBALL_ENERGY_COST,
             AbilityType::LearnedFear => LEARNED_FEAR_ENERGY_COST,
@@ -268,8 +269,9 @@ impl AbilityType {
 }
 
 /// A spell the player has permanently learned (by studying a scroll), or an
-/// innate spell-list ability (the Necromancer's Raise Dead). Energy cost comes
-/// from [`AbilityType::energy_cost`]; the cooldown is stored per entry.
+/// innate spell-list ability (the Necromancer's Raise Dead). Effort comes from
+/// [`AbilityType::energy_cost`]; the cooldown is stored per entry and is the
+/// only thing gating use.
 #[derive(Debug, Clone, Copy)]
 pub struct LearnedSpell {
     pub ability: AbilityType,
@@ -589,13 +591,19 @@ pub enum FatigueState {
     /// Above the tired threshold: enemies notice the player faster (+25%
     /// alertness gain) and the player's damage drops (-10%).
     Tired,
-    /// Meter at cap: actions are 25% slower and energy regen stops (while
-    /// awake — sleeping is the recovery path).
+    /// Meter at cap: actions are 25% slower until slept off.
     Exhausted,
 }
 
-/// Fatigue meter (player-only). Starts empty and grows over game time while
-/// awake (faster while sprinting); sleeping drains it quickly.
+/// Fatigue meter (player-only).
+///
+/// Starts empty and grows with **effort** — every action adds its own effort,
+/// so fighting tires you several times faster than walking does — plus a small
+/// amount simply for being awake. Sleeping is the only thing that drains it.
+///
+/// It is deliberately a long meter: nothing is gated on it until it maxes out,
+/// at which point actions slow down. Fighting should cost you over the course
+/// of a run, not throttle you in the middle of a fight.
 #[derive(Debug, Clone, Copy)]
 pub struct Fatigue {
     /// Current fatigue, 0.0 (fully rested) to `FATIGUE_MAX` (exhausted).
@@ -623,7 +631,7 @@ impl Fatigue {
         self.value > crate::constants::FATIGUE_TIRED_THRESHOLD
     }
 
-    /// Meter maxed: action-speed penalty, no energy regen while awake.
+    /// Meter maxed: actions are slower until the player sleeps it off.
     pub fn is_exhausted(&self) -> bool {
         self.value >= crate::constants::FATIGUE_MAX
     }
@@ -1168,44 +1176,86 @@ pub enum ActionType {
 
 impl ActionType {
     /// Energy cost to start this action
-    pub fn energy_cost(&self) -> i32 {
+    /// How tiring this action is, and how that is shaped.
+    ///
+    /// Two shapes, because two different things are being modelled:
+    ///
+    /// - [`Effort::PerSecond`] for continuous exertion — walking, fighting,
+    ///   hauling a door open. Accrued per game-second of acting, so the rate is
+    ///   the same whatever your speed. A flat amount here would make tiredness
+    ///   track the speed stat rather than the work done.
+    /// - [`Effort::Flat`] for abilities, which are discrete commitments rather
+    ///   than sustained effort. Casting a spell quickly should not make it less
+    ///   tiring, so these are speed-independent by construction.
+    pub fn effort(&self) -> Effort {
+        use Effort::{Flat, PerSecond};
         match self {
-            // All basic actions cost 1 energy by default
-            // This can be customized per-action as needed
-            ActionType::Move { .. } => 1,
-            ActionType::Attack { .. } => 1,
-            ActionType::AttackDirection { .. } => 1,
-            ActionType::InteractDirection { .. } => 1,
-            ActionType::OpenDoor { .. } => 1,
-            ActionType::OpenChest { .. } => 1,
-            ActionType::Wait => 0, // Standing still is free
-            ActionType::ShootBow { .. } => 1,
-            ActionType::UseStairs { .. } => 1,
-            ActionType::TalkTo { .. } => 1,
-            ActionType::ThrowPotion { .. } => 1,
-            ActionType::Blink { .. } => 1,
-            ActionType::CastFireball { .. } => 1,
-            ActionType::EquipWeapon { .. } => 0, // Free action
-            ActionType::UnequipWeapon => 0,      // Free action
-            ActionType::DropItem { .. } => 1,
-            ActionType::DropEquippedWeapon => 1,
-            ActionType::Cleave => CLEAVE_ENERGY_COST,
-            ActionType::ActivateSprint => SPRINT_ENERGY_COST,
-            ActionType::StartTaming { .. } => TAME_ENERGY_COST,
-            ActionType::ActivateBarkskin => BARKSKIN_ENERGY_COST,
-            ActionType::StartLifeDrain { .. } => LIFE_DRAIN_ENERGY_COST,
-            ActionType::ActivateFear => FEAR_ABILITY_ENERGY_COST,
-            ActionType::ActivateStun => STUN_ENERGY_COST,
-            ActionType::PlaceFireTrap { .. } => 1,
-            ActionType::Disengage => DISENGAGE_ENERGY_COST,
-            ActionType::Tumble { .. } => TUMBLE_ENERGY_COST,
-            ActionType::PlaceSnareTrap { .. } => SNARE_TRAP_ENERGY_COST,
-            ActionType::ShootCripplingShot { .. } => CRIPPLING_SHOT_ENERGY_COST,
-            ActionType::CastLearnedSpell { ability, .. } => ability.energy_cost(),
-            ActionType::StartRaiseDead { .. } => RAISE_DEAD_ENERGY_COST,
-            ActionType::Recover => 0, // Free action, just takes time
+            // --- Free: no effort at all ---
+            ActionType::Wait => PerSecond(EXERTION_IDLE),
+            ActionType::Recover => PerSecond(EXERTION_IDLE), // post-shot settle
+            ActionType::EquipWeapon { .. } => PerSecond(EXERTION_IDLE),
+            ActionType::UnequipWeapon => PerSecond(EXERTION_IDLE),
+
+            // --- Light: walking, and things no harder than walking ---
+            ActionType::Move { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::InteractDirection { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::OpenDoor { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::OpenChest { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::UseStairs { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::TalkTo { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::DropItem { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::DropEquippedWeapon => PerSecond(EXERTION_LIGHT),
+            ActionType::ThrowPotion { .. } => PerSecond(EXERTION_LIGHT),
+
+            // --- Heavy: fighting ---
+            ActionType::Attack { .. } => PerSecond(EXERTION_HEAVY),
+            ActionType::AttackDirection { .. } => PerSecond(EXERTION_HEAVY),
+            ActionType::ShootBow { .. } => PerSecond(EXERTION_HEAVY),
+
+            // --- Flat: deliberate abilities, each with its own price ---
+            ActionType::Cleave => Flat(CLEAVE_ENERGY_COST),
+            ActionType::ActivateSprint => Flat(SPRINT_ENERGY_COST),
+            ActionType::StartTaming { .. } => Flat(TAME_ENERGY_COST),
+            ActionType::ActivateBarkskin => Flat(BARKSKIN_ENERGY_COST),
+            ActionType::StartLifeDrain { .. } => Flat(LIFE_DRAIN_ENERGY_COST),
+            ActionType::ActivateFear => Flat(FEAR_ABILITY_ENERGY_COST),
+            ActionType::ActivateStun => Flat(STUN_ENERGY_COST),
+            ActionType::Disengage => Flat(DISENGAGE_ENERGY_COST),
+            ActionType::Tumble { .. } => Flat(TUMBLE_ENERGY_COST),
+            ActionType::PlaceSnareTrap { .. } => Flat(SNARE_TRAP_ENERGY_COST),
+            ActionType::ShootCripplingShot { .. } => Flat(CRIPPLING_SHOT_ENERGY_COST),
+            ActionType::PlaceFireTrap { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::Blink { .. } => Flat(LEARNED_BLINK_ENERGY_COST),
+            ActionType::CastFireball { .. } => Flat(LEARNED_FIREBALL_ENERGY_COST),
+            ActionType::StartRaiseDead { .. } => Flat(RAISE_DEAD_ENERGY_COST),
+            ActionType::CastLearnedSpell { ability, .. } => Flat(ability.energy_cost()),
         }
     }
+
+    /// How much effort this action adds, given how long it runs.
+    pub fn effort_for_duration(&self, duration: f32) -> f32 {
+        match self.effort() {
+            Effort::PerSecond(rate) => rate * duration.max(0.0),
+            Effort::Flat(amount) => amount,
+        }
+    }
+}
+
+/// How tiring an action is, and how that is calculated.
+///
+/// Effort is not a resource the player spends — nothing is gated on it. It is
+/// only an input to the long-term fatigue meter, so that a run full of fighting
+/// sends you to bed sooner than a run spent creeping down corridors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Effort {
+    /// Effort per game-second of acting; the total is this times the action's
+    /// duration. For continuous exertion, where tiredness should track time
+    /// spent — and where a flat amount would make a fast creature tire in
+    /// proportion to its own speed, which is backwards.
+    PerSecond(f32),
+    /// A fixed amount regardless of how long the action takes. For abilities,
+    /// which are discrete commitments rather than sustained effort.
+    Flat(f32),
 }
 
 /// An action currently being executed by an entity
@@ -1222,38 +1272,29 @@ pub struct ActionInProgress {
 /// Energy is a budget: spend to start actions, regen over time
 #[derive(Debug, Clone, Copy)]
 pub struct Actor {
-    /// Current energy pool (0 to max_energy)
-    pub energy: i32,
-    /// Maximum energy (budget cap)
-    pub max_energy: i32,
     /// Speed multiplier (1.0 = normal, higher = faster)
     pub speed: f32,
     /// Currently executing action (None if idle and ready)
     pub current_action: Option<ActionInProgress>,
-    /// Seconds between energy regeneration events
-    pub energy_regen_interval: f32,
-    /// Game time of last energy regen event
-    pub last_energy_regen_time: f32,
 }
 
-/// Default energy regen interval (1 second per energy point)
-pub const DEFAULT_ENERGY_REGEN_INTERVAL: f32 = 1.0;
-
 impl Actor {
-    pub fn new(max_energy: i32, speed: f32) -> Self {
+    pub fn new(speed: f32) -> Self {
         Self {
-            energy: max_energy, // Start with full energy
-            max_energy,
             speed,
             current_action: None,
-            energy_regen_interval: DEFAULT_ENERGY_REGEN_INTERVAL,
-            last_energy_regen_time: 0.0,
         }
     }
 
     /// Can start a new action (has energy and not mid-action)
+    /// Can start a new action: simply not already busy.
+    ///
+    /// There is deliberately no resource gate here. Actions are paced by their
+    /// own durations and abilities by their cooldowns; an energy pool on top of
+    /// those was a third lock on a door that already had two, and the one it
+    /// produced was "you press the button and nothing happens".
     pub fn can_act(&self) -> bool {
-        self.energy > 0 && self.current_action.is_none()
+        self.current_action.is_none()
     }
 }
 

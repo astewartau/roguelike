@@ -2,8 +2,6 @@
 
 /// Player's default starting health
 pub const PLAYER_STARTING_HEALTH: i32 = 50;
-/// Player's maximum energy pool
-pub const PLAYER_MAX_ENERGY: i32 = 5;
 /// Player's action speed multiplier (1.0 = baseline)
 pub const PLAYER_SPEED: f32 = 1.0;
 
@@ -20,6 +18,41 @@ pub const UNARMED_DAMAGE: i32 = 2;
 pub const PLAYER_HP_REGEN_AMOUNT: i32 = 1;
 /// Seconds between each player HP regen event
 pub const PLAYER_HP_REGEN_INTERVAL: f32 = 10.0;
+
+// =============================================================================
+// EXERTION: HOW TIRING ACTIONS ARE (all actors, see time_system.rs)
+// =============================================================================
+// Effort is *not* a resource anyone spends — nothing is gated on it and there is
+// no pool to run dry. It feeds the long-term fatigue meter, and that is all it
+// does: a run spent fighting sends you to bed sooner than a run spent creeping
+// down corridors.
+//
+// Effort accrues at a *rate* while an action runs: `effort = rate * duration`.
+// A flat amount per action would make tiredness-per-second equal `1 / duration`,
+// which for a one-second base action is the actor's speed stat — so a quick
+// creature would tire in proportion to being quick, which is backwards. Charging
+// per second of work makes it track the work rather than the speed.
+//
+// The rates below are per game-second of acting, in fatigue-feeding units.
+
+/// Effort rate for actions that are not tiring at all: waiting, standing, the
+/// free equip/unequip actions, and the post-shot recovery step.
+pub const EXERTION_IDLE: f32 = 0.0;
+
+/// Effort rate for ordinary movement and the small interactions that are no
+/// more effortful than walking: opening a door or a chest, taking the stairs,
+/// picking something up, talking.
+///
+/// A door is about as much work as a step, which is why they share a rate.
+pub const EXERTION_LIGHT: f32 = 8.0;
+
+/// Effort rate for fighting: melee swings and bow shots.
+///
+/// Several times the walking rate, so a run full of combat tires you much
+/// sooner than a quiet one — but it costs nothing in the moment, so fighting
+/// itself stays as consistent as your weapon and your speed make it.
+pub const EXERTION_HEAVY: f32 = 30.0;
+
 
 // =============================================================================
 // SURVIVAL CLOCK: HUNGER (player-only, see systems/survival.rs)
@@ -46,13 +79,45 @@ pub const STARVATION_DAMAGE_INTERVAL: f32 = 5.0;
 
 /// Fatigue meter cap (exhausted)
 pub const FATIGUE_MAX: f32 = 100.0;
-/// Game-time seconds awake for the fatigue meter to grow by 1 point
-pub const FATIGUE_GAIN_SECONDS_PER_POINT: f32 = 20.0;
-/// Fatigue grows this much faster while Sprint/SpeedBoost is active
-pub const FATIGUE_SPRINT_MULT: f32 = 3.0;
+
+/// Fatigue added per point of effort expended.
+///
+/// Fatigue used to be a second clock: it grew purely with elapsed time, at a
+/// rate that reached "exhausted" in about 33 minutes. Hunger is also a clock
+/// and reaches "hungry" in about 15, so hunger always won the race and fatigue
+/// never actually drove a decision — it was a slower copy of a meter the player
+/// already had.
+///
+/// It now measures **effort** instead: it is the running integral of the same
+/// exertion that drains energy. Energy is the short-term buffer of effort and
+/// refills in seconds; fatigue is the long-term total and only clears by
+/// sleeping. Same input, two timescales, and now the two long meters answer
+/// different questions — hunger asks "when did you last eat", fatigue asks
+/// "what have you been doing".
+///
+/// At this rate, steady walking reaches exhaustion in roughly twenty minutes
+/// and continuous fighting in about five. Raise it to make sleep a more
+/// frequent interruption; lower it to let a run go longer between rests.
+pub const FATIGUE_PER_EFFORT: f32 = 0.01;
+
+/// Fatigue added per game-second awake regardless of what the player is doing.
+///
+/// Small on purpose. Being awake should eventually tire you even if you do
+/// nothing at all, so a cautious player cannot opt out of sleeping entirely,
+/// but at this rate idling alone takes hours to exhaust — effort is what
+/// matters. Set it to 0.0 for purely effort-driven fatigue.
+pub const FATIGUE_IDLE_GAIN_PER_SECOND: f32 = 0.01;
+
+// Sleep has to dominate the idle gain by a wide margin or resting would never
+// get the player anywhere.
+const _: () = assert!(
+    SLEEP_FATIGUE_RECOVERY_PER_SECOND > FATIGUE_IDLE_GAIN_PER_SECOND * 10.0,
+    "sleeping must recover fatigue far faster than being awake accrues it"
+);
+
 /// Above this the player is "Tired": enemies notice them faster and their
 /// attacks hit softer. At `FATIGUE_MAX` they are "Exhausted" (slower actions,
-/// no energy regen while awake).
+/// and energy regenerates at [`EXHAUSTED_ENERGY_REGEN_MULT`]).
 pub const FATIGUE_TIRED_THRESHOLD: f32 = 75.0;
 /// Enemy alertness gain against a Tired player is multiplied by this (+25%)
 pub const TIRED_ALERTNESS_MULT: f32 = 1.25;

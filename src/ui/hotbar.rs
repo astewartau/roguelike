@@ -87,12 +87,13 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
     }
 }
 
-/// Look up an ability's status for the player: (cooldown_remaining, cooldown_total, can_afford).
+/// Look up an ability's status for the player: (cooldown_remaining, cooldown_total, usable).
+///
+/// `usable` is always true for an ability the player actually has: abilities are
+/// gated by their cooldown alone, with no spendable resource to fall short of.
+/// The flag is kept so callers that grey out a slot keep working.
 pub fn ability_status(world: &World, player: Entity, ability: AbilityType) -> (f32, f32, bool) {
-    let can_afford = world
-        .get::<&Actor>(player)
-        .map(|a| a.max_energy >= ability.energy_cost())
-        .unwrap_or(false);
+    let can_afford = world.get::<&Actor>(player).is_ok();
 
     if let Ok(a) = world.get::<&ClassAbility>(player) {
         if a.ability_type == ability {
