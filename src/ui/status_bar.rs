@@ -532,6 +532,7 @@ fn effect_label(effect: StatusEffectType) -> &'static str {
         StatusEffectType::Oiled => "Oiled",
         StatusEffectType::Poisoned => "Poison",
         StatusEffectType::Bleeding => "Bleeding",
+        StatusEffectType::Grabbed => "Grabbed",
     }
 }
 

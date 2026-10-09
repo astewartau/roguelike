@@ -570,6 +570,15 @@ impl GameEngine {
                 systems::remove_dead_entities(&mut state.actor_ctx(&mut self.events), floor);
         }
 
+        // Slimes hurt outside an action (an exploding barrel during last
+        // frame's fire tick) split here; in-action damage is handled in the
+        // advance loop. Grabs whose holder just died are let go.
+        {
+            profile_scope!("splits_and_grabs");
+            systems::split::process_splits(&mut state.actor_ctx(&mut self.events));
+            systems::grab::tick_grabs(&mut state.world, &mut self.events);
+        }
+
         // Process events from remove_dead_entities
         let event_result = {
             profile_scope!("process_events");
@@ -2377,7 +2386,9 @@ mod tests {
         // spills (more entities, more rng draws at construction), rats and
         // lesser spiders gained on-hit components (archetype moves), and rat
         // bites roll for Bleeding. Two separate runs agreed before recording.
-        const EXPECTED: &str = "t=344.6579 floor=0 kills=6 hp=0/50 pos=8,7 hunger=83.3344 fatigue=47.3968 n=105 roster=e83ccbda";
+        // Re-recorded for phase 4 creature traits: floor-0 bats now fly
+        // over furniture and hit-and-run instead of trading blows.
+        const EXPECTED: &str = "t=340.5599 floor=0 kills=6 hp=0/50 pos=8,7 hunger=83.3344 fatigue=48.1250 n=104 roster=26da4932";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2448,7 +2459,11 @@ mod tests {
         // that stepped out of reach now miss).
         // Re-recorded again for oil spills, on-hit DoTs and the oil barrels
         // and puddles that floor save/load now keeps (see the other golden).
-        const EXPECTED: &str = "t=264.8761 floor=1 kills=20 hp=99746/100000 pos=10,13 hunger=87.5008 fatigue=29.5459 n=99 roster=3181b400";
+        // Re-recorded for phase 4 creature traits: bats now fly over
+        // furniture and hit-and-run. (Disabling slime splitting leaves this
+        // digest unchanged, so no split happens in this script; the two
+        // extra kills come from the reshaped fights.)
+        const EXPECTED: &str = "t=266.1901 floor=1 kills=22 hp=99785/100000 pos=10,13 hunger=87.5008 fatigue=29.2991 n=99 roster=d0cde0b9";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

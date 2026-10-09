@@ -754,6 +754,34 @@ impl MessageLog {
                 let obj = self.object(world, *target);
                 self.push(format!("{who} shrieks — {obj} speeds up!"), log_colors::INFO);
             }
+            GameEvent::Grabbed { grabber, target } => {
+                let who = self.subject(world, *grabber);
+                if *target == me {
+                    self.push(format!("{who} grabs you!"), log_colors::HARM);
+                } else {
+                    let whom = self.object(world, *target);
+                    self.push(format!("{who} grabs {whom}."), log_colors::INFO);
+                }
+            }
+            GameEvent::GrabSlipped { grabber, target } => {
+                let holder = self.object(world, *grabber);
+                if *target == me {
+                    self.push(format!("You slip out of {holder}'s grasp!"), log_colors::GOOD);
+                } else {
+                    let who = self.subject(world, *target);
+                    self.push(format!("{who} slips out of {holder}'s grasp."), log_colors::INFO);
+                }
+            }
+            GameEvent::GrabReleased { entity } if *entity == me => {
+                self.push("You break free.".to_string(), log_colors::GOOD);
+            }
+            GameEvent::GrabStruggle { entity } if *entity == me => {
+                self.push("You struggle against the grip!".to_string(), log_colors::HARM);
+            }
+            GameEvent::SlimeSplit { parent, .. } => {
+                let who = self.subject(world, *parent);
+                self.push(format!("{who} splits in two!"), log_colors::INFO);
+            }
             GameEvent::WebTouched { victim, .. } => {
                 if *victim == me {
                     self.push(

@@ -65,6 +65,8 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
             let _ = world.insert_one(attacker, LungeAnimation::new(tx, ty));
         }
         events.push(GameEvent::AttackMissed { attacker, target, target_pos, reason });
+        // A hit-and-run attacker breaks off after the swing, hit or miss.
+        crate::systems::ai::begin_hit_and_run_retreat(world, attacker);
         return ActionResult::Completed;
     }
 
@@ -178,6 +180,14 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
             }
         }
     }
+
+    // Zombies take hold of whoever they hurt (an Oiled target slips free).
+    if damage > 0 {
+        crate::systems::grab::try_grab(world, events, attacker, target);
+    }
+
+    // Hit-and-run attackers (bats) break off after the swing.
+    crate::systems::ai::begin_hit_and_run_retreat(world, attacker);
 
     // Interrupt life drain if target was channeling
     interrupt_life_drain_on_damage(world, target, events);

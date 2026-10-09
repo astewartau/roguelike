@@ -64,6 +64,18 @@ pub struct EnemyDef {
     pub support: bool,
     /// Spider-kin: ignores webs and periodically lays them
     pub spider: bool,
+    /// Airborne (bats): flies over furniture and ground hazards (`Flying`)
+    pub flying: bool,
+    /// Breaks off after every melee swing and re-engages (`HitAndRun`)
+    pub hit_and_run: bool,
+    /// Connecting melee hits Grab the victim in place (zombies; `Grabber`)
+    pub grabs: bool,
+    /// Splits in two when badly hurt (slimes; `Splits`)
+    pub splits: bool,
+    /// How many splits produced this creature (0 = an original). Split
+    /// halves are tinted smaller-looking and pay XP halved per generation.
+    /// Part of the template so a revisited floor keeps the lineage.
+    pub split_generation: u8,
 }
 
 impl EnemyDef {
@@ -208,6 +220,33 @@ impl EnemyDef {
             );
         }
 
+        // Bats fly (over furniture and ground hazards) and hit-and-run.
+        if self.flying {
+            let _ = world.insert_one(entity, crate::components::Flying);
+        }
+        if self.hit_and_run {
+            let _ = world.insert_one(entity, crate::components::HitAndRun::default());
+        }
+
+        // Zombies grab whoever they hit.
+        if self.grabs {
+            let _ = world.insert_one(entity, crate::components::Grabber);
+        }
+
+        // Slimes split when badly hurt. Split halves carry their generation
+        // (so they never split again past SLIME_MAX_SPLITS) and a paler tint
+        // (the renderer has no per-entity scale, so the tint says "smaller").
+        if self.splits {
+            let _ = world.insert_one(
+                entity,
+                crate::components::Splits { generation: self.split_generation, spent: false },
+            );
+        }
+        if self.split_generation > 0 {
+            let (r, g, b) = crate::constants::SLIME_SPLIT_TINT;
+            let _ = world.insert_one(entity, crate::components::SpriteTint { r, g, b });
+        }
+
         entity
     }
 }
@@ -237,6 +276,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -259,6 +303,11 @@ pub mod enemies {
         bleed_chance: RAT_BLEED_CHANCE,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -285,6 +334,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const GOBLIN: EnemyDef = EnemyDef {
@@ -307,6 +361,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const ORC: EnemyDef = EnemyDef {
@@ -329,6 +388,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const ZOMBIE: EnemyDef = EnemyDef {
@@ -351,6 +415,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: true,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const BAT: EnemyDef = EnemyDef {
@@ -373,6 +442,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: true,
+        hit_and_run: true,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -395,6 +469,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: true,
+        split_generation: 0,
     };
 
     pub const GOBLIN_SHAMAN: EnemyDef = EnemyDef {
@@ -417,6 +496,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: true,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const LESSER_GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -439,6 +523,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: true,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 
     pub const GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -461,6 +550,11 @@ pub mod enemies {
         bleed_chance: 0.0,
         support: false,
         spider: true,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
     };
 }
 

@@ -13,6 +13,8 @@
 //! - `inventory`: Container and inventory interactions
 //! - `rendering`: FOV, visibility, and render data collection
 //! - `projectile`: Arrow and projectile movement
+//! - `grab`: Zombie grabs (hold a victim in place; early release)
+//! - `split`: Slimes splitting in two when badly hurt
 //! - `telegraph`: Which tiles in-progress hostile attacks threaten (for UI/animation)
 //! - `tile_effects`: What a tile does to whoever enters or stands on it
 
@@ -29,6 +31,7 @@ pub mod effects;
 pub mod experience;
 pub mod fire;
 pub mod furniture;
+pub mod grab;
 pub mod identify;
 pub mod inventory;
 pub mod item_defs;
@@ -36,6 +39,7 @@ pub mod items;
 pub mod player_input;
 pub mod projectile;
 pub mod rendering;
+pub mod split;
 pub mod survival;
 pub mod telegraph;
 pub mod tile_effects;

@@ -72,6 +72,8 @@ pub struct UiIcons {
     // Status-effect icons (stock sprites, tinted via `effect_icon_tint`)
     pub oil_puddle_uv: egui::Rect,
     pub blood_uv: egui::Rect,
+    /// Grabbed: the zombie's own face says who has hold of you.
+    pub zombie_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -138,6 +140,7 @@ impl UiIcons {
             call_rain_uv: tileset.get_egui_uv(tile_ids::CALL_RAIN.0, tile_ids::CALL_RAIN.1),
             oil_puddle_uv: tileset.get_egui_uv(tile_ids::OIL_PUDDLE.0, tile_ids::OIL_PUDDLE.1),
             blood_uv: tileset.get_egui_uv(tile_ids::BLOOD_1.0, tile_ids::BLOOD_1.1),
+            zombie_uv: tileset.get_egui_uv(tile_ids::ZOMBIE.0, tile_ids::ZOMBIE.1),
         }
     }
 
@@ -216,6 +219,7 @@ impl UiIcons {
             E::Wet => (self.items_texture_id, self.water_flask_uv),
             E::Oiled => (self.texture_for_sheet(tile_ids::OIL_PUDDLE.0), self.oil_puddle_uv),
             E::Bleeding => (self.texture_for_sheet(tile_ids::BLOOD_1.0), self.blood_uv),
+            E::Grabbed => (self.texture_for_sheet(tile_ids::ZOMBIE.0), self.zombie_uv),
             // Nothing in the sheets reads as "poisoned" without being mistaken
             // for a potion or a spider; the green text label says it.
             E::Invisible | E::Slowed | E::Invulnerable | E::Poisoned => return None,

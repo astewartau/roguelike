@@ -90,6 +90,12 @@ pub const ZOMBIE_STRENGTH: i32 = 12;
 pub const ZOMBIE_INTELLIGENCE: i32 = 1;
 pub const ZOMBIE_AGILITY: i32 = 1;
 pub const ZOMBIE_DAMAGE: i32 = 8;
+/// How long (game seconds) a zombie's connecting hit holds its victim Grabbed:
+/// unable to walk away, though still free to swing back or use abilities. The
+/// grab also ends early if the zombie dies, is stunned, or stops being
+/// adjacent. Longer makes zombies far more dangerous to melee; shorter turns
+/// the grab into a mere stutter-step.
+pub const ZOMBIE_GRAB_DURATION: f32 = 1.5;
 
 // GIANT BAT - very fast, fragile harasser
 pub const BAT_HEALTH: i32 = 16;
@@ -99,6 +105,11 @@ pub const BAT_STRENGTH: i32 = 3;
 pub const BAT_INTELLIGENCE: i32 = 2;
 pub const BAT_AGILITY: i32 = 13;
 pub const BAT_DAMAGE: i32 = 3;
+/// Hit-and-run: after every melee swing (hit or miss) a bat breaks off and
+/// flutters away from its target for this many game seconds before diving
+/// back in. Longer means fewer bites and easier ranged shots at it; shorter
+/// makes bats behave like ordinary (very fast) chasers.
+pub const BAT_RETREAT_DURATION: f32 = 2.5;
 
 // SLIME - slow, weak chip-damage fodder
 pub const SLIME_HEALTH: i32 = 24;
@@ -108,6 +119,17 @@ pub const SLIME_STRENGTH: i32 = 5;
 pub const SLIME_INTELLIGENCE: i32 = 1;
 pub const SLIME_AGILITY: i32 = 2;
 pub const SLIME_DAMAGE: i32 = 4;
+/// A slime splits the first time a hit leaves it at or below this fraction of
+/// its max HP (and it survives). Higher splits earlier, while there is more HP
+/// left to share between the halves.
+pub const SLIME_SPLIT_HP_FRACTION: f32 = 0.5;
+/// How many generations of splitting a slime lineage allows. 1 = an original
+/// slime splits once into two smaller ones, and those never split again.
+/// Raising it multiplies the number of slimes a single kill can produce.
+pub const SLIME_MAX_SPLITS: u8 = 1;
+/// Tint applied to split (smaller) slimes so they read as the lesser halves.
+/// Multiplies the sprite (1.0 = untinted); a paler, washed-out green.
+pub const SLIME_SPLIT_TINT: (f32, f32, f32) = (0.75, 1.0, 0.75);
 
 // GOBLIN SHAMAN - fragile support caster: heals/hastes allies, kites, raises the alarm
 pub const GOBLIN_SHAMAN_HEALTH: i32 = 20;

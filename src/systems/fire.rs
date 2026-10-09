@@ -349,7 +349,10 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
     for (id, (pos, status, comb)) in
         world.query::<(&Position, &StatusEffects, Option<&Combustible>)>().iter()
     {
-        if grid.water_positions.contains(&(pos.x, pos.y)) {
+        // A flyer hovers above whatever burns on its own tile (and is not
+        // standing in the water either): only neighbouring fire reaches it.
+        let grounded = crate::systems::tile_effects::touches_ground(world, id);
+        if grounded && grid.water_positions.contains(&(pos.x, pos.y)) {
             continue;
         }
         let Some(profile) = ignition_profile(comb, status) else {
@@ -357,16 +360,19 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         };
 
         // Standing in burning oil: high per-step ignite chance.
-        if burning_oil_tiles.contains(&(pos.x, pos.y))
+        if grounded
+            && burning_oil_tiles.contains(&(pos.x, pos.y))
             && rng.gen_bool(ignite_chance(BURNING_OIL_STAND_IGNITE_CHANCE, profile))
         {
             creatures_to_ignite.push((id, (pos.x, pos.y)));
             continue;
         }
 
-        let near = all_sources
-            .iter()
-            .any(|&(sx, sy)| (pos.x - sx).abs() <= 1 && (pos.y - sy).abs() <= 1);
+        let near = all_sources.iter().any(|&(sx, sy)| {
+            (pos.x - sx).abs() <= 1
+                && (pos.y - sy).abs() <= 1
+                && (grounded || (sx, sy) != (pos.x, pos.y))
+        });
         if !near {
             continue;
         }
@@ -650,12 +656,13 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
         ignite_glow_mushrooms(world, id);
     }
 
-    // Anything standing there catches fire.
+    // Anything standing there catches fire (a flyer hovers above it).
     let victims: Vec<Entity> = world
         .query::<(&Position, &StatusEffects)>()
         .iter()
         .filter(|(_, (p, _))| p.x == x && p.y == y)
         .map(|(id, _)| id)
+        .filter(|&id| crate::systems::tile_effects::touches_ground(world, id))
         .collect();
     for id in victims {
         // Announce only a fresh ignition: a Wet victim refuses the fire, and
@@ -1059,6 +1066,23 @@ mod tests {
             w.spawn((Position::new(3, 3), s, Combustible { flammability: 1.0 }))
         });
         assert_eq!(caught, 0);
+    }
+
+    /// A flyer hovering over burning oil is above the flames: it never
+    /// catches from the puddle under it (a walker in the same spot does).
+    #[test]
+    fn flyers_over_burning_oil_never_ignite() {
+        let make = |flying: bool| {
+            move |w: &mut World| {
+                let e = w.spawn((Position::new(3, 3), StatusEffects::new(), Combustible { flammability: 1.0 }));
+                if flying {
+                    let _ = w.insert_one(e, crate::components::Flying);
+                }
+                e
+            }
+        };
+        assert_eq!(ignitions_in_burning_oil(20, 3.0, make(true)), 0);
+        assert!(ignitions_in_burning_oil(20, 3.0, make(false)) > 0, "control: walkers burn");
     }
 
     /// Oil makes anything burn: a non-`Combustible` creature (a skeleton, a

@@ -248,6 +248,12 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
 
         time_system::complete_action(ctx, next_entity);
 
+        // Post-action consequences that need the full actor context or must
+        // land before anyone picks their next action: grabs whose holder died
+        // or drifted away let go, and badly hurt slimes split.
+        systems::grab::tick_grabs(ctx.world, ctx.events);
+        systems::split::process_splits(ctx);
+
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
             if let Some(player_pos) = queries::get_entity_position(ctx.world, player_entity) {

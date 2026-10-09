@@ -28,11 +28,12 @@ use crate::systems::effects;
 /// Whether this entity touches the ground, and so is affected by what is on
 /// the floor (water, oil, fire, webs, traps).
 ///
-/// The single place flight will hook in: Phase 4 adds a `Flying` component,
-/// and flyers skip every ground effect below.
-// TODO(phase 4): `return world.get::<&Flying>(entity).is_err();`
-fn touches_ground(_world: &World, _entity: Entity) -> bool {
-    true
+/// Flyers (`Flying`: bats) do not: they skip every ground effect below, and
+/// the fire system's ground-based ignition (standing in burning oil or grass,
+/// a fire spilled onto their tile) passes them by too. Fire from elsewhere —
+/// a fireball, an adjacent blaze, a burning attacker — still catches them.
+pub fn touches_ground(world: &World, entity: Entity) -> bool {
+    !crate::queries::is_flying(world, entity)
 }
 
 /// Whether an unlit oil puddle lies on `(x, y)`. Burning puddles set you

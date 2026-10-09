@@ -499,6 +499,32 @@ pub enum GameEvent {
         target: Entity,
         position: (i32, i32),
     },
+    /// A zombie's hit took hold: `target` is Grabbed (cannot walk) for a
+    /// moment.
+    Grabbed {
+        grabber: Entity,
+        target: Entity,
+    },
+    /// A grab failed to take hold because the target was slippery (Oiled).
+    GrabSlipped {
+        grabber: Entity,
+        target: Entity,
+    },
+    /// `entity` is no longer held: the grab timed out, or its holder died,
+    /// was stunned or is no longer adjacent.
+    GrabReleased {
+        entity: Entity,
+    },
+    /// `entity` tried to walk while Grabbed and spent the step struggling.
+    GrabStruggle {
+        entity: Entity,
+    },
+    /// A badly hurt slime split in two: `child` appeared at `position`.
+    SlimeSplit {
+        parent: Entity,
+        child: Entity,
+        position: (i32, i32),
+    },
     /// A non-spider entity blundered into a web (Rooted; web consumed).
     WebTouched {
         victim: Entity,

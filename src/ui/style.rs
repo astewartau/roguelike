@@ -176,6 +176,8 @@ pub mod colors {
     pub const EFFECT_OILED: Color32 = Color32::from_rgb(150, 115, 70);
     pub const EFFECT_POISONED: Color32 = Color32::from_rgb(120, 200, 60);
     pub const EFFECT_BLEEDING: Color32 = Color32::from_rgb(200, 40, 40);
+    /// Sickly zombie-flesh green.
+    pub const EFFECT_GRABBED: Color32 = Color32::from_rgb(150, 170, 110);
 }
 
 /// Color for a status effect, used by both the HUD pips and the text fallback
@@ -203,6 +205,7 @@ pub fn effect_color(effect: crate::components::EffectType) -> Color32 {
         E::Oiled => colors::EFFECT_OILED,
         E::Poisoned => colors::EFFECT_POISONED,
         E::Bleeding => colors::EFFECT_BLEEDING,
+        E::Grabbed => colors::EFFECT_GRABBED,
     }
 }
 

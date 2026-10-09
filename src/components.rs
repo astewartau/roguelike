@@ -1092,6 +1092,10 @@ pub enum EffectType {
     /// An open wound: `BLEED_DAMAGE` every `BLEED_TICK_INTERVAL`, ignoring
     /// armor (rat bites).
     Bleeding,
+    /// Held by a zombie: cannot walk, but can still attack and use
+    /// abilities. Ends early when the grabber dies, is stunned or is no longer
+    /// adjacent (the holder is recorded in [`GrabbedBy`]).
+    Grabbed,
 }
 
 /// An active status effect with remaining duration
@@ -2658,6 +2662,47 @@ pub struct Venomous {
 #[derive(Debug, Clone, Copy)]
 pub struct Lacerating {
     pub bleed_chance: f32,
+}
+
+/// Airborne creature (bats). Flyers pass over non-creature blockers —
+/// furniture, chests, barrels, stalagmites — and may hover on such a tile, but
+/// are still stopped by walls, closed doors and other creatures. They do not
+/// touch the ground, so water, oil, webs, traps and burning ground leave them
+/// alone (`tile_effects::touches_ground`); fire from other sources (a
+/// fireball, an adjacent blaze, a burning attacker) still catches them.
+#[derive(Debug, Clone, Copy)]
+pub struct Flying;
+
+/// Hit-and-run melee (bats): after each swing, hit or miss, break off and
+/// fly away from the target for `BAT_RETREAT_DURATION`, then re-engage.
+/// `retreat_remaining` counts down in game time (`ai::tick_role_cooldowns`).
+/// Deliberately not the Feared status, which drives UI/VFX of its own.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HitAndRun {
+    pub retreat_remaining: f32,
+}
+
+/// A melee attacker whose connecting hits Grab the victim (zombies): see
+/// [`EffectType::Grabbed`] and [`GrabbedBy`].
+#[derive(Debug, Clone, Copy)]
+pub struct Grabber;
+
+/// Who is holding this entity in a grab. Lives alongside the
+/// [`EffectType::Grabbed`] timer so the grab can end early when the grabber
+/// dies, is stunned or is no longer adjacent (`systems::grab`).
+#[derive(Debug, Clone, Copy)]
+pub struct GrabbedBy {
+    pub grabber: Entity,
+}
+
+/// A creature that splits in two when badly hurt (slimes). `generation` is
+/// how many splits produced this one (0 = an original slime); a creature
+/// splits only while `generation < SLIME_MAX_SPLITS` and only once
+/// (`spent`). See `systems::split`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Splits {
+    pub generation: u8,
+    pub spent: bool,
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -214,6 +214,19 @@ pub fn tick_role_cooldowns(world: &mut World, elapsed: f32) {
     for (_, boss) in world.query_mut::<&mut Boss>() {
         boss.cooldown = (boss.cooldown - elapsed).max(0.0);
     }
+    for (_, hit_and_run) in world.query_mut::<&mut HitAndRun>() {
+        hit_and_run.retreat_remaining = (hit_and_run.retreat_remaining - elapsed).max(0.0);
+    }
+}
+
+/// A melee swing by `attacker` just resolved (hit or miss). Hit-and-run
+/// creatures (bats) now break off for `BAT_RETREAT_DURATION` of game time;
+/// no-op for everything else. Called from the melee action handler so the
+/// retreat is in place before the attacker picks its next action.
+pub fn begin_hit_and_run_retreat(world: &mut World, attacker: Entity) {
+    if let Ok(mut h) = world.get::<&mut HitAndRun>(attacker) {
+        h.retreat_remaining = BAT_RETREAT_DURATION;
+    }
 }
 
 /// Announce any boss the player can now see for the first time
@@ -348,7 +361,13 @@ fn determine_action(
     let is_stunned = queries::has_status_effect(world, entity, EffectType::Stunned);
     let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
     let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
-    let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted);
+    // Grabbed (zombie hold) pins a creature exactly like Rooted: it can
+    // still swing at whatever is adjacent, but cannot walk.
+    let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted)
+        || queries::has_status_effect(world, entity, EffectType::Grabbed);
+    // Walkers and flyers judge free tiles differently (flyers pass over
+    // furniture); every wander/flee step below asks this.
+    let passability = Passability::for_entity(world, spatial_cache, entity);
 
     // Stunned: cannot act at all - skip the turn entirely.
     if is_stunned {
@@ -357,7 +376,7 @@ fn determine_action(
 
     // Confused: move randomly, ignore everything (including fire hazards)
     if is_confused && !is_rooted {
-        let (dx, dy) = random_wander(grid, entity_pos, spatial_cache, &HashSet::new(), rng);
+        let (dx, dy) = random_wander(grid, entity_pos, &passability, &HashSet::new(), rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -387,7 +406,7 @@ fn determine_action(
             .and_then(|ai| ai.highest_threat().map(|e| e.entity))
             .and_then(|e| queries::get_entity_position(world, e))
             .unwrap_or_else(|| queries::get_entity_position(world, player_entity).unwrap_or(entity_pos));
-        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, spatial_cache, rng);
+        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, &passability, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -485,7 +504,7 @@ fn determine_action(
         } else {
             // Awake but unaware: patrol/wander.
             let fire = fire_positions(world);
-            let (dx, dy) = random_wander(grid, entity_pos, spatial_cache, &fire, rng);
+            let (dx, dy) = random_wander(grid, entity_pos, &passability, &fire, rng);
             if dx == 0 && dy == 0 {
                 return ActionType::Wait;
             }
@@ -668,6 +687,25 @@ fn determine_action(
         return ActionType::Wait;
     }
 
+    // Hit-and-run (bats): fresh off a swing, fly away from the target until
+    // the retreat timer runs out, then dive back in. Cornered (nowhere to
+    // flee), it falls through and fights like anything else.
+    let retreating = world
+        .get::<&HitAndRun>(entity)
+        .map(|h| h.retreat_remaining > 0.0)
+        .unwrap_or(false);
+    if retreating {
+        if let Some(target_pos) = move_target {
+            let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, &passability, rng);
+            if fdx != 0 || fdy != 0 {
+                let action = action_dispatch::determine_action_type(world, grid, entity, fdx, fdy);
+                if matches!(action, ActionType::Move { .. }) {
+                    return action;
+                }
+            }
+        }
+    }
+
     // Check for ranged attack against best visible target in range
     if has_ranged_weapon && ranged_max > 0 {
         let ranged_ready = world
@@ -714,7 +752,7 @@ fn determine_action(
                 .abs()
                 .max((entity_pos.1 - target_pos.1).abs());
             if dist < SHAMAN_KITE_MIN {
-                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, spatial_cache, rng);
+                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, &passability, rng);
                 if fdx == 0 && fdy == 0 {
                     return ActionType::Wait;
                 }
@@ -725,14 +763,17 @@ fn determine_action(
             // dist > SHAMAN_KITE_MAX: fall through to normal approach.
         }
         let can_open = world.get::<&CanOpenDoors>(entity).is_ok();
-        let pathfinding_blocked = ai_pathfinding_blocked(world, spatial_cache, can_open);
+        let pathfinding_blocked = match &passability {
+            Passability::Walker(_) => ai_pathfinding_blocked(world, spatial_cache, can_open),
+            Passability::Flyer(stops) => ai_flyer_pathfinding_blocked(world, stops, can_open),
+        };
         pathfinding::next_step_toward(grid, entity_pos, target_pos, &pathfinding_blocked)
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
     } else {
         // Idle wandering — avoid wandering into fire hazards.
         let fire = fire_positions(world);
-        random_wander(grid, entity_pos, spatial_cache, &fire, rng)
+        random_wander(grid, entity_pos, &passability, &fire, rng)
     };
 
     if dx == 0 && dy == 0 {
@@ -1329,6 +1370,65 @@ fn ai_pathfinding_blocked(
     blocked
 }
 
+/// The flyer's blocked set for pathfinding: tiles holding a creature or a
+/// closed door (`stops`, from `queries::flyer_blocked_tiles`), minus other AI
+/// actors (walked through, as for walkers) and, for door-openers, closed
+/// doors. Furniture and other scenery never appear in it.
+fn ai_flyer_pathfinding_blocked(
+    world: &World,
+    stops: &HashSet<(i32, i32)>,
+    can_open_doors: bool,
+) -> HashSet<(i32, i32)> {
+    let mut blocked = stops.clone();
+    for (_id, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
+        blocked.remove(&(pos.x, pos.y));
+    }
+    for (_id, (pos, _)) in world.query::<(&Position, &CompanionAI)>().iter() {
+        blocked.remove(&(pos.x, pos.y));
+    }
+    if can_open_doors {
+        for (_id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
+            if !door.is_open {
+                blocked.remove(&(pos.x, pos.y));
+            }
+        }
+    }
+    blocked
+}
+
+/// How an AI mover decides whether a neighbouring tile is free to step on,
+/// for wander and flee steps. Walkers ask the spatial cache (any blocker
+/// stops them); flyers carry the set of tiles holding a creature or closed
+/// door, and pass over everything else (see `queries::blocks_flyer_at`,
+/// which `apply_move` uses for the same rule).
+enum Passability<'a> {
+    Walker(&'a SpatialCache),
+    Flyer(HashSet<(i32, i32)>),
+}
+
+impl<'a> Passability<'a> {
+    fn for_entity(world: &World, spatial_cache: &'a SpatialCache, entity: Entity) -> Self {
+        if queries::is_flying(world, entity) {
+            Passability::Flyer(queries::flyer_blocked_tiles(world, Some(entity)))
+        } else {
+            Passability::Walker(spatial_cache)
+        }
+    }
+
+    /// Whether an entity on `pos` stops this mover.
+    fn is_blocked(&self, pos: (i32, i32)) -> bool {
+        match self {
+            Passability::Walker(cache) => cache.is_blocked(pos),
+            Passability::Flyer(stops) => stops.contains(&pos),
+        }
+    }
+
+    /// Walkable terrain with nothing on it that stops this mover.
+    fn is_free(&self, grid: &Grid, pos: (i32, i32)) -> bool {
+        grid.is_walkable(pos.0, pos.1) && !self.is_blocked(pos)
+    }
+}
+
 /// Collect tile positions that cause burning (campfires, braziers, fire traps).
 /// Used so idle AI doesn't casually wander into a fire.
 fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
@@ -1347,7 +1447,7 @@ fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
 fn random_wander(
     grid: &Grid,
     pos: (i32, i32),
-    spatial_cache: &SpatialCache,
+    passability: &Passability,
     fire: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
@@ -1355,10 +1455,7 @@ fn random_wander(
     let mut count = 0;
     for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
         let target = (pos.0 + dx, pos.1 + dy);
-        if grid.is_walkable(target.0, target.1)
-            && !spatial_cache.is_blocked(target)
-            && !fire.contains(&target)
-        {
+        if passability.is_free(grid, target) && !fire.contains(&target) {
             valid[count] = (dx, dy);
             count += 1;
         }
@@ -1376,38 +1473,26 @@ fn flee_from_target(
     grid: &Grid,
     pos: (i32, i32),
     target: (i32, i32),
-    spatial_cache: &SpatialCache,
+    passability: &Passability,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
     let flee_dx = (pos.0 - target.0).signum();
     let flee_dy = (pos.1 - target.1).signum();
 
     if flee_dx != 0 || flee_dy != 0 {
-        let nx = pos.0 + flee_dx;
-        let ny = pos.1 + flee_dy;
-        if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
+        if passability.is_free(grid, (pos.0 + flee_dx, pos.1 + flee_dy)) {
             return (flee_dx, flee_dy);
         }
-
-        if flee_dx != 0 {
-            let nx = pos.0 + flee_dx;
-            let ny = pos.1;
-            if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
-                return (flee_dx, 0);
-            }
+        if flee_dx != 0 && passability.is_free(grid, (pos.0 + flee_dx, pos.1)) {
+            return (flee_dx, 0);
         }
-
-        if flee_dy != 0 {
-            let nx = pos.0;
-            let ny = pos.1 + flee_dy;
-            if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
-                return (0, flee_dy);
-            }
+        if flee_dy != 0 && passability.is_free(grid, (pos.0, pos.1 + flee_dy)) {
+            return (0, flee_dy);
         }
     }
 
     // Panicked flee fallback — desperation overrides fire avoidance.
-    random_wander(grid, pos, spatial_cache, &HashSet::new(), rng)
+    random_wander(grid, pos, passability, &HashSet::new(), rng)
 }
 
 #[cfg(test)]
@@ -1566,5 +1651,147 @@ mod tests {
 
         // Empty input degrades gracefully.
         assert_eq!(select_heal_target(&[]), None);
+    }
+
+    // =========================================================================
+    // Flight-aware pathing and the bat's hit-and-run.
+    // =========================================================================
+
+    use crate::systems::actions::TestArena as Arena;
+    use crate::components::BlocksMovement;
+
+    /// Wall column at x = 8 with two gaps: (8, 5) plugged by a barrel and
+    /// (8, 12) open. The target is straight across at (10, 5).
+    fn wall_with_plugged_gap(arena: &mut Arena) {
+        for y in 0..16 {
+            if y != 5 && y != 12 {
+                if let Some(t) = arena.grid.get_mut(8, y) {
+                    *t = crate::tile::Tile::new(crate::tile::TileType::Wall);
+                }
+            }
+        }
+        arena.world.spawn((Position::new(8, 5), BlocksMovement));
+        arena.cache.rebuild_in_place(&arena.world);
+    }
+
+    fn decided_step(arena: &mut Arena, e: Entity) -> Option<(i32, i32)> {
+        decide_action(&mut arena.ctx(), e);
+        match arena.world.get::<&Actor>(e).ok()?.current_action?.action_type {
+            ActionType::Move { dx, dy, .. } => Some((dx, dy)),
+            _ => None,
+        }
+    }
+
+    /// The flyer heads straight for the barrel-plugged gap and over it; a
+    /// walker in the same spot routes the long way round through the open
+    /// gap.
+    #[test]
+    fn flyer_paths_over_furniture_where_a_walker_goes_around() {
+        let mut arena = Arena::new((10, 5));
+        wall_with_plugged_gap(&mut arena);
+
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        assert_eq!(decided_step(&mut arena, bat), Some((1, 0)), "the bat flies straight on");
+
+        // The routes themselves: over the barrel for the flyer, round
+        // through the far gap for a walker.
+        let flyer_blocked = ai_flyer_pathfinding_blocked(
+            &arena.world,
+            &queries::flyer_blocked_tiles(&arena.world, Some(bat)),
+            false,
+        );
+        let flyer_path = pathfinding::find_path(&arena.grid, (6, 5), (10, 5), &flyer_blocked)
+            .expect("flyer has a route");
+        assert!(flyer_path.contains(&(8, 5)) && flyer_path.len() <= 6, "{flyer_path:?}");
+
+        let mut arena = Arena::new((10, 5));
+        wall_with_plugged_gap(&mut arena);
+        let rat = arena.rat(6, 5, 1.0);
+        let walker_blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, false);
+        let walker_path = pathfinding::find_path(&arena.grid, (6, 5), (10, 5), &walker_blocked)
+            .expect("walker has a route");
+        assert!(!walker_path.contains(&(8, 5)), "the walker never enters the barrel tile");
+        assert!(walker_path.contains(&(8, 12)), "it goes round through the open gap");
+        let _ = rat;
+
+        // Played out: the bat crosses the barrel's tile and reaches the player.
+        let mut arena = Arena::new((10, 5));
+        wall_with_plugged_gap(&mut arena);
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        decide_action(&mut arena.ctx(), bat);
+        let mut crossed = false;
+        while arena.clock.time < 4.0 {
+            arena.player_does(ActionType::Wait);
+            crossed |= arena.pos(bat) == (8, 5);
+            arena.cache.assert_coherent_with_world(&arena.world, "bat crossing");
+        }
+        assert!(crossed, "the bat passed over the barrel");
+        assert!(arena.hit(bat, arena.player) || arena.missed(bat, arena.player)
+            || arena.seen.iter().any(|e| matches!(e, GameEvent::AttackMissed { attacker, .. } if attacker == &bat)),
+            "and went for the player");
+    }
+
+    /// Flee/wander steps for a flyer also pass over scenery but not creatures.
+    #[test]
+    fn flyer_flee_passes_over_furniture_but_not_creatures() {
+        let mut arena = Arena::new((5, 5));
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        // Furniture directly behind the bat, a rat diagonally behind it.
+        arena.world.spawn((Position::new(7, 5), BlocksMovement));
+        let _rat = arena.rat(7, 6, 1.0);
+        let pass = Passability::for_entity(&arena.world, &arena.cache, bat);
+        assert!(!pass.is_blocked((7, 5)), "scenery is free to a flyer");
+        assert!(pass.is_blocked((7, 6)), "a creature is not");
+        let walker = Passability::Walker(&arena.cache);
+        assert!(walker.is_blocked((7, 5)));
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        use rand::SeedableRng;
+        assert_eq!(flee_from_target(&arena.grid, (6, 5), (5, 5), &pass, &mut rng), (1, 0));
+    }
+
+    /// After a swing (hit or miss) a bat flies off for BAT_RETREAT_DURATION,
+    /// then comes back for another bite.
+    #[test]
+    fn bat_retreats_after_attacking_and_reengages() {
+        let mut arena = Arena::new((8, 8));
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 9, 8, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        let player = arena.player;
+        arena.start(bat, ActionType::Attack { target: player });
+
+        let swings = |arena: &Arena| {
+            arena.seen.iter().filter(|e| matches!(e,
+                GameEvent::AttackHit { attacker, .. } | GameEvent::AttackMissed { attacker, .. }
+                    if attacker == &bat)).count()
+        };
+
+        // Run until the first swing lands.
+        while swings(&arena) == 0 {
+            arena.player_does(ActionType::Wait);
+        }
+        let swung_at = arena.clock.time;
+        let retreat = arena.world.get::<&HitAndRun>(bat).map(|h| h.retreat_remaining).unwrap();
+        assert!(retreat > 0.0, "the swing started a retreat");
+        assert!(!queries::has_status_effect(&arena.world, bat, EffectType::Feared),
+            "retreat is not the Feared status");
+
+        // During the retreat it opens distance and does not swing again.
+        let mut max_dist = 0;
+        while arena.clock.time < swung_at + BAT_RETREAT_DURATION - 0.6 {
+            arena.player_does(ActionType::Wait);
+            let (bx, by) = arena.pos(bat);
+            max_dist = max_dist.max((bx - 8).abs().max((by - 8).abs()));
+        }
+        assert!(max_dist >= 2, "the bat flew away (max distance {max_dist})");
+        assert_eq!(swings(&arena), 1, "no second bite while retreating");
+
+        // Once the retreat has run out it comes back and attacks again.
+        while arena.clock.time < swung_at + BAT_RETREAT_DURATION + 6.0 && swings(&arena) < 2 {
+            arena.player_does(ActionType::Wait);
+        }
+        assert!(swings(&arena) >= 2, "the bat re-engaged");
     }
 }

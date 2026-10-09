@@ -68,11 +68,20 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         return ActionResult::Blocked;
     }
 
-    // Check for container (chest) at target
+    // A flyer passes over scenery (chests, barrels, furniture, stalagmites)
+    // and may hover on its tile; only creatures and closed doors stop it.
+    let flying = queries::is_flying(world, entity);
+    let is_player = world.get::<&Player>(entity).is_ok();
+
+    // Check for container (chest) at target. A flying creature hovers over a
+    // chest rather than opening it.
     let mut chest_action: Option<(Entity, bool, bool)> = None;
     for (id, (chest_pos, container, _)) in
         world.query::<(&Position, &Container, &BlocksMovement)>().iter()
     {
+        if flying && !is_player {
+            break;
+        }
         if chest_pos.x == target_x && chest_pos.y == target_y {
             chest_action = Some((id, container.is_open, container.is_empty()));
             break;
@@ -102,9 +111,20 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
     // blocked — but its owner walks through it, same as any other companion.
     // Without this exception a Necromancer trailing skeletons at follow
     // distance 2 would wall itself into any corridor it backed down.
-    if !passing_through_own_companion
-        && queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity))
-    {
+    let blocked = if flying {
+        queries::blocks_flyer_at(world, target_x, target_y, Some(entity))
+    } else {
+        queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity))
+    };
+    if !passing_through_own_companion && blocked {
+        return ActionResult::Blocked;
+    }
+
+    // Held in a zombie's grab: the step goes nowhere (the turn is spent
+    // struggling). A grab whose holder has died, been stunned or drifted
+    // away is let go first, so a just-freed walker is not stuck a turn.
+    if crate::systems::grab::is_held(world, entity, events) {
+        events.push(GameEvent::GrabStruggle { entity });
         return ActionResult::Blocked;
     }
 
@@ -305,6 +325,12 @@ pub fn apply_use_stairs(
     direction: StairDirection,
     events: &mut EventQueue,
 ) -> ActionResult {
+    // A zombie's grab holds you off the stairs too.
+    if crate::systems::grab::is_held(world, entity, events) {
+        events.push(GameEvent::GrabStruggle { entity });
+        return ActionResult::Blocked;
+    }
+
     // Get current position
     let current_pos = match queries::get_entity_position(world, entity) {
         Some(p) => p,
@@ -553,5 +579,156 @@ mod tests {
         );
         assert_eq!(result, ActionResult::Blocked, "a non-owner is screened by the companion");
         let _ = companion;
+    }
+
+    // =========================================================================
+    // Flight: bats pass over scenery, not creatures, and skip the ground.
+    // =========================================================================
+
+    use crate::components::{BlocksMovement, Health};
+
+    /// A cave bat, awake and hunting the arena's player.
+    fn bat(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, x, y, &mut arena.rng);
+        arena.hunt(bat, crate::constants::BAT_SPEED);
+        bat
+    }
+
+    /// A piece of non-creature scenery (barrel, stalagmite, furniture...).
+    fn scenery(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let e = arena.world.spawn((Position::new(x, y), BlocksMovement));
+        arena.cache.rebuild_in_place(&arena.world);
+        e
+    }
+
+    fn step(arena: &mut Arena, e: Entity, dx: i32, dy: i32) -> ActionResult {
+        apply_move(&mut arena.ctx().effects(), e, dx, dy)
+    }
+
+    #[test]
+    fn bats_are_flying_and_cave_bats_too() {
+        let mut arena = Arena::new((1, 1));
+        let b = bat(&mut arena, 5, 5);
+        assert!(crate::queries::is_flying(&arena.world, b));
+        assert!(arena.world.get::<&crate::components::HitAndRun>(b).is_ok());
+        // Cave fauna use the same template, so they fly as well.
+        let (flying, hit_and_run) = arena
+            .world
+            .get::<&crate::spawning::EnemyDef>(b)
+            .map(|d| (d.flying, d.hit_and_run))
+            .unwrap();
+        assert!(flying && hit_and_run);
+        let rat = arena.rat(7, 7, 1.0);
+        assert!(!crate::queries::is_flying(&arena.world, rat), "rats walk");
+    }
+
+    /// A bat moves onto a furniture tile and hovers there; the player can
+    /// still hit it (bump-attack goes to the Attackable), and when it leaves
+    /// the furniture's blocker count is all that remains.
+    #[test]
+    fn flyer_hovers_over_furniture_and_can_still_be_attacked() {
+        let mut arena = Arena::new((7, 5));
+        let b = bat(&mut arena, 5, 5);
+        scenery(&mut arena, 6, 5);
+
+        // A walker is stopped by the same furniture.
+        let rat = arena.rat(5, 7, 1.0);
+        scenery(&mut arena, 6, 7);
+        assert_eq!(step(&mut arena, rat, 1, 0), ActionResult::Blocked);
+
+        assert_eq!(step(&mut arena, b, 1, 0), ActionResult::Completed);
+        assert_eq!(arena.pos(b), (6, 5), "the bat hovers over the furniture");
+        arena.cache.assert_coherent_with_world(&arena.world, "bat over furniture");
+
+        // The player's bump on that tile is an attack on the bat.
+        let player = arena.player;
+        let action = crate::systems::action_dispatch::determine_action_type(
+            &arena.world, &arena.grid, player, -1, 0,
+        );
+        assert!(matches!(action, ActionType::Attack { target } if target == b));
+        let before = arena.hp(b);
+        arena.player_does(action);
+        assert!(arena.hp(b) < before, "the hovering bat takes the hit");
+
+        // Leaving restores the tile to just the furniture.
+        arena.world.get::<&mut Health>(b).unwrap().current = 10;
+        assert_eq!(step(&mut arena, b, 0, 1), ActionResult::Completed);
+        arena.cache.assert_coherent_with_world(&arena.world, "bat left the furniture");
+        assert!(arena.cache.is_blocked((6, 5)), "the furniture still blocks walkers");
+        assert_eq!(arena.pos(b), (6, 6));
+    }
+
+    /// Flight is over scenery only: creatures, walls and closed doors stop a
+    /// bat like anyone else.
+    #[test]
+    fn flyer_cannot_pass_creatures_walls_or_closed_doors() {
+        let mut arena = Arena::new((1, 1));
+        let b = bat(&mut arena, 5, 5);
+        let _rat = arena.rat(6, 5, 1.0);
+        assert_eq!(step(&mut arena, b, 1, 0), ActionResult::Blocked, "creature");
+
+        if let Some(t) = arena.grid.get_mut(4, 5) {
+            *t = crate::tile::Tile::new(crate::tile::TileType::Wall);
+        }
+        assert_eq!(step(&mut arena, b, -1, 0), ActionResult::Blocked, "wall");
+
+        arena.world.spawn((
+            Position::new(5, 6),
+            crate::components::Door::new(),
+            BlocksMovement,
+            crate::components::BlocksVision,
+        ));
+        arena.cache.rebuild_in_place(&arena.world);
+        assert_eq!(step(&mut arena, b, 0, 1), ActionResult::Blocked, "closed door");
+        assert_eq!(arena.pos(b), (5, 5));
+        // And a chest under it is not opened by the bat.
+        let chest = arena.world.spawn((
+            Position::new(5, 4),
+            crate::components::Container::chest(vec![], 5),
+            BlocksMovement,
+        ));
+        arena.cache.rebuild_in_place(&arena.world);
+        assert_eq!(step(&mut arena, b, 0, -1), ActionResult::Completed);
+        assert!(!arena.world.get::<&crate::components::Container>(chest).unwrap().is_open);
+    }
+
+    /// Water, oil, webs and traps act on what touches the ground; a bat
+    /// passing over them is untouched (a walking rat is not).
+    #[test]
+    fn flyer_skips_ground_effects() {
+        let mut arena = Arena::new((1, 1));
+        arena.grid.water_positions.push((6, 5));
+        crate::spawning::spawn_oil_puddle(&mut arena.world, 7, 5);
+        crate::spawning::spawn_web(&mut arena.world, 8, 5, None);
+        let trap = crate::spawning::spawn_dungeon_trap(
+            &mut arena.world, 9, 5, crate::components::DungeonTrapKind::Snare,
+        );
+        let b = bat(&mut arena, 5, 5);
+        for _ in 0..4 {
+            assert_eq!(step(&mut arena, b, 1, 0), ActionResult::Completed);
+        }
+        assert_eq!(arena.pos(b), (9, 5));
+        for effect in [EffectType::Wet, EffectType::Oiled, EffectType::Rooted] {
+            assert!(
+                !crate::queries::has_status_effect(&arena.world, b, effect),
+                "a flyer gains no {effect:?} from the ground"
+            );
+        }
+        assert!(arena.world.contains(trap), "the trap was not sprung");
+
+        // Standing still over the puddle doesn't oil it either.
+        crate::systems::tile_effects::refresh_standing_effects(
+            &mut arena.world, &arena.grid, &mut arena.events,
+        );
+        assert!(!crate::queries::has_status_effect(&arena.world, b, EffectType::Oiled));
+
+        // Fire spilled onto its tile passes beneath it; a walker there burns.
+        crate::systems::fire::spill_fire_at(&mut arena.world, &arena.grid, 9, 5, &mut arena.events);
+        assert!(!crate::queries::has_status_effect(&arena.world, b, EffectType::Burning));
+
+        // Control: a walker in the same water is soaked.
+        let rat = arena.rat(6, 6, 1.0);
+        assert_eq!(step(&mut arena, rat, 0, -1), ActionResult::Completed);
+        assert!(crate::queries::has_status_effect(&arena.world, rat, EffectType::Wet));
     }
 }

@@ -492,7 +492,16 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
                 .entity(id)
                 .map(|e| e.has::<crate::components::Boss>())
                 .unwrap_or(false);
-            let xp = calculate_xp_value(stats) * if is_boss { BOSS_XP_MULT } else { 1 };
+            let mut xp = calculate_xp_value(stats) * if is_boss { BOSS_XP_MULT } else { 1 };
+            // Split slimes pay half per generation, so the two halves of a
+            // split together are worth what the original was.
+            let split_generation = world
+                .get::<&crate::components::Splits>(id)
+                .map(|s| s.generation)
+                .unwrap_or(0);
+            if split_generation > 0 {
+                xp = (xp >> split_generation.min(31)).max(1);
+            }
             // Kill counter: hostile enemies only (companions carry
             // CompanionAI instead of ChaseAI and don't count).
             if world.entity(id).map(|e| e.has::<ChaseAI>()).unwrap_or(false) {

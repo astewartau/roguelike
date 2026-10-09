@@ -30,6 +30,11 @@ pub use movement::*;
 pub use projectiles::*;
 pub use traps::*;
 
+/// The action-level test arena (player + full simulation context), shared
+/// with tests outside this module (AI, grabs, splits).
+#[cfg(test)]
+pub(crate) use combat::tests::Arena as TestArena;
+
 use hecs::Entity;
 
 use crate::events::{EventQueue, GameEvent};
