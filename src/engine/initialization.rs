@@ -3,7 +3,7 @@
 use crate::components::{
     AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ClassAbility,
     Container, Door, Equipment, Experience, Health, Inventory, ItemInstance, ItemType, Name, Player,
-    PlayerClass, Position, RangerAbilities, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
+    PlayerClass, Position, ClassKit, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
 use crate::dungeon_gen::RoomTheme;
@@ -705,10 +705,9 @@ pub fn init_world(
         let _ = world.insert_one(player_entity, learned);
     }
 
-    // Ranger gets the RangerAbilities component for number key abilities
-    if player_class == PlayerClass::Ranger {
-        let _ = world.insert_one(player_entity, RangerAbilities::new());
-    }
+    // Every class gets its kit of extra abilities (Guard; the Ranger's four;
+    // Thorns/Entangle; Bone Ward/Sacrifice/Corpse Explosion).
+    let _ = world.insert_one(player_entity, ClassKit::for_class(player_class));
 
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     // (all rolls come from the caller's rng — seeded for reproducible floors).

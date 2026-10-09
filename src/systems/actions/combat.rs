@@ -108,8 +108,15 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
     raw = (raw as f32 * crate::systems::combat::attacker_conditional_damage_mult(world, attacker))
         as i32;
 
+    // A guarding defender blocks most of the blow and staggers the attacker.
+    // (Defender-side, but melee-only, so it lives here rather than in the
+    // source-agnostic apply_damage: arrows, fire and DoTs are not blocked.)
+    if super::is_guarding(world, target) {
+        raw = super::resolve_guard_block(world, events, attacker, target, raw);
+    }
+
     // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-    let damage = crate::systems::combat::apply_damage(world, target, raw, rng);
+    let damage = crate::systems::combat::apply_damage(world, target, raw, rng, events);
 
     // CursedLoud gear rings out: wake enemies in a doubled radius on top of
     // the standard melee-noise wake inside apply_damage.
@@ -187,6 +194,13 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
         kind: crate::events::DamageKind::Melee,
         crit: is_crit && damage > 0,
     });
+
+    // A thorny defender bites back (after the hit, so the log reads in order).
+    super::reflect_thorns(
+        &mut EffectCtx { world, grid, spatial: spatial_cache, events, rng },
+        attacker,
+        target,
+    );
 
     ActionResult::Completed
 }
@@ -295,7 +309,7 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
             as i32;
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        let damage = crate::systems::combat::apply_damage(world, *target, raw, rng);
+        let damage = crate::systems::combat::apply_damage(world, *target, raw, rng, events);
 
         // Resolve weapon on-hit affixes through the shared chokepoint
         crate::systems::combat::resolve_weapon_on_hit(
@@ -433,10 +447,20 @@ pub fn apply_boss_ground_slam(ctx: &mut EffectCtx, boss: Entity) -> ActionResult
     );
 
     for (victim, vpos) in victims {
-        let damage = crate::systems::combat::apply_damage(world, victim, BOSS_SLAM_DAMAGE, rng);
-        crate::systems::effects::add_effect_to_entity(
-            world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
-        );
+        // Guarding through the slam: most of it is blocked, the guard keeps
+        // their feet (no stun), and the boss is staggered like any attacker.
+        let guarded = super::is_guarding(world, victim);
+        let raw = if guarded {
+            super::resolve_guard_block(world, events, boss, victim, BOSS_SLAM_DAMAGE)
+        } else {
+            BOSS_SLAM_DAMAGE
+        };
+        let damage = crate::systems::combat::apply_damage(world, victim, raw, rng, events);
+        if !guarded {
+            crate::systems::effects::add_effect_to_entity(
+                world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
+            );
+        }
         events.push(GameEvent::AttackHit {
             attacker: boss,
             target: victim,
@@ -451,7 +475,7 @@ pub fn apply_boss_ground_slam(ctx: &mut EffectCtx, boss: Entity) -> ActionResult
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::components::{
         Actor, Container, ContainerType, Experience, Sprite, Stats, StatusEffects, VisualPosition,
@@ -463,7 +487,7 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    fn make_grid(width: usize, height: usize) -> Grid {
+    pub(crate) fn make_grid(width: usize, height: usize) -> Grid {
         Grid {
             width,
             height,
@@ -590,22 +614,22 @@ mod tests {
     use crate::time_system::{self, ActionScheduler, GameClock};
 
     /// A floor-only arena with a player and the full simulation context.
-    struct Arena {
-        world: World,
-        grid: Grid,
-        clock: GameClock,
-        scheduler: ActionScheduler,
-        tracker: ActiveAITracker,
-        cache: SpatialCache,
-        events: EventQueue,
-        rng: StdRng,
-        player: Entity,
+    pub(crate) struct Arena {
+        pub(crate) world: World,
+        pub(crate) grid: Grid,
+        pub(crate) clock: GameClock,
+        pub(crate) scheduler: ActionScheduler,
+        pub(crate) tracker: ActiveAITracker,
+        pub(crate) cache: SpatialCache,
+        pub(crate) events: EventQueue,
+        pub(crate) rng: StdRng,
+        pub(crate) player: Entity,
         /// Every event drained so far, in order.
-        seen: Vec<GameEvent>,
+        pub(crate) seen: Vec<GameEvent>,
     }
 
     impl Arena {
-        fn new(player_at: (i32, i32)) -> Self {
+        pub(crate) fn new(player_at: (i32, i32)) -> Self {
             let mut world = World::new();
             let ppos = Position::new(player_at.0, player_at.1);
             let player = world.spawn((
@@ -637,7 +661,7 @@ mod tests {
         }
 
         /// Spawn a rat at (x, y) with the given speed, already hunting the player.
-        fn rat(&mut self, x: i32, y: i32, speed: f32) -> Entity {
+        pub(crate) fn rat(&mut self, x: i32, y: i32, speed: f32) -> Entity {
             let rat = crate::spawning::enemies::RAT.spawn(&mut self.world, x, y, &mut self.rng);
             self.hunt(rat, speed);
             rat
@@ -645,7 +669,7 @@ mod tests {
 
         /// Wake `e`, point it at the player, fix its speed, and refresh the
         /// caches that hand-placed entities bypass.
-        fn hunt(&mut self, e: Entity, speed: f32) {
+        pub(crate) fn hunt(&mut self, e: Entity, speed: f32) {
             let _ = self.world.remove_one::<crate::components::Asleep>(e);
             let ppos = self.pos(self.player);
             if let Ok(mut ai) = self.world.get::<&mut ChaseAI>(e) {
@@ -658,7 +682,7 @@ mod tests {
             self.tracker.initialize_from_world(&self.world, ppos);
         }
 
-        fn ctx(&mut self) -> ActorCtx<'_> {
+        pub(crate) fn ctx(&mut self) -> ActorCtx<'_> {
             ActorCtx {
                 world: &mut self.world,
                 grid: &mut self.grid,
@@ -673,51 +697,53 @@ mod tests {
         }
 
         /// Start `action` for a non-player entity, as the AI would.
-        fn start(&mut self, e: Entity, action: ActionType) {
+        pub(crate) fn start(&mut self, e: Entity, action: ActionType) {
             time_system::start_action(&mut self.world, e, action, &self.clock, &mut self.scheduler)
                 .expect("action starts");
         }
 
         /// The player takes `action`; the world runs until they can act again.
-        fn player_does(&mut self, action: ActionType) {
+        pub(crate) fn player_does(&mut self, action: ActionType) {
             let player = self.player;
-            self.start(player, action);
+            // The engine's player path: start effects (reactive abilities) apply.
+            time_system::start_action_with_start_effects(&mut self.ctx(), player, action)
+                .expect("player action starts");
             crate::engine::advance_until_player_ready(&mut self.ctx());
             let drained: Vec<GameEvent> = self.events.drain().collect();
             self.seen.extend(drained);
         }
 
         /// Wait in place until game time passes `t`.
-        fn wait_until(&mut self, t: f32) {
+        pub(crate) fn wait_until(&mut self, t: f32) {
             while self.clock.time <= t {
                 self.player_does(ActionType::Wait);
             }
         }
 
-        fn hp(&self, e: Entity) -> i32 {
+        pub(crate) fn hp(&self, e: Entity) -> i32 {
             self.world.get::<&Health>(e).map(|h| h.current).unwrap_or(i32::MIN)
         }
 
-        fn pos(&self, e: Entity) -> (i32, i32) {
+        pub(crate) fn pos(&self, e: Entity) -> (i32, i32) {
             queries::get_entity_position(&self.world, e).expect("has a position")
         }
 
-        fn action(&self, e: Entity) -> Option<ActionType> {
+        pub(crate) fn action(&self, e: Entity) -> Option<ActionType> {
             self.world.get::<&Actor>(e).ok()?.current_action.map(|a| a.action_type)
         }
 
-        fn stunned(&self, e: Entity) -> bool {
+        pub(crate) fn stunned(&self, e: Entity) -> bool {
             queries::has_status_effect(&self.world, e, EffectType::Stunned)
         }
 
-        fn missed(&self, attacker: Entity, target: Entity) -> bool {
+        pub(crate) fn missed(&self, attacker: Entity, target: Entity) -> bool {
             self.seen.iter().any(|ev| {
                 matches!(ev, GameEvent::AttackMissed { attacker: a, target: t, reason: MissReason::OutOfReach, .. }
                     if *a == attacker && *t == target)
             })
         }
 
-        fn hit(&self, attacker: Entity, target: Entity) -> bool {
+        pub(crate) fn hit(&self, attacker: Entity, target: Entity) -> bool {
             self.seen.iter().any(|ev| {
                 matches!(ev, GameEvent::AttackHit { attacker: a, target: t, .. }
                     if *a == attacker && *t == target)

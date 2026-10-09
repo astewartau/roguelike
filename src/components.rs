@@ -166,6 +166,22 @@ pub enum AbilityType {
     LearnedInvisibility,
     /// Necromancer: channel over a bones pile to raise a skeleton companion
     RaiseDead,
+    /// Fighter: brace for a blow. Melee hits during the guard are mostly
+    /// blocked and the attacker is staggered. Reactive: active from the
+    /// moment the action starts.
+    Guard,
+    /// Necromancer: a ward of bones that absorbs the next few hits (more
+    /// charges with corpses nearby). Reactive: up at action start.
+    BoneWard,
+    /// Necromancer: swap places with one of your raised skeletons. Reactive:
+    /// the swap happens at action start, so swings at you find the skeleton.
+    Sacrifice,
+    /// Necromancer: detonate a corpse, damaging hostiles around it.
+    CorpseExplosion,
+    /// Druid: melee attackers take damage back while the buff lasts.
+    Thorns,
+    /// Druid: vines root hostiles around a tile (longer in grass).
+    Entangle,
 }
 
 impl AbilityType {
@@ -193,6 +209,12 @@ impl AbilityType {
             AbilityType::LearnedSpeed => "Speed",
             AbilityType::LearnedInvisibility => "Invisibility",
             AbilityType::RaiseDead => "Raise Dead",
+            AbilityType::Guard => "Guard",
+            AbilityType::BoneWard => "Bone Ward",
+            AbilityType::Sacrifice => "Sacrifice",
+            AbilityType::CorpseExplosion => "Corpse Explosion",
+            AbilityType::Thorns => "Thorns",
+            AbilityType::Entangle => "Entangle",
         }
     }
 
@@ -220,6 +242,12 @@ impl AbilityType {
             AbilityType::LearnedSpeed => "Move and act faster for a while (scales with INT)",
             AbilityType::LearnedInvisibility => "Fade from sight for a while (scales with INT)",
             AbilityType::RaiseDead => "Channel over bones to raise a skeleton ally",
+            AbilityType::Guard => "Brace: block 75% of melee hits and stagger the attacker",
+            AbilityType::BoneWard => "Absorb the next hit (+1 per nearby corpse, max 3)",
+            AbilityType::Sacrifice => "Swap places with one of your raised skeletons",
+            AbilityType::CorpseExplosion => "Detonate a corpse, hurting nearby enemies",
+            AbilityType::Thorns => "Melee attackers take damage back (scales with INT)",
+            AbilityType::Entangle => "Root enemies around a tile (longer in grass)",
         }
     }
 
@@ -248,11 +276,17 @@ impl AbilityType {
             AbilityType::LearnedSpeed => LEARNED_SPEED_ENERGY_COST,
             AbilityType::LearnedInvisibility => LEARNED_INVISIBILITY_ENERGY_COST,
             AbilityType::RaiseDead => RAISE_DEAD_ENERGY_COST,
+            AbilityType::Guard => GUARD_ENERGY_COST,
+            AbilityType::BoneWard => BONE_WARD_ENERGY_COST,
+            AbilityType::Sacrifice => SACRIFICE_ENERGY_COST,
+            AbilityType::CorpseExplosion => CORPSE_EXPLOSION_ENERGY_COST,
+            AbilityType::Thorns => THORNS_ENERGY_COST,
+            AbilityType::Entangle => ENTANGLE_ENERGY_COST,
         }
     }
 
     /// Cooldown for a learned/studied spell (or Raise Dead). `None` for
-    /// abilities that live on other components (class/secondary/ranger).
+    /// abilities that live on other components (class/secondary/kit).
     pub fn learned_cooldown(&self) -> Option<f32> {
         match self {
             AbilityType::LearnedBlink => Some(LEARNED_BLINK_COOLDOWN),
@@ -1030,6 +1064,15 @@ pub enum EffectType {
     Invulnerable,
     /// Cannot act at all (from Fighter's Stun ability)
     Stunned,
+    /// Bracing (Fighter's Guard): melee hits are mostly blocked and the
+    /// attacker is staggered. Lasts as long as the Guard action.
+    Guarding,
+    /// Melee attackers take damage back (Druid's Thorns)
+    Thorns,
+    /// A ward of bones absorbs whole hits (Necromancer's Bone Ward). The
+    /// charge count lives on the [`BoneWard`] component; this effect is its
+    /// timer and HUD pip.
+    BoneWard,
 }
 
 /// An active status effect with remaining duration
@@ -1180,6 +1223,20 @@ pub enum ActionType {
     /// within `BOSS_SLAM_RADIUS` of the boss) is applied when this completes,
     /// so the wind-up is the window to get clear.
     BossGroundSlam,
+    /// Fighter kit: Guard. Reactive — the Guarding effect goes up when the
+    /// action STARTS and drops when it completes.
+    Guard,
+    /// Necromancer kit: Bone Ward. Reactive — the ward goes up at start.
+    BoneWard,
+    /// Necromancer kit: swap places with a raised skeleton. Reactive — the
+    /// swap happens at start.
+    Sacrifice { skeleton: Entity },
+    /// Necromancer kit: detonate a corpse (applied at completion).
+    CorpseExplosion { corpse: Entity },
+    /// Druid kit: Thorns self-buff (applied at completion).
+    ActivateThorns,
+    /// Druid kit: root hostiles around a tile (applied at completion).
+    Entangle { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -1238,6 +1295,12 @@ impl ActionType {
             ActionType::CastFireball { .. } => Flat(LEARNED_FIREBALL_ENERGY_COST),
             ActionType::StartRaiseDead { .. } => Flat(RAISE_DEAD_ENERGY_COST),
             ActionType::CastLearnedSpell { ability, .. } => Flat(ability.energy_cost()),
+            ActionType::Guard => Flat(GUARD_ENERGY_COST),
+            ActionType::BoneWard => Flat(BONE_WARD_ENERGY_COST),
+            ActionType::Sacrifice { .. } => Flat(SACRIFICE_ENERGY_COST),
+            ActionType::CorpseExplosion { .. } => Flat(CORPSE_EXPLOSION_ENERGY_COST),
+            ActionType::ActivateThorns => Flat(THORNS_ENERGY_COST),
+            ActionType::Entangle { .. } => Flat(ENTANGLE_ENERGY_COST),
         }
     }
 
@@ -2284,39 +2347,106 @@ pub struct Furniture {
 pub struct SecretDoor;
 
 // =============================================================================
-// RANGER ABILITIES
+// CLASS KIT
 // =============================================================================
 
-/// Tracks all Ranger abilities with independent cooldowns
-#[derive(Debug, Clone)]
-pub struct RangerAbilities {
-    /// Array of (ability_type, cooldown_remaining, cooldown_total)
-    pub abilities: [(AbilityType, f32, f32); 4],
+/// One ability in a [`ClassKit`], with its own cooldown.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KitAbility {
+    pub ability: AbilityType,
+    /// Seconds remaining on cooldown (0 = ready)
+    pub cooldown_remaining: f32,
+    /// Total cooldown duration
+    pub cooldown_total: f32,
 }
 
-impl RangerAbilities {
-    pub fn new() -> Self {
+/// The per-class list of extra abilities, each with an independent cooldown.
+///
+/// Every class gets one at init (see [`ClassKit::for_class`]); it sits beside
+/// the single [`ClassAbility`] / [`SecondaryAbility`] slots rather than
+/// replacing them. Replaces the Ranger-only `RangerAbilities` array.
+#[derive(Debug, Clone, Default)]
+pub struct ClassKit {
+    pub abilities: Vec<KitAbility>,
+}
+
+impl ClassKit {
+    /// Build a kit from (ability, cooldown) pairs, all starting ready.
+    pub fn new(entries: &[(AbilityType, f32)]) -> Self {
         Self {
-            abilities: [
-                (AbilityType::Disengage, 0.0, DISENGAGE_COOLDOWN),
-                (AbilityType::Tumble, 0.0, TUMBLE_COOLDOWN),
-                (AbilityType::SnareTrap, 0.0, SNARE_TRAP_COOLDOWN),
-                (AbilityType::CripplingShot, 0.0, CRIPPLING_SHOT_COOLDOWN),
-            ],
+            abilities: entries
+                .iter()
+                .map(|&(ability, cooldown_total)| KitAbility {
+                    ability,
+                    cooldown_remaining: 0.0,
+                    cooldown_total,
+                })
+                .collect(),
         }
     }
 
-    /// Get the ability at the given index (0-3)
-    pub fn get(&self, index: usize) -> Option<&(AbilityType, f32, f32)> {
+    /// The starting kit for a class.
+    pub fn for_class(class: PlayerClass) -> Self {
+        match class {
+            PlayerClass::Fighter => Self::new(&[(AbilityType::Guard, GUARD_COOLDOWN)]),
+            PlayerClass::Ranger => Self::new(&[
+                (AbilityType::Disengage, DISENGAGE_COOLDOWN),
+                (AbilityType::Tumble, TUMBLE_COOLDOWN),
+                (AbilityType::SnareTrap, SNARE_TRAP_COOLDOWN),
+                (AbilityType::CripplingShot, CRIPPLING_SHOT_COOLDOWN),
+            ]),
+            PlayerClass::Druid => Self::new(&[
+                (AbilityType::Thorns, THORNS_COOLDOWN),
+                (AbilityType::Entangle, ENTANGLE_COOLDOWN),
+            ]),
+            PlayerClass::Necromancer => Self::new(&[
+                (AbilityType::BoneWard, BONE_WARD_COOLDOWN),
+                (AbilityType::Sacrifice, SACRIFICE_COOLDOWN),
+                (AbilityType::CorpseExplosion, CORPSE_EXPLOSION_COOLDOWN),
+            ]),
+        }
+    }
+
+    /// The ability at `index`, if any.
+    pub fn get(&self, index: usize) -> Option<&KitAbility> {
         self.abilities.get(index)
     }
 
-    /// Start cooldown for ability at index
+    /// Index of `ability` in the kit, if the kit holds it.
+    pub fn position(&self, ability: AbilityType) -> Option<usize> {
+        self.abilities.iter().position(|k| k.ability == ability)
+    }
+
+    /// Start the cooldown for the ability at `index` (no-op if out of range).
     pub fn start_cooldown(&mut self, index: usize) {
-        if let Some((_, cooldown_remaining, cooldown_total)) = self.abilities.get_mut(index) {
-            *cooldown_remaining = *cooldown_total;
+        if let Some(k) = self.abilities.get_mut(index) {
+            k.cooldown_remaining = k.cooldown_total;
         }
     }
+
+    /// Start the cooldown for `ability` (no-op if the kit doesn't hold it).
+    pub fn start_cooldown_for(&mut self, ability: AbilityType) {
+        if let Some(index) = self.position(ability) {
+            self.start_cooldown(index);
+        }
+    }
+
+    /// Advance every cooldown by `elapsed` game seconds.
+    pub fn tick(&mut self, elapsed: f32) {
+        for k in self.abilities.iter_mut() {
+            if k.cooldown_remaining > 0.0 {
+                k.cooldown_remaining = (k.cooldown_remaining - elapsed).max(0.0);
+            }
+        }
+    }
+}
+
+/// Charges left on a Necromancer's Bone Ward. Each damaging hit through
+/// `combat::apply_damage` spends one and is fully absorbed, while the
+/// `EffectType::BoneWard` timer is running. Removed when the last charge goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoneWard {
+    pub charges: u32,
 }
 
 // =============================================================================

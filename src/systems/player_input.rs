@@ -53,6 +53,12 @@ pub enum PlayerIntent {
     },
     /// Necromancer: start channeling Raise Dead on a bones container
     StartRaiseDead { target: Entity },
+    /// Necromancer: swap places with one of your raised skeletons
+    Sacrifice { skeleton: Entity },
+    /// Necromancer: detonate a corpse
+    CorpseExplosion { corpse: Entity },
+    /// Druid: root hostiles around a tile
+    Entangle { target_x: i32, target_y: i32 },
 }
 
 /// Result of validating a targeting action
@@ -260,6 +266,19 @@ pub fn intent_to_action(
         PlayerIntent::StartRaiseDead { target } => {
             Some(ActionType::StartRaiseDead { target: *target })
         }
+
+        PlayerIntent::Sacrifice { skeleton } => {
+            Some(ActionType::Sacrifice { skeleton: *skeleton })
+        }
+
+        PlayerIntent::CorpseExplosion { corpse } => {
+            Some(ActionType::CorpseExplosion { corpse: *corpse })
+        }
+
+        PlayerIntent::Entangle { target_x, target_y } => Some(ActionType::Entangle {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
     }
 }
 

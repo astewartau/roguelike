@@ -46,6 +46,13 @@ pub struct PlayerBuffAuraData {
     pub has_regen: bool,
     pub has_protected: bool,
     pub has_barkskin: bool,
+    /// Fighter's Guard is up: a bright steel ring.
+    pub has_guarding: bool,
+    /// Druid's Thorns: green spikes.
+    pub has_thorns: bool,
+    /// Necromancer's Bone Ward charges left (0 = no ward): one orbiting bone
+    /// mote per charge.
+    pub bone_ward_charges: u32,
     pub is_sneaking: bool,
     /// Hunger meter at zero: dim red pulse (the body consuming itself).
     pub is_starving: bool,
@@ -64,6 +71,16 @@ pub fn get_buff_aura_data(world: &World, player_entity: Entity) -> Option<Player
         has_regen: effects::has_effect(&status_effects, EffectType::Regenerating),
         has_protected: effects::has_effect(&status_effects, EffectType::Protected),
         has_barkskin: effects::has_effect(&status_effects, EffectType::Barkskin),
+        has_guarding: effects::has_effect(&status_effects, EffectType::Guarding),
+        has_thorns: effects::has_effect(&status_effects, EffectType::Thorns),
+        bone_ward_charges: if effects::has_effect(&status_effects, EffectType::BoneWard) {
+            world
+                .get::<&crate::components::BoneWard>(player_entity)
+                .map(|w| w.charges)
+                .unwrap_or(0)
+        } else {
+            0
+        },
         is_sneaking: world.get::<&crate::components::Sneaking>(player_entity).is_ok(),
         is_starving: world
             .get::<&crate::components::Hunger>(player_entity)
@@ -395,14 +412,15 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         // Handle both damage and heal numbers. Heals are their own thing and
         // do not tier: there is no such thing as a critical heal here.
         // A miss is not a number at all, but it floats the same way.
-        let (amount, tier, jitter, is_miss) = match &effect.effect_type {
+        let (amount, tier, jitter, miss_label) = match &effect.effect_type {
             VfxType::DamageNumber { amount, tier, jitter } => {
-                (*amount, Some(*tier), *jitter, false)
+                (*amount, Some(*tier), *jitter, None)
             }
-            VfxType::HealNumber { amount } => (*amount, None, 0.0, false),
-            VfxType::MissText { jitter } => (0, None, *jitter, true),
+            VfxType::HealNumber { amount } => (*amount, None, 0.0, None),
+            VfxType::MissText { jitter, label } => (0, None, *jitter, Some(*label)),
             _ => continue,
         };
+        let is_miss = miss_label.is_some();
 
         let progress = effect.progress();
 
@@ -438,7 +456,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         let text = match tier {
             Some(DamageTier::Crit) => format!("{}!", amount),
             Some(_) => format!("{}", amount),
-            None if is_miss => "miss".to_string(),
+            None if is_miss => miss_label.unwrap_or("miss").to_string(),
             None => format!("+{}", amount),
         };
 
@@ -912,6 +930,9 @@ pub fn draw_player_buff_auras(
     if !data.has_regen
         && !data.has_protected
         && !data.has_barkskin
+        && !data.has_guarding
+        && !data.has_thorns
+        && data.bone_ward_charges == 0
         && !data.is_sneaking
         && !data.is_starving
         && !data.is_exhausted
@@ -1029,6 +1050,43 @@ pub fn draw_player_buff_auras(
         let inner_bark_alpha = (50.0 * pulse) as u8;
         let inner_bark_color = egui::Color32::from_rgba_unmultiplied(101, 67, 33, inner_bark_alpha);
         painter.circle_stroke(center, bark_radius * 0.7, egui::Stroke::new(2.0, inner_bark_color));
+    }
+
+    // Guard: a solid, bright steel ring — it only lasts a fraction of a
+    // second, so it does not pulse.
+    if data.has_guarding {
+        let color = egui::Color32::from_rgba_unmultiplied(210, 220, 240, 190);
+        painter.circle_stroke(center, tile_size * 0.52, egui::Stroke::new(3.0_f32, color));
+    }
+
+    // Thorns: short green spikes radiating from a ring.
+    if data.has_thorns {
+        let color = egui::Color32::from_rgba_unmultiplied(110, 190, 70, (150.0 * pulse) as u8);
+        let inner = tile_size * 0.44;
+        let outer = tile_size * 0.58;
+        for i in 0..8 {
+            let angle = i as f32 * std::f32::consts::PI / 4.0 + real_time * 0.3;
+            let (c, s) = (angle.cos(), angle.sin());
+            painter.line_segment(
+                [
+                    egui::pos2(center.x + c * inner, center.y + s * inner),
+                    egui::pos2(center.x + c * outer, center.y + s * outer),
+                ],
+                egui::Stroke::new(2.0_f32, color),
+            );
+        }
+    }
+
+    // Bone Ward: one bone-white mote orbiting per charge left.
+    if data.bone_ward_charges > 0 {
+        let color = egui::Color32::from_rgba_unmultiplied(235, 230, 210, 210);
+        let radius = tile_size * 0.5;
+        let n = data.bone_ward_charges;
+        for i in 0..n {
+            let angle = i as f32 * std::f32::consts::TAU / n as f32 + real_time * 1.2;
+            let p = egui::pos2(center.x + angle.cos() * radius, center.y + angle.sin() * radius);
+            painter.circle_filled(p, 3.0_f32, color);
+        }
     }
 }
 

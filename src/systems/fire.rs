@@ -677,7 +677,7 @@ fn explode_barrel(
         .collect();
     for (id, (x, y)) in victims {
         let dealt =
-            crate::systems::combat::apply_damage(world, id, OIL_BARREL_EXPLOSION_DAMAGE, rng);
+            crate::systems::combat::apply_damage(world, id, OIL_BARREL_EXPLOSION_DAMAGE, rng, events);
         if dealt > 0 {
             events.push(GameEvent::BurnDamage {
                 entity: id,

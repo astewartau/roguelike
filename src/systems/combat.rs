@@ -256,9 +256,15 @@ pub fn apply_damage(
     target: Entity,
     raw: i32,
     rng: &mut impl Rng,
+    events: &mut crate::events::EventQueue,
 ) -> i32 {
     // Invulnerable negates all damage.
     if crate::queries::has_status_effect(world, target, EffectType::Invulnerable) {
+        return 0;
+    }
+
+    // A Bone Ward swallows the whole hit and spends a charge.
+    if absorb_with_bone_ward(world, target, events) {
         return 0;
     }
 
@@ -326,6 +332,42 @@ pub fn apply_damage(
     }
 
     dmg
+}
+
+/// Spend one Bone Ward charge on an incoming hit, if `target` has a live ward.
+/// Returns true if the hit was absorbed. The ward needs both the charge
+/// component and its (timed) status effect: when the effect expires the
+/// leftover charges are discarded here rather than lingering.
+fn absorb_with_bone_ward(
+    world: &mut World,
+    target: Entity,
+    events: &mut crate::events::EventQueue,
+) -> bool {
+    let Some(charges) = world.get::<&crate::components::BoneWard>(target).ok().map(|w| w.charges)
+    else {
+        return false;
+    };
+    if charges == 0 || !crate::queries::has_status_effect(world, target, EffectType::BoneWard) {
+        let _ = world.remove_one::<crate::components::BoneWard>(target);
+        return false;
+    }
+    let charges_left = charges - 1;
+    if charges_left == 0 {
+        let _ = world.remove_one::<crate::components::BoneWard>(target);
+        crate::systems::effects::remove_effect_from_entity(world, target, EffectType::BoneWard);
+    } else if let Ok(mut ward) = world.get::<&mut crate::components::BoneWard>(target) {
+        ward.charges = charges_left;
+    }
+    let position = world
+        .get::<&Position>(target)
+        .map(|p| (p.x as f32 + 0.5, p.y as f32 + 0.5))
+        .unwrap_or((0.0, 0.0));
+    events.push(crate::events::GameEvent::BoneWardAbsorbed {
+        entity: target,
+        charges_left,
+        position,
+    });
+    true
 }
 
 /// Handle a ContainerOpened event - update sprite for containers

@@ -149,6 +149,17 @@ impl MessageLog {
         if attacker != me && target != me {
             return;
         }
+        // A hit on the player that did no damage was fully negated: a Bone
+        // Ward absorb logs its own line, and Tumble's invulnerability gets
+        // one here, rather than "hits you for 0".
+        if target == me && damage == 0 {
+            if crate::queries::has_status_effect(world, me, crate::components::EffectType::Invulnerable) {
+                let subj = self.subject(world, attacker);
+                self.push(format!("{subj}'s attack passes harmlessly by you."), log_colors::GOOD);
+            }
+            return;
+        }
+
         let end = if crit { "!" } else { "." };
         let crit_word = if crit { "critically " } else { "" };
 
@@ -205,6 +216,36 @@ impl MessageLog {
                     let obj = self.object(world, target);
                     self.push(
                         format!("The ground slam crushes {obj} for {damage}!"),
+                        log_colors::INFO,
+                    );
+                }
+            }
+            DamageKind::Thorns => {
+                // `attacker` is the thorny defender, `target` the one pricked.
+                if attacker == me {
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("Your thorns prick {obj} for {damage}."),
+                        log_colors::INFO,
+                    );
+                } else {
+                    let subj = self.subject(world, attacker);
+                    self.push(
+                        format!("{subj}'s thorns prick you for {damage}."),
+                        log_colors::HARM,
+                    );
+                }
+            }
+            DamageKind::CorpseExplosion => {
+                if target == me {
+                    self.push(
+                        format!("The exploding corpse hits you for {damage}."),
+                        log_colors::HARM,
+                    );
+                } else {
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("The blast tears into {obj} for {damage}."),
                         log_colors::INFO,
                     );
                 }
@@ -280,6 +321,57 @@ impl MessageLog {
                     let subj = self.subject(world, *target);
                     self.push(format!("{subj} evades your attack."), log_colors::INFO);
                 }
+            }
+            GameEvent::AttackBlocked { attacker, defender, .. } => {
+                if *defender == me {
+                    let obj = self.object(world, *attacker);
+                    self.push(format!("You block {obj}'s blow!"), log_colors::GOOD);
+                } else if *attacker == me {
+                    let subj = self.subject(world, *defender);
+                    self.push(format!("{subj} blocks your blow!"), log_colors::INFO);
+                }
+            }
+            GameEvent::BoneWardRaised { entity, charges } if *entity == me => {
+                let s = if *charges == 1 { "" } else { "s" };
+                self.push(
+                    format!("Bones rise to ward you ({charges} charge{s})."),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::BoneWardAbsorbed { entity, charges_left, .. } if *entity == me => {
+                if *charges_left == 0 {
+                    self.push(
+                        "Your bone ward absorbs the blow and shatters.".to_string(),
+                        log_colors::GOOD,
+                    );
+                } else {
+                    self.push(
+                        format!("Your bone ward absorbs the blow ({charges_left} left)."),
+                        log_colors::GOOD,
+                    );
+                }
+            }
+            GameEvent::SacrificeSwapped { caster, .. } if *caster == me => {
+                self.push(
+                    "You trade places with your skeleton.".to_string(),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::CorpseExploded { caster, hits, .. } if *caster == me => {
+                let line = match hits {
+                    0 => "The corpse explodes, but catches no one.".to_string(),
+                    1 => "The corpse explodes!".to_string(),
+                    n => format!("The corpse explodes, catching {n} enemies!"),
+                };
+                self.push(line, log_colors::INFO);
+            }
+            GameEvent::EntangleCast { caster, rooted, .. } if *caster == me => {
+                let line = match rooted {
+                    0 => "Vines burst from the ground, but snare nothing.".to_string(),
+                    1 => "Vines burst from the ground and snare an enemy!".to_string(),
+                    n => format!("Vines burst from the ground and snare {n} enemies!"),
+                };
+                self.push(line, log_colors::INFO);
             }
             GameEvent::ProjectileHit {
                 source,
@@ -450,6 +542,8 @@ impl MessageLog {
                     AbilityType::Disengage => "You disengage to safety.",
                     AbilityType::Tumble => "You tumble away.",
                     AbilityType::SnareTrap => "You set a snare trap.",
+                    AbilityType::Guard => "You raise your guard.",
+                    AbilityType::Thorns => "Thorny vines wreathe your body.",
                     AbilityType::LearnedBlink
                     | AbilityType::LearnedFireball
                     | AbilityType::LearnedFear

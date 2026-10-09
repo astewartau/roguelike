@@ -77,6 +77,124 @@ pub const CRIPPLING_SHOT_COOLDOWN: f32 = 15.0;
 pub const CRIPPLING_SHOT_ENERGY_COST: f32 = 20.0;
 pub const CRIPPLING_SHOT_SLOW_DURATION: f32 = 6.0;
 
+// =============================================================================
+// FIGHTER - GUARD (reactive)
+// =============================================================================
+//
+// Guard is a *reactive* tool: enemy swings land when their action completes
+// (0.36s for a bat up to ~1.45s for a zombie), so a guard that only went up when
+// its own action completed would arrive after the blow it was meant to answer.
+// The Guarding effect is therefore applied the instant the action STARTS (see
+// `systems::actions::kit::apply_action_start_effects`) and dropped when it
+// completes. A future "Parry" upgrade would hook in at the same place
+// (`apply_attack`'s guard check): e.g. a perfect-timing window that negates the
+// hit entirely and ripostes. Not implemented.
+
+/// How long one Guard lasts, in game seconds. It is both the action's base
+/// duration (you are busy guarding) and the window in which melee hits are
+/// blocked. Longer makes Guard easier to time but leaves you committed for
+/// longer; shorter rewards reading the swing telegraph.
+pub const GUARD_DURATION: f32 = 0.6;
+/// Fraction of a blocked melee hit that Guard removes (0.75 => you take 25%).
+/// Applied to the raw hit before armor. Up makes Guard a hard counter; down
+/// makes it a mitigation tool rather than a wall.
+pub const GUARD_DAMAGE_REDUCTION: f32 = 0.75;
+/// How long an attacker whose blow was blocked is Staggered (Stunned) for.
+/// Up gives the Fighter a bigger counter-attack window after a good block.
+pub const GUARD_STAGGER_DURATION: f32 = 0.6;
+/// Guard cooldown in game seconds. Short: it is meant to be used every fight.
+pub const GUARD_COOLDOWN: f32 = 5.0;
+/// Fatigue effort for one Guard (flat, like every ability).
+pub const GUARD_ENERGY_COST: f32 = 10.0;
+
+// =============================================================================
+// NECROMANCER - BONE WARD (reactive)
+// =============================================================================
+
+/// Chebyshev radius around the caster in which corpses (bone piles) add a
+/// Bone Ward charge. Bigger makes the ward easier to fully charge.
+pub const BONE_WARD_CORPSE_RADIUS: i32 = 3;
+/// Most hits one Bone Ward can absorb (1 base + 1 per nearby corpse, capped).
+pub const BONE_WARD_MAX_CHARGES: u32 = 3;
+/// How long the ward lasts if its charges are not spent, in game seconds.
+pub const BONE_WARD_DURATION: f32 = 12.0;
+/// Bone Ward cooldown in game seconds.
+pub const BONE_WARD_COOLDOWN: f32 = 20.0;
+/// Bone Ward cast time. Near-instant; the ward itself goes up at action start.
+pub const BONE_WARD_CAST_DURATION: f32 = 0.15;
+/// Fatigue effort for one Bone Ward cast.
+pub const BONE_WARD_ENERGY_COST: f32 = 20.0;
+
+// =============================================================================
+// NECROMANCER - SACRIFICE (reactive)
+// =============================================================================
+
+/// Maximum Chebyshev distance to the raised skeleton you swap places with.
+pub const SACRIFICE_RANGE: i32 = 6;
+/// Sacrifice action time. The swap itself happens at action start; this is
+/// just how long the necromancer is busy afterwards.
+pub const SACRIFICE_DURATION: f32 = 0.15;
+/// Sacrifice cooldown in game seconds.
+pub const SACRIFICE_COOLDOWN: f32 = 15.0;
+/// Fatigue effort for one Sacrifice.
+pub const SACRIFICE_ENERGY_COST: f32 = 20.0;
+/// Threat a swapped-in skeleton gains, *on top of* the player's own threat, on
+/// every enemy that had a melee swing in flight at the player. Enough to make
+/// the skeleton their new top target. Up makes the taunt stick longer as the
+/// player keeps fighting.
+pub const SACRIFICE_TAUNT_THREAT: f32 = 25.0;
+
+// =============================================================================
+// NECROMANCER - CORPSE EXPLOSION
+// =============================================================================
+
+/// Maximum Chebyshev distance to the targeted corpse.
+pub const CORPSE_EXPLOSION_RANGE: i32 = 5;
+/// Chebyshev radius of the blast around the corpse.
+pub const CORPSE_EXPLOSION_RADIUS: i32 = 1;
+/// Raw blast damage before INT scaling (`queries::int_power`) and armor.
+pub const CORPSE_EXPLOSION_DAMAGE: i32 = 12;
+/// Corpse Explosion cooldown in game seconds.
+pub const CORPSE_EXPLOSION_COOLDOWN: f32 = 20.0;
+/// Fatigue effort for one Corpse Explosion.
+pub const CORPSE_EXPLOSION_ENERGY_COST: f32 = 40.0;
+
+// =============================================================================
+// DRUID - THORNS
+// =============================================================================
+
+/// Base Thorns duration in game seconds, multiplied by the caster's INT power.
+pub const THORNS_DURATION: f32 = 10.0;
+/// Raw damage reflected at a melee attacker per hit that lands on the druid
+/// (goes through `apply_damage`, so the attacker's armor applies).
+pub const THORNS_DAMAGE: i32 = 3;
+/// Thorns cooldown in game seconds.
+pub const THORNS_COOLDOWN: f32 = 30.0;
+/// Thorns cast time (quick self-buff, like Barkskin).
+pub const THORNS_ACTIVATION_DURATION: f32 = 0.3;
+/// Fatigue effort for one Thorns cast.
+pub const THORNS_ENERGY_COST: f32 = 20.0;
+
+// =============================================================================
+// DRUID - ENTANGLE
+// =============================================================================
+
+/// Maximum Chebyshev distance to the targeted tile.
+pub const ENTANGLE_RANGE: i32 = 5;
+/// Chebyshev radius of the entangling patch around the targeted tile.
+pub const ENTANGLE_RADIUS: i32 = 1;
+/// Root duration for a hostile standing on bare ground, in game seconds.
+pub const ENTANGLE_ROOT_DURATION: f32 = 3.0;
+/// Root duration for a hostile standing in grass or tall grass: the vines have
+/// something to grow from. Keep above [`ENTANGLE_ROOT_DURATION`].
+pub const ENTANGLE_ROOT_DURATION_GRASS: f32 = 5.0;
+/// Entangle cooldown in game seconds.
+pub const ENTANGLE_COOLDOWN: f32 = 20.0;
+/// Entangle cast time (a targeted spell, like a bow shot).
+pub const ENTANGLE_CAST_DURATION: f32 = 0.5;
+/// Fatigue effort for one Entangle.
+pub const ENTANGLE_ENERGY_COST: f32 = 20.0;
+
 // Range Bands (for bow attacks)
 pub const RANGE_OPTIMAL_MIN: i32 = 3;
 pub const RANGE_OPTIMAL_MAX: i32 = 5;

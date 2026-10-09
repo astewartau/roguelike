@@ -849,6 +849,53 @@ pub fn process_frame(
                                 return result;
                             }
                         }
+                        AbilityType::Sacrifice => {
+                            // One of your own raised skeletons, in range.
+                            let skeleton = world
+                                .query::<(&Position, &crate::components::RaisedUndead)>()
+                                .iter()
+                                .find(|(e, (p, _))| {
+                                    p.x == target_x
+                                        && p.y == target_y
+                                        && crate::systems::actions::is_valid_sacrifice_target(
+                                            world,
+                                            player_entity,
+                                            *e,
+                                        )
+                                })
+                                .map(|(e, _)| e);
+                            if let Some(skeleton) = skeleton {
+                                input.cancel_targeting();
+                                result.player_intent = Some(PlayerIntent::Sacrifice { skeleton });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::CorpseExplosion => {
+                            // A corpse (bones container) on that tile.
+                            let corpse = world
+                                .query::<(&Position, &Container)>()
+                                .iter()
+                                .find(|(_, (p, c))| {
+                                    p.x == target_x
+                                        && p.y == target_y
+                                        && matches!(c.container_type, ContainerType::Corpse)
+                                })
+                                .map(|(e, _)| e);
+                            if let Some(corpse) = corpse {
+                                input.cancel_targeting();
+                                result.player_intent = Some(PlayerIntent::CorpseExplosion { corpse });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::Entangle => {
+                            // Any tile in range; the vines take whoever is there.
+                            input.cancel_targeting();
+                            result.player_intent = Some(PlayerIntent::Entangle { target_x, target_y });
+                            result.from_keyboard = false;
+                            return result;
+                        }
                         AbilityType::CripplingShot => {
                             // Crippling shot requires line of sight and explored tile
                             use crate::components::BlocksVision;

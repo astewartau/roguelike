@@ -256,6 +256,23 @@ pub fn start_action_with_events(
     Ok(())
 }
 
+/// Start an action and immediately apply its start-of-action effects.
+///
+/// Actions normally do everything at completion. Reactive abilities (Guard,
+/// Bone Ward, Sacrifice) cannot: the blow they answer would land first. This
+/// is the one place their effects go up, right after the action is scheduled,
+/// via `systems::actions::apply_action_start_effects` (a no-op for every other
+/// action, so any player-initiated action can come through here).
+pub fn start_action_with_start_effects(
+    ctx: &mut ActorCtx,
+    entity: Entity,
+    action_type: ActionType,
+) -> Result<(), &'static str> {
+    start_action(ctx.world, entity, action_type, ctx.clock, ctx.scheduler)?;
+    actions::apply_action_start_effects(&mut ctx.effects(), entity, &action_type);
+    Ok(())
+}
+
 // =============================================================================
 // ACTION COMPLETION
 // =============================================================================
@@ -437,6 +454,21 @@ fn apply_action_effects(
         ActionType::BossGroundSlam => actions::apply_boss_ground_slam(
             &mut effects(world, grid, spatial_cache, events, rng), entity,
         ),
+        // Reactive kit abilities did their work when they started (see
+        // `start_action_with_start_effects`); completion only tidies up.
+        ActionType::Guard => {
+            actions::apply_guard_complete(&mut effects(world, grid, spatial_cache, events, rng), entity)
+        }
+        ActionType::BoneWard | ActionType::Sacrifice { .. } => ActionResult::Completed,
+        ActionType::CorpseExplosion { corpse } => actions::apply_corpse_explosion(
+            &mut effects(world, grid, spatial_cache, events, rng), entity, *corpse,
+        ),
+        ActionType::ActivateThorns => {
+            actions::apply_activate_thorns(&mut effects(world, grid, spatial_cache, events, rng), entity)
+        }
+        ActionType::Entangle { target_x, target_y } => actions::apply_entangle(
+            &mut effects(world, grid, spatial_cache, events, rng), entity, *target_x, *target_y,
+        ),
     }
 }
 
@@ -527,7 +559,7 @@ pub fn tick_status_effects(world: &mut World, elapsed: f32) {
 
 /// Process ability cooldown ticks
 pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
-    use crate::components::{ClassAbility, LearnedAbilities, RangerAbilities, SecondaryAbility};
+    use crate::components::{ClassAbility, ClassKit, LearnedAbilities, SecondaryAbility};
 
     if elapsed <= 0.0 {
         return;
@@ -546,13 +578,9 @@ pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
         }
     }
 
-    // Also tick Ranger abilities
-    for (_, ra) in world.query_mut::<&mut RangerAbilities>() {
-        for (_, cooldown_remaining, _) in ra.abilities.iter_mut() {
-            if *cooldown_remaining > 0.0 {
-                *cooldown_remaining = (*cooldown_remaining - elapsed).max(0.0);
-            }
-        }
+    // Also tick the per-class kit abilities
+    for (_, kit) in world.query_mut::<&mut ClassKit>() {
+        kit.tick(elapsed);
     }
 
     // Also tick learned spells (studied scrolls + Raise Dead)

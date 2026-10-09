@@ -29,7 +29,7 @@ use rand::Rng;
 
 use crate::audio::AudioManager;
 use crate::components::{
-    AbilityType, ActionType, Actor, ClassAbility, Health, PlayerClass, RangerAbilities,
+    AbilityType, ActionType, Actor, ClassAbility, ClassKit, Health, PlayerClass,
     SecondaryAbility,
 };
 
@@ -250,31 +250,15 @@ impl GameEngine {
 
         let mut ui_state = GameUiState::new(state.player_entity);
 
-        // Auto-fill the main hotbar with the player's abilities (class, then
-        // secondary, then ranger, in order) so they're usable right away.
+        // Auto-fill the hotbars with the player's abilities so they're usable
+        // right away: main bar first, overflow onto the Shift bar.
         {
-            let mut entries: Vec<AbilityType> = Vec::new();
-            if let Ok(a) = state.world.get::<&ClassAbility>(state.player_entity) {
-                entries.push(a.ability_type);
-            }
-            if let Ok(a) = state.world.get::<&SecondaryAbility>(state.player_entity) {
-                entries.push(a.ability_type);
-            }
-            if let Ok(ra) = state.world.get::<&RangerAbilities>(state.player_entity) {
-                for (at, _, _) in ra.abilities.iter() {
-                    entries.push(*at);
-                }
-            }
-            // Spell-list abilities (the Necromancer starts with Raise Dead).
-            if let Ok(la) = state
-                .world
-                .get::<&crate::components::LearnedAbilities>(state.player_entity)
-            {
-                for spell in la.spells.iter() {
-                    entries.push(spell.ability);
-                }
-            }
-            for (slot, ability) in ui_state.hotbar_main.iter_mut().zip(entries) {
+            let entries = starting_hotbar_abilities(&state.world, state.player_entity);
+            let slots = ui_state
+                .hotbar_main
+                .iter_mut()
+                .chain(ui_state.hotbar_shift.iter_mut());
+            for (slot, ability) in slots.zip(entries) {
                 *slot = Some(crate::ui::HotbarEntry::Ability(ability));
             }
 
@@ -1396,7 +1380,7 @@ impl GameEngine {
         enum Route {
             Class,
             Secondary,
-            Ranger(usize),
+            Kit(usize),
             Learned,
         }
 
@@ -1420,11 +1404,11 @@ impl GameEngine {
             {
                 Route::Secondary
             } else if let Some(index) = world
-                .get::<&RangerAbilities>(player)
+                .get::<&ClassKit>(player)
                 .ok()
-                .and_then(|ra| ra.abilities.iter().position(|(at, _, _)| *at == ability_type))
+                .and_then(|kit| kit.position(ability_type))
             {
-                Route::Ranger(index)
+                Route::Kit(index)
             } else if world
                 .get::<&crate::components::LearnedAbilities>(player)
                 .map(|la| la.knows(ability_type))
@@ -1439,7 +1423,7 @@ impl GameEngine {
         self.try_use_slot(match route {
             Route::Class => AbilitySlot::Class,
             Route::Secondary => AbilitySlot::Secondary,
-            Route::Ranger(index) => AbilitySlot::Ranger(index),
+            Route::Kit(index) => AbilitySlot::Kit(index),
             Route::Learned => AbilitySlot::Learned(ability_type),
         });
     }
@@ -1851,6 +1835,27 @@ fn pick_campfire_spot(
         })
 }
 
+/// The player's abilities in default hotbar order: class ability, secondary,
+/// spell list (the Necromancer's Raise Dead keeps its old slot), then the
+/// class kit. The caller lays these out over the main bar and then the Shift
+/// bar, so a kit longer than the main bar spills over instead of being lost.
+fn starting_hotbar_abilities(world: &hecs::World, player: Entity) -> Vec<AbilityType> {
+    let mut entries: Vec<AbilityType> = Vec::new();
+    if let Ok(a) = world.get::<&ClassAbility>(player) {
+        entries.push(a.ability_type);
+    }
+    if let Ok(a) = world.get::<&SecondaryAbility>(player) {
+        entries.push(a.ability_type);
+    }
+    if let Ok(la) = world.get::<&crate::components::LearnedAbilities>(player) {
+        entries.extend(la.spells.iter().map(|spell| spell.ability));
+    }
+    if let Ok(kit) = world.get::<&ClassKit>(player) {
+        entries.extend(kit.abilities.iter().map(|k| k.ability));
+    }
+    entries
+}
+
 fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
     let ActorCtx { world, player: owner, clock, scheduler, tracker: active_ai_tracker, spatial: spatial_cache, rng, .. } = ctx;
     let (world, owner) = (&mut **world, *owner);
@@ -1936,8 +1941,9 @@ enum AbilitySlot {
     Secondary,
     /// A spell studied from a scroll, plus the Necromancer's Raise Dead.
     Learned(AbilityType),
-    /// One of the Ranger's four indexed abilities.
-    Ranger(usize),
+    /// An indexed ability in the player's [`ClassKit`] (Guard; the Ranger's
+    /// four; Thorns/Entangle; Bone Ward/Sacrifice/Corpse Explosion).
+    Kit(usize),
 }
 
 /// What the targeting check decided about an ability that is about to activate.
@@ -1972,10 +1978,10 @@ impl AbilitySlot {
                 let spell = la.get(ability_type)?;
                 (spell.cooldown_remaining <= 0.0).then_some(ability_type)
             }
-            AbilitySlot::Ranger(index) => {
-                let ra = world.get::<&RangerAbilities>(player).ok()?;
-                let &(ability_type, cooldown_remaining, _) = ra.get(index)?;
-                (cooldown_remaining <= 0.0).then_some(ability_type)
+            AbilitySlot::Kit(index) => {
+                let kit = world.get::<&ClassKit>(player).ok()?;
+                let entry = kit.get(index)?;
+                (entry.cooldown_remaining <= 0.0).then_some(entry.ability)
             }
         }
     }
@@ -2014,9 +2020,32 @@ impl AbilitySlot {
             (AbilitySlot::Learned(_), AbilityType::LearnedFireball) => {
                 Targeting::Enter(FIREBALL_RANGE)
             }
-            (AbilitySlot::Ranger(_), AbilityType::Tumble) => Targeting::Enter(TUMBLE_DISTANCE),
-            (AbilitySlot::Ranger(_), AbilityType::SnareTrap) => Targeting::Enter(SNARE_TRAP_RANGE),
-            (AbilitySlot::Ranger(_), AbilityType::CripplingShot) => Targeting::Enter(BOW_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::Tumble) => Targeting::Enter(TUMBLE_DISTANCE),
+            (AbilitySlot::Kit(_), AbilityType::SnareTrap) => Targeting::Enter(SNARE_TRAP_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::CripplingShot) => Targeting::Enter(BOW_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::Sacrifice) => {
+                // Nothing to swap with: say so rather than entering a
+                // targeting mode with no valid target.
+                let has_skeleton = ctx
+                    .world
+                    .query::<(&crate::components::RaisedUndead, &crate::components::TamedBy)>()
+                    .iter()
+                    .any(|(e, (_, t))| {
+                        t.owner == player
+                            && systems::actions::is_valid_sacrifice_target(ctx.world, player, e)
+                    });
+                if !has_skeleton {
+                    ctx.ui
+                        .message_log
+                        .system("You have no raised skeleton close enough to sacrifice.".to_string());
+                    return Targeting::Refused;
+                }
+                Targeting::Enter(SACRIFICE_RANGE)
+            }
+            (AbilitySlot::Kit(_), AbilityType::CorpseExplosion) => {
+                Targeting::Enter(CORPSE_EXPLOSION_RANGE)
+            }
+            (AbilitySlot::Kit(_), AbilityType::Entangle) => Targeting::Enter(ENTANGLE_RANGE),
             _ => Targeting::Immediate,
         }
     }
@@ -2024,7 +2053,7 @@ impl AbilitySlot {
     /// The action an untargeted activation of `ability_type` starts, or `None`
     /// if this slot can't use that ability (unreachable for every ability the
     /// slots actually grant - see `PlayerClass::ability`, the `SecondaryAbility`
-    /// inserts in `initialization`, and `RangerAbilities::new`).
+    /// inserts in `initialization`, and `ClassKit::for_class`).
     fn action_for(self, ability_type: AbilityType) -> Option<ActionType> {
         match (self, ability_type) {
             (AbilitySlot::Class, AbilityType::Cleave) => Some(ActionType::Cleave),
@@ -2034,7 +2063,10 @@ impl AbilitySlot {
             }
             (AbilitySlot::Secondary, AbilityType::Fear) => Some(ActionType::ActivateFear),
             (AbilitySlot::Secondary, AbilityType::Stun) => Some(ActionType::ActivateStun),
-            (AbilitySlot::Ranger(_), AbilityType::Disengage) => Some(ActionType::Disengage),
+            (AbilitySlot::Kit(_), AbilityType::Disengage) => Some(ActionType::Disengage),
+            (AbilitySlot::Kit(_), AbilityType::Guard) => Some(ActionType::Guard),
+            (AbilitySlot::Kit(_), AbilityType::BoneWard) => Some(ActionType::BoneWard),
+            (AbilitySlot::Kit(_), AbilityType::Thorns) => Some(ActionType::ActivateThorns),
             (AbilitySlot::Learned(_), _) => Some(ActionType::CastLearnedSpell {
                 ability: ability_type,
                 target_x: 0,
@@ -2057,9 +2089,9 @@ impl AbilitySlot {
                     ability.start_cooldown();
                 }
             }
-            AbilitySlot::Ranger(index) => {
-                if let Ok(mut ra) = world.get::<&mut RangerAbilities>(player) {
-                    ra.start_cooldown(index);
+            AbilitySlot::Kit(index) => {
+                if let Ok(mut kit) = world.get::<&mut ClassKit>(player) {
+                    kit.start_cooldown(index);
                 }
             }
             AbilitySlot::Secondary | AbilitySlot::Learned(_) => {}
@@ -2104,8 +2136,10 @@ fn activate_ability(ctx: &mut SimCtx, slot: AbilitySlot) -> bool {
         return false;
     };
 
+    // Through the start-effects path: Guard and Bone Ward take hold the
+    // moment they start, not when they complete.
     let start_result =
-        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
+        time_system::start_action_with_start_effects(&mut ctx.actors(), player, action_type);
 
     if start_result.is_ok() {
         slot.start_cooldown(ctx.world, player);
@@ -3269,4 +3303,122 @@ mod tests {
         }
     }
 
+    // =========================================================================
+    // Class kits: initialisation, hotbar layout, and activation plumbing.
+    // =========================================================================
+
+    fn engine_for(class: PlayerClass) -> GameEngine {
+        let mut engine = GameEngine::new();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        engine.start_game(class, 1234, &mut camera);
+        engine
+    }
+
+    fn hotbar_abilities(slots: &[Option<crate::ui::HotbarEntry>]) -> Vec<AbilityType> {
+        slots
+            .iter()
+            .filter_map(|e| match e {
+                Some(crate::ui::HotbarEntry::Ability(a)) => Some(*a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every class gets a ClassKit at init, and every starting ability lands
+    /// on a hotbar: the main bar first, the overflow on the Shift bar.
+    #[test]
+    fn every_class_starts_with_its_kit_on_the_hotbars() {
+        use AbilityType as A;
+        let expected = [
+            (PlayerClass::Fighter, vec![A::Cleave, A::Stun, A::Guard], vec![]),
+            (
+                PlayerClass::Ranger,
+                vec![A::Sprint, A::Disengage, A::Tumble, A::SnareTrap, A::CripplingShot],
+                vec![],
+            ),
+            (PlayerClass::Druid, vec![A::Tame, A::Barkskin, A::Thorns, A::Entangle], vec![]),
+            (
+                PlayerClass::Necromancer,
+                vec![A::LifeDrain, A::Fear, A::RaiseDead, A::BoneWard, A::Sacrifice],
+                vec![A::CorpseExplosion],
+            ),
+        ];
+        for (class, main, shift) in expected {
+            let engine = engine_for(class);
+            let state = engine.state.as_ref().expect("run");
+            assert!(
+                state.world.get::<&ClassKit>(state.player_entity).is_ok(),
+                "{class:?} has a ClassKit"
+            );
+            let ui = engine.ui_state.as_ref().expect("ui");
+            assert_eq!(hotbar_abilities(&ui.hotbar_main), main, "{class:?} main bar");
+            assert_eq!(hotbar_abilities(&ui.hotbar_shift), shift, "{class:?} shift bar");
+        }
+    }
+
+    /// Guard goes through the kit slot: it starts the kit cooldown, the guard
+    /// was up during the action, and it is down once the player can act again.
+    #[test]
+    fn guard_activates_from_the_kit_slot() {
+        let mut engine = engine_for(PlayerClass::Fighter);
+        engine.try_use_ability(AbilityType::Guard);
+
+        let state = engine.state.as_ref().expect("run");
+        let player = state.player_entity;
+        let kit = state.world.get::<&ClassKit>(player).expect("kit");
+        let guard = kit.get(0).expect("guard");
+        assert_eq!(guard.ability, AbilityType::Guard);
+        assert!(guard.cooldown_remaining > 0.0, "cooldown started");
+        assert!(state.game_clock.time >= crate::constants::GUARD_DURATION - 1e-4);
+        assert!(!crate::queries::has_status_effect(
+            &state.world,
+            player,
+            crate::components::EffectType::Guarding
+        ));
+        assert!(
+            log_lines(&engine).iter().any(|l| l == "You raise your guard."),
+            "got {:?}",
+            log_lines(&engine)
+        );
+    }
+
+    /// A targeted kit ability activated by a click (here the Ranger's Tumble)
+    /// starts its own cooldown in the kit, and only its own.
+    #[test]
+    fn a_targeted_kit_ability_starts_its_cooldown() {
+        let mut engine = engine_for(PlayerClass::Ranger);
+        let target = {
+            let state = engine.state.as_ref().expect("run");
+            let (px, py) = crate::queries::get_entity_position(&state.world, state.player_entity)
+                .expect("player position");
+            [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+                .into_iter()
+                .map(|(dx, dy)| (px + dx, py + dy))
+                .find(|&(x, y)| {
+                    state.grid.is_walkable(x, y) && !state.spatial_cache.is_blocked((x, y))
+                })
+                .expect("a free tile beside the player")
+        };
+        let result = {
+            let mut ctx = engine.sim_ctx().expect("ctx");
+            execute_player_intent(
+                &mut ctx,
+                crate::systems::player_input::PlayerIntent::Tumble {
+                    target_x: target.0,
+                    target_y: target.1,
+                },
+            )
+        };
+        assert_eq!(result.turn_result, simulation::TurnResult::Started);
+
+        let state = engine.state.as_ref().expect("run");
+        let kit = state.world.get::<&ClassKit>(state.player_entity).expect("kit");
+        for k in &kit.abilities {
+            if k.ability == AbilityType::Tumble {
+                assert!(k.cooldown_remaining > 0.0, "Tumble is on cooldown");
+            } else {
+                assert_eq!(k.cooldown_remaining, 0.0, "{:?} untouched", k.ability);
+            }
+        }
+    }
 }

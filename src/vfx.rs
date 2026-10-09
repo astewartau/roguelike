@@ -94,9 +94,11 @@ pub enum VfxType {
     },
     /// Floating heal number (green, positive)
     HealNumber { amount: i32 },
-    /// Floating "miss" over a target that stepped out of a swing's reach.
-    /// Drawn in the damage-number style; `jitter` as for `DamageNumber`.
-    MissText { jitter: f32 },
+    /// Floating word over a swing that did not land as a hit: "miss" for a
+    /// target that stepped out of reach, "BLOCK" for a guarded blow, "WARD"
+    /// for a hit a bone ward swallowed. Drawn in the damage-number style;
+    /// `jitter` as for `DamageNumber`.
+    MissText { jitter: f32, label: &'static str },
     /// Fire particle effect (looping)
     #[allow(dead_code)] // Reserved for torch/fire terrain
     Fire { seed: f32 },
@@ -252,8 +254,13 @@ impl VfxManager {
     /// Spawn a floating "miss" (a melee swing that found nobody in reach).
     /// Jitter comes from the thread RNG for the same reason as damage numbers.
     pub fn spawn_miss_text(&mut self, x: f32, y: f32) {
+        self.spawn_float_text(x, y, "miss");
+    }
+
+    /// Spawn a floating word in the miss-text style ("BLOCK", "WARD").
+    pub fn spawn_float_text(&mut self, x: f32, y: f32, label: &'static str) {
         let jitter = (rand::random::<f32>() * 2.0 - 1.0) * DAMAGE_NUMBER_JITTER;
-        self.spawn(x, y, VfxType::MissText { jitter });
+        self.spawn(x, y, VfxType::MissText { jitter, label });
     }
 
     /// Spawn an alert indicator "!" above an entity
@@ -366,6 +373,35 @@ impl VfxManager {
                 .unwrap_or(false) =>
             {
                 self.spawn_miss_text(target_pos.0, target_pos.1);
+            }
+            GameEvent::AttackBlocked { defender_pos, .. }
+                if grid
+                    .get(defender_pos.0 as i32, defender_pos.1 as i32)
+                    .map(|t| t.visible)
+                    .unwrap_or(false) =>
+            {
+                self.spawn_float_text(defender_pos.0, defender_pos.1, "BLOCK");
+            }
+            GameEvent::BoneWardAbsorbed { position, .. }
+                if grid
+                    .get(position.0 as i32, position.1 as i32)
+                    .map(|t| t.visible)
+                    .unwrap_or(false) =>
+            {
+                self.spawn_float_text(position.0, position.1, "WARD");
+            }
+            // Vines burst out of every tile of the patch: the green potion
+            // splash, reused rather than a new effect.
+            GameEvent::EntangleCast { tiles, .. } => {
+                for &(x, y) in tiles {
+                    if grid.get(x, y).map(|t| t.visible).unwrap_or(false) {
+                        self.spawn_potion_splash(
+                            x as f32 + 0.5,
+                            y as f32 + 0.5,
+                            crate::components::ItemType::RegenerationPotion,
+                        );
+                    }
+                }
             }
             GameEvent::ProjectileHit { position, damage, target, .. }
                 // Only show damage number if we hit an enemy (not a wall) AND position is visible

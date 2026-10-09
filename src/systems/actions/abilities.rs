@@ -128,7 +128,7 @@ pub fn apply_fireball(
     // Apply damage to all
     for (entity, x, y) in damaged {
         // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, entity, damage, rng);
+        crate::systems::combat::apply_damage(world, entity, damage, rng, events);
         // Interrupt life drain if entity was channeling
         interrupt_life_drain_on_damage(world, entity, events);
         // Generate threat on fireball targets
@@ -552,12 +552,23 @@ fn complete_raise_dead(
         return;
     };
 
+    consume_corpse(world, target, (x, y));
+
+    events.push(GameEvent::SkeletonRaised { owner: caster, position: (x, y) });
+}
+
+/// Consume a corpse (bones container) at `pos`: despawn it, and drop anything
+/// it held to a ground pile on the same tile so no loot is destroyed. Shared
+/// by Raise Dead and Corpse Explosion. Corpses never block movement, so there
+/// is nothing to release in the spatial cache.
+pub(super) fn consume_corpse(world: &mut World, corpse: Entity, pos: (i32, i32)) {
+    let (x, y) = pos;
     // Take the loot out of the bones, then consume them.
     let (items, gold) = world
-        .get::<&Container>(target)
+        .get::<&Container>(corpse)
         .map(|c| (c.items.clone(), c.gold))
         .unwrap_or((Vec::new(), 0));
-    let _ = world.despawn(target);
+    let _ = world.despawn(corpse);
 
     // Anything the corpse held drops to a ground pile on the same tile.
     if !items.is_empty() || gold > 0 {
@@ -576,8 +587,6 @@ fn complete_raise_dead(
             crate::components::GroundItemPile,
         ));
     }
-
-    events.push(GameEvent::SkeletonRaised { owner: caster, position: (x, y) });
 }
 
 /// Tick life drain channeling - applies damage and healing
@@ -627,7 +636,7 @@ fn tick_life_drain(
             .max(1);
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, target, damage, rng);
+        crate::systems::combat::apply_damage(world, target, damage, rng, events);
         let target_died = world
             .get::<&Health>(target)
             .map(|h| h.current <= 0)

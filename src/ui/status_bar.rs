@@ -59,6 +59,8 @@ pub struct EffectPip {
     /// Seconds it was applied (or last refreshed) with, so the sweep knows
     /// what fraction has been spent.
     pub total: f32,
+    /// Charges left, for effects that are spent per hit (Bone Ward).
+    pub charges: Option<u32>,
 }
 
 /// Extract status bar data from the world
@@ -103,6 +105,12 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
         .map(|exp| (systems::xp_progress(&exp), exp.level))
         .unwrap_or((0.0, 1));
 
+    // Bone Ward charges ride on their own component; shown on the ward's pip.
+    let ward_charges = world
+        .get::<&crate::components::BoneWard>(player_entity)
+        .ok()
+        .map(|w| w.charges);
+
     // Collect active status effects
     let active_effects = world
         .get::<&StatusEffects>(player_entity)
@@ -114,6 +122,11 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
                     effect: e.effect_type,
                     remaining: e.remaining_duration,
                     total: e.total_duration,
+                    charges: if e.effect_type == StatusEffectType::BoneWard {
+                        ward_charges
+                    } else {
+                        None
+                    },
                 })
                 .collect()
         })
@@ -466,10 +479,28 @@ fn effect_pip(
         colors::TEXT_PRIMARY,
     );
 
+    // Per-hit charges (Bone Ward) in the opposite corner, bold-ish and
+    // bone-white, since they matter more than the timer.
+    if let Some(charges) = pip.charges {
+        let text = format!("x{charges}");
+        let font = egui::FontId::proportional(EFFECT_PIP_FONT_SIZE);
+        let corner = rect.left_top() + egui::vec2(1.0, 1.0);
+        painter.text(
+            corner + egui::vec2(1.0, 1.0),
+            egui::Align2::LEFT_TOP,
+            &text,
+            font.clone(),
+            egui::Color32::BLACK,
+        );
+        painter.text(corner, egui::Align2::LEFT_TOP, &text, font, colors::TEXT_PRIMARY);
+    }
+
+    let charges = pip.charges.map(|c| format!(", {c} charge{} left", if c == 1 { "" } else { "s" }));
     response.on_hover_text(format!(
-        "{} — {:.0}s left",
+        "{} — {:.0}s left{}",
         effect_label(pip.effect),
-        pip.remaining.max(0.0)
+        pip.remaining.max(0.0),
+        charges.unwrap_or_default()
     ));
 }
 
@@ -489,6 +520,9 @@ fn effect_label(effect: StatusEffectType) -> &'static str {
         StatusEffectType::Rooted => "Rooted",
         StatusEffectType::Invulnerable => "Invuln",
         StatusEffectType::Stunned => "Stunned",
+        StatusEffectType::Guarding => "Guarding",
+        StatusEffectType::Thorns => "Thorns",
+        StatusEffectType::BoneWard => "Bone Ward",
     }
 }
 

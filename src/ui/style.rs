@@ -169,6 +169,9 @@ pub mod colors {
     pub const EFFECT_ROOTED: Color32 = Color32::from_rgb(139, 90, 43);
     pub const EFFECT_INVULNERABLE: Color32 = Color32::from_rgb(255, 215, 0);
     pub const EFFECT_STUNNED: Color32 = Color32::from_rgb(255, 230, 120);
+    pub const EFFECT_GUARDING: Color32 = Color32::from_rgb(200, 210, 230);
+    pub const EFFECT_THORNS: Color32 = Color32::from_rgb(120, 200, 80);
+    pub const EFFECT_BONE_WARD: Color32 = Color32::from_rgb(225, 225, 205);
 }
 
 /// Color for a status effect, used by both the HUD pips and the text fallback
@@ -189,6 +192,9 @@ pub fn effect_color(effect: crate::components::EffectType) -> Color32 {
         E::Rooted => colors::EFFECT_ROOTED,
         E::Invulnerable => colors::EFFECT_INVULNERABLE,
         E::Stunned => colors::EFFECT_STUNNED,
+        E::Guarding => colors::EFFECT_GUARDING,
+        E::Thorns => colors::EFFECT_THORNS,
+        E::BoneWard => colors::EFFECT_BONE_WARD,
     }
 }
 

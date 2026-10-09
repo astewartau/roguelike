@@ -89,14 +89,10 @@ pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExec
             }
         };
 
-    if time_system::start_action(
-        ctx.world,
-        player_entity,
-        action_type,
-        ctx.clock,
-        ctx.scheduler,
-    )
-    .is_err()
+    // Through the start-effects path, so a reactive ability (Sacrifice) acts
+    // the moment it starts.
+    if time_system::start_action_with_start_effects(&mut ctx.actors(), player_entity, action_type)
+        .is_err()
     {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
@@ -104,19 +100,12 @@ pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExec
         };
     }
 
-    // Start cooldown for Ranger abilities
-    if let Ok(mut ra) = ctx
-        .world
-        .get::<&mut crate::components::RangerAbilities>(player_entity)
-    {
-        let ability_index = match &action_type {
-            ActionType::Tumble { .. } => Some(1), // Index 1 = Tumble
-            ActionType::PlaceSnareTrap { .. } => Some(2), // Index 2 = SnareTrap
-            ActionType::ShootCripplingShot { .. } => Some(3), // Index 3 = CripplingShot
-            _ => None,
-        };
-        if let Some(index) = ability_index {
-            ra.start_cooldown(index);
+    // Targeted kit abilities (Tumble, Snare Trap, Crippling Shot, Sacrifice,
+    // Corpse Explosion, Entangle) are activated by a click rather than through
+    // their hotbar slot, so their cooldown starts here.
+    if let Some(ability) = systems::actions::kit_ability_for_action(&action_type) {
+        if let Ok(mut kit) = ctx.world.get::<&mut crate::components::ClassKit>(player_entity) {
+            kit.start_cooldown_for(ability);
         }
     }
 

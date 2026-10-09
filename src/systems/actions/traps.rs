@@ -58,7 +58,7 @@ pub(super) fn check_fire_trap_trigger(
 
     // Trap triggered! Apply burst damage (handles invulnerability, armor defense,
     // Protected/Barkskin) and a burning effect.
-    crate::systems::combat::apply_damage(world, victim, burst_damage, rng);
+    crate::systems::combat::apply_damage(world, victim, burst_damage, rng, events);
 
     // Interrupt life drain if victim was channeling
     interrupt_life_drain_on_damage(world, victim, events);
@@ -174,14 +174,14 @@ pub(super) fn check_dungeon_trap_trigger(
     match kind {
         DungeonTrapKind::Spike => {
             damage = crate::systems::combat::apply_damage(
-                world, victim, DUNGEON_SPIKE_TRAP_DAMAGE, rng,
+                world, victim, DUNGEON_SPIKE_TRAP_DAMAGE, rng, events,
             );
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);
         }
         DungeonTrapKind::Fire => {
             damage = crate::systems::combat::apply_damage(
-                world, victim, DUNGEON_FIRE_TRAP_DAMAGE, rng,
+                world, victim, DUNGEON_FIRE_TRAP_DAMAGE, rng, events,
             );
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);

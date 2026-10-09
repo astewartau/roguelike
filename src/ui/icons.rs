@@ -61,6 +61,13 @@ pub struct UiIcons {
     pub tumble_uv: egui::Rect,
     pub snare_trap_uv: egui::Rect,
     pub crippling_shot_uv: egui::Rect,
+    // Class-kit ability icons
+    pub guard_uv: egui::Rect,
+    pub bone_ward_uv: egui::Rect,
+    pub sacrifice_uv: egui::Rect,
+    pub corpse_explosion_uv: egui::Rect,
+    pub thorns_uv: egui::Rect,
+    pub entangle_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -118,6 +125,12 @@ impl UiIcons {
             tumble_uv: tileset.get_egui_uv(tile_ids::TUMBLE.0, tile_ids::TUMBLE.1),
             snare_trap_uv: tileset.get_egui_uv(tile_ids::PRESSURE_PLATE.0, tile_ids::PRESSURE_PLATE.1),
             crippling_shot_uv: tileset.get_egui_uv(tile_ids::CRIPPLING_SHOT.0, tile_ids::CRIPPLING_SHOT.1),
+            guard_uv: tileset.get_egui_uv(tile_ids::GUARD.0, tile_ids::GUARD.1),
+            bone_ward_uv: tileset.get_egui_uv(tile_ids::BONE_WARD.0, tile_ids::BONE_WARD.1),
+            sacrifice_uv: tileset.get_egui_uv(tile_ids::SACRIFICE.0, tile_ids::SACRIFICE.1),
+            corpse_explosion_uv: tileset.get_egui_uv(tile_ids::CORPSE_EXPLOSION.0, tile_ids::CORPSE_EXPLOSION.1),
+            thorns_uv: tileset.get_egui_uv(tile_ids::THORNS.0, tile_ids::THORNS.1),
+            entangle_uv: tileset.get_egui_uv(tile_ids::ENTANGLE.0, tile_ids::ENTANGLE.1),
         }
     }
 
@@ -190,6 +203,9 @@ impl UiIcons {
             E::Burning => (self.items_texture_id, self.fire_trap_uv),
             E::Rooted => (self.tiles_texture_id, self.snare_trap_uv),
             E::Stunned => (self.items_texture_id, self.stun_uv),
+            E::Guarding => (self.texture_for_sheet(tile_ids::GUARD.0), self.guard_uv),
+            E::Thorns => (self.texture_for_sheet(tile_ids::THORNS.0), self.thorns_uv),
+            E::BoneWard => (self.texture_for_sheet(tile_ids::BONE_WARD.0), self.bone_ward_uv),
             E::Invisible | E::Slowed | E::Invulnerable => return None,
         };
         Some((tex, uv))

@@ -232,6 +232,15 @@ pub mod tile_ids {
     pub const CRIPPLING_SHOT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 7, ITEMS_COLS)); // 27.h crippling shot (custom)
     pub const STUN: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 8, ITEMS_COLS)); // 27.i stun (custom)
 
+    // Class-kit ability icons: stock 32rogues sprites (no custom art), some
+    // tinted in the UI via `ui::hotbar::ability_icon_tint`.
+    pub const GUARD: (SpriteSheet, u32) = (SpriteSheet::Items, rc(12, 0, ITEMS_COLS)); // 12.a buckler
+    pub const BONE_WARD: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 3, TILES_COLS)); // 11.d bone 3 (tinted pale blue)
+    pub const SACRIFICE: (SpriteSheet, u32) = (SpriteSheet::Monsters, rc(5, 0, MONSTERS_COLS)); // 5.a skeleton (tinted like a raised ally)
+    pub const CORPSE_EXPLOSION: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(22, 0, TILES_COLS)); // 22.a corpse bones 1 (tinted fiery)
+    pub const THORNS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 1, TILES_COLS)); // 20.b flax (tinted thorny green)
+    pub const ENTANGLE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat (tinted vine green)
+
     // ===== TILES SHEET - TRAPS =====
 
     // Traps (row 17 of tiles.png)

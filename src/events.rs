@@ -30,6 +30,11 @@ pub enum DamageKind {
     Potion,
     /// A boss ground slam (Gnash's shockwave).
     Slam,
+    /// Druid's Thorns biting back at a melee attacker. The "attacker" of the
+    /// hit is the thorny defender.
+    Thorns,
+    /// Necromancer's Corpse Explosion blast.
+    CorpseExplosion,
 }
 
 /// Why a locked-target melee attack (`ActionType::Attack`) failed to connect.
@@ -74,6 +79,47 @@ pub enum GameEvent {
         /// (for the floating "miss" text).
         target_pos: Option<(f32, f32)>,
         reason: MissReason,
+    },
+    /// A melee blow landed on a Guarding defender: most of it was blocked
+    /// and the attacker was staggered. An `AttackHit` for the reduced damage
+    /// follows.
+    AttackBlocked {
+        attacker: Entity,
+        defender: Entity,
+        /// Tile centre of the defender (for the floating "BLOCK" text).
+        defender_pos: (f32, f32),
+    },
+    /// A Bone Ward went up with this many charges.
+    BoneWardRaised {
+        entity: Entity,
+        charges: u32,
+    },
+    /// A Bone Ward absorbed a whole hit; `charges_left` is 0 when it shatters.
+    BoneWardAbsorbed {
+        entity: Entity,
+        charges_left: u32,
+        /// Tile centre of the warded entity.
+        position: (f32, f32),
+    },
+    /// A necromancer swapped places with one of their raised skeletons.
+    SacrificeSwapped {
+        caster: Entity,
+        skeleton: Entity,
+    },
+    /// A corpse was detonated. `hits` is how many hostiles the blast struck.
+    /// VFX/audio/shake ride on the `FireballExplosion` emitted alongside.
+    CorpseExploded {
+        caster: Entity,
+        position: (i32, i32),
+        hits: u32,
+    },
+    /// Entangle took hold around `position`; `rooted` hostiles were caught.
+    /// `tiles` is the patch, for the vine-burst VFX.
+    EntangleCast {
+        caster: Entity,
+        position: (i32, i32),
+        rooted: u32,
+        tiles: Vec<(i32, i32)>,
     },
     /// An entity died
     EntityDied {

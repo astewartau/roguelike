@@ -19,10 +19,11 @@ use super::UiActions;
 use crate::constants::*;
 use crate::ease;
 use crate::components::{
-    AbilityType, Actor, ClassAbility, Inventory, ItemType, LearnedAbilities, RangerAbilities,
+    AbilityType, Actor, ClassAbility, ClassKit, Inventory, ItemType, LearnedAbilities,
     SecondaryAbility,
 };
 use crate::systems;
+use crate::tile::tile_ids;
 use hecs::{Entity, World};
 
 /// An entry placed in a hotbar slot: an inventory item or an ability.
@@ -177,7 +178,43 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
         | AbilityType::LearnedSpeed
         | AbilityType::LearnedInvisibility => (icons.items_texture_id, icons.scroll_uv),
         AbilityType::RaiseDead => (icons.items_texture_id, icons.raise_dead_uv),
+        AbilityType::Guard => (icons.texture_for_sheet(tile_ids::GUARD.0), icons.guard_uv),
+        AbilityType::BoneWard => (icons.texture_for_sheet(tile_ids::BONE_WARD.0), icons.bone_ward_uv),
+        AbilityType::Sacrifice => (icons.texture_for_sheet(tile_ids::SACRIFICE.0), icons.sacrifice_uv),
+        AbilityType::CorpseExplosion => (
+            icons.texture_for_sheet(tile_ids::CORPSE_EXPLOSION.0),
+            icons.corpse_explosion_uv,
+        ),
+        AbilityType::Thorns => (icons.texture_for_sheet(tile_ids::THORNS.0), icons.thorns_uv),
+        AbilityType::Entangle => (icons.texture_for_sheet(tile_ids::ENTANGLE.0), icons.entangle_uv),
     }
+}
+
+/// Tint multiplied into an ability's icon. Stock sprites reused for a kit
+/// ability are tinted so they read as that ability rather than as the terrain
+/// or monster they were drawn for (CLAUDE.md: tint before custom art).
+pub fn ability_icon_tint(ability: AbilityType) -> egui::Color32 {
+    match ability {
+        AbilityType::BoneWard => egui::Color32::from_rgb(200, 220, 255),
+        // Same sickly green as a raised skeleton's SpriteTint.
+        AbilityType::Sacrifice => egui::Color32::from_rgb(166, 255, 191),
+        AbilityType::CorpseExplosion => egui::Color32::from_rgb(255, 140, 90),
+        AbilityType::Thorns => egui::Color32::from_rgb(150, 230, 100),
+        AbilityType::Entangle => egui::Color32::from_rgb(110, 220, 90),
+        _ => egui::Color32::WHITE,
+    }
+}
+
+/// Multiply two tints channel by channel (egui tints multiply the texture, so
+/// stacking a dim-when-unusable tint on an ability tint is a product).
+pub fn mul_tint(a: egui::Color32, b: egui::Color32) -> egui::Color32 {
+    let m = |x: u8, y: u8| ((x as u16 * y as u16) / 255) as u8;
+    egui::Color32::from_rgba_unmultiplied(
+        m(a.r(), b.r()),
+        m(a.g(), b.g()),
+        m(a.b(), b.b()),
+        m(a.a(), b.a()),
+    )
 }
 
 /// Look up an ability's status for the player: (cooldown_remaining, cooldown_total, usable).
@@ -198,9 +235,9 @@ pub fn ability_status(world: &World, player: Entity, ability: AbilityType) -> (f
             return (a.cooldown_remaining, a.cooldown_total, can_afford);
         }
     }
-    if let Ok(ra) = world.get::<&RangerAbilities>(player) {
-        if let Some((_, cd, total)) = ra.abilities.iter().find(|(at, _, _)| *at == ability) {
-            return (*cd, *total, can_afford);
+    if let Ok(kit) = world.get::<&ClassKit>(player) {
+        if let Some(k) = kit.abilities.iter().find(|k| k.ability == ability) {
+            return (k.cooldown_remaining, k.cooldown_total, can_afford);
         }
     }
     if let Ok(la) = world.get::<&LearnedAbilities>(player) {
@@ -413,7 +450,8 @@ fn draw_bar(
                 let (tex, uv) = ability_icon(icons, ab);
                 // The icon swells for an instant as the ability returns.
                 let pop = 1.0 + (HOTBAR_READY_POP_SCALE - 1.0) * ready_pop;
-                paint_icon(ui, rect, tex, uv, slot_tint(usable), pop);
+                let tint = mul_tint(slot_tint(usable), ability_icon_tint(ab));
+                paint_icon(ui, rect, tex, uv, tint, pop);
                 if cd > 0.0 {
                     // A wipe rather than a uniform dim: the sweep uncovers the
                     // icon from the bottom as the cooldown runs down, so the
@@ -600,16 +638,22 @@ fn draw_count_badge(ui: &egui::Ui, rect: egui::Rect, count: u32) {
 pub fn draw_drag_ghost(ctx: &egui::Context, icons: &UiIcons) {
     if let Some(drag) = egui::DragAndDrop::payload::<HotbarDrag>(ctx) {
         if let Some(pos) = ctx.pointer_interact_pos() {
-            let (tex, uv) = match drag.entry {
-                HotbarEntry::Item(item) => (icons.items_texture_id, icons.get_item_uv(item)),
-                HotbarEntry::Ability(ab) => ability_icon(icons, ab),
+            let (tex, uv, tint) = match drag.entry {
+                HotbarEntry::Item(item) => {
+                    (icons.items_texture_id, icons.get_item_uv(item), egui::Color32::WHITE)
+                }
+                HotbarEntry::Ability(ab) => {
+                    let (tex, uv) = ability_icon(icons, ab);
+                    (tex, uv, ability_icon_tint(ab))
+                }
             };
             let rect = egui::Rect::from_center_size(pos, egui::vec2(40.0, 40.0));
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("hotbar_drag_ghost"),
             ));
-            painter.image(tex, rect, uv, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200));
+            let ghost = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200);
+            painter.image(tex, rect, uv, mul_tint(ghost, tint));
         }
     }
 }
