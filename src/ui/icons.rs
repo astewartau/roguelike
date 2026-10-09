@@ -68,6 +68,10 @@ pub struct UiIcons {
     pub corpse_explosion_uv: egui::Rect,
     pub thorns_uv: egui::Rect,
     pub entangle_uv: egui::Rect,
+    pub call_rain_uv: egui::Rect,
+    // Status-effect icons (stock sprites, tinted via `effect_icon_tint`)
+    pub oil_puddle_uv: egui::Rect,
+    pub blood_uv: egui::Rect,
 }
 
 impl UiIcons {
@@ -131,6 +135,9 @@ impl UiIcons {
             corpse_explosion_uv: tileset.get_egui_uv(tile_ids::CORPSE_EXPLOSION.0, tile_ids::CORPSE_EXPLOSION.1),
             thorns_uv: tileset.get_egui_uv(tile_ids::THORNS.0, tile_ids::THORNS.1),
             entangle_uv: tileset.get_egui_uv(tile_ids::ENTANGLE.0, tile_ids::ENTANGLE.1),
+            call_rain_uv: tileset.get_egui_uv(tile_ids::CALL_RAIN.0, tile_ids::CALL_RAIN.1),
+            oil_puddle_uv: tileset.get_egui_uv(tile_ids::OIL_PUDDLE.0, tile_ids::OIL_PUDDLE.1),
+            blood_uv: tileset.get_egui_uv(tile_ids::BLOOD_1.0, tile_ids::BLOOD_1.1),
         }
     }
 
@@ -206,9 +213,29 @@ impl UiIcons {
             E::Guarding => (self.texture_for_sheet(tile_ids::GUARD.0), self.guard_uv),
             E::Thorns => (self.texture_for_sheet(tile_ids::THORNS.0), self.thorns_uv),
             E::BoneWard => (self.texture_for_sheet(tile_ids::BONE_WARD.0), self.bone_ward_uv),
-            E::Invisible | E::Slowed | E::Invulnerable => return None,
+            E::Wet => (self.items_texture_id, self.water_flask_uv),
+            E::Oiled => (self.texture_for_sheet(tile_ids::OIL_PUDDLE.0), self.oil_puddle_uv),
+            E::Bleeding => (self.texture_for_sheet(tile_ids::BLOOD_1.0), self.blood_uv),
+            // Nothing in the sheets reads as "poisoned" without being mistaken
+            // for a potion or a spider; the green text label says it.
+            E::Invisible | E::Slowed | E::Invulnerable | E::Poisoned => return None,
         };
         Some((tex, uv))
+    }
+
+    /// Tint multiplied into a status effect's icon, for stock sprites that
+    /// need it to read as the effect (the oil puddle decal is a green slime
+    /// pool untinted). White for everything else.
+    pub fn effect_icon_tint(effect: crate::components::EffectType) -> egui::Color32 {
+        use crate::components::EffectType as E;
+        match effect {
+            // Same dark brown as the oil puddles on the floor (OIL_PUDDLE_TINT).
+            E::Oiled => {
+                let (r, g, b) = crate::constants::OIL_PUDDLE_TINT;
+                egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+            }
+            _ => egui::Color32::WHITE,
+        }
     }
 
     /// UI icon tint for an item type (fire arrows render as orange arrows,

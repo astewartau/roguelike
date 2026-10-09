@@ -70,6 +70,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::CorpseExplosion { .. } => ACTION_SHOOT_DURATION, // Like a targeted spell
         ActionType::ActivateThorns => THORNS_ACTIVATION_DURATION,
         ActionType::Entangle { .. } => ENTANGLE_CAST_DURATION,
+        ActionType::CallRain { .. } => CALL_RAIN_CAST_DURATION,
     };
 
     // Speed modifies duration: higher speed = shorter duration

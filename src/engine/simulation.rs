@@ -238,6 +238,7 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
 
         time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
         time_system::tick_burn_damage(ctx.world, now, ctx.events);
+        time_system::tick_dot_damage(ctx.world, now, ctx.rng, ctx.events);
         time_system::tick_status_effects(ctx.world, elapsed);
         time_system::tick_ability_cooldowns(ctx.world, elapsed);
         time_system::tick_ranged_cooldowns(ctx.world, elapsed);
@@ -374,6 +375,13 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
             }
             GameEvent::BurnDamage { entity, .. } if *entity == player_entity => {
                 record_player_damage_source(world, player_entity, "burning".to_string());
+            }
+            GameEvent::DotDamage { entity, kind, .. } if *entity == player_entity => {
+                let source = match kind {
+                    crate::events::DamageKind::Bleed => "bleeding",
+                    _ => "poison",
+                };
+                record_player_damage_source(world, player_entity, source.to_string());
             }
             GameEvent::StarvationDamage { entity, .. } if *entity == player_entity => {
                 record_player_damage_source(world, player_entity, "starvation".to_string());

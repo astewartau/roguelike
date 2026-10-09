@@ -240,6 +240,7 @@ pub mod tile_ids {
     pub const CORPSE_EXPLOSION: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(22, 0, TILES_COLS)); // 22.a corpse bones 1 (tinted fiery)
     pub const THORNS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 1, TILES_COLS)); // 20.b flax (tinted thorny green)
     pub const ENTANGLE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat (tinted vine green)
+    pub const CALL_RAIN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 3, TILES_COLS)); // 23.d slime large (tinted rain blue: a puddle)
 
     // ===== TILES SHEET - TRAPS =====
 

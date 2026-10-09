@@ -2,6 +2,7 @@
 
 use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::tile::{SpriteSheet, tile_ids};
+use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
 use crate::fov::Fov;
 use crate::grid::Grid;
 use hecs::{Entity, World};
@@ -287,6 +288,19 @@ pub fn calculate_illumination(
     }
 }
 
+/// Multiply a Wet (bluish) or Oiled (greasy) look into an entity's tint, so
+/// the surface status reads on the sprite as well as in the HUD.
+fn surface_status_tint(world: &World, id: Entity, (r, g, b): (f32, f32, f32)) -> (f32, f32, f32) {
+    let status = if super::effects::entity_has_effect(world, id, EffectType::Wet) {
+        WET_SPRITE_TINT
+    } else if super::effects::entity_has_effect(world, id, EffectType::Oiled) {
+        OILED_SPRITE_TINT
+    } else {
+        return (r, g, b);
+    };
+    (r * status.0, g * status.1, b * status.2)
+}
+
 /// Collect entities that should be rendered, with fog of war applied.
 /// Entities are sorted by layer: ground items first, then actors, then player on top.
 pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, real_time: f32) -> Vec<RenderEntity> {
@@ -319,6 +333,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
             .get::<&SpriteTint>(id)
             .map(|t| (t.r, t.g, t.b))
             .unwrap_or(NO_TINT);
+        let base_tint = surface_status_tint(world, id, base_tint);
         let tint = super::animation::hit_flash_tint(world, id, id == player_entity, base_tint);
 
         let entity_effects = effects::NONE;

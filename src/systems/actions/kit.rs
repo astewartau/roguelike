@@ -1,5 +1,5 @@
 //! Class-kit abilities: Guard (Fighter), Bone Ward / Sacrifice / Corpse
-//! Explosion (Necromancer), Thorns / Entangle (Druid).
+//! Explosion (Necromancer), Thorns / Entangle / Call Rain (Druid).
 //!
 //! # Reactive abilities act at action START
 //!
@@ -39,6 +39,7 @@ pub fn kit_ability_for_action(action: &ActionType) -> Option<AbilityType> {
         ActionType::Sacrifice { .. } => Some(AbilityType::Sacrifice),
         ActionType::CorpseExplosion { .. } => Some(AbilityType::CorpseExplosion),
         ActionType::Entangle { .. } => Some(AbilityType::Entangle),
+        ActionType::CallRain { .. } => Some(AbilityType::CallRain),
         _ => None,
     }
 }
@@ -181,6 +182,12 @@ fn start_sacrifice(ctx: &mut EffectCtx, caster: Entity, skeleton: Entity) {
         }
         ctx.spatial.update_position(entity, old, new);
         ctx.events.push(GameEvent::EntityMoved { entity, from: old, to: new });
+    }
+    // Both arrive on the other's tile; each tile acts on its new occupant.
+    for (entity, tile) in [(caster, to), (skeleton, from)] {
+        crate::systems::tile_effects::on_enter_tile(
+            ctx.world, ctx.grid, entity, tile, ctx.events, ctx.rng,
+        );
     }
 
     // Enemies mid-swing at the caster turn on the skeleton.
@@ -370,6 +377,30 @@ pub fn apply_entangle(ctx: &mut EffectCtx, caster: Entity, tx: i32, ty: i32) -> 
         rooted: victims.len() as u32,
         tiles,
     });
+    ActionResult::Completed
+}
+
+/// A downpour over `(tx, ty)`: everything within `CALL_RAIN_RADIUS` is
+/// doused and soaked through the same path as a thrown water flask
+/// (`fire::splash_water`) — creature fires, grass fires, burning oil and webs
+/// go out, grass is soaked (`WetGrass`), and every creature in the area,
+/// friend or foe (the druid too, if inside), becomes Wet.
+pub fn apply_call_rain(ctx: &mut EffectCtx, caster: Entity, tx: i32, ty: i32) -> ActionResult {
+    let Some(from) = queries::get_entity_position(ctx.world, caster) else {
+        return ActionResult::Invalid;
+    };
+    if (tx - from.0).abs().max((ty - from.1).abs()) > CALL_RAIN_RANGE {
+        return ActionResult::Blocked;
+    }
+
+    let doused =
+        crate::systems::fire::splash_water(ctx.world, ctx.grid, tx, ty, CALL_RAIN_RADIUS, ctx.events);
+
+    let tiles: Vec<(i32, i32)> = (-CALL_RAIN_RADIUS..=CALL_RAIN_RADIUS)
+        .flat_map(|dy| (-CALL_RAIN_RADIUS..=CALL_RAIN_RADIUS).map(move |dx| (tx + dx, ty + dy)))
+        .filter(|&(x, y)| ctx.grid.is_walkable(x, y))
+        .collect();
+    ctx.events.push(GameEvent::RainCalled { caster, position: (tx, ty), tiles, doused });
     ActionResult::Completed
 }
 
@@ -756,7 +787,10 @@ mod tests {
                 AbilityType::CripplingShot
             ]
         );
-        assert_eq!(kit(PlayerClass::Druid), vec![AbilityType::Thorns, AbilityType::Entangle]);
+        assert_eq!(
+            kit(PlayerClass::Druid),
+            vec![AbilityType::Thorns, AbilityType::Entangle, AbilityType::CallRain]
+        );
         assert_eq!(
             kit(PlayerClass::Necromancer),
             vec![AbilityType::BoneWard, AbilityType::Sacrifice, AbilityType::CorpseExplosion]
@@ -768,5 +802,89 @@ mod tests {
                 assert!(k.cooldown_total > 0.0);
             }
         }
+    }
+
+    /// Both ends of a Sacrifice swap run the arrival hook: the skeleton lands
+    /// in the caster's water and comes up Wet, the caster lands in the
+    /// skeleton's oil and comes up Oiled.
+    #[test]
+    fn sacrifice_swap_runs_tile_effects_for_both() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        arena.grid.water_positions.push((5, 5));
+        let skeleton = raised_skeleton(&mut arena, 5, 7);
+        crate::spawning::spawn_oil_puddle(&mut arena.world, 5, 7);
+
+        arena.player_does(ActionType::Sacrifice { skeleton });
+        assert_eq!(arena.pos(player), (5, 7));
+        assert!(queries::has_status_effect(&arena.world, player, EffectType::Oiled));
+        assert!(queries::has_status_effect(&arena.world, skeleton, EffectType::Wet));
+    }
+
+    /// Call Rain puts out everything burning in the area — creatures, grass,
+    /// oil — soaks the grass, and leaves every creature in it Wet, the druid
+    /// included. A creature outside the radius is untouched.
+    #[test]
+    fn call_rain_douses_and_soaks_everyone_in_the_area() {
+        use crate::components::{BurningGrass, BurningOil, WetGrass};
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        for x in 7..=9 {
+            if let Some(t) = arena.grid.get_mut(x, 7) {
+                t.tile_type = TileType::TallGrass;
+            }
+        }
+        crate::spawning::spawn_burning_grass(&mut arena.world, 8, 7);
+        let puddle = crate::spawning::spawn_oil_puddle(&mut arena.world, 6, 6);
+        crate::systems::fire::ignite_oil_puddle(&mut arena.world, puddle);
+        let rat = arena.rat(7, 6, 0.1);
+        effects::add_effect_to_entity(&mut arena.world, rat, EffectType::Burning, 30.0);
+        effects::add_effect_to_entity(&mut arena.world, player, EffectType::Oiled, 30.0);
+        let far = arena.rat(13, 13, 0.1);
+
+        arena.player_does(ActionType::CallRain { target_x: 7, target_y: 7 });
+
+        assert!(arena.world.get::<&BurningOil>(puddle).is_err(), "oil fire out");
+        assert!(arena.world.get::<&crate::components::OilPuddle>(puddle).is_ok(), "puddle stays");
+        assert_eq!(arena.world.query::<&BurningGrass>().iter().count(), 0, "grass fire out");
+        let soaked: Vec<(i32, i32)> = arena
+            .world
+            .query::<(&Position, &WetGrass)>()
+            .iter()
+            .map(|(_, (p, _))| (p.x, p.y))
+            .collect();
+        assert!(soaked.contains(&(9, 7)), "grass in the area is soaked: {soaked:?}");
+        assert!(!queries::has_status_effect(&arena.world, rat, EffectType::Burning));
+        assert!(queries::has_status_effect(&arena.world, rat, EffectType::Wet));
+        assert!(queries::has_status_effect(&arena.world, player, EffectType::Wet), "druid in range");
+        assert!(!queries::has_status_effect(&arena.world, player, EffectType::Oiled), "oil washed off");
+        assert!(!queries::has_status_effect(&arena.world, far, EffectType::Wet), "outside the rain");
+
+        let mut log = crate::ui::MessageLog::new(player);
+        for ev in &arena.seen {
+            log.record_event(ev, &arena.world);
+        }
+        let lines = log.lines();
+        assert!(lines.iter().any(|l| l == "You are soaked."), "{lines:?}");
+        assert!(lines.iter().any(|l| l == "Rain pours down and puts out 3 fires."), "{lines:?}");
+    }
+
+    /// Out of range is refused.
+    #[test]
+    fn call_rain_respects_its_range() {
+        let mut arena = Arena::new((1, 1));
+        let r = apply_call_rain(
+            &mut EffectCtx {
+                world: &mut arena.world,
+                grid: &mut arena.grid,
+                spatial: &mut arena.cache,
+                events: &mut arena.events,
+                rng: &mut arena.rng,
+            },
+            arena.player,
+            1 + CALL_RAIN_RANGE + 1,
+            1,
+        );
+        assert_eq!(r, ActionResult::Blocked);
     }
 }

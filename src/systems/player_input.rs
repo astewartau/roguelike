@@ -59,6 +59,7 @@ pub enum PlayerIntent {
     CorpseExplosion { corpse: Entity },
     /// Druid: root hostiles around a tile
     Entangle { target_x: i32, target_y: i32 },
+    CallRain { target_x: i32, target_y: i32 },
 }
 
 /// Result of validating a targeting action
@@ -276,6 +277,11 @@ pub fn intent_to_action(
         }
 
         PlayerIntent::Entangle { target_x, target_y } => Some(ActionType::Entangle {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
+
+        PlayerIntent::CallRain { target_x, target_y } => Some(ActionType::CallRain {
             target_x: *target_x,
             target_y: *target_y,
         }),

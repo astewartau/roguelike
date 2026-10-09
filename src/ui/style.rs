@@ -172,6 +172,10 @@ pub mod colors {
     pub const EFFECT_GUARDING: Color32 = Color32::from_rgb(200, 210, 230);
     pub const EFFECT_THORNS: Color32 = Color32::from_rgb(120, 200, 80);
     pub const EFFECT_BONE_WARD: Color32 = Color32::from_rgb(225, 225, 205);
+    pub const EFFECT_WET: Color32 = Color32::from_rgb(90, 160, 230);
+    pub const EFFECT_OILED: Color32 = Color32::from_rgb(150, 115, 70);
+    pub const EFFECT_POISONED: Color32 = Color32::from_rgb(120, 200, 60);
+    pub const EFFECT_BLEEDING: Color32 = Color32::from_rgb(200, 40, 40);
 }
 
 /// Color for a status effect, used by both the HUD pips and the text fallback
@@ -195,6 +199,10 @@ pub fn effect_color(effect: crate::components::EffectType) -> Color32 {
         E::Guarding => colors::EFFECT_GUARDING,
         E::Thorns => colors::EFFECT_THORNS,
         E::BoneWard => colors::EFFECT_BONE_WARD,
+        E::Wet => colors::EFFECT_WET,
+        E::Oiled => colors::EFFECT_OILED,
+        E::Poisoned => colors::EFFECT_POISONED,
+        E::Bleeding => colors::EFFECT_BLEEDING,
     }
 }
 

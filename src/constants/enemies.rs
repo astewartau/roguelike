@@ -36,6 +36,9 @@ pub const RAT_INTELLIGENCE: i32 = 1;
 pub const RAT_AGILITY: i32 = 8;
 /// Rat attack damage (weak bite)
 pub const RAT_DAMAGE: i32 = 5;
+/// Chance a connecting rat bite opens a wound (Bleeding for `BLEED_DURATION`).
+/// Higher makes rat packs a slow attrition threat rather than chip damage.
+pub const RAT_BLEED_CHANCE: f32 = 0.3;
 
 // SKELETON ARCHER
 /// Skeleton archer health (slightly weaker than melee skeleton)
@@ -147,6 +150,9 @@ pub const GIANT_SPIDER_AGILITY: i32 = 6;
 pub const GIANT_SPIDER_DAMAGE: i32 = 9;
 /// Duration of the Slowed venom applied by a giant spider's bite.
 pub const SPIDER_VENOM_SLOW_DURATION: f32 = 4.0;
+/// Poisoned duration from a lesser giant spider's bite (weaker venom than the
+/// Giant Spider's `POISON_DURATION`). 0 would make lesser spiders non-venomous.
+pub const LESSER_SPIDER_POISON_DURATION: f32 = 3.0;
 
 // WEBS (see systems/webs.rs and the web arm of systems/fire.rs)
 /// Seconds between a spider laying webs (while chasing or idling).
@@ -265,6 +271,10 @@ pub const SNEAK_ALERTNESS_MULT: f32 = 0.35;
 /// Multiplier on a not-yet-alerted (Idle) enemy's sight range vs a sneaking
 /// player — lets you slip past awake-but-unalerted wanderers.
 pub const SNEAK_SIGHT_MULT: f32 = 0.5;
+/// Multiplier on how fast unaware enemies gain alertness on a Wet player:
+/// dripping, squelching footsteps are noisy. Stacks with sneaking (a wet sneak
+/// is still quieter than a wet walk). 1.0 would make water stealth-neutral.
+pub const WET_STEALTH_PENALTY: f32 = 1.5;
 
 /// Effective detection radius (tiles) when the target is standing in concealing
 /// terrain (tall grass). At 1, only an adjacent enemy can pick you out of the

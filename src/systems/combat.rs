@@ -124,13 +124,14 @@ pub fn resolve_weapon_on_hit(
             // fire::try_combat_ignite); the fire system then handles
             // spread, grass ignition, and dousing.
             Affix::OnHitIgnite(chance) if !target_died && rng.gen::<f32>() < *chance => {
-                crate::systems::effects::add_effect_to_entity(
+                // A Wet target refuses the fire (see effects::add_effect).
+                let ignited = crate::systems::effects::add_effect_to_entity(
                     world,
                     target,
                     EffectType::Burning,
                     BURNING_DURATION,
                 );
-                if let Some(pos) = crate::queries::get_entity_position(world, target) {
+                if let Some(pos) = crate::queries::get_entity_position(world, target).filter(|_| ignited) {
                     events.push(GameEvent::CaughtFire { entity: target, position: pos });
                 }
             }
@@ -231,6 +232,9 @@ fn try_knockback(
         to: dest,
     });
 
+    // Whatever the victim lands in acts on them: water, oil, fire, traps.
+    crate::systems::tile_effects::on_enter_tile(world, grid, target, dest, events, rng);
+
     // Knocked into a lit brazier? It topples onto the victim, spilling fire
     // over the tile they just landed on (see systems::fire::topple_brazier).
     let brazier_hit: Option<Entity> = world
@@ -258,36 +262,67 @@ pub fn apply_damage(
     rng: &mut impl Rng,
     events: &mut crate::events::EventQueue,
 ) -> i32 {
+    apply_damage_inner(world, target, raw, false, rng, events)
+}
+
+/// Apply one damage-over-time tick (Poisoned, Bleeding) to `target`.
+///
+/// DoTs are not blows, so compared with [`apply_damage`] they **bypass armor**
+/// (venom and open wounds are not stopped by a breastplate), get no sneak
+/// multiplier, do not spend a Bone Ward charge (the ward absorbs *hits*), and
+/// make no combat noise. Invulnerability and Protected/Barkskin still apply,
+/// as do waking an unaware victim and the morale check.
+pub fn apply_damage_dot(
+    world: &mut World,
+    target: Entity,
+    raw: i32,
+    rng: &mut impl Rng,
+    events: &mut crate::events::EventQueue,
+) -> i32 {
+    apply_damage_inner(world, target, raw, true, rng, events)
+}
+
+fn apply_damage_inner(
+    world: &mut World,
+    target: Entity,
+    raw: i32,
+    dot: bool,
+    rng: &mut impl Rng,
+    events: &mut crate::events::EventQueue,
+) -> i32 {
     // Invulnerable negates all damage.
     if crate::queries::has_status_effect(world, target, EffectType::Invulnerable) {
         return 0;
     }
 
     // A Bone Ward swallows the whole hit and spends a charge.
-    if absorb_with_bone_ward(world, target, events) {
+    if !dot && absorb_with_bone_ward(world, target, events) {
         return 0;
     }
 
     // Sneak attack: an unaware target takes extra damage from this hit.
     // Symmetric for the player: while asleep (the `Asleep` marker the sleep
     // action adds) the player counts as unaware and eats the same multiplier.
-    let unaware = world
-        .get::<&ChaseAI>(target)
-        .map(|ai| ai.state == crate::components::AIState::Unaware)
-        .unwrap_or(false)
-        || world.get::<&crate::components::Asleep>(target).is_ok();
+    let unaware = !dot
+        && (world
+            .get::<&ChaseAI>(target)
+            .map(|ai| ai.state == crate::components::AIState::Unaware)
+            .unwrap_or(false)
+            || world.get::<&crate::components::Asleep>(target).is_ok());
     let mut dmg = if unaware {
         (raw as f32 * SNEAK_ATTACK_MULT) as i32
     } else {
         raw
     };
 
-    // Flat armor reduction (0 for entities without armor).
-    let defense = world
-        .get::<&Equipment>(target)
-        .map(|e| e.total_defense())
-        .unwrap_or(0);
-    dmg -= defense;
+    // Flat armor reduction (0 for entities without armor). DoTs bypass it.
+    if !dot {
+        let defense = world
+            .get::<&Equipment>(target)
+            .map(|e| e.total_defense())
+            .unwrap_or(0);
+        dmg -= defense;
+    }
 
     // Multiplicative damage reduction from Protected / Barkskin.
     if crate::queries::has_status_effect(world, target, EffectType::Protected)
@@ -327,7 +362,8 @@ pub fn apply_damage(
     }
 
     // Combat is loud: wake nearby sleeping enemies that "hear" the impact.
-    if let Some(pos) = pos {
+    // A DoT tick is silent.
+    if let Some(pos) = pos.filter(|_| !dot) {
         crate::systems::ai::wake_enemies_in_radius(world, pos, MELEE_NOISE_RADIUS);
     }
 
@@ -604,6 +640,75 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::StatusEffects;
+
+    /// A knockback shove lands its victim on a tile like any other arrival:
+    /// shoved into an unlit oil puddle, it comes up Oiled (and slippery);
+    /// shoved into water, it comes up Wet and no longer burning.
+    #[test]
+    fn knockback_landing_runs_tile_effects() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        let mut grid = crate::grid::Grid::new_floor(20, 20, 0, &mut rng);
+        grid.water_positions.clear();
+        for x in 1..10 {
+            for y in 1..4 {
+                if let Some(t) = grid.get_mut(x, y) {
+                    t.tile_type = crate::tile::TileType::Floor;
+                }
+            }
+        }
+        grid.water_positions.push((4, 3));
+
+        let mut world = World::new();
+        let attacker = world.spawn((Position::new(1, 1),));
+        let victim = world.spawn((Position::new(2, 1), StatusEffects::new()));
+        let wet_victim = world.spawn((Position::new(2, 3), StatusEffects::new()));
+        let shover = world.spawn((Position::new(1, 3),));
+        crate::spawning::spawn_oil_puddle(&mut world, 3, 1);
+        crate::systems::effects::add_effect_to_entity(
+            &mut world,
+            wet_victim,
+            EffectType::Burning,
+            BURNING_DURATION,
+        );
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        let mut events = crate::events::EventQueue::new();
+
+        try_knockback(&mut world, &grid, &mut cache, attacker, victim, &mut events, &mut rng);
+        assert_eq!(crate::queries::get_entity_position(&world, victim), Some((3, 1)));
+        assert!(crate::queries::has_status_effect(&world, victim, EffectType::Oiled));
+        assert!(crate::queries::is_slippery(&world, victim));
+
+        // Shove the burning victim twice, (2,3) -> (3,3) -> (4,3): into the water.
+        try_knockback(&mut world, &grid, &mut cache, shover, wet_victim, &mut events, &mut rng);
+        if let Ok(mut p) = world.get::<&mut Position>(shover) {
+            p.x = 2;
+        }
+        try_knockback(&mut world, &grid, &mut cache, shover, wet_victim, &mut events, &mut rng);
+        assert_eq!(crate::queries::get_entity_position(&world, wet_victim), Some((4, 3)));
+        assert!(crate::queries::has_status_effect(&world, wet_victim, EffectType::Wet));
+        assert!(!crate::queries::has_status_effect(&world, wet_victim, EffectType::Burning));
+    }
+
+    /// DoT damage bypasses armor; a normal hit does not.
+    #[test]
+    fn dot_damage_ignores_armor() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let mut events = crate::events::EventQueue::new();
+        let mut world = World::new();
+        let mut armor = crate::components::Equipment::with_weapon(Weapon::claws(1));
+        armor.body = Some(crate::components::ItemInstance::plain(crate::components::ItemType::ChainMail));
+        let defense = armor.total_defense();
+        assert!(defense >= 1, "the test needs real armor");
+        let e = world.spawn((Health::new(50), armor, StatusEffects::new()));
+
+        let hit = apply_damage(&mut world, e, defense, &mut rng, &mut events);
+        assert_eq!(hit, 1, "armor soaks a hit down to the minimum");
+        let dot = apply_damage_dot(&mut world, e, 2, &mut rng, &mut events);
+        assert_eq!(dot, 2, "a DoT tick ignores armor");
+    }
 
     #[test]
     fn test_weapon_damage() {

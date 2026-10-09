@@ -896,6 +896,13 @@ pub fn process_frame(
                             result.from_keyboard = false;
                             return result;
                         }
+                        AbilityType::CallRain => {
+                            // Any tile in range; the rain falls on whoever is there.
+                            input.cancel_targeting();
+                            result.player_intent = Some(PlayerIntent::CallRain { target_x, target_y });
+                            result.from_keyboard = false;
+                            return result;
+                        }
                         AbilityType::CripplingShot => {
                             // Crippling shot requires line of sight and explored tile
                             use crate::components::BlocksVision;

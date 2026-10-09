@@ -182,6 +182,8 @@ pub enum AbilityType {
     Thorns,
     /// Druid: vines root hostiles around a tile (longer in grass).
     Entangle,
+    /// Druid: a downpour over a tile douses fires and soaks everyone in it.
+    CallRain,
 }
 
 impl AbilityType {
@@ -215,6 +217,7 @@ impl AbilityType {
             AbilityType::CorpseExplosion => "Corpse Explosion",
             AbilityType::Thorns => "Thorns",
             AbilityType::Entangle => "Entangle",
+            AbilityType::CallRain => "Call Rain",
         }
     }
 
@@ -248,6 +251,7 @@ impl AbilityType {
             AbilityType::CorpseExplosion => "Detonate a corpse, hurting nearby enemies",
             AbilityType::Thorns => "Melee attackers take damage back (scales with INT)",
             AbilityType::Entangle => "Root enemies around a tile (longer in grass)",
+            AbilityType::CallRain => "Douse fires and soak everyone around a tile",
         }
     }
 
@@ -282,6 +286,7 @@ impl AbilityType {
             AbilityType::CorpseExplosion => CORPSE_EXPLOSION_ENERGY_COST,
             AbilityType::Thorns => THORNS_ENERGY_COST,
             AbilityType::Entangle => ENTANGLE_ENERGY_COST,
+            AbilityType::CallRain => CALL_RAIN_ENERGY_COST,
         }
     }
 
@@ -1073,6 +1078,20 @@ pub enum EffectType {
     /// charge count lives on the [`BoneWard`] component; this effect is its
     /// timer and HUD pip.
     BoneWard,
+    /// Soaked (water, rain, a thrown flask). Cannot catch fire; gaining it
+    /// puts out Burning and washes off Oiled. Noisy: unaware enemies notice a
+    /// Wet player faster (`WET_STEALTH_PENALTY`).
+    Wet,
+    /// Slick with oil (stepped in an unlit oil puddle). Catches fire far more
+    /// readily, burns hotter while Burning, and is slippery
+    /// (`queries::is_slippery`). Burns off with the fire.
+    Oiled,
+    /// Venom in the blood: `POISON_DAMAGE` every `POISON_TICK_INTERVAL`,
+    /// ignoring armor (spider bites).
+    Poisoned,
+    /// An open wound: `BLEED_DAMAGE` every `BLEED_TICK_INTERVAL`, ignoring
+    /// armor (rat bites).
+    Bleeding,
 }
 
 /// An active status effect with remaining duration
@@ -1237,6 +1256,8 @@ pub enum ActionType {
     ActivateThorns,
     /// Druid kit: root hostiles around a tile (applied at completion).
     Entangle { target_x: i32, target_y: i32 },
+    /// Druid kit: rain over a tile (applied at completion).
+    CallRain { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -1301,6 +1322,7 @@ impl ActionType {
             ActionType::CorpseExplosion { .. } => Flat(CORPSE_EXPLOSION_ENERGY_COST),
             ActionType::ActivateThorns => Flat(THORNS_ENERGY_COST),
             ActionType::Entangle { .. } => Flat(ENTANGLE_ENERGY_COST),
+            ActionType::CallRain { .. } => Flat(CALL_RAIN_ENERGY_COST),
         }
     }
 
@@ -2398,6 +2420,7 @@ impl ClassKit {
             PlayerClass::Druid => Self::new(&[
                 (AbilityType::Thorns, THORNS_COOLDOWN),
                 (AbilityType::Entangle, ENTANGLE_COOLDOWN),
+                (AbilityType::CallRain, CALL_RAIN_COOLDOWN),
             ]),
             PlayerClass::Necromancer => Self::new(&[
                 (AbilityType::BoneWard, BONE_WARD_COOLDOWN),
@@ -2620,12 +2643,21 @@ pub struct BossMinion {
 #[derive(Debug, Clone, Copy)]
 pub struct FearImmune;
 
-/// A venomous melee attacker: successful hits apply Slowed for this long
-/// (Giant Spider). Applied directly in the enemy melee path since enemy
-/// natural weapons are not item instances with on-hit affixes.
+/// A venomous melee attacker: successful hits apply Slowed and/or Poisoned
+/// for these durations (0 = none) — Giant Spider slows and poisons, Lesser
+/// Giant Spider only poisons, briefly. Applied directly in the enemy melee path
+/// since enemy natural weapons are not item instances with on-hit affixes.
 #[derive(Debug, Clone, Copy)]
 pub struct Venomous {
     pub slow_duration: f32,
+    pub poison_duration: f32,
+}
+
+/// A melee attacker whose connecting hits open a wound (Bleeding) with this
+/// chance (rats). Applied in the enemy melee path, like [`Venomous`].
+#[derive(Debug, Clone, Copy)]
+pub struct Lacerating {
+    pub bleed_chance: f32,
 }
 
 #[cfg(test)]

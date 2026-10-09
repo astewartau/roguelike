@@ -21,7 +21,9 @@ use crate::tile::tile_ids;
 
 use super::{calculate_arrow_path, ActionResult};
 
-/// Apply blink (teleport) action
+/// Apply blink (teleport) action. The landing tile's effects (water, oil,
+/// fire, traps) apply as for a step — see `tile_effects::on_enter_tile`.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_blink(
     world: &mut World,
     grid: &Grid,
@@ -30,6 +32,7 @@ pub fn apply_blink(
     target_y: i32,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Get current position
     let current_pos = match queries::get_entity_position(world, entity) {
@@ -71,6 +74,15 @@ pub fn apply_blink(
         from: current_pos,
         to: (target_x, target_y),
     });
+
+    crate::systems::tile_effects::on_enter_tile(
+        world,
+        grid,
+        entity,
+        (target_x, target_y),
+        events,
+        rng,
+    );
 
     ActionResult::Completed
 }
@@ -411,7 +423,7 @@ pub fn apply_cast_learned_spell(
 
     let result = match ability {
         AbilityType::LearnedBlink => {
-            apply_blink(world, grid, caster, target_x, target_y, spatial_cache, events)
+            apply_blink(world, grid, caster, target_x, target_y, spatial_cache, events, rng)
         }
         AbilityType::LearnedFireball => {
             apply_fireball(world, caster, target_x, target_y, events, rng)
@@ -794,13 +806,15 @@ pub fn apply_start_taming(
     ActionResult::Completed
 }
 
-/// Ranger ability: Disengage - leap away from the nearest enemy
+/// Ranger ability: Disengage - leap away from the nearest enemy. The landing
+/// tile's effects apply (see `tile_effects::on_enter_tile`).
 pub fn apply_disengage(
     world: &mut World,
     grid: &Grid,
     entity: Entity,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     use crate::fov::Fov;
     use crate::constants::{DISENGAGE_DISTANCE, FOV_RADIUS};
@@ -881,6 +895,19 @@ pub fn apply_disengage(
                     vpos.x = target_x as f32;
                     vpos.y = target_y as f32;
                 }
+                events.push(GameEvent::EntityMoved {
+                    entity,
+                    from: pos,
+                    to: (target_x, target_y),
+                });
+                crate::systems::tile_effects::on_enter_tile(
+                    world,
+                    grid,
+                    entity,
+                    (target_x, target_y),
+                    events,
+                    rng,
+                );
                 return ActionResult::Completed;
             }
         }
@@ -890,7 +917,10 @@ pub fn apply_disengage(
     ActionResult::Completed
 }
 
-/// Ranger ability: Tumble - roll to target position with brief invulnerability
+/// Ranger ability: Tumble - roll to target position with brief invulnerability.
+/// The landing tile's effects apply (see `tile_effects::on_enter_tile`); the
+/// tiles rolled over on the way do not.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_tumble(
     world: &mut World,
     grid: &Grid,
@@ -899,6 +929,7 @@ pub fn apply_tumble(
     target_y: i32,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     use crate::constants::TUMBLE_INVULN_DURATION;
 
@@ -931,6 +962,16 @@ pub fn apply_tumble(
 
     // Apply invulnerability effect
     effects::add_effect_to_entity(world, entity, EffectType::Invulnerable, TUMBLE_INVULN_DURATION);
+
+    events.push(GameEvent::EntityMoved { entity, from, to: (target_x, target_y) });
+    crate::systems::tile_effects::on_enter_tile(
+        world,
+        grid,
+        entity,
+        (target_x, target_y),
+        events,
+        rng,
+    );
 
     ActionResult::Completed
 }

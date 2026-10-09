@@ -35,6 +35,10 @@ pub enum DamageKind {
     Thorns,
     /// Necromancer's Corpse Explosion blast.
     CorpseExplosion,
+    /// A Poisoned damage-over-time tick (never in `AttackHit`; see `DotDamage`).
+    Poison,
+    /// A Bleeding damage-over-time tick (never in `AttackHit`; see `DotDamage`).
+    Bleed,
 }
 
 /// Why a locked-target melee attack (`ActionType::Attack`) failed to connect.
@@ -287,6 +291,29 @@ pub enum GameEvent {
         name: String,
         /// Whether the item turned out to carry a curse affix
         cursed: bool,
+    },
+    /// A damage-over-time status (Poisoned / Bleeding) ticked. `kind` is
+    /// `DamageKind::Poison` or `DamageKind::Bleed`.
+    DotDamage {
+        entity: Entity,
+        position: (f32, f32),
+        damage: i32,
+        kind: DamageKind,
+    },
+    /// An entity newly gained a status effect that the player should hear
+    /// about (Wet, Oiled, Poisoned, Bleeding). Refreshes are not announced.
+    StatusEffectGained {
+        entity: Entity,
+        effect: crate::components::EffectType,
+    },
+    /// A Druid called down rain over `position`. `tiles` is the soaked patch,
+    /// for the splash VFX; `doused` counts fires put out (creatures, grass,
+    /// oil, webs).
+    RainCalled {
+        caster: Entity,
+        position: (i32, i32),
+        tiles: Vec<(i32, i32)>,
+        doused: u32,
     },
     /// An entity took burn damage from being on fire
     BurnDamage {

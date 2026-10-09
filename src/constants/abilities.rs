@@ -195,6 +195,24 @@ pub const ENTANGLE_CAST_DURATION: f32 = 0.5;
 /// Fatigue effort for one Entangle.
 pub const ENTANGLE_ENERGY_COST: f32 = 20.0;
 
+// =============================================================================
+// DRUID - CALL RAIN
+// =============================================================================
+
+/// Maximum Chebyshev distance to the targeted tile.
+pub const CALL_RAIN_RANGE: i32 = 6;
+/// Chebyshev radius of the downpour around the targeted tile. Everything in it
+/// is doused (creatures, grass fires, burning oil and webs), grass is soaked
+/// (`WET_GRASS_DURATION`), and every creature, friend or foe, becomes Wet.
+pub const CALL_RAIN_RADIUS: i32 = 2;
+/// Call Rain cooldown in game seconds. Long: it is a fire-control tool, and a
+/// short one would make the Druid fireproof.
+pub const CALL_RAIN_COOLDOWN: f32 = 40.0;
+/// Call Rain cast time (a targeted spell, like Entangle).
+pub const CALL_RAIN_CAST_DURATION: f32 = 0.5;
+/// Fatigue effort for one Call Rain.
+pub const CALL_RAIN_ENERGY_COST: f32 = 20.0;
+
 // Range Bands (for bow attacks)
 pub const RANGE_OPTIMAL_MIN: i32 = 3;
 pub const RANGE_OPTIMAL_MAX: i32 = 5;

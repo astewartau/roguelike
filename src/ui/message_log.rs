@@ -250,8 +250,13 @@ impl MessageLog {
                     );
                 }
             }
-            // Projectile kinds never arrive here.
-            DamageKind::Arrow | DamageKind::CripplingShot | DamageKind::Potion => {}
+            // Projectile kinds never arrive here, and DoT ticks arrive as
+            // `DotDamage` (see `record_event`).
+            DamageKind::Arrow
+            | DamageKind::CripplingShot
+            | DamageKind::Potion
+            | DamageKind::Poison
+            | DamageKind::Bleed => {}
         }
     }
 
@@ -397,6 +402,39 @@ impl MessageLog {
                     let who = self.subject(world, *entity);
                     self.push(format!("{who} burns for {damage}."), log_colors::INFO);
                 }
+            }
+            GameEvent::DotDamage { entity, damage, kind, .. } => {
+                let (you, them) = match kind {
+                    DamageKind::Bleed => ("You bleed", "bleeds"),
+                    _ => ("Poison burns you", "suffers from poison"),
+                };
+                if *entity == me {
+                    self.push(format!("{you} for {damage}."), log_colors::HARM);
+                } else {
+                    let who = self.subject(world, *entity);
+                    self.push(format!("{who} {them} for {damage}."), log_colors::INFO);
+                }
+            }
+            GameEvent::StatusEffectGained { entity, effect } if *entity == me => {
+                use crate::components::EffectType;
+                let line = match effect {
+                    EffectType::Wet => Some("You are soaked."),
+                    EffectType::Oiled => Some("You are slick with oil."),
+                    EffectType::Poisoned => Some("You are poisoned."),
+                    EffectType::Bleeding => Some("You are bleeding."),
+                    _ => None,
+                };
+                if let Some(line) = line {
+                    self.push(line.to_string(), log_colors::HARM);
+                }
+            }
+            GameEvent::RainCalled { caster, doused, .. } if *caster == me => {
+                let line = match doused {
+                    0 => "Rain pours down from nowhere.".to_string(),
+                    1 => "Rain pours down and puts out a fire.".to_string(),
+                    n => format!("Rain pours down and puts out {n} fires."),
+                };
+                self.push(line, log_colors::INFO);
             }
             GameEvent::CaughtFire { entity, .. } => {
                 if *entity == me {

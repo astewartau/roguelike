@@ -344,6 +344,10 @@ impl AudioManager {
                     let dist = Self::distance(player_pos, (*x, *y));
                     self.play_at_distance(SoundType::Spell, dist);
                 }
+                GameEvent::RainCalled { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::Spell, dist);
+                }
                 GameEvent::PotionSplash { x, y, .. } => {
                     let dist = Self::distance(player_pos, (*x, *y));
                     self.play_at_distance(SoundType::PotionThrow, dist);

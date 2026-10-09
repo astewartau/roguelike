@@ -121,6 +121,7 @@ pub fn get_ability_targeting_overlay_data(
         AbilityType::LearnedFireball => crate::constants::FIREBALL_RADIUS,
         AbilityType::CorpseExplosion => crate::constants::CORPSE_EXPLOSION_RADIUS,
         AbilityType::Entangle => crate::constants::ENTANGLE_RADIUS,
+        AbilityType::CallRain => crate::constants::CALL_RAIN_RADIUS,
         _ => 0,
     };
 
@@ -391,6 +392,8 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
                     "Click to cast fireball"
                 } else if matches!(data.ability_type, Some(AbilityType::Entangle)) {
                     "Click to entangle"
+                } else if matches!(data.ability_type, Some(AbilityType::CallRain)) {
+                    "Click to call rain"
                 } else {
                     "Click to use"
                 }

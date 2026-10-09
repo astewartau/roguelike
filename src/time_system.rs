@@ -386,7 +386,7 @@ fn apply_action_effects(
             actions::apply_throw_potion(world, entity, *potion_type, *target_x, *target_y, events, current_time)
         }
         ActionType::Blink { target_x, target_y } => {
-            actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events)
+            actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events, rng)
         }
         ActionType::CastFireball { target_x, target_y } => {
             actions::apply_fireball(world, entity, *target_x, *target_y, events, rng)
@@ -428,10 +428,10 @@ fn apply_action_effects(
             actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
         }
         ActionType::Disengage => {
-            actions::apply_disengage(world, grid, entity, spatial_cache, events)
+            actions::apply_disengage(world, grid, entity, spatial_cache, events, rng)
         }
         ActionType::Tumble { target_x, target_y } => {
-            actions::apply_tumble(world, grid, entity, *target_x, *target_y, spatial_cache, events)
+            actions::apply_tumble(world, grid, entity, *target_x, *target_y, spatial_cache, events, rng)
         }
         ActionType::PlaceSnareTrap { target_x, target_y } => {
             actions::apply_place_snare_trap(world, entity, *target_x, *target_y, events)
@@ -467,6 +467,9 @@ fn apply_action_effects(
             actions::apply_activate_thorns(&mut effects(world, grid, spatial_cache, events, rng), entity)
         }
         ActionType::Entangle { target_x, target_y } => actions::apply_entangle(
+            &mut effects(world, grid, spatial_cache, events, rng), entity, *target_x, *target_y,
+        ),
+        ActionType::CallRain { target_x, target_y } => actions::apply_call_rain(
             &mut effects(world, grid, spatial_cache, events, rng), entity, *target_x, *target_y,
         ),
     }
@@ -618,6 +621,8 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
     for (entity, (health, effects, pos)) in
         world.query_mut::<(&mut Health, &mut StatusEffects, &Position)>()
     {
+        // Oil burns hot: an Oiled creature takes more from each burn tick.
+        let oiled = effects.effects.iter().any(|e| e.effect_type == EffectType::Oiled);
         // Find the burning effect
         if let Some(burn_effect) = effects
             .effects
@@ -627,7 +632,11 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
             let time_since_last = current_time - burn_effect.last_damage_tick;
             if time_since_last >= BURNING_DAMAGE_INTERVAL {
                 // Deal damage
-                let damage = BURNING_DAMAGE_PER_SECOND;
+                let damage = if oiled {
+                    (BURNING_DAMAGE_PER_SECOND as f32 * OILED_BURN_DAMAGE_MULT).round() as i32
+                } else {
+                    BURNING_DAMAGE_PER_SECOND
+                };
                 health.current = (health.current - damage).max(0);
                 burn_effect.last_damage_tick = current_time;
 
@@ -662,10 +671,126 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
     }
 }
 
+/// Tick damage-over-time statuses (Poisoned, Bleeding) on game time.
+///
+/// Same shape as [`tick_burn_damage`]: each effect remembers the game time of
+/// its last tick (`last_damage_tick`, 0 on a fresh application, so the first
+/// tick lands at the next advancement) and deals its damage whenever its
+/// interval has elapsed. Ticks stop when `tick_status_effects` expires the
+/// effect. Damage goes through `combat::apply_damage_dot`, which bypasses
+/// armor; the result is announced as a [`GameEvent::DotDamage`].
+pub fn tick_dot_damage(
+    world: &mut World,
+    current_time: f32,
+    rng: &mut impl rand::Rng,
+    events: &mut EventQueue,
+) {
+    use crate::components::{Player, Position};
+    use crate::events::DamageKind;
+
+    let mut due: Vec<(Entity, DamageKind, i32)> = Vec::new();
+    for (entity, (health, effects)) in world.query_mut::<(&Health, &mut StatusEffects)>() {
+        if health.current <= 0 {
+            continue;
+        }
+        for effect in effects.effects.iter_mut() {
+            let (kind, damage, interval) = match effect.effect_type {
+                EffectType::Poisoned => (DamageKind::Poison, POISON_DAMAGE, POISON_TICK_INTERVAL),
+                EffectType::Bleeding => (DamageKind::Bleed, BLEED_DAMAGE, BLEED_TICK_INTERVAL),
+                _ => continue,
+            };
+            if current_time - effect.last_damage_tick >= interval {
+                effect.last_damage_tick = current_time;
+                due.push((entity, kind, damage));
+            }
+        }
+    }
+
+    for (entity, kind, raw) in due {
+        let alive = world.get::<&Health>(entity).map(|h| h.current > 0).unwrap_or(false);
+        let Ok(position) = world
+            .get::<&Position>(entity)
+            .map(|p| (p.x as f32 + 0.5, p.y as f32 + 0.5))
+        else {
+            continue;
+        };
+        if !alive {
+            continue;
+        }
+        let dealt = crate::systems::combat::apply_damage_dot(world, entity, raw, rng, events);
+        if dealt <= 0 {
+            continue;
+        }
+        actions::interrupt_life_drain_on_damage(world, entity, events);
+        events.push(GameEvent::DotDamage { entity, position, damage: dealt, kind });
+
+        // Dead enemies are swept (and announced) by `remove_dead_entities`;
+        // the player is not, so announce a fatal tick here as burning does.
+        let dead = world.get::<&Health>(entity).map(|h| h.current <= 0).unwrap_or(false);
+        if dead && world.get::<&Player>(entity).is_ok() {
+            events.push(GameEvent::EntityDied { entity, position });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::{Effort, Fatigue};
+
+    /// Run a DoT victim through `seconds` of game time in `step`-sized
+    /// advancements, the way the scheduler loop does (DoT tick, then status
+    /// tick). Returns HP lost and the DoT events seen.
+    fn bleed_out(effect: EffectType, duration: f32, seconds: f32, step: f32) -> (i32, Vec<GameEvent>) {
+        use rand::SeedableRng;
+        let mut world = World::new();
+        let mut s = StatusEffects::new();
+        effects::add_effect(&mut s, effect, duration);
+        let victim = world.spawn((crate::components::Position::new(2, 2), Health::new(100), s));
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let mut events = EventQueue::new();
+        // Start well into the run, so "last tick at t=0" is long past.
+        let mut t = 100.0;
+        let end = t + seconds;
+        while t < end {
+            t += step;
+            tick_dot_damage(&mut world, t, &mut rng, &mut events);
+            tick_status_effects(&mut world, step);
+        }
+        let lost = 100 - world.get::<&Health>(victim).unwrap().current;
+        let seen: Vec<GameEvent> = events
+            .drain()
+            .filter(|e| matches!(e, GameEvent::DotDamage { .. }))
+            .collect();
+        (lost, seen)
+    }
+
+    /// Poison ticks `POISON_DAMAGE` every `POISON_TICK_INTERVAL` of game time
+    /// and stops when the effect expires — however finely time is sliced.
+    #[test]
+    fn poison_ticks_on_game_time_and_stops_at_expiry() {
+        let expected_ticks = (POISON_DURATION / POISON_TICK_INTERVAL).round() as i32;
+        for step in [0.1, 0.25, 0.5] {
+            let (lost, seen) = bleed_out(EffectType::Poisoned, POISON_DURATION, 30.0, step);
+            assert_eq!(lost, expected_ticks * POISON_DAMAGE, "step {step}");
+            assert_eq!(seen.len() as i32, expected_ticks, "step {step}");
+            assert!(seen.iter().all(|e| matches!(e,
+                GameEvent::DotDamage { kind: crate::events::DamageKind::Poison, .. })));
+        }
+        // No time passing, no damage.
+        let (lost, _) = bleed_out(EffectType::Poisoned, POISON_DURATION, 0.0, 0.1);
+        assert_eq!(lost, 0);
+    }
+
+    /// Bleeding works the same way at its own rate.
+    #[test]
+    fn bleeding_ticks_on_game_time_and_stops_at_expiry() {
+        let expected_ticks = (BLEED_DURATION / BLEED_TICK_INTERVAL).round() as i32;
+        let (lost, seen) = bleed_out(EffectType::Bleeding, BLEED_DURATION, 30.0, 0.25);
+        assert_eq!(lost, expected_ticks * BLEED_DAMAGE);
+        assert!(seen.iter().all(|e| matches!(e,
+            GameEvent::DotDamage { kind: crate::events::DamageKind::Bleed, .. })));
+    }
 
     fn actor(speed: f32) -> (World, Entity) {
         let mut world = World::new();

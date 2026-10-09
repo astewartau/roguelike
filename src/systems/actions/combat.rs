@@ -138,23 +138,43 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
         damage,
     );
 
-    // Venomous natural attacks (Giant Spider): a connecting bite Slows the
-    // target. Applied directly here since enemy claws/fangs are not item
-    // instances with on-hit affixes.
+    // Natural-weapon on-hit effects: venom (Giant Spider slows and poisons,
+    // Lesser Giant Spider poisons) and wounds (rats may cause Bleeding).
+    // Applied directly here since enemy claws/fangs are not item instances
+    // with on-hit affixes. Newly gained DoTs are announced after the hit line.
+    let mut gained: Vec<EffectType> = Vec::new();
     if damage > 0 {
+        let target_alive = world
+            .get::<&Health>(target)
+            .map(|h| h.current > 0)
+            .unwrap_or(false);
         let venom = world
             .get::<&crate::components::Venomous>(attacker)
             .ok()
-            .map(|v| v.slow_duration);
-        if let Some(duration) = venom {
-            let target_alive = world
-                .get::<&Health>(target)
-                .map(|h| h.current > 0)
-                .unwrap_or(false);
-            if target_alive {
+            .map(|v| *v);
+        let bleed_chance = world
+            .get::<&crate::components::Lacerating>(attacker)
+            .ok()
+            .map(|l| l.bleed_chance);
+        let mut afflict = |world: &mut hecs::World, effect: EffectType, duration: f32| {
+            let had = crate::systems::effects::entity_has_effect(world, target, effect);
+            if crate::systems::effects::add_effect_to_entity(world, target, effect, duration) && !had {
+                gained.push(effect);
+            }
+        };
+        if let (true, Some(v)) = (target_alive, venom) {
+            if v.slow_duration > 0.0 {
                 crate::systems::effects::add_effect_to_entity(
-                    world, target, EffectType::Slowed, duration,
+                    world, target, EffectType::Slowed, v.slow_duration,
                 );
+            }
+            if v.poison_duration > 0.0 {
+                afflict(world, EffectType::Poisoned, v.poison_duration);
+            }
+        }
+        if let (true, Some(chance)) = (target_alive, bleed_chance) {
+            if rng.gen::<f32>() < chance {
+                afflict(world, EffectType::Bleeding, BLEED_DURATION);
             }
         }
     }
@@ -194,6 +214,9 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
         kind: crate::events::DamageKind::Melee,
         crit: is_crit && damage > 0,
     });
+    for effect in gained {
+        events.push(GameEvent::StatusEffectGained { entity: target, effect });
+    }
 
     // A thorny defender bites back (after the hit, so the log reads in order).
     super::reflect_thorns(
@@ -932,5 +955,56 @@ pub(super) mod tests {
         );
         assert!(!arena.stunned(player), "but the player was out of range");
         assert_eq!(arena.hp(player), 30);
+    }
+
+    /// A giant spider's bite slows and poisons; the poison is announced after
+    /// the hit line, and then ticks on game time, ignoring armor.
+    #[test]
+    fn a_spider_bite_poisons_and_the_poison_ticks() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        arena.world.get::<&mut Health>(player).unwrap().current = 30;
+        let spider =
+            crate::spawning::enemies::GIANT_SPIDER.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(spider, 1.0);
+        let _ = arena.world.insert_one(spider, Equipment::with_weapon(Weapon::claws(2)));
+
+        let mut ctx = arena.ctx();
+        let result = apply_attack(&mut ctx.effects(), spider, player);
+        assert_eq!(result, ActionResult::Completed);
+        let events: Vec<GameEvent> = arena.events.drain().collect();
+        assert!(queries::has_status_effect(&arena.world, player, EffectType::Poisoned));
+        assert!(queries::has_status_effect(&arena.world, player, EffectType::Slowed));
+        let hit = events.iter().position(|e| matches!(e, GameEvent::AttackHit { .. }));
+        let gained = events.iter().position(|e| matches!(e,
+            GameEvent::StatusEffectGained { effect: EffectType::Poisoned, .. }));
+        assert!(hit.is_some() && gained > hit, "poison announced after the hit: {events:?}");
+
+        let mut log = crate::ui::MessageLog::new(player);
+        for ev in &events {
+            log.record_event(ev, &arena.world);
+        }
+        assert!(log.lines().iter().any(|l| l == "You are poisoned."), "{:?}", log.lines());
+
+        // The poison bites over the next few seconds of game time.
+        let before = arena.hp(player);
+        let mut rng = StdRng::seed_from_u64(2);
+        for i in 1..=4 {
+            crate::time_system::tick_dot_damage(&mut arena.world, 100.0 + i as f32, &mut rng, &mut arena.events);
+        }
+        assert_eq!(before - arena.hp(player), 4 * POISON_DAMAGE);
+    }
+
+    /// Rats carry the wound-opening trait (Bleeding on a chance roll).
+    #[test]
+    fn rats_can_open_wounds() {
+        let mut arena = Arena::new((5, 5));
+        let rat = arena.rat(6, 5, 1.0);
+        let chance = arena
+            .world
+            .get::<&crate::components::Lacerating>(rat)
+            .map(|l| l.bleed_chance)
+            .expect("rats lacerate");
+        assert_eq!(chance, RAT_BLEED_CHANCE);
     }
 }

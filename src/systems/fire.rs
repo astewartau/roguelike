@@ -50,19 +50,9 @@ pub fn tick_fire(
         return;
     }
 
-    // 0. Water douses fire: anything standing on a water tile can't stay alight.
-    let to_douse: Vec<Entity> = world
-        .query::<(&Position, &StatusEffects)>()
-        .iter()
-        .filter(|(_, (p, s))| {
-            grid.water_positions.contains(&(p.x, p.y))
-                && s.effects.iter().any(|e| e.effect_type == EffectType::Burning)
-        })
-        .map(|(id, _)| id)
-        .collect();
-    for id in to_douse {
-        crate::systems::effects::remove_effect_from_entity(world, id, EffectType::Burning);
-    }
+    // 0. Surface statuses: anything standing in water stays Wet (so it can't
+    //    stay alight), anything standing in unlit oil stays Oiled.
+    crate::systems::tile_effects::refresh_standing_effects(world, grid, events);
 
     // 1. Burnout: advance each burning-grass timer; revert tile on expiry.
     let mut burned_out: Vec<(Entity, (i32, i32))> = Vec::new();
@@ -156,9 +146,41 @@ pub fn tick_fire(
     }
 }
 
+/// Effective flammability of a creature for ignition rolls, or `None` if it
+/// cannot catch fire right now.
+///
+/// - Already Burning, or Wet: `None`.
+/// - `Combustible`: its flammability.
+/// - Oiled: the oil burns even if the creature would not, so at least
+///   `OILED_MIN_FLAMMABILITY` — this is what lets an oiled skeleton or slime
+///   burn.
+///
+/// The second value is the chance multiplier: `OILED_IGNITE_MULT` while Oiled,
+/// else 1.
+fn ignition_profile(comb: Option<&Combustible>, status: &StatusEffects) -> Option<(f64, f64)> {
+    let has = |t: EffectType| status.effects.iter().any(|e| e.effect_type == t);
+    if has(EffectType::Burning) || has(EffectType::Wet) {
+        return None;
+    }
+    let base = comb.map(|c| c.flammability).unwrap_or(0.0);
+    if has(EffectType::Oiled) {
+        Some((base.max(OILED_MIN_FLAMMABILITY) as f64, OILED_IGNITE_MULT))
+    } else if comb.is_some() && base > 0.0 {
+        Some((base as f64, 1.0))
+    } else {
+        None
+    }
+}
+
+/// Per-roll chance that a creature with this ignition profile catches from a
+/// source with `base` chance.
+fn ignite_chance(base: f64, (flammability, mult): (f64, f64)) -> f64 {
+    (base * flammability * mult).clamp(0.0, 1.0)
+}
+
 /// On a melee hit, a burning combatant may set the other alight (medium chance
-/// scaled by the target's flammability). No-op unless `from` is burning and `to`
-/// is combustible and not already burning.
+/// scaled by the target's flammability, much higher if the target is Oiled).
+/// No-op unless `from` is burning and `to` can ignite (see `ignition_profile`).
 pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut impl Rng) {
     let from_burning = world
         .get::<&StatusEffects>(from)
@@ -167,19 +189,17 @@ pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut 
     if !from_burning {
         return;
     }
-    let flammability = match world.get::<&Combustible>(to) {
-        Ok(c) => c.flammability,
-        Err(_) => return,
+    let profile = {
+        let Ok(status) = world.get::<&StatusEffects>(to) else {
+            return;
+        };
+        let comb = world.get::<&Combustible>(to).ok();
+        ignition_profile(comb.as_deref(), &status)
     };
-    let already = world
-        .get::<&StatusEffects>(to)
-        .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
-        .unwrap_or(false);
-    if already {
+    let Some(profile) = profile else {
         return;
-    }
-    let chance = (FIRE_COMBAT_IGNITE_CHANCE * flammability as f64).clamp(0.0, 1.0);
-    if rng.gen_bool(chance) {
+    };
+    if rng.gen_bool(ignite_chance(FIRE_COMBAT_IGNITE_CHANCE, profile)) {
         crate::systems::effects::add_effect_to_entity(world, to, EffectType::Burning, BURNING_DURATION);
     }
 }
@@ -321,31 +341,27 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
     }
 
     // Fire -> adjacent creatures (small, scaled by flammability), and burning
-    // oil -> creatures standing IN it (high, scaled by flammability).
-    // Creatures in water can't be ignited; already-burning ones are skipped.
+    // oil -> creatures standing IN it (high, scaled by flammability). Oiled
+    // creatures catch far more readily (see `ignition_profile`); creatures in
+    // water are Wet and can't be ignited; already-burning ones are skipped.
     let burning_oil_tiles: HashSet<(i32, i32)> = oil_sources.iter().copied().collect();
     let mut creatures_to_ignite: Vec<(Entity, (i32, i32))> = Vec::new();
-    for (id, (pos, comb, status)) in
-        world.query::<(&Position, &Combustible, Option<&StatusEffects>)>().iter()
+    for (id, (pos, status, comb)) in
+        world.query::<(&Position, &StatusEffects, Option<&Combustible>)>().iter()
     {
         if grid.water_positions.contains(&(pos.x, pos.y)) {
             continue;
         }
-        let already_burning = status
-            .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
-            .unwrap_or(false);
-        if already_burning {
+        let Some(profile) = ignition_profile(comb, status) else {
             continue;
-        }
+        };
 
         // Standing in burning oil: high per-step ignite chance.
-        if burning_oil_tiles.contains(&(pos.x, pos.y)) {
-            let chance =
-                (BURNING_OIL_STAND_IGNITE_CHANCE * comb.flammability as f64).clamp(0.0, 1.0);
-            if rng.gen_bool(chance) {
-                creatures_to_ignite.push((id, (pos.x, pos.y)));
-                continue;
-            }
+        if burning_oil_tiles.contains(&(pos.x, pos.y))
+            && rng.gen_bool(ignite_chance(BURNING_OIL_STAND_IGNITE_CHANCE, profile))
+        {
+            creatures_to_ignite.push((id, (pos.x, pos.y)));
+            continue;
         }
 
         let near = all_sources
@@ -354,8 +370,7 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         if !near {
             continue;
         }
-        let chance = (FIRE_SPREAD_ENTITY_CHANCE * comb.flammability as f64).clamp(0.0, 1.0);
-        if rng.gen_bool(chance) {
+        if rng.gen_bool(ignite_chance(FIRE_SPREAD_ENTITY_CHANCE, profile)) {
             creatures_to_ignite.push((id, (pos.x, pos.y)));
         }
     }
@@ -374,8 +389,9 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         ignite_glow_mushrooms(world, id);
     }
     for (id, pos) in creatures_to_ignite {
-        crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire { entity: id, position: pos });
+        if crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION) {
+            events.push(GameEvent::CaughtFire { entity: id, position: pos });
+        }
     }
 }
 
@@ -439,25 +455,36 @@ pub fn ignite_glow_mushrooms(world: &mut World, mushrooms: Entity) {
 }
 
 /// Splash of water centered at (cx, cy) with the given Chebyshev radius:
-/// extinguishes Burning on entities, stops burning grass (tile stays as
-/// unburnt grass), douses burning oil (puddle stays), and soaks grass tiles
-/// so they can't ignite for a while.
-pub fn splash_water(world: &mut World, grid: &Grid, cx: i32, cy: i32, radius: i32) {
+/// soaks every creature (Wet — which puts out Burning and washes off Oiled),
+/// stops burning grass (tile stays as unburnt grass), douses burning oil
+/// (puddle stays) and burning webs, and soaks grass tiles so they can't ignite
+/// for a while. Used by thrown water flasks and the Druid's Call Rain.
+///
+/// Returns how many fires were put out (burning creatures, grass, oil, webs).
+pub fn splash_water(
+    world: &mut World,
+    grid: &Grid,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    events: &mut EventQueue,
+) -> u32 {
     let in_radius =
         |x: i32, y: i32| (x - cx).abs() <= radius && (y - cy).abs() <= radius;
+    let mut doused: u32 = 0;
 
-    // Douse burning entities.
-    let burning: Vec<Entity> = world
+    // Soak every creature in the splash (Wet extinguishes Burning).
+    let soaked: Vec<(Entity, bool)> = world
         .query::<(&Position, &StatusEffects)>()
         .iter()
-        .filter(|(_, (p, s))| {
-            in_radius(p.x, p.y)
-                && s.effects.iter().any(|e| e.effect_type == EffectType::Burning)
-        })
-        .map(|(id, _)| id)
+        .filter(|(_, (p, _))| in_radius(p.x, p.y))
+        .map(|(id, (_, s))| (id, s.effects.iter().any(|e| e.effect_type == EffectType::Burning)))
         .collect();
-    for id in burning {
-        crate::systems::effects::remove_effect_from_entity(world, id, EffectType::Burning);
+    for (id, was_burning) in soaked {
+        crate::systems::effects::add_effect_announced(world, events, id, EffectType::Wet, WET_DURATION);
+        if was_burning {
+            doused += 1;
+        }
     }
 
     // Stop burning grass without consuming the grass (tile stays TallGrass).
@@ -469,6 +496,7 @@ pub fn splash_water(world: &mut World, grid: &Grid, cx: i32, cy: i32, radius: i3
         .collect();
     for id in doused_grass {
         let _ = world.despawn(id);
+        doused += 1;
     }
 
     // Douse burning oil; the puddle remains and can be re-lit.
@@ -480,6 +508,7 @@ pub fn splash_water(world: &mut World, grid: &Grid, cx: i32, cy: i32, radius: i3
         .collect();
     for id in doused_oil {
         extinguish_oil_puddle(world, id);
+        doused += 1;
     }
 
     // Douse burning webs; the (soggy) web survives and can be re-lit later.
@@ -491,6 +520,7 @@ pub fn splash_water(world: &mut World, grid: &Grid, cx: i32, cy: i32, radius: i3
         .collect();
     for id in doused_webs {
         let _ = world.remove::<(BurningWeb, CausesBurning, AnimatedSprite, LightSource)>(id);
+        doused += 1;
     }
 
     // Soak grass tiles in the radius: refresh existing timers, spawn new ones.
@@ -517,6 +547,7 @@ pub fn splash_water(world: &mut World, grid: &Grid, cx: i32, cy: i32, radius: i3
             }
         }
     }
+    doused
 }
 
 /// Topple a lit brazier: snuff its stand (light + hazard removed, sprite goes
@@ -627,8 +658,15 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
         .map(|(id, _)| id)
         .collect();
     for id in victims {
-        crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire { entity: id, position: (x, y) });
+        // Announce only a fresh ignition: a Wet victim refuses the fire, and
+        // one already alight (a shove onto a brazier tile, say) has already
+        // been told.
+        let was_burning = crate::systems::effects::entity_has_effect(world, id, EffectType::Burning);
+        if crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION)
+            && !was_burning
+        {
+            events.push(GameEvent::CaughtFire { entity: id, position: (x, y) });
+        }
     }
 }
 
@@ -995,6 +1033,126 @@ mod tests {
         assert!(!world.contains(barrel), "a destroyed barrel detonates immediately");
     }
 
+    /// How many of `n` seeded runs set a creature standing in burning oil
+    /// alight within `seconds`, for a creature built by `make`.
+    fn ignitions_in_burning_oil(n: u64, seconds: f32, make: impl Fn(&mut World) -> Entity) -> u64 {
+        (0..n)
+            .filter(|&seed| {
+                let mut world = World::new();
+                let mut grid = make_grid(7, 7, TileType::Floor);
+                let puddle = crate::spawning::spawn_oil_puddle(&mut world, 3, 3);
+                ignite_oil_puddle(&mut world, puddle);
+                let victim = make(&mut world);
+                run_fire_seeded(&mut world, &mut grid, seconds, seed);
+                crate::systems::effects::entity_has_effect(&world, victim, EffectType::Burning)
+            })
+            .count() as u64
+    }
+
+    /// A Wet creature standing in burning oil never catches, however long it
+    /// stands there.
+    #[test]
+    fn wet_creatures_never_ignite() {
+        let caught = ignitions_in_burning_oil(20, 3.0, |w| {
+            let mut s = StatusEffects::new();
+            crate::systems::effects::add_effect(&mut s, EffectType::Wet, 60.0);
+            w.spawn((Position::new(3, 3), s, Combustible { flammability: 1.0 }))
+        });
+        assert_eq!(caught, 0);
+    }
+
+    /// Oil makes anything burn: a non-`Combustible` creature (a skeleton, a
+    /// slime) never ignites in burning oil, but the same creature Oiled does,
+    /// and a barely flammable one catches far more often once Oiled.
+    #[test]
+    fn oiled_creatures_ignite_far_more_readily() {
+        let fireproof = |oiled: bool| {
+            move |w: &mut World| {
+                let mut s = StatusEffects::new();
+                if oiled {
+                    crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+                }
+                w.spawn((Position::new(3, 3), s))
+            }
+        };
+        assert_eq!(ignitions_in_burning_oil(20, 1.0, fireproof(false)), 0);
+        assert!(ignitions_in_burning_oil(20, 1.0, fireproof(true)) >= 15);
+
+        // One spread step (0.5s) at low flammability: 0.6*0.1 = 6% dry,
+        // 0.6*0.5*3 = 90% oiled.
+        let barely = |oiled: bool| {
+            move |w: &mut World| {
+                let mut s = StatusEffects::new();
+                if oiled {
+                    crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+                }
+                w.spawn((Position::new(3, 3), s, Combustible { flammability: 0.1 }))
+            }
+        };
+        let dry = ignitions_in_burning_oil(40, FIRE_STEP_INTERVAL, barely(false));
+        let oily = ignitions_in_burning_oil(40, FIRE_STEP_INTERVAL, barely(true));
+        assert!(oily > dry + 20, "oiled {oily}/40 vs dry {dry}/40");
+    }
+
+    /// Burning while Oiled hurts more per tick.
+    #[test]
+    fn oiled_burning_takes_extra_damage() {
+        let mut world = World::new();
+        let mut events = EventQueue::new();
+        let spawn = |w: &mut World, oiled: bool| {
+            let mut s = StatusEffects::new();
+            if oiled {
+                crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+            }
+            crate::systems::effects::add_effect(&mut s, EffectType::Burning, 60.0);
+            w.spawn((Position::new(1, 1), Health::new(100), s))
+        };
+        let dry = spawn(&mut world, false);
+        let oily = spawn(&mut world, true);
+        crate::time_system::tick_burn_damage(&mut world, 5.0, &mut events);
+        let lost = |e| 100 - world.get::<&Health>(e).unwrap().current;
+        assert_eq!(lost(dry), BURNING_DAMAGE_PER_SECOND);
+        assert_eq!(
+            lost(oily),
+            (BURNING_DAMAGE_PER_SECOND as f32 * OILED_BURN_DAMAGE_MULT).round() as i32
+        );
+    }
+
+    /// Standing in water keeps a creature Wet; standing in unlit oil keeps it
+    /// Oiled — both refreshed by the fire tick, on game time.
+    #[test]
+    fn standing_in_water_or_oil_keeps_the_status_up() {
+        let mut world = World::new();
+        let mut grid = make_grid(7, 7, TileType::Floor);
+        grid.water_positions.push((1, 1));
+        crate::spawning::spawn_oil_puddle(&mut world, 5, 5);
+        let swimmer = world.spawn((Position::new(1, 1), StatusEffects::new()));
+        let slick = world.spawn((Position::new(5, 5), StatusEffects::new()));
+
+        // Long past both durations: the statuses tick down between fire
+        // ticks, the standing refresh tops them back up.
+        for _ in 0..40 {
+            crate::time_system::tick_status_effects(&mut world, 1.0);
+            run_fire_seeded(&mut world, &mut grid, 1.0, 1);
+        }
+        assert!(crate::systems::effects::entity_has_effect(&world, swimmer, EffectType::Wet));
+        assert!(crate::systems::effects::entity_has_effect(&world, slick, EffectType::Oiled));
+    }
+
+    /// A water splash soaks creatures as well as putting them out.
+    #[test]
+    fn splash_soaks_creatures_and_washes_off_oil() {
+        let mut world = World::new();
+        let grid = make_grid(7, 7, TileType::Floor);
+        let mut s = StatusEffects::new();
+        crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+        let victim = world.spawn((Position::new(3, 3), s));
+        let mut events = EventQueue::new();
+        splash_water(&mut world, &grid, 3, 3, WATER_SPLASH_RADIUS, &mut events);
+        assert!(crate::systems::effects::entity_has_effect(&world, victim, EffectType::Wet));
+        assert!(!crate::systems::effects::entity_has_effect(&world, victim, EffectType::Oiled));
+    }
+
     #[test]
     fn test_wet_grass_blocks_ignition() {
         let mut world = World::new();
@@ -1056,7 +1214,7 @@ mod tests {
             s
         }));
 
-        splash_water(&mut world, &grid, 3, 3, WATER_SPLASH_RADIUS);
+        splash_water(&mut world, &grid, 3, 3, WATER_SPLASH_RADIUS, &mut EventQueue::new());
 
         // Fires are out ...
         assert!(world.get::<&BurningOil>(puddle).is_err(), "oil fire doused");

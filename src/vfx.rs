@@ -445,6 +445,33 @@ impl VfxManager {
                     }
                 }
             }
+            GameEvent::DotDamage { entity, position, damage, .. }
+                if grid
+                    .get(position.0 as i32, position.1 as i32)
+                    .map(|t| t.visible)
+                    .unwrap_or(false) =>
+            {
+                // Poison and bleed ticks float a number like burn damage does.
+                self.spawn_damage_number(
+                    position.0,
+                    position.1,
+                    *damage,
+                    damage_tier(Some(*entity), player, *damage, false),
+                );
+            }
+            // Rain falls on every tile of the patch: the water-flask splash,
+            // reused rather than a new effect.
+            GameEvent::RainCalled { tiles, .. } => {
+                for &(x, y) in tiles {
+                    if grid.get(x, y).map(|t| t.visible).unwrap_or(false) {
+                        self.spawn_potion_splash(
+                            x as f32 + 0.5,
+                            y as f32 + 0.5,
+                            crate::components::ItemType::WaterFlaskFull,
+                        );
+                    }
+                }
+            }
             GameEvent::BurnDamage { entity, position, damage } => {
                 // Show damage number for burn damage
                 let tile_x = position.0 as i32;

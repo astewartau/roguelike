@@ -187,6 +187,7 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
         ),
         AbilityType::Thorns => (icons.texture_for_sheet(tile_ids::THORNS.0), icons.thorns_uv),
         AbilityType::Entangle => (icons.texture_for_sheet(tile_ids::ENTANGLE.0), icons.entangle_uv),
+        AbilityType::CallRain => (icons.texture_for_sheet(tile_ids::CALL_RAIN.0), icons.call_rain_uv),
     }
 }
 
@@ -201,6 +202,7 @@ pub fn ability_icon_tint(ability: AbilityType) -> egui::Color32 {
         AbilityType::CorpseExplosion => egui::Color32::from_rgb(255, 140, 90),
         AbilityType::Thorns => egui::Color32::from_rgb(150, 230, 100),
         AbilityType::Entangle => egui::Color32::from_rgb(110, 220, 90),
+        AbilityType::CallRain => egui::Color32::from_rgb(110, 160, 255),
         _ => egui::Color32::WHITE,
     }
 }

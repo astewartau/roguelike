@@ -452,6 +452,10 @@ fn determine_action(
             } else if player_sneaking {
                 gain *= SNEAK_ALERTNESS_MULT;
             }
+            // Dripping wet: squelching footsteps carry (stacks with sneaking).
+            if queries::has_status_effect(world, player_entity, crate::components::EffectType::Wet) {
+                gain *= WET_STEALTH_PENALTY;
+            }
             let new_alert = world.get::<&ChaseAI>(entity).map(|a| a.alertness + gain).unwrap_or(0.0);
             if new_alert >= ALERTNESS_WAKE_THRESHOLD {
                 woke = true;

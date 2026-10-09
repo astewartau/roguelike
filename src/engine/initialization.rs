@@ -316,6 +316,118 @@ fn spawn_oil_barrels(
     }
 }
 
+/// Spill unlit oil on the floor: a small spill (1-3 tiles) beside some oil
+/// barrels, and an occasional stray spill in a room.
+///
+/// Runs last in floor construction, after every blocker is placed, so that
+/// `occupancy` can keep puddles out from under chests and furniture. Puddles
+/// themselves do not block movement, so they never claim tiles. A puddle only
+/// lands on plain floor (not grass, water, stairs or doorways), never on
+/// `avoid` (the player's spawn), never in the starting room or the shop, and
+/// never within one tile of a standing fire (`CausesBurning`: braziers, the
+/// campfire) — oil next to a flame would be alight before the player arrived.
+fn spawn_oil_spills(
+    world: &mut World,
+    grid: &Grid,
+    occupancy: &TileOccupancy,
+    avoid: &[(i32, i32)],
+    rng: &mut impl Rng,
+) {
+    use crate::components::{CausesBurning, OilBarrel};
+    use std::collections::HashSet;
+
+    let fires: Vec<(i32, i32)> = world
+        .query::<&Position>()
+        .with::<&CausesBurning>()
+        .iter()
+        .map(|(_, p)| (p.x, p.y))
+        .collect();
+    let door_tiles: HashSet<(i32, i32)> =
+        grid.door_positions.iter().map(|(p, _)| *p).collect();
+    let shop_or_start = |x: i32, y: i32| {
+        grid.starting_room.map(|r| r.contains(x, y)).unwrap_or(false)
+            || grid
+                .themed_rooms
+                .iter()
+                .any(|r| r.theme == RoomTheme::Shop && r.rect.contains(x, y))
+    };
+    let valid = |(x, y): (i32, i32)| {
+        grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
+            && !grid.water_positions.contains(&(x, y))
+            && !door_tiles.contains(&(x, y))
+            && occupancy.is_free((x, y))
+            && !avoid.contains(&(x, y))
+            && !shop_or_start(x, y)
+            && !fires.iter().any(|&(fx, fy)| (fx - x).abs().max((fy - y).abs()) <= 1)
+    };
+
+    let mut taken: HashSet<(i32, i32)> = HashSet::new();
+    // Grow a spill of up to `size` orthogonally connected tiles from `start`.
+    let grow = |start: (i32, i32), size: usize, taken: &mut HashSet<(i32, i32)>, rng: &mut _| {
+        let mut spill = vec![start];
+        taken.insert(start);
+        while spill.len() < size {
+            let candidates: Vec<(i32, i32)> = spill
+                .iter()
+                .flat_map(|&(x, y)| [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)])
+                .filter(|t| valid(*t) && !taken.contains(t))
+                .collect();
+            let Some(&next) = candidates.choose(rng) else {
+                break;
+            };
+            taken.insert(next);
+            spill.push(next);
+        }
+        spill
+    };
+
+    let mut puddles: Vec<(i32, i32)> = Vec::new();
+
+    // Leaks beside oil barrels. Sorted so a seed replays identically.
+    let mut barrels: Vec<(i32, i32)> = world
+        .query::<&Position>()
+        .with::<&OilBarrel>()
+        .iter()
+        .map(|(_, p)| (p.x, p.y))
+        .collect();
+    barrels.sort_unstable();
+    for (bx, by) in barrels {
+        if !rng.gen_bool(OIL_SPILL_BARREL_CHANCE) {
+            continue;
+        }
+        let beside: Vec<(i32, i32)> = (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (bx + dx, by + dy)))
+            .filter(|&t| t != (bx, by) && valid(t) && !taken.contains(&t))
+            .collect();
+        let Some(&start) = beside.choose(rng) else {
+            continue;
+        };
+        let size = rng.gen_range(OIL_SPILL_BARREL_MIN..=OIL_SPILL_BARREL_MAX);
+        puddles.extend(grow(start, size, &mut taken, rng));
+    }
+
+    // Stray spills in rooms.
+    for room in &grid.themed_rooms {
+        if !rng.gen_bool(OIL_SPILL_ROOM_CHANCE) {
+            continue;
+        }
+        let r = room.rect;
+        let floor: Vec<(i32, i32)> = (r.y..r.y + r.height)
+            .flat_map(|y| (r.x..r.x + r.width).map(move |x| (x, y)))
+            .filter(|&t| valid(t) && !taken.contains(&t))
+            .collect();
+        let Some(&start) = floor.choose(rng) else {
+            continue;
+        };
+        let size = rng.gen_range(OIL_SPILL_ROOM_MIN..=OIL_SPILL_ROOM_MAX);
+        puddles.extend(grow(start, size, &mut taken, rng));
+    }
+
+    for (x, y) in puddles {
+        spawning::spawn_oil_puddle(world, x, y);
+    }
+}
+
 /// Spawn all barrels from grid positions with food items.
 ///
 /// The oil-barrel pass runs first and claims the spots it converted, so those
@@ -783,6 +895,15 @@ pub fn init_world(
 
     // Floor 0 has no boss (see `is_boss_floor`), so there is no boss pass here.
 
+    // Unlit oil spills go down last, once every blocker has its tile.
+    spawn_oil_spills(
+        &mut world,
+        grid,
+        &occupancy,
+        &[(player_start.x, player_start.y)],
+        rng,
+    );
+
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(&world, "init_world");
 
@@ -888,6 +1009,9 @@ pub fn spawn_floor_entities(
 
     // Every 3rd floor: a named boss guarding a Rare+ chest in the largest room.
     spawn_boss_encounter(world, grid, floor_num, &mut occupancy, rng);
+
+    // Unlit oil spills go down last, once every blocker has its tile.
+    spawn_oil_spills(world, grid, &occupancy, &[player_spawn_pos], rng);
 
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(world, "spawn_floor_entities");

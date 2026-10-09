@@ -104,6 +104,7 @@ pub fn flash_on_damage(world: &mut World, event: &GameEvent) {
         GameEvent::AttackHit { target, damage, .. } if *damage > 0 => *target,
         GameEvent::ProjectileHit { target: Some(target), damage, .. } if *damage > 0 => *target,
         GameEvent::BurnDamage { entity, .. } => *entity,
+        GameEvent::DotDamage { entity, .. } => *entity,
         GameEvent::StarvationDamage { entity, .. } => *entity,
         GameEvent::DungeonTrapTriggered { victim, damage, .. } if *damage > 0 => *victim,
         _ => return,

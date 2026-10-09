@@ -57,6 +57,59 @@ pub const BURNING_DAMAGE_PER_SECOND: i32 = 2;
 pub const BURNING_DAMAGE_INTERVAL: f32 = 1.0;
 
 // =============================================================================
+// WET / OILED (surface statuses — see systems::tile_effects and systems::effects)
+// =============================================================================
+
+/// How long (game seconds) a creature stays Wet after leaving water, being
+/// splashed, or being rained on. Standing in water keeps refreshing it. While
+/// Wet a creature cannot catch fire, and gaining Wet puts out Burning and
+/// washes off Oiled. Longer makes water a stronger fire-proofing.
+pub const WET_DURATION: f32 = 8.0;
+/// How long (game seconds) a creature stays Oiled after stepping in an unlit
+/// oil puddle. Standing in the puddle keeps refreshing it. Longer leaves more
+/// time to set the oiled creature alight.
+pub const OILED_DURATION: f32 = 15.0;
+/// Multiplier on every per-step chance (spread, burning oil, combat) that an
+/// Oiled creature catches fire. Higher makes oiled targets near-certain to
+/// ignite near any flame.
+pub const OILED_IGNITE_MULT: f64 = 3.0;
+/// Flammability floor for an Oiled creature. The oil burns even when the
+/// creature underneath does not, so a non-`Combustible` (or barely flammable)
+/// creature that is Oiled ignites as if it had at least this flammability.
+pub const OILED_MIN_FLAMMABILITY: f32 = 0.5;
+/// Burn damage multiplier while a creature is both Oiled and Burning. The oil
+/// burns off with the fire: catching fire caps the Oiled timer at the burn's
+/// duration (see `systems::effects::add_effect`).
+pub const OILED_BURN_DAMAGE_MULT: f32 = 2.0;
+/// Sprite tint multiplied into a Wet creature (cool, bluish). `(1,1,1)` is
+/// untinted; lower red/green pushes it bluer.
+pub const WET_SPRITE_TINT: (f32, f32, f32) = (0.7, 0.85, 1.0);
+/// Sprite tint multiplied into an Oiled creature (dark and greasy brown).
+pub const OILED_SPRITE_TINT: (f32, f32, f32) = (0.65, 0.55, 0.4);
+
+// =============================================================================
+// DAMAGE OVER TIME (Poisoned, Bleeding — see time_system::tick_dot_damage)
+// =============================================================================
+// DoT ticks go through `combat::apply_damage_dot`, which skips armor: venom and
+// open wounds are not stopped by a breastplate. Protection/Barkskin and
+// invulnerability still apply.
+
+/// Damage per Poisoned tick.
+pub const POISON_DAMAGE: i32 = 1;
+/// Game seconds between Poisoned ticks. Lower makes poison bite harder.
+pub const POISON_TICK_INTERVAL: f32 = 1.0;
+/// Poisoned duration (game seconds) from a full-strength venomous bite (the
+/// Giant Spider). Re-poisoning keeps the longer timer rather than stacking.
+pub const POISON_DURATION: f32 = 6.0;
+/// Damage per Bleeding tick.
+pub const BLEED_DAMAGE: i32 = 1;
+/// Game seconds between Bleeding ticks.
+pub const BLEED_TICK_INTERVAL: f32 = 1.5;
+/// Bleeding duration (game seconds) per wound. Re-bleeding keeps the longer
+/// of the two timers rather than stacking.
+pub const BLEED_DURATION: f32 = 6.0;
+
+// =============================================================================
 // FIRE SPREAD
 // =============================================================================
 

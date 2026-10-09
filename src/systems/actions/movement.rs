@@ -3,13 +3,11 @@
 use crate::engine::EffectCtx;
 use hecs::{Entity, World};
 
-use crate::components::{BlocksMovement, Container, Door, EffectType, Player, Position};
+use crate::components::{BlocksMovement, Container, Door, Player, Position};
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::queries;
 use crate::spatial_cache::SpatialCache;
-use crate::systems::effects;
 
-use super::traps::{check_dungeon_trap_trigger, check_fire_trap_trigger, check_snare_trap_trigger};
 use super::{apply_open_chest, interrupt_raise_dead, interrupt_taming, ActionResult};
 
 /// Apply movement effect
@@ -123,45 +121,16 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         });
     }
 
-    // Check if entity stepped into water (extinguishes fire)
-    if grid.water_positions.contains(&(target_x, target_y)) {
-        effects::remove_effect_from_entity(world, entity, EffectType::Burning);
-    }
-
-    // Check if entity stepped into a fire source (brazier, campfire) and catches fire
-    let stepped_on_fire = world
-        .query::<(&Position, &crate::components::CausesBurning)>()
-        .iter()
-        .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
-
-    if stepped_on_fire {
-        use crate::constants::BURNING_DURATION;
-        effects::add_effect_to_entity(world, entity, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire {
-            entity,
-            position: (target_x, target_y),
-        });
-    }
-
-    // Check if entity blundered into a spider web (non-spiders are rooted,
-    // web consumed)
-    crate::systems::webs::trigger_web_at(world, entity, target_x, target_y, events);
-
-    // Check if entity stepped on a fire trap
-    check_fire_trap_trigger(world, entity, target_x, target_y, events, rng);
-
-    // Check if entity stepped on a snare trap
-    check_snare_trap_trigger(world, entity, target_x, target_y, events);
-
-    // Check if entity stepped on a dungeon-generated floor trap (no owner
-    // exemption — enemies set these off too)
-    check_dungeon_trap_trigger(world, grid, entity, target_x, target_y, events, rng);
-
-    // After a player step: roll passive detection for hidden traps and secret
-    // doors within one tile (Agility-scaled).
-    if world.get::<&Player>(entity).is_ok() {
-        crate::systems::discovery::roll_player_discovery(world, entity, events, rng);
-    }
+    // Everything the destination tile does to an arrival (water, oil, fire,
+    // webs, traps, discovery) lives in one hook shared by every relocation.
+    crate::systems::tile_effects::on_enter_tile(
+        world,
+        grid,
+        entity,
+        (target_x, target_y),
+        events,
+        rng,
+    );
 
     ActionResult::Completed
 }
@@ -370,6 +339,101 @@ mod tests {
     use super::*;
     use crate::components::{Attackable, CompanionAI, TamedBy, VisualPosition};
     use rand::SeedableRng;
+
+    // =========================================================================
+    // The on-enter-tile hook runs for every way of arriving on a tile.
+    // =========================================================================
+
+    use crate::components::{ActionType, EffectType};
+    use crate::systems::actions::combat::tests::Arena;
+
+    fn has(arena: &Arena, effect: EffectType) -> bool {
+        crate::queries::has_status_effect(&arena.world, arena.player, effect)
+    }
+
+    fn set_burning(arena: &mut Arena) {
+        crate::systems::effects::add_effect_to_entity(
+            &mut arena.world,
+            arena.player,
+            EffectType::Burning,
+            crate::constants::BURNING_DURATION,
+        );
+    }
+
+    /// A normal step into water still puts the fire out (as before the hook
+    /// existed), and now also leaves the walker Wet.
+    #[test]
+    fn stepping_into_water_soaks_and_extinguishes() {
+        let mut arena = Arena::new((5, 5));
+        arena.grid.water_positions.push((6, 5));
+        set_burning(&mut arena);
+
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(arena.player), (6, 5));
+        assert!(!has(&arena, EffectType::Burning), "water puts the fire out");
+        assert!(has(&arena, EffectType::Wet), "and soaks the walker");
+        assert!(arena.seen.iter().any(|e| matches!(e,
+            GameEvent::StatusEffectGained { effect: EffectType::Wet, .. })));
+    }
+
+    /// Blinking into a pool behaves exactly like walking into it: before the
+    /// hook, a teleport left you burning in the water.
+    #[test]
+    fn blinking_into_water_soaks_and_extinguishes() {
+        let mut arena = Arena::new((3, 3));
+        arena.grid.water_positions.push((7, 3));
+        set_burning(&mut arena);
+
+        arena.player_does(ActionType::Blink { target_x: 7, target_y: 3 });
+        assert_eq!(arena.pos(arena.player), (7, 3), "the blink landed");
+        assert!(!has(&arena, EffectType::Burning));
+        assert!(has(&arena, EffectType::Wet));
+    }
+
+    /// Tumble's landing tile acts on the ranger: rolling into an unlit oil
+    /// puddle leaves them Oiled.
+    #[test]
+    fn tumbling_into_oil_leaves_you_oiled() {
+        let mut arena = Arena::new((3, 3));
+        crate::spawning::spawn_oil_puddle(&mut arena.world, 5, 3);
+
+        arena.player_does(ActionType::Tumble { target_x: 5, target_y: 3 });
+        assert_eq!(arena.pos(arena.player), (5, 3));
+        assert!(has(&arena, EffectType::Oiled));
+        assert!(crate::queries::is_slippery(&arena.world, arena.player), "oiled means slippery");
+    }
+
+    /// A burning puddle sets you alight instead of oiling you.
+    #[test]
+    fn stepping_into_burning_oil_ignites_rather_than_oils() {
+        let mut arena = Arena::new((5, 5));
+        let puddle = crate::spawning::spawn_oil_puddle(&mut arena.world, 6, 5);
+        crate::systems::fire::ignite_oil_puddle(&mut arena.world, puddle);
+
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert!(has(&arena, EffectType::Burning));
+        assert!(!has(&arena, EffectType::Oiled));
+    }
+
+    /// A Wet walker steps into a fire source and does not catch — and is not
+    /// told it did.
+    #[test]
+    fn a_wet_walker_does_not_catch_fire() {
+        let mut arena = Arena::new((5, 5));
+        let puddle = crate::spawning::spawn_oil_puddle(&mut arena.world, 6, 5);
+        crate::systems::fire::ignite_oil_puddle(&mut arena.world, puddle);
+        crate::systems::effects::add_effect_to_entity(
+            &mut arena.world,
+            arena.player,
+            EffectType::Wet,
+            crate::constants::WET_DURATION,
+        );
+
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(arena.player), (6, 5));
+        assert!(!has(&arena, EffectType::Burning));
+        assert!(!arena.seen.iter().any(|e| matches!(e, GameEvent::CaughtFire { .. })));
+    }
 
     /// Walking onto a staircase is a real move, and the entity can end up
     /// standing there: `can_transition_floor` refuses `Up` on floor 0, so

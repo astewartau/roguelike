@@ -56,6 +56,10 @@ pub struct EnemyDef {
     pub flammability: f32,
     /// Venomous bite: melee hits apply Slowed for this many seconds (0 = none)
     pub venom_slow: f32,
+    /// Venomous bite: melee hits apply Poisoned for this many seconds (0 = none)
+    pub venom_poison: f32,
+    /// Chance a connecting melee hit opens a wound (Bleeding; 0 = never)
+    pub bleed_chance: f32,
     /// Support caster (Goblin Shaman): kites and heals/hastes allies
     pub support: bool,
     /// Spider-kin: ignores webs and periodically lays them
@@ -162,11 +166,23 @@ impl EnemyDef {
             );
         }
 
-        // Venomous biters apply Slowed on melee hits (enemy melee path).
-        if self.venom_slow > 0.0 {
+        // Venomous biters apply Slowed and/or Poisoned on melee hits (enemy
+        // melee path).
+        if self.venom_slow > 0.0 || self.venom_poison > 0.0 {
             let _ = world.insert_one(
                 entity,
-                crate::components::Venomous { slow_duration: self.venom_slow },
+                crate::components::Venomous {
+                    slow_duration: self.venom_slow,
+                    poison_duration: self.venom_poison,
+                },
+            );
+        }
+
+        // Biters that open wounds (rats) can leave their victim Bleeding.
+        if self.bleed_chance > 0.0 {
+            let _ = world.insert_one(
+                entity,
+                crate::components::Lacerating { bleed_chance: self.bleed_chance },
             );
         }
 
@@ -217,6 +233,8 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.0, // bone doesn't burn
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -237,6 +255,8 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: RAT_BLEED_CHANCE,
         support: false,
         spider: false,
     };
@@ -261,6 +281,8 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.0, // bone doesn't burn
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -281,6 +303,8 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -301,6 +325,8 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -321,6 +347,8 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.2, // rotting flesh, smoulders
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -341,6 +369,8 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -361,6 +391,8 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.0, // wet, doesn't burn
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
     };
@@ -381,6 +413,8 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: true,
         spider: false,
     };
@@ -401,6 +435,8 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.5, // bristly and dry — catches easily
         venom_slow: 0.0,
+        venom_poison: LESSER_SPIDER_POISON_DURATION,
+        bleed_chance: 0.0,
         support: false,
         spider: true,
     };
@@ -421,6 +457,8 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.5,
         venom_slow: SPIDER_VENOM_SLOW_DURATION,
+        venom_poison: POISON_DURATION,
+        bleed_chance: 0.0,
         support: false,
         spider: true,
     };

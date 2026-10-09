@@ -46,6 +46,14 @@ pub fn has_status_effect(world: &World, entity: Entity, effect: EffectType) -> b
     effects::entity_has_effect(world, entity, effect)
 }
 
+/// Whether `entity` is slippery — slick with oil (Oiled) — and so hard to
+/// get a grip on. Grabs and holds (the zombie grab) should fail or slip on a
+/// slippery target.
+#[allow(dead_code)] // Consumer (zombie grab) lands in the next combat phase
+pub fn is_slippery(world: &World, entity: Entity) -> bool {
+    has_status_effect(world, entity, EffectType::Oiled)
+}
+
 /// Check if an entity can perform an action (has energy and is not busy).
 pub fn can_entity_act(world: &World, entity: Entity) -> bool {
     world

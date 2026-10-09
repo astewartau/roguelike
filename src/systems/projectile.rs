@@ -229,7 +229,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
         // If this is a potion projectile, apply splash effect and emit event
         if let Some(ptype) = potion_type {
             let thrower = world.get::<&Projectile>(entity).map(|p| p.source).ok();
-            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y);
+            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y, events);
             events.push(GameEvent::PotionSplash {
                 x: final_x,
                 y: final_y,

@@ -438,7 +438,12 @@ fn effect_pip(
     let painter = ui.painter().with_clip_rect(rect);
 
     painter.rect_filled(rect, 0.0, colors::BUTTON_BG);
-    painter.image(tex, rect, uv, style::brighten(egui::Color32::WHITE, lift));
+    painter.image(
+        tex,
+        rect,
+        uv,
+        style::brighten(UiIcons::effect_icon_tint(pip.effect), lift),
+    );
 
     // Darken the part of the duration already spent.
     let spent = if pip.total > 0.0 {
@@ -523,6 +528,10 @@ fn effect_label(effect: StatusEffectType) -> &'static str {
         StatusEffectType::Guarding => "Guarding",
         StatusEffectType::Thorns => "Thorns",
         StatusEffectType::BoneWard => "Bone Ward",
+        StatusEffectType::Wet => "Wet",
+        StatusEffectType::Oiled => "Oiled",
+        StatusEffectType::Poisoned => "Poison",
+        StatusEffectType::Bleeding => "Bleeding",
     }
 }
 

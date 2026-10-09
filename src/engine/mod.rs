@@ -2046,6 +2046,7 @@ impl AbilitySlot {
                 Targeting::Enter(CORPSE_EXPLOSION_RANGE)
             }
             (AbilitySlot::Kit(_), AbilityType::Entangle) => Targeting::Enter(ENTANGLE_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::CallRain) => Targeting::Enter(CALL_RAIN_RANGE),
             _ => Targeting::Immediate,
         }
     }
@@ -2372,7 +2373,11 @@ mod tests {
         // stepped away now misses) and for dead actors no longer completing
         // queued actions. Either change alone moves this digest a long way
         // (the swarm amplifies any divergence); the run stays reproducible.
-        const EXPECTED: &str = "t=350.1600 floor=0 kills=7 hp=-1/50 pos=8,8 hunger=83.3344 fatigue=40.4448 n=97 roster=020d0cf1";
+        // Re-recorded for the surface-status phase: floors now carry unlit oil
+        // spills (more entities, more rng draws at construction), rats and
+        // lesser spiders gained on-hit components (archetype moves), and rat
+        // bites roll for Bleeding. Two separate runs agreed before recording.
+        const EXPECTED: &str = "t=344.6579 floor=0 kills=6 hp=0/50 pos=8,7 hunger=83.3344 fatigue=47.3968 n=105 roster=e83ccbda";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2441,7 +2446,9 @@ mod tests {
         // because no actor ever stalls waiting to afford its next move.
         // Re-recorded again for melee reach-at-completion (swings at targets
         // that stepped out of reach now miss).
-        const EXPECTED: &str = "t=261.2761 floor=1 kills=17 hp=99768/100000 pos=10,13 hunger=87.5008 fatigue=30.6659 n=95 roster=61352377";
+        // Re-recorded again for oil spills, on-hit DoTs and the oil barrels
+        // and puddles that floor save/load now keeps (see the other golden).
+        const EXPECTED: &str = "t=264.8761 floor=1 kills=20 hp=99746/100000 pos=10,13 hunger=87.5008 fatigue=29.5459 n=99 roster=3181b400";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -3336,7 +3343,7 @@ mod tests {
                 vec![A::Sprint, A::Disengage, A::Tumble, A::SnareTrap, A::CripplingShot],
                 vec![],
             ),
-            (PlayerClass::Druid, vec![A::Tame, A::Barkskin, A::Thorns, A::Entangle], vec![]),
+            (PlayerClass::Druid, vec![A::Tame, A::Barkskin, A::Thorns, A::Entangle, A::CallRain], vec![]),
             (
                 PlayerClass::Necromancer,
                 vec![A::LifeDrain, A::Fear, A::RaiseDead, A::BoneWard, A::Sacrifice],

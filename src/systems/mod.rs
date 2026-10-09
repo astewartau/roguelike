@@ -14,6 +14,7 @@
 //! - `rendering`: FOV, visibility, and render data collection
 //! - `projectile`: Arrow and projectile movement
 //! - `telegraph`: Which tiles in-progress hostile attacks threaten (for UI/animation)
+//! - `tile_effects`: What a tile does to whoever enters or stands on it
 
 pub mod action_dispatch;
 pub mod actions;
@@ -37,6 +38,7 @@ pub mod projectile;
 pub mod rendering;
 pub mod survival;
 pub mod telegraph;
+pub mod tile_effects;
 pub mod webs;
 
 // Re-export commonly used items
