@@ -214,26 +214,21 @@ pub const ATTACK_TELEGRAPH_LABEL_FONT_SIZE: f32 = 12.0;
 pub const ATTACK_TELEGRAPH_LABEL_HEIGHT: f32 = 0.15;
 
 // =============================================================================
-// HOVERED TILE: OUTLINE, INFO PANEL, CONTEXT MENU
+// HOVERED TILE: HIGHLIGHT, INFO PANEL, CONTEXT MENU
 // =============================================================================
-// The outline on the tile under the cursor, the "what's here" panel in the
-// top-right corner and the right-click action menu. See `ui::tile_info` for
-// the drawing and `systems::tile_context` for what they say.
+// The faint lightening of the tile under the cursor (drawn by the tile
+// renderer, see `HOVER_TILE_BRIGHTEN`), the "what's here" panel
+// in the top-right corner and the Shift+right-click action menu. See
+// `ui::tile_info` for the drawing and `systems::tile_context` for what they
+// say.
 
-/// Colour of the hover outline, RGB. A pale parchment so it reads on dark
-/// floors and lit ones alike without being mistaken for the red attack
-/// telegraph or the coloured targeting overlays.
-pub const HOVER_OUTLINE_COLOR: (u8, u8, u8) = (235, 220, 180);
-/// Opacity of the hover outline, 0-255. Subtle on purpose: it marks where the
-/// cursor is, it is not a selection. Past about 160 it starts to look like a
-/// targeting cursor.
-pub const HOVER_OUTLINE_ALPHA: u8 = 110;
-/// Width of the hover outline, in points. 1.0 stays a hairline at any zoom;
-/// 2.0 matches the targeting cursor and stops being subtle.
-pub const HOVER_OUTLINE_WIDTH: f32 = 1.0;
-/// Inset of the hover outline from the tile edge, in points, so it sits on
-/// the tile rather than on the seam it shares with its neighbours.
-pub const HOVER_OUTLINE_INSET: f32 = 1.0;
+/// Brightness multiplier for the tile under the cursor, applied by the tile
+/// renderer to the terrain sprite (1.0 = unchanged). It lightens the tile
+/// itself rather than painting over it, so it scales with the tile's own
+/// lighting: a lit floor gets a little lighter, a fogged one barely changes,
+/// and unexplored tiles (never drawn) are never marked. Up makes the cursor
+/// easier to spot; past about 1.3 it starts to read as a selection.
+pub const HOVER_TILE_BRIGHTEN: f32 = 1.12;
 
 /// Width of the tile info panel's contents, in points. Fixed so the panel
 /// does not jump about as the cursor sweeps over tiles with longer names;

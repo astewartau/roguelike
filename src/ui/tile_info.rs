@@ -1,5 +1,5 @@
-//! The hovered tile: a faint outline under the cursor, a "what's here" panel
-//! in the top-right corner, and the right-click action menu.
+//! The hovered tile: a faint lightening under the cursor, a "what's here"
+//! panel in the top-right corner, and the Shift+right-click action menu.
 //!
 //! What the panel says and which actions the menu lists are decided in
 //! [`crate::systems::tile_context`]; this module only draws them. A menu
@@ -9,7 +9,6 @@
 use egui::Color32;
 
 use super::style::{self, colors};
-use crate::camera::Camera;
 use crate::constants::*;
 use crate::systems::tile_context::{ContextAction, ContextCommand, Relation, TileInfo, TileKnowledge};
 
@@ -32,27 +31,6 @@ pub enum TileMenuOutcome {
     Closed,
     /// Picked an enabled entry.
     Chose(ContextCommand),
-}
-
-/// The on-screen rect of `tile`, in egui points.
-fn tile_rect(ctx: &egui::Context, camera: &Camera, (x, y): (i32, i32)) -> egui::Rect {
-    let ppp = ctx.pixels_per_point();
-    let size = camera.zoom / ppp;
-    let (sx, sy) = camera.world_to_screen(x as f32, y as f32);
-    egui::Rect::from_min_size(egui::pos2(sx / ppp, sy / ppp - size), egui::vec2(size, size))
-}
-
-/// Outline the tile under the cursor. Drawn on the background layer, with the
-/// health bars and loot markers: over the world, under every panel.
-pub fn draw_hover_outline(ctx: &egui::Context, camera: &Camera, tile: (i32, i32)) {
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Background,
-        egui::Id::new("hover_tile_outline"),
-    ));
-    let (r, g, b) = HOVER_OUTLINE_COLOR;
-    let color = Color32::from_rgba_unmultiplied(r, g, b, HOVER_OUTLINE_ALPHA);
-    let rect = tile_rect(ctx, camera, tile).shrink(HOVER_OUTLINE_INSET);
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(HOVER_OUTLINE_WIDTH, color));
 }
 
 fn relation_color(relation: Relation) -> Color32 {

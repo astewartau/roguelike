@@ -1,6 +1,7 @@
 use crate::camera::Camera;
 use crate::constants::MAX_SCENE_LIGHTS as MAX_LIGHTS;
 use crate::constants::LIGHT_AMBIENT_TINT;
+use crate::constants::HOVER_TILE_BRIGHTEN;
 use crate::grid::Grid;
 use crate::multi_tileset::MultiTileset;
 use crate::systems::RenderEntity;
@@ -770,6 +771,7 @@ impl Renderer {
             player_light_radius,
             player_light_color,
             light_sources,
+            highlight_tile,
         } = lighting;
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
@@ -849,10 +851,18 @@ impl Renderer {
                         let fog = grid.illumination.get(idx).copied().unwrap_or(0.5);
 
                         // Water tiles get a blue tint
-                        let tint = match tile.tile_type {
+                        let mut tint = match tile.tile_type {
                             crate::tile::TileType::Water => (0.6, 0.8, 1.0),
                             _ => (1.0, 1.0, 1.0),
                         };
+                        // The tile under the cursor is drawn a little lighter.
+                        if highlight_tile == Some((x, y)) {
+                            tint = (
+                                tint.0 * HOVER_TILE_BRIGHTEN,
+                                tint.1 * HOVER_TILE_BRIGHTEN,
+                                tint.2 * HOVER_TILE_BRIGHTEN,
+                            );
+                        }
 
                         instance_data.push(x as f32);
                         instance_data.push(y as f32);

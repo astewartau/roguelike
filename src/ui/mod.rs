@@ -109,7 +109,7 @@ pub struct UiActions {
     pub altar_sacrifice: Option<usize>,
     /// Close the altar window without sacrificing
     pub close_altar: bool,
-    /// An entry picked from the right-click tile menu: the tile it was opened
+    /// An entry picked from the Shift+right-click tile menu: the tile it was opened
     /// on and the command. The engine re-validates it before running it.
     pub tile_choice: Option<((i32, i32), crate::systems::tile_context::ContextCommand)>,
 }
@@ -152,8 +152,12 @@ pub struct GameUiState {
     pub item_context_menu: Option<(usize, egui::Pos2)>,
     /// Context menu for equipped weapon (screen position)
     pub equipped_context_menu: Option<egui::Pos2>,
-    /// The right-click menu for a map tile, if open
+    /// The Shift+right-click menu for a map tile, if open
     pub tile_menu: Option<TileMenu>,
+    /// The tile the world renderer should lighten this frame (under the
+    /// cursor, or the open tile menu's tile), decided while running the UI
+    /// because only egui knows whether the pointer is over a panel.
+    pub hover_highlight: Option<(i32, i32)>,
     /// Which tab the Character window shows
     pub character_tab: CharacterTab,
     /// Main hotbar (keys 1-5)
@@ -188,6 +192,7 @@ impl GameUiState {
             item_context_menu: None,
             equipped_context_menu: None,
             tile_menu: None,
+            hover_highlight: None,
             character_tab: CharacterTab::default(),
             hotbar_main: [None; 5],
             hotbar_shift: [None; 5],
@@ -307,7 +312,7 @@ impl GameUiState {
         self.open_altar = None;
     }
 
-    /// Close the right-click tile menu. Returns whether one was open.
+    /// Close the Shift+right-click tile menu. Returns whether one was open.
     pub fn close_tile_menu(&mut self) -> bool {
         self.tile_menu.take().is_some()
     }
@@ -466,17 +471,19 @@ pub fn run_ui(
             draw_targeting_overlay(ctx, camera, data);
         }
 
-        // Hovered tile: outline (unless the targeting cursor is already
+        // Hovered tile: faint highlight (unless the targeting cursor is already
         // marking it) and the info panel. Hidden while the pointer is over a
         // panel or outside the window.
         let pointer_on_map = ctx.input(|i| i.pointer.hover_pos().is_some())
             && !ctx.is_pointer_over_area();
-        // While the right-click menu is open, its tile keeps the outline.
-        if let Some(menu) = ui_state.tile_menu.as_ref() {
-            tile_info::draw_hover_outline(ctx, camera, menu.tile);
+        // While the tile menu is open, its tile keeps the highlight.
+        ui_state.hover_highlight = if let Some(menu) = ui_state.tile_menu.as_ref() {
+            Some(menu.tile)
         } else if pointer_on_map && targeting_data.is_none() {
-            tile_info::draw_hover_outline(ctx, camera, hover_tile);
-        }
+            Some(hover_tile)
+        } else {
+            None
+        };
         if let Some(ref info) = menu_info {
             tile_info::draw_tile_info_panel(ctx, info);
         } else if pointer_on_map {

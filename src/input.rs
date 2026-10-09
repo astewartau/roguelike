@@ -76,10 +76,10 @@ pub struct InputState {
     pub targeting_mode: Option<TargetingMode>,
     /// Targeting mode for abilities that require click-to-target (Tame)
     pub ability_targeting_mode: Option<AbilityTargetingMode>,
-    /// Pending quick-shot to process: Shift+right-click fires the equipped
-    /// bow at the cursor tile (a plain right-click opens the context menu).
+    /// Pending quick-shot to process: a plain right-click fires the equipped
+    /// bow at the cursor tile (Shift+right-click opens the context menu).
     pub pending_right_click: bool,
-    /// An intent picked from the right-click context menu, executed on the
+    /// An intent picked from the Shift+right-click context menu, executed on the
     /// next frame exactly as a key press would be (see `process_frame`).
     pub pending_intent: Option<PlayerIntent>,
     /// Pending left-click to process (for targeting confirmation)
@@ -678,7 +678,7 @@ pub fn process_frame(
         return result;
     }
 
-    // An intent chosen from the right-click context menu: executed like a
+    // An intent chosen from the Shift+right-click context menu: executed like a
     // key press (it replaces any click-to-move path in progress).
     if let Some(intent) = input.pending_intent.take() {
         input.clear_path();
@@ -687,7 +687,7 @@ pub fn process_frame(
         return result;
     }
 
-    // Handle pending Shift+right-click (quick bow shot at the cursor)
+    // Handle pending right-click (quick bow shot at the cursor)
     if input.pending_right_click {
         input.pending_right_click = false;
 

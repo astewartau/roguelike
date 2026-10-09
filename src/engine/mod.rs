@@ -481,10 +481,9 @@ impl GameEngine {
                         }
                     }
                 }
-                // Right click: cancels targeting; otherwise opens the tile
-                // menu. Shift+right-click keeps the old instant bow shot at
-                // the cursor (it was what a plain right-click did before the
-                // menu, and the menu's "Shoot" entry is the same intent).
+                // Right click: cancels targeting; otherwise the quick
+                // alternate action (the instant bow shot at the cursor).
+                // Shift+right-click opens the tile action menu.
                 if !egui_consumed && *button == MouseButton::Right
                     && *btn_state == ElementState::Released {
                         let shift = self.input.keys_pressed.contains(&KeyCode::ShiftLeft)
@@ -492,9 +491,11 @@ impl GameEngine {
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
                         } else if shift {
+                            if self.game_mode == GameMode::Playing {
+                                self.open_tile_menu(camera);
+                            }
+                        } else {
                             self.input.pending_right_click = true;
-                        } else if self.game_mode == GameMode::Playing {
-                            self.open_tile_menu(camera);
                         }
                     }
             }
@@ -921,6 +922,15 @@ impl GameEngine {
     #[allow(dead_code)] // Public API for external callers
     pub fn world(&self) -> Option<&hecs::World> {
         self.state.as_ref().map(|s| &s.world)
+    }
+
+    /// The tile the world renderer should draw slightly lighter (under the
+    /// cursor), as decided by the last UI pass.
+    pub fn hover_highlight_tile(&self) -> Option<(i32, i32)> {
+        if !self.is_playing() {
+            return None;
+        }
+        self.ui_state.as_ref().and_then(|u| u.hover_highlight)
     }
 
     /// Should show grid lines?
