@@ -37,10 +37,31 @@ pub fn generate_threat(world: &mut World, enemy: Entity, threat_source: Entity, 
 
 /// Generate threat on a companion from a damage source.
 /// Call this whenever an entity deals damage to a companion.
+///
+/// Friendly fire never turns a companion: damage from its own owner (a
+/// fireball that clips a skeleton, a stray arrow, a trap) or from a sibling
+/// companion of the same owner generates no threat, so the companion does not
+/// go after its own side.
 pub fn generate_companion_threat(world: &mut World, companion: Entity, threat_source: Entity, amount: f32) {
+    if is_own_side_of_companion(world, companion, threat_source) {
+        return;
+    }
     if let Ok(mut ai) = world.get::<&mut CompanionAI>(companion) {
         ai.add_threat(threat_source, amount);
     }
+}
+
+/// Whether `other` is on `companion`'s own side: its owner, or another
+/// companion tamed by the same owner.
+fn is_own_side_of_companion(world: &World, companion: Entity, other: Entity) -> bool {
+    let Ok(owner) = world.get::<&CompanionAI>(companion).map(|ai| ai.owner) else {
+        return false;
+    };
+    other == owner
+        || world
+            .get::<&TamedBy>(other)
+            .map(|t| t.owner == owner)
+            .unwrap_or(false)
 }
 
 // =============================================================================
@@ -1121,11 +1142,8 @@ fn determine_companion_action(
         entries.sort_by(|a, b| b.threat.partial_cmp(&a.threat).unwrap_or(std::cmp::Ordering::Equal));
 
         for entry in entries {
-            // Skip sibling companions
-            let is_sibling = world.get::<&TamedBy>(entry.entity)
-                .map(|t| t.owner == owner)
-                .unwrap_or(false);
-            if is_sibling {
+            // Never fight our own side: the owner or a sibling companion
+            if is_own_side_of_companion(world, entity, entry.entity) {
                 continue;
             }
 

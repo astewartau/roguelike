@@ -891,4 +891,37 @@ mod tests {
         );
         assert_eq!(r, ActionResult::Blocked);
     }
+
+    #[test]
+    fn friendly_fire_never_turns_a_companion_on_its_own_side() {
+        // A fireball, stray arrow or trap of the owner's that clips a raised
+        // skeleton used to put the owner in its threat table, and the
+        // skeleton then hunted the necromancer.
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let skel = raised_skeleton(&mut arena, 6, 5);
+        let sibling = raised_skeleton(&mut arena, 4, 5);
+        let rat = arena.rat(8, 5, 1.0);
+
+        crate::systems::ai::generate_companion_threat(&mut arena.world, skel, player, 50.0);
+        crate::systems::ai::generate_companion_threat(&mut arena.world, skel, sibling, 50.0);
+        crate::systems::ai::generate_companion_threat(&mut arena.world, skel, rat, 5.0);
+
+        let ai = arena.world.get::<&CompanionAI>(skel).unwrap();
+        let sources: Vec<Entity> = ai.threat_table.iter().map(|e| e.entity).collect();
+        assert_eq!(sources, vec![rat], "only the enemy should be a threat");
+    }
+
+    #[test]
+    fn a_companion_stumbling_into_its_owner_does_not_attack_them() {
+        let mut arena = Arena::new((5, 5));
+        let skel = raised_skeleton(&mut arena, 6, 5);
+        let action = crate::systems::action_dispatch::determine_action_type(
+            &arena.world, &arena.grid, skel, -1, 0,
+        );
+        assert!(
+            matches!(action, crate::components::ActionType::Wait),
+            "stepping into the owner must not become an attack, got {action:?}"
+        );
+    }
 }

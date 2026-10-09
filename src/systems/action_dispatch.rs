@@ -124,6 +124,12 @@ pub fn determine_action_type(
                     }
                 }
             }
+            // A companion stepping into its own owner (a confused or
+            // fleeing skeleton stumbling into the necromancer) holds still
+            // instead of attacking them.
+            if world.get::<&TamedBy>(entity).map(|t| t.owner == id).unwrap_or(false) {
+                return ActionType::Wait;
+            }
             return ActionType::Attack { target: id };
         }
     }
