@@ -164,9 +164,13 @@ impl GameEngine {
     /// Create a new game engine on the start screen.
     pub fn new() -> Self {
         // Tests build many engines in parallel; opening a real output stream
-        // for each one churns the system sound server for no benefit.
-        let audio = if cfg!(test) { None } else { AudioManager::new() };
-        if audio.is_none() {
+        // for each one churns the system sound server for no benefit. Setting
+        // ROGUELIKE_NO_AUDIO does the same for a real run, so an agent driving
+        // the game on a virtual display doesn't play sound through the user's
+        // speakers (see .claude/skills/run-game).
+        let muted = cfg!(test) || std::env::var_os("ROGUELIKE_NO_AUDIO").is_some();
+        let audio = if muted { None } else { AudioManager::new() };
+        if audio.is_none() && !muted {
             eprintln!("Warning: Could not initialize audio system");
         }
 
