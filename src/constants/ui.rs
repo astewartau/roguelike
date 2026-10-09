@@ -212,3 +212,46 @@ pub const ATTACK_TELEGRAPH_LABEL_FONT_SIZE: f32 = 12.0;
 /// Where the label sits, in tiles above the threatened tile's bottom edge.
 /// 0.5 centres it on the tile; lower tucks it under the sprite's feet.
 pub const ATTACK_TELEGRAPH_LABEL_HEIGHT: f32 = 0.15;
+
+// =============================================================================
+// HOVERED TILE: OUTLINE, INFO PANEL, CONTEXT MENU
+// =============================================================================
+// The outline on the tile under the cursor, the "what's here" panel in the
+// top-right corner and the right-click action menu. See `ui::tile_info` for
+// the drawing and `systems::tile_context` for what they say.
+
+/// Colour of the hover outline, RGB. A pale parchment so it reads on dark
+/// floors and lit ones alike without being mistaken for the red attack
+/// telegraph or the coloured targeting overlays.
+pub const HOVER_OUTLINE_COLOR: (u8, u8, u8) = (235, 220, 180);
+/// Opacity of the hover outline, 0-255. Subtle on purpose: it marks where the
+/// cursor is, it is not a selection. Past about 160 it starts to look like a
+/// targeting cursor.
+pub const HOVER_OUTLINE_ALPHA: u8 = 110;
+/// Width of the hover outline, in points. 1.0 stays a hairline at any zoom;
+/// 2.0 matches the targeting cursor and stops being subtle.
+pub const HOVER_OUTLINE_WIDTH: f32 = 1.0;
+/// Inset of the hover outline from the tile edge, in points, so it sits on
+/// the tile rather than on the seam it shares with its neighbours.
+pub const HOVER_OUTLINE_INSET: f32 = 1.0;
+
+/// Width of the tile info panel's contents, in points. Fixed so the panel
+/// does not jump about as the cursor sweeps over tiles with longer names;
+/// long lines wrap instead.
+pub const TILE_INFO_WIDTH: f32 = 220.0;
+/// Gap between the tile info panel and the top-right screen corner, in
+/// points. Matches the status bar's 10pt inset in the opposite corner.
+pub const TILE_INFO_MARGIN: f32 = 10.0;
+/// Height of the small HP bar under each creature in the info panel, in
+/// points. Much thinner than the HUD bars: it is a gauge, not a readout.
+pub const TILE_INFO_HP_BAR_HEIGHT: f32 = 6.0;
+/// How many distinct item names an item pile lists before "+N more". Up lists
+/// more of a big pile at the cost of a taller panel.
+pub const TILE_INFO_ITEM_NAMES_SHOWN: usize = 3;
+
+/// Minimum width of the right-click menu, in points, so short menus ("Walk
+/// here", "Examine") still look like a menu rather than a tooltip.
+pub const CONTEXT_MENU_MIN_WIDTH: f32 = 150.0;
+/// Offset of the right-click menu from the cursor, in points, so the cursor
+/// does not sit on top of the first entry's label.
+pub const CONTEXT_MENU_CURSOR_OFFSET: f32 = 4.0;

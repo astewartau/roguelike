@@ -140,6 +140,13 @@ pub mod colors {
     /// Outline behind a floating number, so it survives a light floor.
     pub const NUMBER_OUTLINE: Color32 = Color32::BLACK;
 
+    // How a creature in the tile info panel stands toward the player. Muted
+    // enough to sit in a panel next to TEXT_PRIMARY; the hostile red is
+    // deliberately softer than DAMAGE_TAKEN so it reads as a label, not a hit.
+    pub const RELATION_HOSTILE: Color32 = Color32::from_rgb(220, 110, 95);
+    pub const RELATION_COMPANION: Color32 = Color32::from_rgb(120, 190, 120);
+    pub const RELATION_FRIENDLY: Color32 = Color32::from_rgb(210, 180, 100);
+
     // Selection/Highlight
     pub const SELECTED: Color32 = Color32::from_rgb(70, 90, 110);
     pub const HOVERED: Color32 = Color32::from_rgb(45, 40, 35);

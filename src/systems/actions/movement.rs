@@ -203,7 +203,6 @@ pub fn doorway_obstructed(world: &World, door: Entity) -> bool {
 /// Whether `closer` can close `door` right now: it is an open door on a tile
 /// adjacent to the closer (8-way, not the closer's own tile) and nothing is
 /// in the doorway. For the context menu and the CloseDoor intent.
-#[allow(dead_code)] // Reserved for the upcoming right-click context menu
 pub fn can_close_door(world: &World, closer: Entity, door: Entity) -> bool {
     let open = world.get::<&Door>(door).map(|d| d.is_open).unwrap_or(false);
     let (Some(a), Some(b)) = (

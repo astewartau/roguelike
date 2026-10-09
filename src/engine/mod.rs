@@ -158,6 +158,10 @@ pub struct GameEngine {
     /// All recorded runs from `runs_history.jsonl`, newest first. The start
     /// screen aggregates stats over the lot and lists the most recent few.
     pub past_runs: Vec<crate::run_history::RunRecord>,
+
+    /// Set when a left press only dismissed the right-click tile menu, so the
+    /// matching release doesn't also walk the player to the clicked tile.
+    swallow_left_release: bool,
 }
 
 impl GameEngine {
@@ -195,6 +199,7 @@ impl GameEngine {
             seed_input: String::new(),
             stats_open: false,
             past_runs: crate::run_history::load_recent(usize::MAX),
+            swallow_left_release: false,
         }
     }
 
@@ -367,18 +372,24 @@ impl GameEngine {
                     self.input.cancel_targeting();
                     return None;
                 }
-                // 2. Close the dev menu.
+                // 2. Close the right-click tile menu.
+                if let Some(ui) = self.ui_state.as_mut() {
+                    if ui.close_tile_menu() {
+                        return None;
+                    }
+                }
+                // 3. Close the dev menu.
                 if self.dev_menu.visible {
                     self.dev_menu.visible = false;
                     return None;
                 }
-                // 3. Close any open game UI window (inventory, dialogue, shop, loot).
+                // 4. Close any open game UI window (inventory, dialogue, shop, loot).
                 if let Some(ui) = self.ui_state.as_mut() {
                     if ui.close_open_menus() {
                         return None;
                     }
                 }
-                // 4. Nothing open — open the pause menu.
+                // 5. Nothing open — open the pause menu.
                 self.game_mode = GameMode::Paused;
                 self.pause_selected = 0;
                 self.input.keys_pressed.clear();
@@ -423,6 +434,21 @@ impl GameEngine {
                 self.input.mouse_pos = (position.x as f32, position.y as f32);
             }
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
+                // A left click on the map while the tile menu is open only
+                // closes the menu.
+                if !egui_consumed && *button == MouseButton::Left {
+                    if *btn_state == ElementState::Pressed {
+                        if let Some(ui) = self.ui_state.as_mut() {
+                            if ui.close_tile_menu() {
+                                self.swallow_left_release = true;
+                                return None;
+                            }
+                        }
+                    } else if std::mem::take(&mut self.swallow_left_release) {
+                        self.input.mouse_down = false;
+                        return None;
+                    }
+                }
                 if !egui_consumed && *button == MouseButton::Left {
                     let was_down = self.input.mouse_down;
                     self.input.mouse_down = *btn_state == ElementState::Pressed;
@@ -455,12 +481,20 @@ impl GameEngine {
                         }
                     }
                 }
+                // Right click: cancels targeting; otherwise opens the tile
+                // menu. Shift+right-click keeps the old instant bow shot at
+                // the cursor (it was what a plain right-click did before the
+                // menu, and the menu's "Shoot" entry is the same intent).
                 if !egui_consumed && *button == MouseButton::Right
                     && *btn_state == ElementState::Released {
+                        let shift = self.input.keys_pressed.contains(&KeyCode::ShiftLeft)
+                            || self.input.keys_pressed.contains(&KeyCode::ShiftRight);
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
-                        } else {
+                        } else if shift {
                             self.input.pending_right_click = true;
+                        } else if self.game_mode == GameMode::Playing {
+                            self.open_tile_menu(camera);
                         }
                     }
             }
@@ -801,6 +835,11 @@ impl GameEngine {
             self.try_use_ability(ability_type);
         }
 
+        // An entry picked from the right-click tile menu
+        if let Some((tile, ref command)) = actions.tile_choice {
+            self.run_tile_command(tile, command);
+        }
+
         let ui_state = self.ui_state.as_mut().expect("UI state should exist");
         // Apply UI state changes
         if let Some(targeting) = ui_result.enter_targeting {
@@ -1046,6 +1085,18 @@ impl GameEngine {
             GameMode::Playing => {
                 let state = self.state.as_ref().expect("State should exist when playing");
                 let ui_state = self.ui_state.as_mut().expect("UI state should exist when playing");
+
+                // Keep an open tile menu current (cooldowns tick, creatures
+                // move) so what it greys out is what would be refused now.
+                if let Some(menu) = ui_state.tile_menu.as_mut() {
+                    menu.actions = systems::tile_context::context_actions(
+                        &state.world,
+                        &state.grid,
+                        &state.spatial_cache,
+                        state.player_entity,
+                        menu.tile,
+                    );
+                }
 
                 // Extract life drain beam data for rendering
                 let life_drain_beams = crate::ui::get_life_drain_beam_data(
@@ -1352,6 +1403,71 @@ impl GameEngine {
         input::process_mouse_drag(&mut self.input, camera, show_inv);
 
         result
+    }
+
+    /// Open the right-click menu on the tile under the cursor.
+    fn open_tile_menu(&mut self, camera: &Camera) {
+        let (Some(state), Some(ui)) = (self.state.as_ref(), self.ui_state.as_mut()) else {
+            return;
+        };
+        let tile = input::cursor_tile(camera, self.input.mouse_pos);
+        let actions = systems::tile_context::context_actions(
+            &state.world,
+            &state.grid,
+            &state.spatial_cache,
+            state.player_entity,
+            tile,
+        );
+        ui.tile_menu = Some(crate::ui::TileMenu {
+            tile,
+            screen_pos: self.input.mouse_pos,
+            actions,
+        });
+    }
+
+    /// Run a command picked from the tile menu, through the same path the
+    /// equivalent click or key takes. Re-validated first: the menu may be a
+    /// frame stale, and a disabled entry must never run.
+    fn run_tile_command(
+        &mut self,
+        tile: (i32, i32),
+        command: &systems::tile_context::ContextCommand,
+    ) {
+        use systems::tile_context::{validate_choice, ContextCommand};
+        let (Some(state), Some(ui)) = (self.state.as_ref(), self.ui_state.as_mut()) else {
+            return;
+        };
+        ui.close_tile_menu();
+        let player = state.player_entity;
+        if let Err(reason) = validate_choice(
+            &state.world,
+            &state.grid,
+            &state.spatial_cache,
+            player,
+            tile,
+            command,
+        ) {
+            ui.message_log.system(reason);
+            return;
+        }
+        match command {
+            ContextCommand::ClickTo { x, y } => {
+                input::click_to_move_tile(&mut self.input, &state.world, &state.grid, player, (*x, *y));
+            }
+            ContextCommand::Approach { x, y } => {
+                if !input::approach_and_bump(&mut self.input, &state.world, &state.grid, player, (*x, *y)) {
+                    ui.message_log.system("You can't find a way there.");
+                }
+            }
+            ContextCommand::Intent(intent) => {
+                // Executed next frame by process_input, exactly as a key press.
+                self.input.pending_intent = Some(intent.clone());
+            }
+            ContextCommand::Examine { x, y } => {
+                let info = systems::tile_context::describe_tile(&state.world, &state.grid, player, (*x, *y));
+                ui.message_log.system(info.summary());
+            }
+        }
     }
 
     fn handle_dev_spawn(&mut self, camera: &Camera) {
@@ -3481,5 +3597,129 @@ mod tests {
                 assert_eq!(k.cooldown_remaining, 0.0, "{:?} untouched", k.ability);
             }
         }
+    }
+
+    /// A free floor tile orthogonally beside the player with nothing on it.
+    fn empty_neighbour(engine: &GameEngine) -> (i32, i32) {
+        let state = engine.state.as_ref().expect("run");
+        let (px, py) = crate::queries::get_entity_position(&state.world, state.player_entity)
+            .expect("player position");
+        [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .map(|(dx, dy)| (px + dx, py + dy))
+            .find(|&(x, y)| {
+                state.grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
+                    && !state
+                        .world
+                        .query::<&crate::components::Position>()
+                        .iter()
+                        .any(|(_, p)| (p.x, p.y) == (x, y))
+            })
+            .expect("an empty floor tile beside the player")
+    }
+
+    fn see(engine: &mut GameEngine, (x, y): (i32, i32)) {
+        let tile = engine.state.as_mut().expect("run").grid.get_mut(x, y).expect("in bounds");
+        tile.visible = true;
+        tile.explored = true;
+    }
+
+    fn choose(engine: &mut GameEngine, tile: (i32, i32), command: systems::tile_context::ContextCommand) {
+        engine.process_ui_actions(&UiActions {
+            tile_choice: Some((tile, command)),
+            ..Default::default()
+        });
+    }
+
+    /// Picking "Close door" from the tile menu runs the CloseDoor intent
+    /// through the normal input path on the next frame.
+    #[test]
+    fn close_door_from_the_tile_menu_closes_the_door() {
+        use crate::components::{Door, Position, VisualPosition};
+        use systems::tile_context::context_actions;
+        let mut engine = engine_with_run();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let at = empty_neighbour(&engine);
+        see(&mut engine, at);
+        let door = {
+            let state = engine.state.as_mut().expect("run");
+            // Spawned closed and opened the way the game opens one, so the
+            // spatial cache tracks it like a generated door.
+            let pos = Position::new(at.0, at.1);
+            let door = state.world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                Door::new(),
+                crate::components::BlocksMovement,
+                crate::components::BlocksVision,
+            ));
+            state.spatial_cache.rebuild_in_place(&state.world);
+            state.world.get::<&mut Door>(door).expect("door").is_open = true;
+            let _ = state.world.remove::<(crate::components::BlocksMovement, crate::components::BlocksVision)>(door);
+            state.spatial_cache.clear_blocking_flags(door);
+            door
+        };
+        let entry = {
+            let state = engine.state.as_ref().expect("run");
+            context_actions(&state.world, &state.grid, &state.spatial_cache, state.player_entity, at)
+                .into_iter()
+                .find(|a| a.label == "Close door")
+                .expect("the menu offers Close door")
+        };
+        assert!(entry.enabled, "{:?}", entry.reason);
+        choose(&mut engine, at, entry.command);
+        assert!(matches!(
+            engine.input.pending_intent,
+            Some(crate::systems::player_input::PlayerIntent::CloseDoor { .. })
+        ));
+        engine.tick(0.016, &mut camera);
+        let state = engine.state.as_ref().expect("run");
+        assert!(!state.world.get::<&Door>(door).expect("door").is_open, "the door closed");
+        assert!(engine.input.pending_intent.is_none());
+    }
+
+    /// A command the menu would not offer (a fighter has no Grave Bolt) is
+    /// refused with a log line and never reaches the simulation.
+    #[test]
+    fn a_tile_command_the_menu_would_not_offer_is_refused() {
+        use systems::tile_context::ContextCommand;
+        let mut engine = engine_with_run();
+        let at = empty_neighbour(&engine);
+        see(&mut engine, at);
+        let bolt = ContextCommand::Intent(crate::systems::player_input::PlayerIntent::GraveBolt {
+            target_x: at.0,
+            target_y: at.1,
+        });
+        choose(&mut engine, at, bolt);
+        assert!(engine.input.pending_intent.is_none());
+        assert!(log_lines(&engine).iter().any(|l| l == "You can't do that now."), "{:?}", log_lines(&engine));
+    }
+
+    /// Examine writes the tile's description to the message log.
+    #[test]
+    fn examine_logs_the_tile_description() {
+        use systems::tile_context::ContextCommand;
+        let mut engine = engine_with_run();
+        let at = empty_neighbour(&engine);
+        see(&mut engine, at);
+        choose(&mut engine, at, ContextCommand::Examine { x: at.0, y: at.1 });
+        assert!(log_lines(&engine).iter().any(|l| l == "Floor."), "{:?}", log_lines(&engine));
+    }
+
+    /// Escape closes the tile menu first; only the next Escape pauses.
+    #[test]
+    fn escape_closes_the_tile_menu_before_pausing() {
+        let mut engine = engine_with_run();
+        engine.game_mode = GameMode::Playing;
+        engine.ui_state.as_mut().expect("ui").tile_menu = Some(crate::ui::TileMenu {
+            tile: (0, 0),
+            screen_pos: (10.0, 10.0),
+            actions: Vec::new(),
+        });
+        engine.handle_escape();
+        assert_eq!(engine.game_mode, GameMode::Playing);
+        assert!(engine.ui_state.as_ref().expect("ui").tile_menu.is_none());
+        engine.handle_escape();
+        assert_eq!(engine.game_mode, GameMode::Paused);
     }
 }

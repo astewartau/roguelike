@@ -18,6 +18,7 @@ mod shop_window;
 mod start_screen;
 mod status_bar;
 mod targeting;
+mod tile_info;
 mod vfx;
 
 // Re-export public items from submodules
@@ -37,6 +38,7 @@ pub use pause_screen::{run_pause_screen, PauseChoice};
 pub use shop_window::{draw_shop_window, get_shop_window_data};
 pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
+pub use tile_info::{TileMenu, TileMenuOutcome};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
     draw_alert_indicators, draw_attack_telegraphs, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
@@ -107,6 +109,9 @@ pub struct UiActions {
     pub altar_sacrifice: Option<usize>,
     /// Close the altar window without sacrificing
     pub close_altar: bool,
+    /// An entry picked from the right-click tile menu: the tile it was opened
+    /// on and the command. The engine re-validates it before running it.
+    pub tile_choice: Option<((i32, i32), crate::systems::tile_context::ContextCommand)>,
 }
 
 // =============================================================================
@@ -147,6 +152,8 @@ pub struct GameUiState {
     pub item_context_menu: Option<(usize, egui::Pos2)>,
     /// Context menu for equipped weapon (screen position)
     pub equipped_context_menu: Option<egui::Pos2>,
+    /// The right-click menu for a map tile, if open
+    pub tile_menu: Option<TileMenu>,
     /// Which tab the Character window shows
     pub character_tab: CharacterTab,
     /// Main hotbar (keys 1-5)
@@ -180,6 +187,7 @@ impl GameUiState {
             show_grid_lines: false,
             item_context_menu: None,
             equipped_context_menu: None,
+            tile_menu: None,
             character_tab: CharacterTab::default(),
             hotbar_main: [None; 5],
             hotbar_shift: [None; 5],
@@ -234,6 +242,10 @@ impl GameUiState {
     /// Close any open UI window/popup. Returns true if something was closed
     /// (used by Escape to back out one layer at a time before pausing).
     pub fn close_open_menus(&mut self) -> bool {
+        // The map's right-click menu sits on top of everything.
+        if self.close_tile_menu() {
+            return true;
+        }
         let mut closed = false;
         // Context menus first (they sit on top of the inventory).
         if self.item_context_menu.is_some() {
@@ -293,6 +305,11 @@ impl GameUiState {
     /// Close the altar sacrifice window
     pub fn close_altar(&mut self) {
         self.open_altar = None;
+    }
+
+    /// Close the right-click tile menu. Returns whether one was open.
+    pub fn close_tile_menu(&mut self) -> bool {
+        self.tile_menu.take().is_some()
     }
 
     /// Close the item context menu
@@ -416,6 +433,14 @@ pub fn run_ui(
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
     let loot_indicator_data = get_loot_indicator_data(world, grid, player_entity);
     let attack_telegraph_data = get_attack_telegraph_data(world, grid, game_time);
+    // The hovered tile, and the tile the right-click menu is open on: the
+    // info panel describes the menu's tile while it is open.
+    let hover_tile = crate::input::cursor_tile(camera, mouse_pos);
+    let hover_info =
+        crate::systems::tile_context::describe_tile(world, grid, player_entity, hover_tile);
+    let menu_info = ui_state.tile_menu.as_ref().map(|m| {
+        crate::systems::tile_context::describe_tile(world, grid, player_entity, m.tile)
+    });
     // The countdown is for deciding; while the player's own action is
     // resolving (auto-path, rest) it would only flicker.
     let player_idle = world
@@ -439,6 +464,23 @@ pub fn run_ui(
         // Targeting overlay (draw first so it's behind other UI)
         if let Some(ref data) = targeting_data {
             draw_targeting_overlay(ctx, camera, data);
+        }
+
+        // Hovered tile: outline (unless the targeting cursor is already
+        // marking it) and the info panel. Hidden while the pointer is over a
+        // panel or outside the window.
+        let pointer_on_map = ctx.input(|i| i.pointer.hover_pos().is_some())
+            && !ctx.is_pointer_over_area();
+        // While the right-click menu is open, its tile keeps the outline.
+        if let Some(menu) = ui_state.tile_menu.as_ref() {
+            tile_info::draw_hover_outline(ctx, camera, menu.tile);
+        } else if pointer_on_map && targeting_data.is_none() {
+            tile_info::draw_hover_outline(ctx, camera, hover_tile);
+        }
+        if let Some(ref info) = menu_info {
+            tile_info::draw_tile_info_panel(ctx, info);
+        } else if pointer_on_map {
+            tile_info::draw_tile_info_panel(ctx, &hover_info);
         }
 
         // Status bar (always visible)
@@ -514,6 +556,23 @@ pub fn run_ui(
                 viewport_height,
             };
             draw_inventory_window(ctx, world, player_entity, &inv_data, icons, ui_state, &mut actions);
+        }
+
+        // Right-click tile menu (over everything but the drag ghost)
+        let menu_outcome = match (ui_state.tile_menu.as_ref(), menu_info.as_ref()) {
+            (Some(menu), Some(info)) => Some((
+                menu.tile,
+                tile_info::draw_tile_context_menu(ctx, menu, &info.title()),
+            )),
+            _ => None,
+        };
+        match menu_outcome {
+            Some((_, TileMenuOutcome::Closed)) => ui_state.tile_menu = None,
+            Some((tile, TileMenuOutcome::Chose(command))) => {
+                actions.tile_choice = Some((tile, command));
+                ui_state.tile_menu = None;
+            }
+            _ => {}
         }
 
         // Drag preview icon under the cursor (drawn last so it's on top)

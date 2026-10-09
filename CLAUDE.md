@@ -11,7 +11,7 @@ See [README.md](README.md) for what the game is and how to build it, and
 
 ```bash
 cargo build --all-targets          # compile, tests included
-cargo test                         # 158 tests, no window needed
+cargo test                         # full suite, no window needed
 cargo clippy --all-targets         # has a standing backlog; don't add to it
 cargo run --release                # play (must be run from the repo root)
 cargo run --release --features profiling   # puffin on 127.0.0.1:8585

@@ -20,6 +20,7 @@
 //! - `pack`: Rat packs (alone-means-flee, pack morale, shared alerts)
 //! - `split`: Slimes splitting in two when badly hurt
 //! - `telegraph`: Which tiles in-progress hostile attacks threaten (for UI/animation)
+//! - `tile_context`: What the player knows about a tile, and what they can do there (info panel, context menu)
 //! - `tile_effects`: What a tile does to whoever enters or stands on it
 
 pub mod action_dispatch;
@@ -50,6 +51,7 @@ pub mod rendering;
 pub mod split;
 pub mod survival;
 pub mod telegraph;
+pub mod tile_context;
 pub mod tile_effects;
 pub mod webs;
 

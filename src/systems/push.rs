@@ -4,7 +4,7 @@
 //! A `Pushable` that also `BlocksMovement` (oil barrels, unlooted storage
 //! barrels) can be moved one tile at a time in a straight line. The pusher
 //! never moves. Where an object may land is decided in one place,
-//! [`object_can_enter`], so Push, Shield Bash and the upcoming context menu
+//! [`object_can_enter`], so Push, Shield Bash and the right-click context menu
 //! (via [`can_push`]) agree.
 //!
 //! # Where a pushed object may go
@@ -91,7 +91,6 @@ pub fn object_can_enter(
 /// Whether `pusher` could push the object on `target_tile` right now: the
 /// tile is adjacent (8-way), holds a pushable, and the tile beyond it in the
 /// same direction will take it. For the context menu and click validation.
-#[allow(dead_code)] // Reserved for the upcoming right-click context menu
 pub fn can_push(
     world: &World,
     grid: &Grid,

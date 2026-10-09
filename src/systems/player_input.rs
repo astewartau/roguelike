@@ -64,10 +64,8 @@ pub enum PlayerIntent {
     /// Ctrl+direction resolves to this on its own (see
     /// `actions::resolve_interact_direction`); the explicit intent is for the
     /// context menu.
-    #[allow(dead_code)] // Reserved for the upcoming right-click context menu
     Push { dx: i32, dy: i32 },
     /// Close an open door (context menu; Ctrl+direction also resolves to it).
-    #[allow(dead_code)] // Reserved for the upcoming right-click context menu
     CloseDoor { door: Entity },
     /// Fighter: Shield Bash the creature or pushable on an adjacent tile.
     ShieldBash { target_x: i32, target_y: i32 },
