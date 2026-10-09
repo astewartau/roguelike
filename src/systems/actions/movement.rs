@@ -120,11 +120,11 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         return ActionResult::Blocked;
     }
 
-    // Held in a zombie's grab: the step goes nowhere (the turn is spent
-    // struggling). A grab whose holder has died, been stunned or drifted
-    // away is let go first, so a just-freed walker is not stuck a turn.
-    if crate::systems::grab::is_held(world, entity, events) {
-        events.push(GameEvent::GrabStruggle { entity });
+    // Held in a zombie's grab or rooted (web, snare, Entangle): the step
+    // goes nowhere (the turn is spent struggling). A grab whose holder has
+    // died, been stunned or drifted away is let go first, so a just-freed
+    // walker is not stuck a turn.
+    if crate::systems::grab::pinned_in_place(world, entity, events) {
         return ActionResult::Blocked;
     }
 
@@ -325,9 +325,8 @@ pub fn apply_use_stairs(
     direction: StairDirection,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // A zombie's grab holds you off the stairs too.
-    if crate::systems::grab::is_held(world, entity, events) {
-        events.push(GameEvent::GrabStruggle { entity });
+    // A zombie's grab or a root holds you off the stairs too.
+    if crate::systems::grab::pinned_in_place(world, entity, events) {
         return ActionResult::Blocked;
     }
 

@@ -61,6 +61,7 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::StartRaiseDead { .. } => ACTION_WAIT_DURATION, // Starting the channel (quick)
         ActionType::Recover => ACTION_RECOVER_DURATION, // Post-shot recovery
         ActionType::BossGroundSlam => BOSS_SLAM_WINDUP, // Telegraphed wind-up
+        ActionType::OrcChargeWindup { .. } => ORC_CHARGE_WINDUP, // Telegraphed wind-up
         // Reactive kit abilities: their effect goes up at action START (see
         // systems::actions::kit::apply_action_start_effects); the duration is
         // how long the actor stays committed to it.

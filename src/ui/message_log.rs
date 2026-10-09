@@ -39,6 +39,13 @@ mod log_colors {
     pub const SYSTEM: Color32 = Color32::from_rgb(150, 140, 125);
 }
 
+/// How a hit landed, beyond its damage: what the log line remarks on.
+#[derive(Debug, Clone, Copy)]
+struct HitNotes {
+    crit: bool,
+    flanked: bool,
+}
+
 /// A single log line, with a repeat counter so spammy events collapse.
 struct LogMessage {
     text: String,
@@ -142,8 +149,9 @@ impl MessageLog {
         target: Entity,
         damage: i32,
         kind: DamageKind,
-        crit: bool,
+        notes: HitNotes,
     ) {
+        let HitNotes { crit, flanked } = notes;
         let me = self.player_entity;
         // Only log hits the player is part of, to keep the log readable.
         if attacker != me && target != me {
@@ -160,7 +168,11 @@ impl MessageLog {
             return;
         }
 
-        let end = if crit { "!" } else { "." };
+        let end = match (crit || flanked, flanked) {
+            (true, true) => " (flanked)!",
+            (true, false) => "!",
+            _ => ".",
+        };
         let crit_word = if crit { "critically " } else { "" };
 
         match kind {
@@ -201,6 +213,23 @@ impl MessageLog {
                     let obj = self.object(world, target);
                     self.push(
                         format!("Your fireball scorches {obj} for {damage}."),
+                        log_colors::INFO,
+                    );
+                }
+            }
+            DamageKind::Charge => {
+                // An orc's charge; the charger is never the player.
+                if target == me {
+                    let subj = self.subject(world, attacker);
+                    self.push(
+                        format!("{subj}'s charge slams into you for {damage}{end}"),
+                        log_colors::HARM,
+                    );
+                } else {
+                    let subj = self.subject(world, attacker);
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("{subj}'s charge slams into {obj} for {damage}{end}"),
                         log_colors::INFO,
                     );
                 }
@@ -307,9 +336,11 @@ impl MessageLog {
                 damage,
                 kind,
                 crit,
+                flanked,
                 ..
             } => {
-                self.record_attack(world, *attacker, *target, *damage, *kind, *crit);
+                let notes = HitNotes { crit: *crit, flanked: *flanked };
+                self.record_attack(world, *attacker, *target, *damage, *kind, notes);
             }
             // Only a swing that the target actually stepped away from is
             // news; a target that died mid-swing already has its death line.
@@ -777,6 +808,21 @@ impl MessageLog {
             }
             GameEvent::GrabStruggle { entity } if *entity == me => {
                 self.push("You struggle against the grip!".to_string(), log_colors::HARM);
+            }
+            GameEvent::RootStruggle { entity } if *entity == me => {
+                self.push("You're stuck fast!".to_string(), log_colors::HARM);
+            }
+            GameEvent::ChargeWindup { attacker, .. } => {
+                let who = self.subject(world, *attacker);
+                self.push(format!("{who} lowers its head to charge!"), log_colors::HARM);
+            }
+            GameEvent::ChargeMissed { attacker, outcome, .. } => {
+                let who = self.subject(world, *attacker);
+                let line = match outcome {
+                    crate::events::ChargeOutcome::Wall => format!("{who} slams into the wall!"),
+                    crate::events::ChargeOutcome::Stumble => format!("{who} stumbles past!"),
+                };
+                self.push(line, log_colors::GOOD);
             }
             GameEvent::SlimeSplit { parent, .. } => {
                 let who = self.subject(world, *parent);

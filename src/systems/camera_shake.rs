@@ -126,6 +126,8 @@ mod tests {
             damage,
             kind: DamageKind::Melee,
             crit: false,
+            flanked: false,
+            killed: false,
         }
     }
 

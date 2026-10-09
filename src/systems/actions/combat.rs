@@ -40,11 +40,38 @@ pub fn melee_reach_check(world: &World, attacker: Entity, target: Entity) -> Res
     Ok(())
 }
 
+/// How a melee blow is delivered. Every melee blow — an ordinary swing or an
+/// orc's charge — resolves through [`apply_melee_blow`], so reach, flanking,
+/// Guard, Bone Ward, Thorns and on-hit effects apply to all of them alike.
+#[derive(Debug, Clone, Copy)]
+pub struct MeleeBlow {
+    /// Multiplier on the attacker's rolled damage, before flanking and the
+    /// defender's reductions.
+    pub damage_mult: f32,
+    /// How the hit is described (`AttackHit::kind`).
+    pub kind: crate::events::DamageKind,
+}
+
+impl MeleeBlow {
+    /// An ordinary weapon swing.
+    pub const SWING: Self = Self { damage_mult: 1.0, kind: crate::events::DamageKind::Melee };
+}
+
 /// Apply attack effect.
 ///
 /// The target was chosen when the attack started; if it has since moved out
 /// of reach or gone, the swing whiffs (see [`melee_reach_check`]).
 pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> ActionResult {
+    apply_melee_blow(ctx, attacker, target, MeleeBlow::SWING)
+}
+
+/// Resolve one melee blow from `attacker` on `target` (see [`MeleeBlow`]).
+pub fn apply_melee_blow(
+    ctx: &mut EffectCtx,
+    attacker: Entity,
+    target: Entity,
+    blow: MeleeBlow,
+) -> ActionResult {
     let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
     let (world, grid) = (&mut **world, &mut **grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
@@ -109,6 +136,13 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
     // Conditional weapon affixes (LowHealthDamage)
     raw = (raw as f32 * crate::systems::combat::attacker_conditional_damage_mult(world, attacker))
         as i32;
+    // The blow itself (a charge hits harder than a swing).
+    raw = (raw as f32 * blow.damage_mult) as i32;
+    // Caught between two foes: the target cannot face both.
+    let flanked = crate::systems::combat::is_flanked(world, attacker, target);
+    if flanked {
+        raw = (raw as f32 * FLANK_DAMAGE_MULT) as i32;
+    }
 
     // A guarding defender blocks most of the blow and staggers the attacker.
     // (Defender-side, but melee-only, so it lives here rather than in the
@@ -119,6 +153,7 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
 
     // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
     let damage = crate::systems::combat::apply_damage(world, target, raw, rng, events);
+    let killed = crate::systems::combat::is_dead(world, target);
 
     // CursedLoud gear rings out: wake enemies in a doubled radius on top of
     // the standard melee-noise wake inside apply_damage.
@@ -221,8 +256,10 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
         target,
         target_pos: (target_pos.0 + 0.5, target_pos.1 + 0.5),
         damage,
-        kind: crate::events::DamageKind::Melee,
+        kind: blow.kind,
         crit: is_crit && damage > 0,
+        flanked: flanked && damage > 0,
+        killed,
     });
     for effect in gained {
         events.push(GameEvent::StatusEffectGained { entity: target, effect });
@@ -368,6 +405,8 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
             damage,
             kind: crate::events::DamageKind::Cleave,
             crit: is_crit,
+            flanked: false,
+            killed: crate::systems::combat::is_dead(world, *target),
         });
     }
 
@@ -501,6 +540,8 @@ pub fn apply_boss_ground_slam(ctx: &mut EffectCtx, boss: Entity) -> ActionResult
             damage,
             kind: crate::events::DamageKind::Slam,
             crit: false,
+            flanked: false,
+            killed: crate::systems::combat::is_dead(world, victim),
         });
     }
 
@@ -1003,6 +1044,109 @@ pub(super) mod tests {
             crate::time_system::tick_dot_damage(&mut arena.world, 100.0 + i as f32, &mut rng, &mut arena.events);
         }
         assert_eq!(before - arena.hp(player), 4 * POISON_DAMAGE);
+    }
+
+    // =========================================================================
+    // Flanking
+    // =========================================================================
+
+    /// A companion of the player's standing at (x, y).
+    fn companion(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let player = arena.player;
+        let e = arena.world.spawn((
+            Position::new(x, y),
+            Health::new(20),
+            StatusEffects::new(),
+            TamedBy { owner: player },
+            Attackable,
+            crate::components::BlocksMovement,
+        ));
+        arena.cache.rebuild_in_place(&arena.world);
+        e
+    }
+
+    /// The player's swing at `target`, from a fresh event queue: (damage, flanked).
+    fn player_swing(arena: &mut Arena, target: Entity) -> (i32, bool) {
+        let player = arena.player;
+        let _ = apply_attack(&mut arena.ctx().effects(), player, target);
+        let events: Vec<GameEvent> = arena.events.drain().collect();
+        let out = events
+            .iter()
+            .find_map(|e| match e {
+                GameEvent::AttackHit { attacker, damage, flanked, .. } if *attacker == player => {
+                    Some((*damage, *flanked))
+                }
+                _ => None,
+            })
+            .expect("the swing landed");
+        arena.seen.extend(events);
+        out
+    }
+
+    #[test]
+    fn the_player_flanks_with_a_companion_opposite() {
+        // Same seed, with and without a companion behind the rat.
+        let mut flanking = Arena::new((5, 5));
+        let rat = flanking.rat(6, 5, 1.0);
+        companion(&mut flanking, 7, 5);
+        let mut alone = Arena::new((5, 5));
+        let rat2 = alone.rat(6, 5, 1.0);
+
+        let (with, flanked) = player_swing(&mut flanking, rat);
+        let (without, plain) = player_swing(&mut alone, rat2);
+        assert!(flanked && !plain);
+        assert!(with > without, "flanked {with} vs {without}");
+
+        let mut log = crate::ui::MessageLog::new(flanking.player);
+        for ev in &flanking.seen {
+            log.record_event(ev, &flanking.world);
+        }
+        assert!(log.lines().iter().any(|l| l.contains("(flanked)")), "{:?}", log.lines());
+    }
+
+    #[test]
+    fn the_135_degree_tiles_flank_but_the_sides_do_not() {
+        let mut arena = Arena::new((5, 5));
+        let rat = arena.rat(6, 5, 1.0);
+        let player = arena.player;
+        let pal = companion(&mut arena, 7, 6);
+        assert!(crate::systems::combat::is_flanked(&arena.world, player, rat), "diagonal far side");
+        arena.world.get::<&mut Position>(pal).unwrap().x = 6;
+        arena.world.get::<&mut Position>(pal).unwrap().y = 4;
+        assert!(!crate::systems::combat::is_flanked(&arena.world, player, rat), "beside it: no");
+        arena.world.get::<&mut Position>(pal).unwrap().x = 5;
+        assert!(!crate::systems::combat::is_flanked(&arena.world, player, rat), "on the attacker's side: no");
+        arena.world.get::<&mut Position>(pal).unwrap().x = 8;
+        arena.world.get::<&mut Position>(pal).unwrap().y = 5;
+        assert!(!crate::systems::combat::is_flanked(&arena.world, player, rat), "two tiles away: no");
+    }
+
+    #[test]
+    fn a_stunned_or_dead_flanker_does_not_count() {
+        let mut arena = Arena::new((5, 5));
+        let rat = arena.rat(6, 5, 1.0);
+        let player = arena.player;
+        let pal = companion(&mut arena, 7, 5);
+        crate::systems::effects::add_effect_to_entity(&mut arena.world, pal, EffectType::Stunned, 2.0);
+        assert!(!crate::systems::combat::is_flanked(&arena.world, player, rat));
+        crate::systems::effects::remove_effect_from_entity(&mut arena.world, pal, EffectType::Stunned);
+        assert!(crate::systems::combat::is_flanked(&arena.world, player, rat));
+        arena.world.get::<&mut Health>(pal).unwrap().current = 0;
+        assert!(!crate::systems::combat::is_flanked(&arena.world, player, rat));
+    }
+
+    /// Monsters flank the player too; a monster's own kind behind its target
+    /// does not count.
+    #[test]
+    fn enemies_flank_the_player_but_not_each_other() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let a = arena.rat(4, 5, 1.0);
+        let b = arena.rat(6, 5, 1.0);
+        assert!(crate::systems::combat::is_flanked(&arena.world, a, player));
+        // The player swinging at `a` has `b` behind them, not behind `a`.
+        assert!(!crate::systems::combat::is_flanked(&arena.world, player, a));
+        let _ = b;
     }
 
     /// Rats carry the wound-opening trait (Bleeding on a chance roll).

@@ -222,14 +222,22 @@ pub fn get_attack_telegraph_data(world: &World, grid: &Grid, game_time: f32) -> 
         .into_iter()
         .filter(|t| visible(t.attacker_pos))
         .filter_map(|t| {
-            let tiles: Vec<(i32, i32)> = t.shape.tiles().into_iter().filter(|&p| visible(p)).collect();
-            if tiles.is_empty() {
-                return None;
+            let mut tiles = t.shape.tiles();
+            // A charge lane ends at the first wall: the dash cannot go further.
+            if let TelegraphShape::Lane { .. } = t.shape {
+                let open = tiles.iter().take_while(|&&(x, y)| grid.is_walkable(x, y)).count();
+                tiles.truncate(open);
             }
+            let tiles: Vec<(i32, i32)> = tiles.into_iter().filter(|&p| visible(p)).collect();
             let (label_tile, is_area) = match t.shape {
                 TelegraphShape::Tile(p) => (p, false),
                 TelegraphShape::Area { center, .. } => (center, true),
+                // Label the lane where it starts, next to the orc.
+                TelegraphShape::Lane { .. } => (*tiles.first()?, false),
             };
+            if tiles.is_empty() {
+                return None;
+            }
             Some(AttackTelegraphData {
                 tiles,
                 label_tile,

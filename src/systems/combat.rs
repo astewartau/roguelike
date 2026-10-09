@@ -15,6 +15,12 @@ use crate::tile::tile_ids;
 use hecs::{Entity, World};
 use rand::Rng;
 
+/// Whether `entity` has health and it has run out. Entities without a
+/// `Health` (already converted to bones, scenery) are not "dead" here.
+pub fn is_dead(world: &World, entity: Entity) -> bool {
+    world.get::<&Health>(entity).map(|h| h.current <= 0).unwrap_or(false)
+}
+
 /// Calculate total damage for a weapon
 pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
@@ -181,10 +187,78 @@ fn heal_entity(world: &mut World, entity: Entity, amount: i32) {
     }
 }
 
+/// Which side of the fight a creature is on, for flanking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatSide {
+    /// The player and their companions (tamed or raised).
+    Player,
+    /// Hostile monsters: ChaseAI and not tamed.
+    Enemy,
+}
+
+/// Which side `entity` fights on, or None for anything that is not a
+/// combatant (scenery, NPCs).
+pub fn combat_side(world: &World, entity: Entity) -> Option<CombatSide> {
+    let Ok(e) = world.entity(entity) else {
+        return None;
+    };
+    if e.has::<crate::components::Player>()
+        || e.has::<crate::components::TamedBy>()
+        || e.has::<CompanionAI>()
+    {
+        Some(CombatSide::Player)
+    } else if e.has::<ChaseAI>() {
+        Some(CombatSide::Enemy)
+    } else {
+        None
+    }
+}
+
+/// Whether the tile offset `d` (from the target) lies at least 135 degrees
+/// around from the attacker's offset `a`: the tile directly opposite the
+/// attacker, or either tile beside it that also touches the target. Integer
+/// form of `cos(angle) <= -1/sqrt(2)`.
+fn is_far_side(a: (i32, i32), d: (i32, i32)) -> bool {
+    let dot = a.0 * d.0 + a.1 * d.1;
+    let a2 = a.0 * a.0 + a.1 * a.1;
+    let d2 = d.0 * d.0 + d.1 * d.1;
+    dot < 0 && 2 * dot * dot >= a2 * d2
+}
+
+/// Whether `target` is flanked against a melee blow from `attacker`: some
+/// other living, un-Stunned creature hostile to the target stands on its far
+/// side (see [`is_far_side`]) — the player with a companion opposite, or an
+/// orc and a goblin either side of the player.
+pub fn is_flanked(world: &World, attacker: Entity, target: Entity) -> bool {
+    let (Some(a), Some(t)) = (
+        crate::queries::get_entity_position(world, attacker),
+        crate::queries::get_entity_position(world, target),
+    ) else {
+        return false;
+    };
+    let Some(target_side) = combat_side(world, target) else {
+        return false;
+    };
+    let toward_attacker = (a.0 - t.0, a.1 - t.1);
+    if toward_attacker == (0, 0) {
+        return false;
+    }
+    world.query::<(&Position, &Health)>().iter().any(|(id, (p, h))| {
+        let d = (p.x - t.0, p.y - t.1);
+        id != attacker
+            && id != target
+            && h.current > 0
+            && d.0.abs().max(d.1.abs()) == 1
+            && is_far_side(toward_attacker, d)
+            && combat_side(world, id).is_some_and(|side| side != target_side)
+            && !crate::queries::has_status_effect(world, id, EffectType::Stunned)
+    })
+}
+
 /// Push `target` one tile directly away from `attacker` if the destination
 /// tile is walkable and unoccupied. Updates the spatial cache and emits an
 /// `EntityMoved` event so downstream systems stay consistent.
-fn try_knockback(
+pub(crate) fn try_knockback(
     world: &mut World,
     grid: &Grid,
     spatial_cache: &mut SpatialCache,
@@ -344,11 +418,16 @@ fn apply_damage_inner(
     crate::systems::ai::interrupt_shout_on_damage(world, target);
     crate::systems::ai::wake_on_attacked(world, target);
 
+    // A pack rat that is hit alerts its packmates.
+    crate::systems::pack::alert_pack_of_attack(world, target);
+
     // Morale: a surviving enemy that drops below the HP threshold may panic.
-    // Bosses (FearImmune) never break.
+    // Bosses (FearImmune) never break, nor does a pack rat with its pack
+    // around it.
     if hp_after.0 > 0
         && world.get::<&ChaseAI>(target).is_ok()
         && world.get::<&crate::components::FearImmune>(target).is_err()
+        && !crate::systems::pack::steadied_by_pack(world, target)
     {
         let frac = hp_after.0 as f32 / hp_after.1 as f32;
         if frac < MORALE_HP_THRESHOLD && rng.gen_bool(MORALE_FLEE_CHANCE) {

@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -216,6 +216,9 @@ pub fn tick_role_cooldowns(world: &mut World, elapsed: f32) {
     }
     for (_, hit_and_run) in world.query_mut::<&mut HitAndRun>() {
         hit_and_run.retreat_remaining = (hit_and_run.retreat_remaining - elapsed).max(0.0);
+    }
+    for (_, charger) in world.query_mut::<&mut Charger>() {
+        charger.cooldown = (charger.cooldown - elapsed).max(0.0);
     }
 }
 
@@ -664,6 +667,24 @@ fn determine_action(
         }
     }
 
+    // A pack rat that knows about a foe makes sure its packmates do too.
+    if is_aware && world.get::<&PackHunter>(entity).is_ok() {
+        if let (Some(te), Some(tp)) = (chase_target_entity, move_target) {
+            crate::systems::pack::alert_packmates(world, entity, te, tp);
+        }
+    }
+
+    // Orc charge: a visible target down a clear straight lane, in range.
+    if !is_rooted && target_visible && new_state == AIState::Chasing {
+        if let Some(tp) = chase_pos {
+            if let Some(action) = crate::systems::charge::try_start_charge(
+                world, grid, spatial_cache, entity, entity_pos, tp, events,
+            ) {
+                return action;
+            }
+        }
+    }
+
     // Shaman support cast: heal the most wounded visible ally in range, or
     // haste one that is attacking the player.
     if is_support && is_aware {
@@ -698,6 +719,22 @@ fn determine_action(
         if let Some(target_pos) = move_target {
             let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, &passability, rng);
             if fdx != 0 || fdy != 0 {
+                let action = action_dispatch::determine_action_type(world, grid, entity, fdx, fdy);
+                if matches!(action, ActionType::Move { .. }) {
+                    return action;
+                }
+            }
+        }
+    }
+
+    // A pack rat on its own runs from whatever it is aware of rather than
+    // fight it — unless cornered (no step takes it further away), when it
+    // falls through and fights.
+    if is_aware && crate::systems::pack::is_alone(world, entity) {
+        if let Some(target_pos) = move_target {
+            if let Some((fdx, fdy)) =
+                flee_step_away(grid, entity_pos, target_pos, &passability, rng)
+            {
                 let action = action_dispatch::determine_action_type(world, grid, entity, fdx, fdy);
                 if matches!(action, ActionType::Move { .. }) {
                     return action;
@@ -767,7 +804,21 @@ fn determine_action(
             Passability::Walker(_) => ai_pathfinding_blocked(world, spatial_cache, can_open),
             Passability::Flyer(stops) => ai_flyer_pathfinding_blocked(world, stops, can_open),
         };
-        pathfinding::next_step_toward(grid, entity_pos, target_pos, &pathfinding_blocked)
+        // A flanker heads round to the far side of a target an ally is
+        // already engaging, instead of queueing up beside the ally.
+        let goal = if target_visible && world.get::<&Flanker>(entity).is_ok() {
+            chase_target_entity
+                .and_then(|te| {
+                    flank_destination(
+                        world, grid, spatial_cache, entity, entity_pos, te, target_pos,
+                        &pathfinding_blocked,
+                    )
+                })
+                .unwrap_or(target_pos)
+        } else {
+            target_pos
+        };
+        pathfinding::next_step_toward(grid, entity_pos, goal, &pathfinding_blocked)
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
     } else {
@@ -1468,6 +1519,109 @@ fn random_wander(
     }
 }
 
+/// A flee step that actually opens distance from `target` (Chebyshev), or
+/// None if the creature is cornered. Unlike [`flee_from_target`] there is no
+/// random fallback: a creature that cannot get further away stands and
+/// fights.
+fn flee_step_away(
+    grid: &Grid,
+    pos: (i32, i32),
+    target: (i32, i32),
+    passability: &Passability,
+    rng: &mut impl Rng,
+) -> Option<(i32, i32)> {
+    let cheb = |p: (i32, i32)| (p.0 - target.0).abs().max((p.1 - target.1).abs());
+    let here = cheb(pos);
+    let (dx, dy) = flee_from_target(grid, pos, target, passability, rng);
+    if (dx, dy) != (0, 0) && cheb((pos.0 + dx, pos.1 + dy)) > here {
+        return Some((dx, dy));
+    }
+    // The straight-away steps are shut; any other neighbour that still gains
+    // ground will do.
+    (-1..=1)
+        .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
+        .filter(|&d| d != (0, 0))
+        .find(|&(dx, dy)| {
+            let p = (pos.0 + dx, pos.1 + dy);
+            passability.is_free(grid, p) && cheb(p) > here
+        })
+}
+
+/// Where a flanker (goblin) should head to attack `target` at `target_pos`:
+/// when another hostile (ChaseAI, untamed, alive) is already adjacent to the
+/// target, the free walkable tile adjacent to the target most nearly opposite
+/// those allies (smallest angle-cosine, at the target, to the nearest-in-angle
+/// ally), ties broken by the shorter path. None when the flanker is already adjacent
+/// (it just attacks), when no ally is engaged, or when no such tile is free
+/// and reachable — the caller then paths straight at the target.
+#[allow(clippy::too_many_arguments)]
+fn flank_destination(
+    world: &World,
+    grid: &Grid,
+    spatial_cache: &SpatialCache,
+    entity: Entity,
+    entity_pos: (i32, i32),
+    target: Entity,
+    target_pos: (i32, i32),
+    blocked: &HashSet<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    let adjacent = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs().max((a.1 - b.1).abs()) == 1;
+    if adjacent(entity_pos, target_pos) {
+        return None;
+    }
+    let allies: Vec<(i32, i32)> = world
+        .query::<(&Position, &ChaseAI, &Health)>()
+        .without::<&TamedBy>()
+        .iter()
+        .filter(|(id, (p, _, h))| {
+            *id != entity && *id != target && h.current > 0 && adjacent((p.x, p.y), target_pos)
+        })
+        .map(|(_, (p, _, _))| (p.x, p.y))
+        .collect();
+    if allies.is_empty() {
+        return None;
+    }
+    // How far round from the nearest-in-angle ally a tile is: the cosine of
+    // the angle (at the target) between the tile and that ally. -1 is
+    // directly opposite; lower is better.
+    let closeness = |tile: (i32, i32)| -> f32 {
+        let d = ((tile.0 - target_pos.0) as f32, (tile.1 - target_pos.1) as f32);
+        allies
+            .iter()
+            .map(|a| {
+                let v = ((a.0 - target_pos.0) as f32, (a.1 - target_pos.1) as f32);
+                (v.0 * d.0 + v.1 * d.1) / ((v.0.hypot(v.1)) * (d.0.hypot(d.1)))
+            })
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    let mut best: Option<(f32, usize, (i32, i32))> = None;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let tile = (target_pos.0 + dx, target_pos.1 + dy);
+            if (dx, dy) == (0, 0)
+                || !grid.is_walkable(tile.0, tile.1)
+                || spatial_cache.is_blocked(tile)
+            {
+                continue;
+            }
+            let score = closeness(tile);
+            let Some(path) = pathfinding::find_path(grid, entity_pos, tile, blocked) else {
+                continue;
+            };
+            let better = match best {
+                None => true,
+                Some((s, len, _)) => {
+                    score < s - 1e-4 || ((score - s).abs() <= 1e-4 && path.len() < len)
+                }
+            };
+            if better {
+                best = Some((score, path.len(), tile));
+            }
+        }
+    }
+    best.map(|(_, _, tile)| tile)
+}
+
 /// Flee from a target position - move in the opposite direction.
 fn flee_from_target(
     grid: &Grid,
@@ -1750,6 +1904,65 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         use rand::SeedableRng;
         assert_eq!(flee_from_target(&arena.grid, (6, 5), (5, 5), &pass, &mut rng), (1, 0));
+    }
+
+    /// A goblin heads for the tile opposite an ally already fighting the
+    /// player, not the nearest free one.
+    #[test]
+    fn a_goblin_flanks_to_the_far_side_of_an_engaged_target() {
+        let mut arena = Arena::new((8, 8));
+        let player = arena.player;
+        let ally = crate::spawning::enemies::SKELETON.spawn(&mut arena.world, 7, 8, &mut arena.rng);
+        arena.hunt(ally, 1.0);
+        let gob = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, 8, 4, &mut arena.rng);
+        arena.hunt(gob, GOBLIN_SPEED);
+        assert!(arena.world.get::<&Flanker>(gob).is_ok(), "goblins flank");
+
+        let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+        let dest = flank_destination(
+            &arena.world, &arena.grid, &arena.cache, gob, (8, 4), player, (8, 8), &blocked,
+        );
+        assert_eq!(dest, Some((9, 8)), "directly opposite the skeleton");
+
+        // From the other side, with the ally to the south: north of the player.
+        let dest = {
+            arena.world.get::<&mut Position>(ally).unwrap().y = 9;
+            arena.world.get::<&mut Position>(ally).unwrap().x = 8;
+            arena.cache.rebuild_in_place(&arena.world);
+            let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+            flank_destination(
+                &arena.world, &arena.grid, &arena.cache, gob, (12, 8), player, (8, 8), &blocked,
+            )
+        };
+        assert_eq!(dest, Some((8, 7)));
+
+        // Already adjacent: no detour, it just attacks.
+        let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+        assert_eq!(
+            flank_destination(&arena.world, &arena.grid, &arena.cache, gob, (9, 9), player, (8, 8), &blocked),
+            None
+        );
+    }
+
+    /// With nobody engaged yet there is no flank to take: straight in.
+    #[test]
+    fn a_goblin_with_no_engaged_ally_goes_straight_in() {
+        let mut arena = Arena::new((8, 8));
+        let player = arena.player;
+        let gob = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, 8, 4, &mut arena.rng);
+        arena.hunt(gob, GOBLIN_SPEED);
+        // A tamed "ally" next to the player does not count.
+        let pet = crate::spawning::enemies::SKELETON.spawn(&mut arena.world, 7, 8, &mut arena.rng);
+        arena.world.insert_one(pet, TamedBy { owner: player }).unwrap();
+        // Awake, so the goblin has nobody to shout awake first.
+        arena.world.get::<&mut ChaseAI>(pet).unwrap().state = AIState::Idle;
+        arena.cache.rebuild_in_place(&arena.world);
+        let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+        assert_eq!(
+            flank_destination(&arena.world, &arena.grid, &arena.cache, gob, (8, 4), player, (8, 8), &blocked),
+            None
+        );
+        assert_eq!(decided_step(&mut arena, gob), Some((0, 1)));
     }
 
     /// After a swing (hit or miss) a bat flies off for BAT_RETREAT_DURATION,

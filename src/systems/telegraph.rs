@@ -19,6 +19,10 @@ pub enum TelegraphShape {
     Tile((i32, i32)),
     /// Every tile within `radius` (Chebyshev) of `center`.
     Area { center: (i32, i32), radius: i32 },
+    /// A charge lane: the `len` tiles stepping from `from` (exclusive) along
+    /// the unit direction `dir`. Not clipped at walls here (this module has
+    /// no grid); the UI stops drawing it at the first one.
+    Lane { from: (i32, i32), dir: (i32, i32), len: i32 },
 }
 
 impl TelegraphShape {
@@ -34,6 +38,9 @@ impl TelegraphShape {
                     }
                 }
                 out
+            }
+            TelegraphShape::Lane { from, dir, len } => {
+                (1..=len).map(|i| (from.0 + dir.0 * i, from.1 + dir.1 * i)).collect()
             }
         }
     }
@@ -86,6 +93,13 @@ pub fn hostile_telegraphs(world: &World, now: f32) -> Vec<Telegraph> {
                 center: attacker_pos,
                 radius: BOSS_SLAM_RADIUS,
             },
+            // The whole dash: anything hostile standing anywhere in it when
+            // the wind-up completes is charged down.
+            ActionType::OrcChargeWindup { dx, dy } => TelegraphShape::Lane {
+                from: attacker_pos,
+                dir: (dx, dy),
+                len: ORC_CHARGE_MAX_RANGE + 1,
+            },
             _ => continue,
         };
         out.push(Telegraph {
@@ -111,16 +125,20 @@ pub fn progress(start: f32, end: f32, now: f32) -> f32 {
 
 /// How far each telegraphing melee attacker should lean toward its target
 /// right now, in tiles: a unit vector toward the target tile scaled by
-/// `ATTACK_TELEGRAPH_LEAN * progress`. Area attacks (the slam) do not lean.
+/// `ATTACK_TELEGRAPH_LEAN * progress`. A charging orc leans down its lane.
+/// Area attacks (the slam) do not lean.
 pub fn lean_offsets(world: &World, now: f32) -> Vec<(Entity, (f32, f32))> {
     hostile_telegraphs(world, now)
         .into_iter()
         .filter_map(|t| {
-            let TelegraphShape::Tile(tile) = t.shape else {
-                return None;
+            let (dx, dy) = match t.shape {
+                TelegraphShape::Tile(tile) => {
+                    (tile.0 - t.attacker_pos.0, tile.1 - t.attacker_pos.1)
+                }
+                TelegraphShape::Lane { dir, .. } => dir,
+                TelegraphShape::Area { .. } => return None,
             };
-            let dx = (tile.0 - t.attacker_pos.0) as f32;
-            let dy = (tile.1 - t.attacker_pos.1) as f32;
+            let (dx, dy) = (dx as f32, dy as f32);
             let len = (dx * dx + dy * dy).sqrt();
             if len <= f32::EPSILON {
                 return None;

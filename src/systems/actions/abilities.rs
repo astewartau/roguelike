@@ -153,6 +153,8 @@ pub fn apply_fireball(
             damage,
             kind: crate::events::DamageKind::Fireball,
             crit: false,
+            flanked: false,
+            killed: crate::systems::combat::is_dead(world, entity),
         });
     }
 

@@ -207,3 +207,22 @@ pub const MISS_TEXT_SCALE: f32 = 0.85;
 /// the wind-up's progress). A cue that the swing is coming, not the swing
 /// itself, so keep it well under `LUNGE_DISTANCE`; 0.0 disables the lean.
 pub const ATTACK_TELEGRAPH_LEAN: f32 = 0.15;
+
+// =============================================================================
+// HIT-STOP
+// =============================================================================
+
+/// Real seconds visual animation freezes for when the player lands a critical
+/// hit. A hit-stop is presentation only: the simulation never sees it. Longer
+/// makes crits feel weightier but starts to read as a stutter.
+pub const HITSTOP_CRIT: f32 = 0.05;
+/// Real seconds of hit-stop when the player (or one of their companions)
+/// kills something. Slightly longer than a crit so the finishing blow lands.
+pub const HITSTOP_KILL: f32 = 0.08;
+/// Real seconds of hit-stop when a boss's ground slam hits the player: the
+/// heaviest blow in the game gets the longest freeze.
+pub const HITSTOP_HEAVY: f32 = 0.1;
+/// Fraction of real time that still reaches visual animation during a
+/// hit-stop. 0.0 is a dead freeze; a little above zero is a slow-motion
+/// crawl instead.
+pub const HITSTOP_TIME_SCALE: f32 = 0.0;

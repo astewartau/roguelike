@@ -29,3 +29,11 @@ pub const LOW_HEALTH_DAMAGE_THRESHOLD: f32 = 0.3;
 /// completes is missed. Raising it would let every melee attacker hit across
 /// a gap; nothing in the game has a longer weapon today.
 pub const MELEE_REACH: i32 = 1;
+
+/// Melee damage multiplier for a flanked target: one with a creature hostile
+/// to it standing on the far side from the attacker (the tile directly
+/// opposite, or either tile beside that one that also touches the target —
+/// roughly 135 degrees or more around). Applies to everyone, player and
+/// enemies alike. Higher rewards surrounding (and punishes being
+/// surrounded) harder; 1.0 turns flanking off.
+pub const FLANK_DAMAGE_MULT: f32 = 1.25;

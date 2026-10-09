@@ -14,7 +14,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{EffectType, GrabbedBy, Grabber, Health};
+use crate::components::{EffectType, GrabbedBy, Grabber, Health, RootStruggleNoticed};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::queries;
@@ -103,6 +103,46 @@ pub fn is_held(world: &mut World, entity: Entity, events: &mut EventQueue) -> bo
         // No recorded holder: honour the effect until its timer ends.
         _ => true,
     }
+}
+
+/// Whether `entity` is held in place and cannot take a step: Grabbed by a
+/// zombie (see [`is_held`]) or Rooted (a web, a snare, Entangle). The shared
+/// movement gate for walking and stairs — the player, companions and enemies
+/// alike. Attacks and abilities are not gated: a pinned creature can still
+/// swing, and Blink/Tumble/Disengage teleport it out.
+///
+/// Reports the struggle: a grab every attempt (`GrabStruggle`), a root once
+/// per application (`RootStruggle`; remembered in [`RootStruggleNoticed`], so
+/// holding a direction key does not flood the log).
+pub fn pinned_in_place(world: &mut World, entity: Entity, events: &mut EventQueue) -> bool {
+    if is_held(world, entity, events) {
+        events.push(GameEvent::GrabStruggle { entity });
+        return true;
+    }
+    let root_left = world
+        .get::<&crate::components::StatusEffects>(entity)
+        .ok()
+        .and_then(|s| {
+            s.effects
+                .iter()
+                .find(|e| e.effect_type == EffectType::Rooted)
+                .map(|e| e.remaining_duration)
+        });
+    let Some(remaining) = root_left else {
+        let _ = world.remove_one::<RootStruggleNoticed>(entity);
+        return false;
+    };
+    // A root applied (or refreshed) since the last notice has more time on
+    // it than was left then.
+    let noticed = world
+        .get::<&RootStruggleNoticed>(entity)
+        .map(|n| remaining <= n.remaining)
+        .unwrap_or(false);
+    if !noticed {
+        events.push(GameEvent::RootStruggle { entity });
+    }
+    let _ = world.insert_one(entity, RootStruggleNoticed { remaining });
+    true
 }
 
 #[cfg(test)]
@@ -229,5 +269,80 @@ mod tests {
         let player = arena.player;
         let _ = apply_attack(&mut arena.ctx().effects(), rat, player);
         assert!(!grabbed(&arena));
+    }
+
+    // =========================================================================
+    // Roots hold the player (and anyone else) in place
+    // =========================================================================
+
+    fn root_struggles(arena: &Arena) -> usize {
+        arena.seen.iter().filter(|e| matches!(e, GameEvent::RootStruggle { .. })).count()
+    }
+
+    #[test]
+    fn a_rooted_player_cannot_step_but_can_still_attack() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        effects::add_effect_to_entity(&mut arena.world, player, EffectType::Rooted, 4.0);
+
+        arena.player_does(ActionType::Move { dx: -1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (5, 5), "stuck fast");
+        arena.player_does(ActionType::Move { dx: -1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (5, 5));
+        assert_eq!(root_struggles(&arena), 1, "said once per root, not per attempt");
+
+        let mut log = crate::ui::MessageLog::new(player);
+        for ev in &arena.seen {
+            log.record_event(ev, &arena.world);
+        }
+        assert_eq!(
+            log.lines().iter().filter(|l| *l == "You're stuck fast!").count(),
+            1,
+            "{:?}",
+            log.lines()
+        );
+
+        // A fresh root is announced again.
+        effects::add_effect_to_entity(&mut arena.world, player, EffectType::Rooted, 4.0);
+        arena.player_does(ActionType::Move { dx: -1, dy: 0, is_diagonal: false });
+        assert_eq!(root_struggles(&arena), 2);
+
+        // Swinging is fine.
+        let rat = arena.rat(6, 5, 0.1);
+        arena.player_does(ActionType::Attack { target: rat });
+        assert!(arena.hit(player, rat), "a rooted player still attacks");
+
+        // Once the root is gone, the step goes through.
+        effects::remove_effect_from_entity(&mut arena.world, player, EffectType::Rooted);
+        arena.player_does(ActionType::Move { dx: -1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (4, 5));
+        assert!(arena.world.get::<&RootStruggleNoticed>(player).is_err(), "notice cleared");
+        arena.cache.assert_coherent_with_world(&arena.world, "rooted player");
+    }
+
+    #[test]
+    fn a_web_roots_the_player() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        crate::spawning::spawn_web(&mut arena.world, 6, 5, None);
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (6, 5), "walked into the web");
+        assert!(queries::has_status_effect(&arena.world, player, EffectType::Rooted));
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (6, 5), "and cannot walk out of it");
+        assert_eq!(root_struggles(&arena), 1);
+    }
+
+    #[test]
+    fn a_rooted_companion_cannot_walk_either() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let pet = crate::spawning::enemies::RAT.spawn(&mut arena.world, 8, 8, &mut arena.rng);
+        arena.world.insert_one(pet, crate::components::TamedBy { owner: player }).unwrap();
+        effects::add_effect_to_entity(&mut arena.world, pet, EffectType::Rooted, 4.0);
+        let r = crate::systems::actions::apply_move(&mut arena.ctx().effects(), pet, -1, 0);
+        assert_eq!(r, ActionResult::Blocked);
+        assert_eq!(arena.pos(pet), (8, 8));
+        let _ = Position::new(0, 0);
     }
 }

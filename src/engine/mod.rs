@@ -553,12 +553,18 @@ impl GameEngine {
         let state = self.state.as_mut().expect("State checked above");
         let _ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
 
+        // Animation time for this frame: real time, unless a hit-stop is
+        // freezing it (systems::hitstop; fed by last frame's events). Only
+        // visuals ride on it — the simulation is event-driven and the camera
+        // shake keeps real time so the knock still rattles through a freeze.
+        let anim_dt = self.vfx.hitstop.visual_dt(dt);
+
         // Update animations
         {
             profile_scope!("animations");
-            systems::update_lunge_animations(&mut state.world, dt);
-            systems::update_hit_flashes(&mut state.world, dt);
-            self.vfx.update(dt);
+            systems::update_lunge_animations(&mut state.world, anim_dt);
+            systems::update_hit_flashes(&mut state.world, anim_dt);
+            self.vfx.update(anim_dt);
         }
 
         // Remove dead entities (loot rolls draw from the seeded game rng);
@@ -600,10 +606,10 @@ impl GameEngine {
         // Visual lerping
         {
             profile_scope!("visual_lerp");
-            systems::visual_lerp(&mut state.world, dt, state.game_clock.time);
+            systems::visual_lerp(&mut state.world, anim_dt, state.game_clock.time);
             systems::lerp_projectiles_realtime(
                 &mut state.world,
-                dt,
+                anim_dt,
                 crate::constants::ARROW_SPEED,
             );
         }
@@ -2388,7 +2394,12 @@ mod tests {
         // bites roll for Bleeding. Two separate runs agreed before recording.
         // Re-recorded for phase 4 creature traits: floor-0 bats now fly
         // over furniture and hit-and-run instead of trading blows.
-        const EXPECTED: &str = "t=340.5599 floor=0 kills=6 hp=0/50 pos=8,7 hunger=83.3344 fatigue=48.1250 n=104 roster=26da4932";
+        // Re-recorded for phase 4b: floor-0 rats now spawn in packs (the
+        // floor's rats regrouped, so different spawn tiles and rng draws),
+        // lone rats flee, goblins flank, orcs charge, everyone gets the
+        // flanking bonus and roots hold the player. Three separate test
+        // processes produced this same digest before recording.
+        const EXPECTED: &str = "t=357.0720 floor=0 kills=18 hp=0/50 pos=9,11 hunger=83.3344 fatigue=37.8297 n=100 roster=a7e40bc9";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2463,7 +2474,10 @@ mod tests {
         // furniture and hit-and-run. (Disabling slime splitting leaves this
         // digest unchanged, so no split happens in this script; the two
         // extra kills come from the reshaped fights.)
-        const EXPECTED: &str = "t=266.1901 floor=1 kills=22 hp=99785/100000 pos=10,13 hunger=87.5008 fatigue=29.2991 n=99 roster=d0cde0b9";
+        // Re-recorded for phase 4b (rat packs, flanking, goblin flank
+        // routing, orc charges, rooted player): see the other golden.
+        // Reproduced in three separate processes before recording.
+        const EXPECTED: &str = "t=267.1041 floor=1 kills=21 hp=99962/100000 pos=10,13 hunger=87.5008 fatigue=28.4922 n=98 roster=20b24abd";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

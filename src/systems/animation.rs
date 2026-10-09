@@ -196,6 +196,8 @@ mod tests {
                 damage: 3,
                 kind: DamageKind::Melee,
                 crit: false,
+                flanked: false,
+                killed: false,
             },
         );
         assert!(world.get::<&HitFlash>(victim).is_ok(), "no flash was armed");
@@ -225,6 +227,8 @@ mod tests {
                 damage: 0,
                 kind: DamageKind::Melee,
                 crit: false,
+                flanked: false,
+                killed: false,
             },
         );
 

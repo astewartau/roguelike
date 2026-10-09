@@ -204,6 +204,9 @@ pub struct VfxManager {
     /// in the simulation, where the camera is not reachable, while the engine
     /// tick has both this and the camera in hand.
     shake_requests: Vec<ShakeRequest>,
+    /// Hit-stop timer, fed by events alongside the rest of the vfx and read
+    /// by the engine tick to slow the animation clock (`systems::hitstop`).
+    pub hitstop: crate::systems::hitstop::HitStop,
 }
 
 impl VfxManager {
@@ -215,6 +218,7 @@ impl VfxManager {
             taming_beams: Vec::new(),
             resting_bubble: None,
             shake_requests: Vec::new(),
+            hitstop: crate::systems::hitstop::HitStop::new(),
         }
     }
 
@@ -349,7 +353,7 @@ impl VfxManager {
     /// Only spawns VFX for positions visible to the player (not in fog of war).
     pub fn handle_event(&mut self, event: &GameEvent, grid: &Grid, player: hecs::Entity) {
         match event {
-            GameEvent::AttackHit { target, target_pos, damage, crit, .. } => {
+            GameEvent::AttackHit { target, target_pos, damage, crit, flanked, .. } => {
                 // Only show VFX if the position is visible to the player
                 let tile_x = target_pos.0 as i32;
                 let tile_y = target_pos.1 as i32;
@@ -361,7 +365,14 @@ impl VfxManager {
                         *damage,
                         damage_tier(Some(*target), player, *damage, *crit),
                     );
+                    // A flanked hit says so beside its number.
+                    if *flanked {
+                        self.spawn_float_text(target_pos.0, target_pos.1, "FLANK");
+                    }
                 }
+            }
+            GameEvent::ChargeMissed { position, outcome: crate::events::ChargeOutcome::Wall, .. } => {
+                self.spawn_float_text(position.0 as f32 + 0.5, position.1 as f32 + 0.5, "SLAM");
             }
             GameEvent::AttackMissed {
                 target_pos: Some(target_pos),

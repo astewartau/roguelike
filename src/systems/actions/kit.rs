@@ -291,6 +291,8 @@ pub fn apply_corpse_explosion(ctx: &mut EffectCtx, caster: Entity, corpse: Entit
             damage: dealt,
             kind: crate::events::DamageKind::CorpseExplosion,
             crit: false,
+            flanked: false,
+            killed: crate::systems::combat::is_dead(ctx.world, victim),
         });
     }
 
@@ -343,6 +345,8 @@ pub fn reflect_thorns(ctx: &mut EffectCtx, attacker: Entity, defender: Entity) {
         damage: dealt,
         kind: crate::events::DamageKind::Thorns,
         crit: false,
+        flanked: false,
+        killed: crate::systems::combat::is_dead(ctx.world, attacker),
     });
 }
 

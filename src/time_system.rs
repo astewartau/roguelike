@@ -454,6 +454,9 @@ fn apply_action_effects(
         ActionType::BossGroundSlam => actions::apply_boss_ground_slam(
             &mut effects(world, grid, spatial_cache, events, rng), entity,
         ),
+        ActionType::OrcChargeWindup { dx, dy } => crate::systems::charge::apply_orc_charge(
+            &mut effects(world, grid, spatial_cache, events, rng), entity, *dx, *dy,
+        ),
         // Reactive kit abilities did their work when they started (see
         // `start_action_with_start_effects`); completion only tidies up.
         ActionType::Guard => {

@@ -30,6 +30,8 @@ pub enum DamageKind {
     Potion,
     /// A boss ground slam (Gnash's shockwave).
     Slam,
+    /// An orc's charge connecting at the end of its dash.
+    Charge,
     /// Druid's Thorns biting back at a melee attacker. The "attacker" of the
     /// hit is the thorny defender.
     Thorns,
@@ -72,6 +74,11 @@ pub enum GameEvent {
         kind: DamageKind,
         /// Whether this was a critical hit.
         crit: bool,
+        /// The target was flanked: a creature hostile to it stood on the far
+        /// side from the attacker, and the hit took `FLANK_DAMAGE_MULT`.
+        flanked: bool,
+        /// The hit left the target dead (hit-stop, kill feedback).
+        killed: bool,
     },
     /// A melee attack locked onto `target` landed on nothing: by the time
     /// the swing completed the target had moved out of reach or was gone. No
@@ -519,6 +526,27 @@ pub enum GameEvent {
     GrabStruggle {
         entity: Entity,
     },
+    /// `entity` tried to walk while Rooted and spent the step struggling.
+    /// Said once per root application, not on every attempt
+    /// (`grab::pinned_in_place`).
+    RootStruggle {
+        entity: Entity,
+    },
+    /// An orc lowered its head to charge down a lane (a unit step `dir`);
+    /// the dash comes when the wind-up completes. Only emitted when the orc
+    /// stands on a tile the player can see.
+    ChargeWindup {
+        attacker: Entity,
+        position: (i32, i32),
+        dir: (i32, i32),
+    },
+    /// A charge that hit nobody ended (a hit is reported as an `AttackHit`
+    /// of kind `Charge`). Only emitted when the end tile is visible.
+    ChargeMissed {
+        attacker: Entity,
+        position: (i32, i32),
+        outcome: ChargeOutcome,
+    },
     /// A badly hurt slime split in two: `child` appeared at `position`.
     SlimeSplit {
         parent: Entity,
@@ -558,6 +586,16 @@ pub enum GameEvent {
         boss: Entity,
         position: (i32, i32),
     },
+}
+
+/// How a charge that hit nobody ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChargeOutcome {
+    /// Ran into a wall or furniture: stunned for `ORC_WALL_STUN`.
+    Wall,
+    /// Ran its full length, or was stopped by one of its own: stunned for
+    /// `ORC_STUMBLE_DURATION`.
+    Stumble,
 }
 
 /// What drinking from a fountain did (for the message log / VFX).

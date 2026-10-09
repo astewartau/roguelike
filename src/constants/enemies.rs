@@ -39,6 +39,21 @@ pub const RAT_DAMAGE: i32 = 5;
 /// Chance a connecting rat bite opens a wound (Bleeding for `BLEED_DURATION`).
 /// Higher makes rat packs a slow attrition threat rather than chip damage.
 pub const RAT_BLEED_CHANCE: f32 = 0.3;
+/// Smallest rat pack spawned together on a floor. Rats are counted
+/// individually against the floor roster: a pack spends as many roster rats
+/// as it has members.
+pub const RAT_PACK_MIN: usize = 2;
+/// Largest rat pack spawned together.
+pub const RAT_PACK_MAX: usize = 4;
+/// How far (in steps over walkable spawn tiles, from the first rat) the rest
+/// of a pack may be placed. Small keeps packs huddled in one spot.
+pub const RAT_PACK_SPAWN_SPREAD: i32 = 3;
+/// Chebyshev radius within which pack rats count as together. A pack rat
+/// with no living packmate this close is alone: it flees instead of
+/// fighting (unless cornered). With its pack it ignores the wounded-morale
+/// panic, and an alert spreads to every packmate this close. Larger makes
+/// packs harder to split up.
+pub const RAT_PACK_RADIUS: i32 = 4;
 
 // SKELETON ARCHER
 /// Skeleton archer health (slightly weaker than melee skeleton)
@@ -81,6 +96,30 @@ pub const ORC_STRENGTH: i32 = 15;
 pub const ORC_INTELLIGENCE: i32 = 2;
 pub const ORC_AGILITY: i32 = 3;
 pub const ORC_DAMAGE: i32 = 13;
+/// Closest a target can be (Chebyshev tiles, on one of the eight straight
+/// lines from the orc) for it to start a charge. Below this it just walks up
+/// and swings. Lower makes the charge an opener at almost any distance.
+pub const ORC_CHARGE_MIN_RANGE: i32 = 3;
+/// Farthest a charge target can be. The dash itself runs one tile further
+/// (`ORC_CHARGE_MAX_RANGE + 1`) so a target that backs straight away along
+/// the lane is still caught. Higher makes orcs threaten whole rooms.
+pub const ORC_CHARGE_MAX_RANGE: i32 = 6;
+/// Base wind-up of the charge in game seconds (divided by the orc's speed,
+/// like every action): the window to step out of the telegraphed lane.
+/// Shorter makes the charge much harder to dodge.
+pub const ORC_CHARGE_WINDUP: f32 = 0.8;
+/// Damage multiplier on a charge that connects, over the orc's normal melee
+/// hit (guard, armour and wards still apply after it).
+pub const ORC_CHARGE_DAMAGE_MULT: f32 = 1.5;
+/// How long (game seconds) an orc that charges into a wall or furniture is
+/// Stunned: the punishment for baiting it into one. Longer turns a dodged
+/// charge into a free beating.
+pub const ORC_WALL_STUN: f32 = 1.5;
+/// How long (game seconds) an orc that charges the full distance without
+/// hitting anything (or is stopped by one of its own) stumbles, Stunned.
+pub const ORC_STUMBLE_DURATION: f32 = 0.8;
+/// Game seconds between charges, counted from the wind-up starting.
+pub const ORC_CHARGE_COOLDOWN: f32 = 10.0;
 
 // ZOMBIE - very slow, high HP, relentless
 pub const ZOMBIE_HEALTH: i32 = 60;

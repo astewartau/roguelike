@@ -1262,6 +1262,11 @@ pub enum ActionType {
     Entangle { target_x: i32, target_y: i32 },
     /// Druid kit: rain over a tile (applied at completion).
     CallRain { target_x: i32, target_y: i32 },
+    /// Orc charge wind-up. The direction (a unit step) is fixed when the
+    /// wind-up starts, and the lane down it is telegraphed; on completion
+    /// the orc dashes along it (`systems::charge::apply_orc_charge`), so
+    /// sidestepping out of the lane dodges.
+    OrcChargeWindup { dx: i32, dy: i32 },
 }
 
 impl ActionType {
@@ -1302,6 +1307,7 @@ impl ActionType {
             ActionType::AttackDirection { .. } => PerSecond(EXERTION_HEAVY),
             ActionType::ShootBow { .. } => PerSecond(EXERTION_HEAVY),
             ActionType::BossGroundSlam => PerSecond(EXERTION_HEAVY),
+            ActionType::OrcChargeWindup { .. } => PerSecond(EXERTION_HEAVY),
 
             // --- Flat: deliberate abilities, each with its own price ---
             ActionType::Cleave => Flat(CLEAVE_ENERGY_COST),
@@ -2703,6 +2709,39 @@ pub struct GrabbedBy {
 pub struct Splits {
     pub generation: u8,
     pub spent: bool,
+}
+
+/// A bruiser that charges (orcs): when its target lies on a straight line
+/// `ORC_CHARGE_MIN_RANGE..=ORC_CHARGE_MAX_RANGE` away down a clear lane, it
+/// winds up (`ActionType::OrcChargeWindup`, telegraphed) and then dashes
+/// down that lane. `cooldown` counts down in game time
+/// (`ai::tick_role_cooldowns`). See `systems::charge`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Charger {
+    pub cooldown: f32,
+}
+
+/// Hunts in packs (rats). Alone — no living packmate within
+/// `RAT_PACK_RADIUS` — it flees from a hostile rather than fighting, unless
+/// cornered; with its pack it shrugs off the wounded-morale panic, and when
+/// it becomes aware of a foe (or is hit) its packmates do too. See
+/// `systems::pack`.
+#[derive(Debug, Clone, Copy)]
+pub struct PackHunter;
+
+/// Works around the target's flank (goblins): when an ally is already
+/// adjacent to the target, it heads for the free tile on the far side of the
+/// target from that ally rather than the nearest one.
+#[derive(Debug, Clone, Copy)]
+pub struct Flanker;
+
+/// The Rooted remaining-duration at the moment this entity was last told it
+/// is stuck fast, so the "You're stuck fast!" line is said once per root
+/// application rather than on every step attempt (`grab::pinned_in_place`).
+/// A root applied afresh has more time left than this and is announced again.
+#[derive(Debug, Clone, Copy)]
+pub struct RootStruggleNoticed {
+    pub remaining: f32,
 }
 
 #[cfg(test)]
