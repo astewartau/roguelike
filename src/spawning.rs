@@ -1450,9 +1450,9 @@ pub fn apply_boss_role(
     }
 }
 
-/// Spawn an explosive oil barrel: blocks movement, highly combustible, and
-/// attackable (destroying it by damage sets it off — see `systems::fire`).
-/// Distinguished from food storage barrels by a red/dark tint.
+/// Spawn an explosive oil barrel: blocks movement, highly combustible,
+/// attackable (breaking it open lights a short fuse — see `systems::fire`)
+/// and pushable. Distinguished from food storage barrels by a red/dark tint.
 pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     use crate::components::{Combustible, Health, Name, OilBarrel, Sprite, SpriteTint};
     use crate::constants::{OIL_BARREL_FLAMMABILITY, OIL_BARREL_HEALTH, OIL_BARREL_TINT};
@@ -1471,6 +1471,7 @@ pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         Combustible { flammability: OIL_BARREL_FLAMMABILITY },
         Attackable,
         BlocksMovement,
+        crate::components::Pushable,
     ))
 }
 

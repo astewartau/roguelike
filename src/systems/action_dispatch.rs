@@ -72,6 +72,10 @@ pub fn calculate_action_duration(action_type: &ActionType, speed: f32) -> f32 {
         ActionType::ActivateThorns => THORNS_ACTIVATION_DURATION,
         ActionType::Entangle { .. } => ENTANGLE_CAST_DURATION,
         ActionType::CallRain { .. } => CALL_RAIN_CAST_DURATION,
+        ActionType::Push { .. } => ACTION_PUSH_DURATION,
+        ActionType::CloseDoor { .. } => ACTION_DOOR_DURATION,
+        ActionType::ShieldBash { .. } => SHIELD_BASH_DURATION,
+        ActionType::GraveBolt { .. } => GRAVE_BOLT_CAST_DURATION,
     };
 
     // Speed modifies duration: higher speed = shorter duration

@@ -41,6 +41,13 @@ pub enum DamageKind {
     Poison,
     /// A Bleeding damage-over-time tick (never in `AttackHit`; see `DotDamage`).
     Bleed,
+    /// Fighter's Shield Bash connecting.
+    ShieldBash,
+    /// A shield-bashed creature slammed into a wall or blocker mid-shove.
+    /// The "attacker" is the basher.
+    WallSlam,
+    /// Necromancer's Grave Bolt (a projectile; arrives in `ProjectileHit`).
+    GraveBolt,
 }
 
 /// Why a locked-target melee attack (`ActionType::Attack`) failed to connect.
@@ -336,6 +343,35 @@ pub enum GameEvent {
     /// An oil barrel exploded (damage + burning oil spray). VFX/audio reuse
     /// the FireballExplosion event emitted alongside this one.
     BarrelExploded {
+        position: (i32, i32),
+    },
+    /// An oil barrel was broken open (0 HP) and its break fuse started: it
+    /// hisses, its blast radius is telegraphed, and the next hit sets it off.
+    BarrelCracked {
+        barrel: Entity,
+        position: (i32, i32),
+    },
+    /// Water soaked an oil barrel: it cannot catch fire for a while.
+    /// `defused` is true when this put out a burning barrel's fire fuse.
+    BarrelSoaked {
+        barrel: Entity,
+        position: (i32, i32),
+        defused: bool,
+    },
+    /// A pushable object was shoved one tile (by Push or a Shield Bash).
+    ObjectPushed {
+        pusher: Entity,
+        object: Entity,
+        from: (i32, i32),
+        to: (i32, i32),
+    },
+    /// A push went nowhere: nothing pushable there, or its way is blocked.
+    PushBlocked {
+        pusher: Entity,
+    },
+    /// A door could not be closed: something is standing in the doorway.
+    DoorCloseBlocked {
+        closer: Entity,
         position: (i32, i32),
     },
     /// A brazier was toppled (by interaction or knockback), spilling fire.

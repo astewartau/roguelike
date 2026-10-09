@@ -13,6 +13,7 @@
 //! - `inventory`: Container and inventory interactions
 //! - `rendering`: FOV, visibility, and render data collection
 //! - `projectile`: Arrow and projectile movement
+//! - `push`: Shoving pushable furniture (Push action, Shield Bash)
 //! - `charge`: Orc charges (wind-up lane, dash, impact / wall stun / stumble)
 //! - `grab`: Zombie grabs (hold a victim in place; early release)
 //! - `hitstop`: Brief real-time freeze of visual animation on heavy blows
@@ -44,6 +45,7 @@ pub mod items;
 pub mod pack;
 pub mod player_input;
 pub mod projectile;
+pub mod push;
 pub mod rendering;
 pub mod split;
 pub mod survival;

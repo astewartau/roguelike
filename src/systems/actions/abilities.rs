@@ -1051,6 +1051,7 @@ pub fn apply_shoot_crippling_shot(
             on_hit_effect: Some((EffectType::Slowed, CRIPPLING_SHOT_SLOW_DURATION)),
             hit_enemy: false,
             incendiary: false,
+            kind: crate::components::ProjectileKind::Missile,
         },
         ProjectileMarker,
     ));

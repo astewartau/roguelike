@@ -307,10 +307,13 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
         return ActionResult::Invalid;
     }
 
-    // Check if this is a bow shot that needs recovery follow-up
+    // Check if this is a shot that needs recovery follow-up (a short pause
+    // that lets the missile fly before the shooter acts again)
     let needs_recovery = matches!(
         action.action_type,
-        ActionType::ShootBow { .. } | ActionType::ShootCripplingShot { .. }
+        ActionType::ShootBow { .. }
+            | ActionType::ShootCripplingShot { .. }
+            | ActionType::GraveBolt { .. }
     );
 
     // Apply action effects
@@ -474,6 +477,20 @@ fn apply_action_effects(
         ),
         ActionType::CallRain { target_x, target_y } => actions::apply_call_rain(
             &mut effects(world, grid, spatial_cache, events, rng), entity, *target_x, *target_y,
+        ),
+        ActionType::Push { dx, dy } => crate::systems::push::apply_push(
+            &mut effects(world, grid, spatial_cache, events, rng), entity, *dx, *dy,
+        ),
+        ActionType::CloseDoor { door } => actions::apply_close_door(world, entity, *door, events),
+        ActionType::ShieldBash { target_x, target_y } => actions::apply_shield_bash(
+            &mut effects(world, grid, spatial_cache, events, rng), entity, *target_x, *target_y,
+        ),
+        ActionType::GraveBolt { target_x, target_y } => actions::apply_grave_bolt(
+            &mut effects(world, grid, spatial_cache, events, rng),
+            entity,
+            *target_x,
+            *target_y,
+            current_time,
         ),
     }
 }

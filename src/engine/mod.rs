@@ -2062,6 +2062,22 @@ impl AbilitySlot {
             }
             (AbilitySlot::Kit(_), AbilityType::Entangle) => Targeting::Enter(ENTANGLE_RANGE),
             (AbilitySlot::Kit(_), AbilityType::CallRain) => Targeting::Enter(CALL_RAIN_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::ShieldBash) => {
+                // Nothing beside you to bash: say so instead of entering a
+                // targeting mode with no valid tile.
+                let Some((px, py)) = crate::queries::get_entity_position(ctx.world, player) else {
+                    return Targeting::Refused;
+                };
+                let any = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (px + dx, py + dy)))
+                    .any(|t| systems::actions::can_shield_bash(ctx.world, player, t));
+                if !any {
+                    ctx.ui.message_log.system("There is nothing next to you to bash.".to_string());
+                    return Targeting::Refused;
+                }
+                Targeting::Enter(SHIELD_BASH_RANGE)
+            }
+            (AbilitySlot::Kit(_), AbilityType::GraveBolt) => Targeting::Enter(GRAVE_BOLT_RANGE),
             _ => Targeting::Immediate,
         }
     }
@@ -2399,7 +2415,13 @@ mod tests {
         // lone rats flee, goblins flank, orcs charge, everyone gets the
         // flanking bonus and roots hold the player. Three separate test
         // processes produced this same digest before recording.
-        const EXPECTED: &str = "t=357.0720 floor=0 kills=18 hp=0/50 pos=9,11 hunger=83.3344 fatigue=37.8297 n=100 roster=a7e40bc9";
+        // Re-recorded for oil barrels in corridors no longer getting a spill
+        // beside them (fewer spill rng draws at floor construction, so the
+        // room spills land elsewhere). Only the roster moved; disabling that
+        // one generation filter restores the old digest exactly, so the
+        // fuse/push/bash/bolt changes do not touch this script. Two separate
+        // processes agreed before recording.
+        const EXPECTED: &str = "t=357.0720 floor=0 kills=18 hp=0/50 pos=9,11 hunger=83.3344 fatigue=37.8297 n=100 roster=eb7c2f09";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2477,7 +2499,10 @@ mod tests {
         // Re-recorded for phase 4b (rat packs, flanking, goblin flank
         // routing, orc charges, rooted player): see the other golden.
         // Reproduced in three separate processes before recording.
-        const EXPECTED: &str = "t=267.1041 floor=1 kills=21 hp=99962/100000 pos=10,13 hunger=87.5008 fatigue=28.4922 n=98 roster=20b24abd";
+        // Re-recorded for corridor oil barrels no longer leaking a spill (two
+        // fewer puddles on the floor, n=98 -> 96; see the other golden, same
+        // cause, confirmed the same way, two processes agreed).
+        const EXPECTED: &str = "t=267.1041 floor=1 kills=21 hp=99962/100000 pos=10,13 hunger=87.5008 fatigue=28.4922 n=96 roster=50f83c36";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -3366,7 +3391,7 @@ mod tests {
     fn every_class_starts_with_its_kit_on_the_hotbars() {
         use AbilityType as A;
         let expected = [
-            (PlayerClass::Fighter, vec![A::Cleave, A::Stun, A::Guard], vec![]),
+            (PlayerClass::Fighter, vec![A::Cleave, A::Stun, A::Guard, A::ShieldBash], vec![]),
             (
                 PlayerClass::Ranger,
                 vec![A::Sprint, A::Disengage, A::Tumble, A::SnareTrap, A::CripplingShot],
@@ -3376,7 +3401,7 @@ mod tests {
             (
                 PlayerClass::Necromancer,
                 vec![A::LifeDrain, A::Fear, A::RaiseDead, A::BoneWard, A::Sacrifice],
-                vec![A::CorpseExplosion],
+                vec![A::CorpseExplosion, A::GraveBolt],
             ),
         ];
         for (class, main, shift) in expected {

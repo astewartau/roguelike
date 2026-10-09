@@ -161,6 +161,7 @@ pub fn apply_shoot_bow(
             on_hit_effect,
             hit_enemy: false,
             incendiary: is_fire_arrow,
+            kind: crate::components::ProjectileKind::Missile,
         },
         ProjectileMarker,
     ));
@@ -306,6 +307,7 @@ pub fn apply_throw_potion(
             on_hit_effect: None,
             hit_enemy: false,
             incendiary: false,
+            kind: crate::components::ProjectileKind::Missile,
         },
         ProjectileMarker,
     ));

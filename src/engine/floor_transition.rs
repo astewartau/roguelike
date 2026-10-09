@@ -397,6 +397,10 @@ pub fn load_floor(
                 } else if !looted {
                     let _ = ctx.world.insert_one(entity, BlocksMovement);
                 }
+                // Storage barrels can be shoved (see `components::Pushable`).
+                if *container_type == ContainerType::Barrel {
+                    let _ = ctx.world.insert_one(entity, crate::components::Pushable);
+                }
             }
             SavedEntityType::Door { is_open } => {
                 if *is_open {

@@ -184,6 +184,11 @@ pub enum AbilityType {
     Entangle,
     /// Druid: a downpour over a tile douses fires and soaks everyone in it.
     CallRain,
+    /// Fighter: bash an adjacent creature (damage, knockback, stun) or shove
+    /// an adjacent pushable object.
+    ShieldBash,
+    /// Necromancer: a bone shard bolt at a tile in line of sight.
+    GraveBolt,
 }
 
 impl AbilityType {
@@ -218,6 +223,8 @@ impl AbilityType {
             AbilityType::Thorns => "Thorns",
             AbilityType::Entangle => "Entangle",
             AbilityType::CallRain => "Call Rain",
+            AbilityType::ShieldBash => "Shield Bash",
+            AbilityType::GraveBolt => "Grave Bolt",
         }
     }
 
@@ -252,6 +259,8 @@ impl AbilityType {
             AbilityType::Thorns => "Melee attackers take damage back (scales with INT)",
             AbilityType::Entangle => "Root enemies around a tile (longer in grass)",
             AbilityType::CallRain => "Douse fires and soak everyone around a tile",
+            AbilityType::ShieldBash => "Bash an adjacent foe back 2 tiles and stun it, or shove a barrel",
+            AbilityType::GraveBolt => "Hurl a bone shard at a target in sight (scales with INT)",
         }
     }
 
@@ -287,6 +296,8 @@ impl AbilityType {
             AbilityType::Thorns => THORNS_ENERGY_COST,
             AbilityType::Entangle => ENTANGLE_ENERGY_COST,
             AbilityType::CallRain => CALL_RAIN_ENERGY_COST,
+            AbilityType::ShieldBash => SHIELD_BASH_ENERGY_COST,
+            AbilityType::GraveBolt => GRAVE_BOLT_ENERGY_COST,
         }
     }
 
@@ -1267,6 +1278,18 @@ pub enum ActionType {
     /// the orc dashes along it (`systems::charge::apply_orc_charge`), so
     /// sidestepping out of the lane dodges.
     OrcChargeWindup { dx: i32, dy: i32 },
+    /// Universal: shove the `Pushable` object on the adjacent tile (dx, dy)
+    /// one tile further in the same direction. The pusher stays put. See
+    /// `systems::push`.
+    Push { dx: i32, dy: i32 },
+    /// Close an open door (refused while anything stands in the doorway).
+    CloseDoor { door: Entity },
+    /// Fighter kit: Shield Bash the creature or pushable on an adjacent tile
+    /// (applied at completion; see `systems::actions::kit::apply_shield_bash`).
+    ShieldBash { target_x: i32, target_y: i32 },
+    /// Necromancer kit: fire a Grave Bolt at a tile (the bone shard flies
+    /// through the projectile system).
+    GraveBolt { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -1301,6 +1324,9 @@ impl ActionType {
             ActionType::DropItem { .. } => PerSecond(EXERTION_LIGHT),
             ActionType::DropEquippedWeapon => PerSecond(EXERTION_LIGHT),
             ActionType::ThrowPotion { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::CloseDoor { .. } => PerSecond(EXERTION_LIGHT),
+            // Shoving a barrel is real work, like fighting.
+            ActionType::Push { .. } => PerSecond(EXERTION_HEAVY),
 
             // --- Heavy: fighting ---
             ActionType::Attack { .. } => PerSecond(EXERTION_HEAVY),
@@ -1333,6 +1359,8 @@ impl ActionType {
             ActionType::ActivateThorns => Flat(THORNS_ENERGY_COST),
             ActionType::Entangle { .. } => Flat(ENTANGLE_ENERGY_COST),
             ActionType::CallRain { .. } => Flat(CALL_RAIN_ENERGY_COST),
+            ActionType::ShieldBash { .. } => Flat(SHIELD_BASH_ENERGY_COST),
+            ActionType::GraveBolt { .. } => Flat(GRAVE_BOLT_ENERGY_COST),
         }
     }
 
@@ -1982,6 +2010,20 @@ pub struct Projectile {
     /// Fire arrows: ignites the landing tile (grass catches) and burns up
     /// on impact (never recoverable).
     pub incendiary: bool,
+    /// What is flying: a physical missile (arrow / thrown potion) or a spell.
+    pub kind: ProjectileKind,
+}
+
+/// What a projectile is, for the parts of impact handling that differ between
+/// a weapon's missile and a spell's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjectileKind {
+    /// Arrows and thrown potions: weapon on-hit affixes apply to arrows, and
+    /// a spent arrow may be recovered.
+    #[default]
+    Missile,
+    /// The Necromancer's Grave Bolt: no weapon affixes, nothing to recover.
+    GraveBolt,
 }
 
 /// Marker component for projectiles (for queries)
@@ -2259,16 +2301,59 @@ pub struct BurningOil {
 /// Marker for explosive oil barrels. Blocks movement and is highly
 /// combustible: once Burning, a short fuse (`BarrelFuse`) starts, then the
 /// barrel explodes — damage in a radius plus a spray of burning oil puddles.
-/// Destroying one by damage also sets it off.
+/// Breaking one open (0 HP) starts a shorter fuse; any damage to a barrel
+/// whose fuse is already running detonates it at once (see `systems::fire`).
 #[derive(Debug, Clone, Copy)]
 pub struct OilBarrel;
 
-/// Lit fuse on an ignited oil barrel. Ticked by `systems::fire`; the barrel
-/// explodes when `remaining` reaches zero.
+/// What lit an oil barrel's fuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuseCause {
+    /// The barrel caught fire (`OIL_BARREL_FUSE_SECONDS`). Water puts this
+    /// fuse out along with the flames.
+    Fire,
+    /// The barrel was broken open by damage (`OIL_BARREL_BREAK_FUSE_SECONDS`).
+    /// Oil is already spilling over the spark: water does not stop it.
+    Broken,
+}
+
+/// Lit fuse on an oil barrel. Ticked in game time by `systems::fire`; the
+/// barrel explodes when `remaining` reaches zero. Damage to a fusing barrel
+/// zeroes `remaining` (immediate detonation on the next fire tick).
 #[derive(Debug, Clone, Copy)]
 pub struct BarrelFuse {
     pub remaining: f32,
+    /// The fuse's full length, for the telegraph's fill progress.
+    pub total: f32,
+    pub cause: FuseCause,
 }
+
+impl BarrelFuse {
+    /// A fresh fuse of `seconds`.
+    pub fn new(seconds: f32, cause: FuseCause) -> Self {
+        Self { remaining: seconds, total: seconds, cause }
+    }
+
+    /// 0.0 when lit, 1.0 when it blows.
+    pub fn progress(&self) -> f32 {
+        if self.total <= f32::EPSILON {
+            return 1.0;
+        }
+        (1.0 - self.remaining / self.total).clamp(0.0, 1.0)
+    }
+}
+
+/// Light furniture that can be shoved a tile at a time: by the universal Push
+/// action (Ctrl+direction) and by the Fighter's Shield Bash.
+///
+/// Carried by oil barrels and food/storage barrels. Deliberately *not* by
+/// chests and coffins (heavy, and a loot container wandering off its spot
+/// would be confusing), braziers (interacting topples them instead), room
+/// furniture (fountains, altars, shrines), shop decor or stalagmites. A
+/// pushable only matters while it also `BlocksMovement`: a looted storage
+/// barrel becomes walkable scenery and there is nothing left to shove.
+#[derive(Debug, Clone, Copy)]
+pub struct Pushable;
 
 /// Grass tile soaked by a water splash: unignitable until it dries out.
 /// Lives as an invisible timer entity on the tile, checked by fire spread.
@@ -2420,7 +2505,10 @@ impl ClassKit {
     /// The starting kit for a class.
     pub fn for_class(class: PlayerClass) -> Self {
         match class {
-            PlayerClass::Fighter => Self::new(&[(AbilityType::Guard, GUARD_COOLDOWN)]),
+            PlayerClass::Fighter => Self::new(&[
+                (AbilityType::Guard, GUARD_COOLDOWN),
+                (AbilityType::ShieldBash, SHIELD_BASH_COOLDOWN),
+            ]),
             PlayerClass::Ranger => Self::new(&[
                 (AbilityType::Disengage, DISENGAGE_COOLDOWN),
                 (AbilityType::Tumble, TUMBLE_COOLDOWN),
@@ -2436,6 +2524,7 @@ impl ClassKit {
                 (AbilityType::BoneWard, BONE_WARD_COOLDOWN),
                 (AbilityType::Sacrifice, SACRIFICE_COOLDOWN),
                 (AbilityType::CorpseExplosion, CORPSE_EXPLOSION_COOLDOWN),
+                (AbilityType::GraveBolt, GRAVE_BOLT_COOLDOWN),
             ]),
         }
     }

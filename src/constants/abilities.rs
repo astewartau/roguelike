@@ -108,6 +108,30 @@ pub const GUARD_COOLDOWN: f32 = 5.0;
 pub const GUARD_ENERGY_COST: f32 = 10.0;
 
 // =============================================================================
+// FIGHTER - SHIELD BASH
+// =============================================================================
+
+/// Shield Bash reaches an adjacent tile only (Chebyshev distance).
+pub const SHIELD_BASH_RANGE: i32 = 1;
+/// Raw bash damage before the strength bonus and armor. Small: the bash is for
+/// position and the stun, not for damage. Goes through `apply_damage`.
+pub const SHIELD_BASH_DAMAGE: i32 = 3;
+/// Most tiles a bashed creature or pushable object is shoved straight back.
+/// Up turns the bash into a battlefield-rearranging tool.
+pub const SHIELD_BASH_KNOCKBACK: i32 = 2;
+/// How long a bashed creature is Stunned, in game seconds.
+pub const SHIELD_BASH_STUN: f32 = 1.0;
+/// Extra raw damage when the shove is cut short by a wall or another blocker
+/// (the victim is slammed into it). Up rewards bashing enemies into walls.
+pub const SHIELD_BASH_WALL_DAMAGE: i32 = 3;
+/// Shield Bash action time (a quick shove, a bit faster than a swing).
+pub const SHIELD_BASH_DURATION: f32 = 0.6;
+/// Shield Bash cooldown in game seconds.
+pub const SHIELD_BASH_COOLDOWN: f32 = 8.0;
+/// Fatigue effort for one Shield Bash.
+pub const SHIELD_BASH_ENERGY_COST: f32 = 15.0;
+
+// =============================================================================
 // NECROMANCER - BONE WARD (reactive)
 // =============================================================================
 
@@ -158,6 +182,29 @@ pub const CORPSE_EXPLOSION_DAMAGE: i32 = 12;
 pub const CORPSE_EXPLOSION_COOLDOWN: f32 = 20.0;
 /// Fatigue effort for one Corpse Explosion.
 pub const CORPSE_EXPLOSION_ENERGY_COST: f32 = 40.0;
+
+// =============================================================================
+// NECROMANCER - GRAVE BOLT
+// =============================================================================
+
+/// Maximum Chebyshev distance to the targeted tile; the bolt also needs line
+/// of sight, like a bow shot, and does not fly past this range.
+pub const GRAVE_BOLT_RANGE: i32 = 6;
+/// Raw bolt damage before INT scaling (`queries::int_power`; the result is
+/// rounded and never below one) and the target's armor. No crits and no weapon
+/// on-hit affixes: it is a spell, not a weapon.
+pub const GRAVE_BOLT_DAMAGE: i32 = 3;
+/// Grave Bolt cooldown in game seconds. Casters stay cooldown-limited: this
+/// is the only thing gating the bolt.
+pub const GRAVE_BOLT_COOLDOWN: f32 = 5.0;
+/// Grave Bolt cast time, same as drawing and loosing a bow.
+pub const GRAVE_BOLT_CAST_DURATION: f32 = 1.2;
+/// Flight speed of the bone shard, in tiles per game second.
+pub const GRAVE_BOLT_SPEED: f32 = 12.0;
+/// Pale bone-green tint on the bolt's sprite (and its hotbar icon).
+pub const GRAVE_BOLT_TINT: (f32, f32, f32) = (0.7, 1.0, 0.65);
+/// Fatigue effort for one Grave Bolt.
+pub const GRAVE_BOLT_ENERGY_COST: f32 = 15.0;
 
 // =============================================================================
 // DRUID - THORNS

@@ -1,5 +1,6 @@
-//! Class-kit abilities: Guard (Fighter), Bone Ward / Sacrifice / Corpse
-//! Explosion (Necromancer), Thorns / Entangle / Call Rain (Druid).
+//! Class-kit abilities: Guard / Shield Bash (Fighter), Bone Ward / Sacrifice /
+//! Corpse Explosion / Grave Bolt (Necromancer), Thorns / Entangle / Call Rain
+//! (Druid).
 //!
 //! # Reactive abilities act at action START
 //!
@@ -40,8 +41,23 @@ pub fn kit_ability_for_action(action: &ActionType) -> Option<AbilityType> {
         ActionType::CorpseExplosion { .. } => Some(AbilityType::CorpseExplosion),
         ActionType::Entangle { .. } => Some(AbilityType::Entangle),
         ActionType::CallRain { .. } => Some(AbilityType::CallRain),
+        ActionType::ShieldBash { .. } => Some(AbilityType::ShieldBash),
+        ActionType::GraveBolt { .. } => Some(AbilityType::GraveBolt),
         _ => None,
     }
+}
+
+/// Whether `entity`'s kit holds `ability` and it is off cooldown. A kit
+/// ability whose action arrives by some other route than its hotbar slot (a
+/// click, the context menu) is refused while cooling down: the cooldown is
+/// the only gate.
+pub fn kit_ability_ready(world: &hecs::World, entity: Entity, ability: AbilityType) -> bool {
+    world
+        .get::<&crate::components::ClassKit>(entity)
+        .ok()
+        .and_then(|kit| kit.position(ability).and_then(|i| kit.get(i).copied()))
+        .map(|k| k.cooldown_remaining <= 0.0)
+        .unwrap_or(false)
 }
 
 /// Apply the part of an action that has to happen the instant it starts.
@@ -106,6 +122,222 @@ pub fn resolve_guard_block(
         .unwrap_or((0.0, 0.0));
     events.push(GameEvent::AttackBlocked { attacker, defender, defender_pos });
     (raw as f32 * (1.0 - GUARD_DAMAGE_REDUCTION)) as i32
+}
+
+// =============================================================================
+// SHIELD BASH (Fighter)
+// =============================================================================
+
+/// Whether `basher` can Shield Bash `tile`: an adjacent tile (within
+/// `SHIELD_BASH_RANGE`, not its own) holding a creature or a pushable object.
+/// Shared by click validation, the context menu, and the action itself.
+pub fn can_shield_bash(world: &hecs::World, basher: Entity, tile: (i32, i32)) -> bool {
+    let Some(from) = queries::get_entity_position(world, basher) else {
+        return false;
+    };
+    let dist = (tile.0 - from.0).abs().max((tile.1 - from.1).abs());
+    (1..=SHIELD_BASH_RANGE).contains(&dist)
+        && crate::systems::push::has_bash_target(world, basher, tile)
+}
+
+/// Raw Shield Bash damage: `SHIELD_BASH_DAMAGE` plus half the strength bonus
+/// (the bonus being `(STR - 10) / 2`, as for melee).
+pub fn shield_bash_damage(world: &hecs::World, basher: Entity) -> i32 {
+    let strength = queries::effective_stats(world, basher).strength;
+    (SHIELD_BASH_DAMAGE + (strength - 10) / 2 / 2).max(1)
+}
+
+/// The bash lands on the tile `(tx, ty)`.
+///
+/// **A creature** takes [`shield_bash_damage`] through `apply_damage` (armor,
+/// Protected/Barkskin and a Bone Ward apply; no crit, no flanking bonus, no
+/// weapon on-hit affixes and no Thorns: it is a shove with a shield, not a
+/// weapon blow), is Stunned for `SHIELD_BASH_STUN`, and is knocked straight
+/// back up to `SHIELD_BASH_KNOCKBACK` tiles through `try_knockback` (so each
+/// tile it lands on acts on it: water, oil, fire, traps, braziers). If a wall
+/// or blocker cuts the shove short it takes `SHIELD_BASH_WALL_DAMAGE` more. A
+/// Bone Ward swallows the damage but not the shove or the stun.
+///
+/// **A pushable object** is shoved up to `SHIELD_BASH_KNOCKBACK` tiles
+/// (`systems::push` rules). If it can be damaged (an oil barrel) it takes the
+/// bash damage first, as any hit: a barrel already fusing detonates, one
+/// broken open by the bash starts its break fuse.
+pub fn apply_shield_bash(ctx: &mut EffectCtx, basher: Entity, tx: i32, ty: i32) -> ActionResult {
+    if !can_shield_bash(ctx.world, basher, (tx, ty)) {
+        return ActionResult::Invalid;
+    }
+    let Some(from) = queries::get_entity_position(ctx.world, basher) else {
+        return ActionResult::Invalid;
+    };
+    let dir = ((tx - from.0).signum(), (ty - from.1).signum());
+    let raw = shield_bash_damage(ctx.world, basher);
+    let _ = ctx.world.insert_one(
+        basher,
+        crate::components::LungeAnimation::new(tx as f32 + 0.5, ty as f32 + 0.5),
+    );
+    ctx.events.push(GameEvent::AbilityActivated { entity: basher, ability: AbilityType::ShieldBash });
+
+    // A pushable object (oil barrels are Attackable too, so this goes first).
+    if let Some(object) = crate::systems::push::pushable_at(ctx.world, tx, ty) {
+        if ctx.world.get::<&Health>(object).is_ok() {
+            bash_hit(ctx, basher, object, raw, crate::events::DamageKind::ShieldBash);
+        }
+        for _ in 0..SHIELD_BASH_KNOCKBACK {
+            if !ctx.world.contains(object)
+                || !crate::systems::push::shove_object(
+                    ctx.world, ctx.grid, ctx.spatial, basher, object, dir, ctx.events, ctx.rng,
+                )
+            {
+                break;
+            }
+        }
+        return ActionResult::Completed;
+    }
+
+    let Some(victim) = queries::get_attackable_at(ctx.world, tx, ty, Some(basher)) else {
+        return ActionResult::Invalid;
+    };
+    bash_hit(ctx, basher, victim, raw, crate::events::DamageKind::ShieldBash);
+    if !crate::systems::combat::is_dead(ctx.world, victim) {
+        effects::add_effect_to_entity(ctx.world, victim, EffectType::Stunned, SHIELD_BASH_STUN);
+    }
+    for _ in 0..SHIELD_BASH_KNOCKBACK {
+        if crate::systems::combat::is_dead(ctx.world, victim) {
+            break;
+        }
+        let moved = crate::systems::combat::try_knockback(
+            ctx.world, ctx.grid, ctx.spatial, basher, victim, ctx.events, ctx.rng,
+        );
+        if !moved {
+            bash_hit(ctx, basher, victim, SHIELD_BASH_WALL_DAMAGE, crate::events::DamageKind::WallSlam);
+            break;
+        }
+    }
+    ActionResult::Completed
+}
+
+/// One Shield Bash hit (the bash itself, or the slam into a wall): damage via
+/// `apply_damage`, life-drain interruption, threat, and an `AttackHit`.
+fn bash_hit(
+    ctx: &mut EffectCtx,
+    basher: Entity,
+    target: Entity,
+    raw: i32,
+    kind: crate::events::DamageKind,
+) {
+    let Some((x, y)) = queries::get_entity_position(ctx.world, target) else {
+        return;
+    };
+    let dealt = crate::systems::combat::apply_damage(ctx.world, target, raw, ctx.rng, ctx.events);
+    interrupt_life_drain_on_damage(ctx.world, target, ctx.events);
+    let threat = dealt as f32 * THREAT_PER_DAMAGE;
+    crate::systems::ai::generate_threat(ctx.world, target, basher, threat);
+    crate::systems::ai::generate_companion_threat(ctx.world, target, basher, threat);
+    ctx.events.push(GameEvent::AttackHit {
+        attacker: basher,
+        target,
+        target_pos: (x as f32 + 0.5, y as f32 + 0.5),
+        damage: dealt,
+        kind,
+        crit: false,
+        flanked: false,
+        killed: crate::systems::combat::is_dead(ctx.world, target),
+    });
+}
+
+// =============================================================================
+// GRAVE BOLT (Necromancer)
+// =============================================================================
+
+/// Whether `caster` can fire a Grave Bolt at `tile`: not its own tile, within
+/// `GRAVE_BOLT_RANGE`, and in line of sight (walls and vision-blocking
+/// entities such as closed doors block it, as for a bow shot).
+pub fn can_grave_bolt(
+    world: &hecs::World,
+    grid: &crate::grid::Grid,
+    caster: Entity,
+    tile: (i32, i32),
+) -> bool {
+    let Some(from) = queries::get_entity_position(world, caster) else {
+        return false;
+    };
+    let dist = (tile.0 - from.0).abs().max((tile.1 - from.1).abs());
+    if dist == 0 || dist > GRAVE_BOLT_RANGE {
+        return false;
+    }
+    let blockers: std::collections::HashSet<(i32, i32)> = world
+        .query::<(&Position, &crate::components::BlocksVision)>()
+        .iter()
+        .map(|(_, (p, _))| (p.x, p.y))
+        .collect();
+    crate::fov::Fov::calculate(
+        grid,
+        from.0,
+        from.1,
+        GRAVE_BOLT_RANGE,
+        Some(|x: i32, y: i32| blockers.contains(&(x, y))),
+    )
+    .contains(&tile)
+}
+
+/// Grave Bolt damage for `caster`: `GRAVE_BOLT_DAMAGE` x INT power, rounded,
+/// at least 1.
+pub fn grave_bolt_damage(world: &hecs::World, caster: Entity) -> i32 {
+    ((GRAVE_BOLT_DAMAGE as f32 * queries::int_power(world, caster)).round() as i32).max(1)
+}
+
+/// Loose a Grave Bolt at `(tx, ty)`: a bone shard (pale-green tinted bone
+/// sprite) flies through the projectile system along the same line an arrow
+/// would, stopping at walls and at `GRAVE_BOLT_RANGE`. It hits the first
+/// creature or oil barrel in its path for [`grave_bolt_damage`] (no crits,
+/// no weapon affixes; threat as for any projectile hit).
+pub fn apply_grave_bolt(
+    ctx: &mut EffectCtx,
+    caster: Entity,
+    tx: i32,
+    ty: i32,
+    current_time: f32,
+) -> ActionResult {
+    use crate::components::{Projectile, ProjectileKind, ProjectileMarker, Sprite, SpriteTint};
+    if !can_grave_bolt(ctx.world, ctx.grid, caster, (tx, ty)) {
+        return ActionResult::Blocked;
+    }
+    let Some(start) = queries::get_entity_position(ctx.world, caster) else {
+        return ActionResult::Invalid;
+    };
+    let mut path = super::calculate_arrow_path(start.0, start.1, tx, ty, GRAVE_BOLT_SPEED, ctx.grid);
+    path.retain(|&(x, y, _)| (x - start.0).abs().max((y - start.1).abs()) <= GRAVE_BOLT_RANGE);
+    if path.is_empty() {
+        return ActionResult::Blocked;
+    }
+    let (dx, dy) = ((tx - start.0) as f32, (ty - start.1) as f32);
+    let len = (dx * dx + dy * dy).sqrt().max(0.001);
+    let pos = Position::new(start.0, start.1);
+    let (r, g, b) = GRAVE_BOLT_TINT;
+    let bolt = ctx.world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(crate::tile::tile_ids::GRAVE_BOLT),
+        SpriteTint { r, g, b },
+        Projectile {
+            source: caster,
+            damage: grave_bolt_damage(ctx.world, caster),
+            path,
+            path_index: 0,
+            direction: (dx / len, dy / len),
+            spawn_time: current_time,
+            finished: None,
+            potion_type: None,
+            on_hit_effect: None,
+            hit_enemy: false,
+            incendiary: false,
+            kind: ProjectileKind::GraveBolt,
+        },
+        ProjectileMarker,
+    ));
+    ctx.events.push(GameEvent::AbilityActivated { entity: caster, ability: AbilityType::GraveBolt });
+    ctx.events.push(GameEvent::ProjectileSpawned { projectile: bolt, source: caster });
+    ActionResult::Completed
 }
 
 // =============================================================================
@@ -781,7 +1013,7 @@ mod tests {
         let kit = |c| -> Vec<AbilityType> {
             ClassKit::for_class(c).abilities.iter().map(|k| k.ability).collect()
         };
-        assert_eq!(kit(PlayerClass::Fighter), vec![AbilityType::Guard]);
+        assert_eq!(kit(PlayerClass::Fighter), vec![AbilityType::Guard, AbilityType::ShieldBash]);
         assert_eq!(
             kit(PlayerClass::Ranger),
             vec![
@@ -797,7 +1029,12 @@ mod tests {
         );
         assert_eq!(
             kit(PlayerClass::Necromancer),
-            vec![AbilityType::BoneWard, AbilityType::Sacrifice, AbilityType::CorpseExplosion]
+            vec![
+                AbilityType::BoneWard,
+                AbilityType::Sacrifice,
+                AbilityType::CorpseExplosion,
+                AbilityType::GraveBolt
+            ]
         );
         // All start ready, each with its own cooldown.
         for class in PlayerClass::ALL {
@@ -965,5 +1202,228 @@ mod tests {
         arena.wait_until(4.0);
         assert!(!arena.hit(rear, player) && !arena.hit(front, player));
         assert!(arena.hp(player) <= hp_before, "sanity");
+    }
+
+    // =========================================================================
+    // Shield Bash (Fighter)
+    // =========================================================================
+
+    /// A sturdy hunting rat at (x, y): enough HP that the bash never kills it.
+    fn sturdy_rat(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let rat = arena.rat(x, y, 1.0);
+        let mut h = arena.world.get::<&mut Health>(rat).unwrap();
+        h.current = 50;
+        h.max = 50;
+        drop(h);
+        rat
+    }
+
+    fn wall(arena: &mut Arena, x: i32, y: i32) {
+        arena.grid.tiles[(y as usize) * arena.grid.width + x as usize] =
+            Tile::new(TileType::Wall);
+    }
+
+    #[test]
+    fn shield_bash_knocks_a_creature_back_two_tiles_and_stuns_it() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let rat = sturdy_rat(&mut arena, 6, 5);
+        let dmg = shield_bash_damage(&arena.world, player);
+        assert_eq!(dmg, SHIELD_BASH_DAMAGE + (14 - 10) / 2 / 2, "STR 14: +1");
+        assert!(can_shield_bash(&arena.world, player, (6, 5)));
+        assert!(!can_shield_bash(&arena.world, player, (7, 5)), "adjacent only");
+
+        arena.player_does(ActionType::ShieldBash { target_x: 6, target_y: 5 });
+        assert_eq!(arena.pos(rat), (8, 5), "shoved back two tiles");
+        assert!(arena.stunned(rat));
+        assert_eq!(arena.hp(rat), 50 - dmg, "no wall, no extra damage");
+        assert!(arena.seen.iter().any(|e| matches!(e,
+            GameEvent::AttackHit { kind: DamageKind::ShieldBash, target, .. } if *target == rat)));
+        assert!(!arena.seen.iter().any(|e| matches!(e,
+            GameEvent::AttackHit { kind: DamageKind::WallSlam, .. })));
+        assert!(!arena.cache.is_blocked((6, 5)) && arena.cache.is_blocked((8, 5)));
+        assert!((arena.clock.time - SHIELD_BASH_DURATION).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shield_bash_into_a_wall_hurts_more() {
+        // One tile of room, then the wall: the second tile of the shove is cut.
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let rat = sturdy_rat(&mut arena, 6, 5);
+        wall(&mut arena, 8, 5);
+        let dmg = shield_bash_damage(&arena.world, player);
+        arena.player_does(ActionType::ShieldBash { target_x: 6, target_y: 5 });
+        assert_eq!(arena.pos(rat), (7, 5));
+        assert_eq!(arena.hp(rat), 50 - dmg - SHIELD_BASH_WALL_DAMAGE);
+        assert!(arena.stunned(rat));
+
+        let mut log = crate::ui::MessageLog::new(player);
+        for ev in &arena.seen {
+            log.record_event(ev, &arena.world);
+        }
+        assert!(log.lines().iter().any(|l| l.starts_with("You shield-bash the Rat for")), "{:?}", log.lines());
+        assert!(log.lines().iter().any(|l| l.starts_with("The Rat slams into the wall")), "{:?}", log.lines());
+
+        // Pinned against the wall already: no movement at all, still the slam.
+        let mut arena = Arena::new((5, 5));
+        let rat = sturdy_rat(&mut arena, 6, 5);
+        wall(&mut arena, 7, 5);
+        arena.player_does(ActionType::ShieldBash { target_x: 6, target_y: 5 });
+        assert_eq!(arena.pos(rat), (6, 5));
+        assert_eq!(arena.hp(rat), 50 - dmg - SHIELD_BASH_WALL_DAMAGE);
+    }
+
+    #[test]
+    fn shield_bash_shoves_a_barrel_two_tiles_and_hits_it() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let barrel = crate::spawning::spawn_oil_barrel(&mut arena.world, 6, 5);
+        arena.cache.rebuild_in_place(&arena.world);
+        let dmg = shield_bash_damage(&arena.world, player);
+        assert!(can_shield_bash(&arena.world, player, (6, 5)));
+
+        arena.player_does(ActionType::ShieldBash { target_x: 6, target_y: 5 });
+        assert_eq!(arena.pos(barrel), (8, 5), "shoved two tiles");
+        assert_eq!(arena.pos(player), (5, 5));
+        assert_eq!(arena.hp(barrel), OIL_BARREL_HEALTH - dmg, "the bash counts as a hit");
+        assert!(arena.world.get::<&crate::components::BarrelFuse>(barrel).is_err(), "not broken yet");
+        assert!(arena.cache.is_blocked((8, 5)) && !arena.cache.is_blocked((6, 5)));
+
+        // A fusing barrel is set off by the bash (it blows on the fire tick).
+        let mut arena = Arena::new((5, 5));
+        let barrel = crate::spawning::spawn_oil_barrel(&mut arena.world, 6, 5);
+        arena.cache.rebuild_in_place(&arena.world);
+        let _ = arena.world.insert_one(
+            barrel,
+            crate::components::BarrelFuse::new(
+                OIL_BARREL_BREAK_FUSE_SECONDS,
+                crate::components::FuseCause::Broken,
+            ),
+        );
+        arena.player_does(ActionType::ShieldBash { target_x: 6, target_y: 5 });
+        let fuse = *arena.world.get::<&crate::components::BarrelFuse>(barrel).expect("fuse");
+        assert!(fuse.remaining <= 0.0, "the hit detonates it");
+    }
+
+    #[test]
+    fn shield_bash_with_nothing_there_does_nothing() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        assert!(!can_shield_bash(&arena.world, player, (6, 5)));
+        let mut ctx = arena.ctx();
+        assert_eq!(apply_shield_bash(&mut ctx.effects(), player, 6, 5), ActionResult::Invalid);
+    }
+
+    // =========================================================================
+    // Grave Bolt (Necromancer)
+    // =========================================================================
+
+    /// An inert target: attackable, with health, never acts.
+    fn dummy(arena: &mut Arena, x: i32, y: i32, hp: i32) -> Entity {
+        let pos = Position::new(x, y);
+        let e = arena.world.spawn((
+            pos,
+            VisualPosition::from_position(&pos),
+            crate::components::Attackable,
+            crate::components::BlocksMovement,
+            Health::new(hp),
+            StatusEffects::new(),
+            crate::components::Name::new("Dummy"),
+        ));
+        arena.cache.rebuild_in_place(&arena.world);
+        e
+    }
+
+    fn set_int(arena: &mut Arena, int: i32) {
+        arena.world.get::<&mut crate::components::Stats>(arena.player).unwrap().intelligence = int;
+    }
+
+    #[test]
+    fn grave_bolt_damage_scales_with_int() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        for int in [6, 10, 14, 20] {
+            set_int(&mut arena, int);
+            let expected = ((GRAVE_BOLT_DAMAGE as f32 * int_power_mult(int)).round() as i32).max(1);
+            assert_eq!(grave_bolt_damage(&arena.world, player), expected, "INT {int}");
+        }
+        set_int(&mut arena, 10);
+        let low = grave_bolt_damage(&arena.world, player);
+        set_int(&mut arena, 20);
+        assert!(grave_bolt_damage(&arena.world, player) > low);
+
+        // And the bolt actually lands for that much: no crit, no variance.
+        let target = dummy(&mut arena, 9, 5, 100);
+        let dmg = grave_bolt_damage(&arena.world, player);
+        arena.player_does(ActionType::GraveBolt { target_x: 9, target_y: 5 });
+        arena.player_does(ActionType::Wait);
+        assert_eq!(arena.hp(target), 100 - dmg);
+        assert!(arena.seen.iter().any(|e| matches!(e,
+            GameEvent::ProjectileHit { kind: DamageKind::GraveBolt, target: Some(t), .. } if *t == target)));
+        // Nothing to pick up afterwards.
+        let (_, recover) = crate::systems::cleanup_finished_projectiles(&arena.world);
+        assert!(recover.is_empty());
+    }
+
+    #[test]
+    fn grave_bolt_needs_range_and_line_of_sight() {
+        let mut arena = Arena::new((2, 5));
+        let player = arena.player;
+        assert!(can_grave_bolt(&arena.world, &arena.grid, player, (2 + GRAVE_BOLT_RANGE, 5)));
+        assert!(!can_grave_bolt(&arena.world, &arena.grid, player, (2 + GRAVE_BOLT_RANGE + 1, 5)));
+        assert!(!can_grave_bolt(&arena.world, &arena.grid, player, (2, 5)), "not your own tile");
+
+        wall(&mut arena, 4, 5);
+        assert!(!can_grave_bolt(&arena.world, &arena.grid, player, (6, 5)), "a wall blocks it");
+        let mut ctx = arena.ctx();
+        assert_eq!(
+            apply_grave_bolt(&mut ctx.effects(), player, 6, 5, 0.0),
+            ActionResult::Blocked
+        );
+    }
+
+    #[test]
+    fn grave_bolt_hits_and_breaks_a_barrel() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let dmg = grave_bolt_damage(&arena.world, player);
+        let barrel = crate::spawning::spawn_oil_barrel(&mut arena.world, 8, 5);
+        arena.cache.rebuild_in_place(&arena.world);
+        arena.player_does(ActionType::GraveBolt { target_x: 8, target_y: 5 });
+        arena.player_does(ActionType::Wait);
+        assert_eq!(arena.hp(barrel), OIL_BARREL_HEALTH - dmg, "a bolt damages a barrel like an arrow");
+
+        // A second bolt into a barrel on its last legs cracks it open.
+        arena.world.get::<&mut Health>(barrel).unwrap().current = 1;
+        arena.player_does(ActionType::GraveBolt { target_x: 8, target_y: 5 });
+        arena.player_does(ActionType::Wait);
+        assert!(arena.hp(barrel) <= 0);
+        assert!(arena.seen.iter().any(|e| matches!(e, GameEvent::BarrelCracked { .. })));
+        assert!(arena.world.contains(barrel), "still standing, fuse hissing");
+    }
+
+    /// Kit abilities are cooldown-limited whatever route the intent takes.
+    #[test]
+    fn a_kit_ability_on_cooldown_is_refused_at_the_intent() {
+        use crate::systems::player_input::{intent_to_action, PlayerIntent};
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let _ = arena.world.insert_one(
+            player,
+            crate::components::ClassKit::for_class(crate::components::PlayerClass::Necromancer),
+        );
+        dummy(&mut arena, 8, 5, 10);
+        let intent = PlayerIntent::GraveBolt { target_x: 8, target_y: 5 };
+        assert!(intent_to_action(&arena.world, &arena.grid, player, &intent).is_some());
+        arena
+            .world
+            .get::<&mut crate::components::ClassKit>(player)
+            .unwrap()
+            .start_cooldown_for(AbilityType::GraveBolt);
+        assert!(intent_to_action(&arena.world, &arena.grid, player, &intent).is_none());
+        // Out of range / sight is refused too.
+        let far = PlayerIntent::GraveBolt { target_x: 15, target_y: 5 };
+        assert!(intent_to_action(&arena.world, &arena.grid, player, &far).is_none());
     }
 }

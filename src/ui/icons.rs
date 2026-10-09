@@ -69,6 +69,8 @@ pub struct UiIcons {
     pub thorns_uv: egui::Rect,
     pub entangle_uv: egui::Rect,
     pub call_rain_uv: egui::Rect,
+    pub shield_bash_uv: egui::Rect,
+    pub grave_bolt_uv: egui::Rect,
     // Status-effect icons (stock sprites, tinted via `effect_icon_tint`)
     pub oil_puddle_uv: egui::Rect,
     pub blood_uv: egui::Rect,
@@ -138,6 +140,8 @@ impl UiIcons {
             thorns_uv: tileset.get_egui_uv(tile_ids::THORNS.0, tile_ids::THORNS.1),
             entangle_uv: tileset.get_egui_uv(tile_ids::ENTANGLE.0, tile_ids::ENTANGLE.1),
             call_rain_uv: tileset.get_egui_uv(tile_ids::CALL_RAIN.0, tile_ids::CALL_RAIN.1),
+            shield_bash_uv: tileset.get_egui_uv(tile_ids::SHIELD_BASH.0, tile_ids::SHIELD_BASH.1),
+            grave_bolt_uv: tileset.get_egui_uv(tile_ids::GRAVE_BOLT.0, tile_ids::GRAVE_BOLT.1),
             oil_puddle_uv: tileset.get_egui_uv(tile_ids::OIL_PUDDLE.0, tile_ids::OIL_PUDDLE.1),
             blood_uv: tileset.get_egui_uv(tile_ids::BLOOD_1.0, tile_ids::BLOOD_1.1),
             zombie_uv: tileset.get_egui_uv(tile_ids::ZOMBIE.0, tile_ids::ZOMBIE.1),

@@ -241,6 +241,10 @@ pub mod tile_ids {
     pub const THORNS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 1, TILES_COLS)); // 20.b flax (tinted thorny green)
     pub const ENTANGLE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat (tinted vine green)
     pub const CALL_RAIN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 3, TILES_COLS)); // 23.d slime large (tinted rain blue: a puddle)
+    pub const SHIELD_BASH: (SpriteSheet, u32) = (SpriteSheet::Items, rc(12, 1, ITEMS_COLS)); // 12.b kite shield (tinted steel-orange)
+    /// Grave Bolt: the hotbar icon and the bone shard in flight (tinted pale
+    /// green via `GRAVE_BOLT_TINT`).
+    pub const GRAVE_BOLT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 2, TILES_COLS)); // 11.c bone 2 (tinted pale green)
 
     // ===== TILES SHEET - TRAPS =====
 

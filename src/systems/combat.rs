@@ -257,7 +257,8 @@ pub fn is_flanked(world: &World, attacker: Entity, target: Entity) -> bool {
 
 /// Push `target` one tile directly away from `attacker` if the destination
 /// tile is walkable and unoccupied. Updates the spatial cache and emits an
-/// `EntityMoved` event so downstream systems stay consistent.
+/// `EntityMoved` event so downstream systems stay consistent. Returns whether
+/// the target moved (false: a wall or blocker stopped it).
 pub(crate) fn try_knockback(
     world: &mut World,
     grid: &Grid,
@@ -266,33 +267,33 @@ pub(crate) fn try_knockback(
     target: Entity,
     events: &mut EventQueue,
     rng: &mut impl Rng,
-) {
+) -> bool {
     let Some((ax, ay)) = crate::queries::get_entity_position(world, attacker) else {
-        return;
+        return false;
     };
     let Some((tx, ty)) = crate::queries::get_entity_position(world, target) else {
-        return;
+        return false;
     };
 
     let dx = (tx - ax).signum();
     let dy = (ty - ay).signum();
     if dx == 0 && dy == 0 {
-        return;
+        return false;
     }
 
     let dest = (tx + dx, ty + dy);
     if !grid.is_walkable(dest.0, dest.1) {
-        return;
+        return false;
     }
     if crate::queries::is_position_blocked(spatial_cache, dest.0, dest.1, Some(target)) {
-        return;
+        return false;
     }
 
     if let Ok(mut pos) = world.get::<&mut Position>(target) {
         pos.x = dest.0;
         pos.y = dest.1;
     } else {
-        return;
+        return false;
     }
     // Snap the visual so the shove reads as an impact rather than a stroll.
     if let Ok(mut vis) = world.get::<&mut VisualPosition>(target) {
@@ -319,6 +320,7 @@ pub(crate) fn try_knockback(
     if let Some(brazier) = brazier_hit {
         crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
     }
+    true
 }
 
 /// Apply `raw` incoming damage to `target`, accounting for invulnerability,
@@ -412,6 +414,12 @@ fn apply_damage_inner(
     if let Ok(mut health) = world.get::<&mut Health>(target) {
         health.current -= dmg;
         hp_after = (health.current, health.max.max(1));
+    }
+
+    // An oil barrel cracks open at 0 HP (break fuse), and any hit on one
+    // whose fuse is already running sets it off. DoT ticks are not blows.
+    if !dot {
+        crate::systems::fire::on_barrel_damaged(world, target, events);
     }
 
     // Taking a hit cancels any alarm shout and wakes an unaware victim.
@@ -560,8 +568,10 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // Never convert the player into a corpse - the player keeps its Health
         // component (at <=0) so the engine can detect death and show the retry
         // screen. The dead player is handled separately by the game over flow.
-        // Oil barrels are also skipped: a destroyed barrel detonates in the
-        // fire system (systems::fire::tick_fire) instead of leaving bones.
+        // Oil barrels are also skipped: a broken barrel (0 HP) stays in the
+        // world, still attackable, while its break fuse runs, and then
+        // detonates in the fire system (systems::fire::tick_fire) instead of
+        // leaving bones.
         if world.entity(id).map(|e| e.has::<crate::components::OilBarrel>()).unwrap_or(false) {
             continue;
         }

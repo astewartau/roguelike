@@ -903,6 +903,42 @@ pub fn process_frame(
                             result.from_keyboard = false;
                             return result;
                         }
+                        AbilityType::ShieldBash => {
+                            // An adjacent creature or pushable object.
+                            if crate::systems::actions::can_shield_bash(
+                                world,
+                                player_entity,
+                                (target_x, target_y),
+                            ) {
+                                input.cancel_targeting();
+                                result.player_intent =
+                                    Some(PlayerIntent::ShieldBash { target_x, target_y });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::GraveBolt => {
+                            // In range and line of sight, on an explored tile
+                            // (like a bow shot).
+                            let explored = grid
+                                .get(target_x, target_y)
+                                .map(|tile| tile.explored)
+                                .unwrap_or(false);
+                            if explored
+                                && crate::systems::actions::can_grave_bolt(
+                                    world,
+                                    grid,
+                                    player_entity,
+                                    (target_x, target_y),
+                                )
+                            {
+                                input.cancel_targeting();
+                                result.player_intent =
+                                    Some(PlayerIntent::GraveBolt { target_x, target_y });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
                         AbilityType::CripplingShot => {
                             // Crippling shot requires line of sight and explored tile
                             use crate::components::BlocksVision;

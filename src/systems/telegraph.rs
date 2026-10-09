@@ -5,11 +5,12 @@
 //! fixed, readable fact while the player decides. This module turns the
 //! `ActionInProgress` of every hostile into a description of the tiles it
 //! threatens; the UI draws it and the animation system leans the attacker
-//! with it. Nothing here changes simulation state.
+//! with it. Fusing oil barrels are telegraphed the same way (their blast
+//! radius, filling as the fuse burns). Nothing here changes simulation state.
 
 use hecs::{Entity, World};
 
-use crate::components::{ActionType, Actor, ChaseAI, Position, TamedBy};
+use crate::components::{ActionType, Actor, BarrelFuse, ChaseAI, OilBarrel, Position, TamedBy};
 use crate::constants::*;
 
 /// Which tiles an in-progress attack will hit when it lands.
@@ -110,6 +111,35 @@ pub fn hostile_telegraphs(world: &World, now: f32) -> Vec<Telegraph> {
             remaining: (action.completion_time - now).max(0.0),
         });
     }
+    out
+}
+
+/// Every oil barrel with a running fuse, as an area telegraph over its blast
+/// radius (`OIL_BARREL_EXPLOSION_RADIUS`) that fills as the fuse burns down.
+/// The barrel stands in for the "attacker". Fuses tick in game time (see
+/// `systems::fire`), so this is frozen while the player decides.
+pub fn barrel_fuse_telegraphs(world: &World) -> Vec<Telegraph> {
+    world
+        .query::<(&Position, &BarrelFuse, &OilBarrel)>()
+        .iter()
+        .map(|(barrel, (pos, fuse, _))| Telegraph {
+            attacker: barrel,
+            attacker_pos: (pos.x, pos.y),
+            shape: TelegraphShape::Area {
+                center: (pos.x, pos.y),
+                radius: OIL_BARREL_EXPLOSION_RADIUS,
+            },
+            progress: fuse.progress(),
+            remaining: fuse.remaining.max(0.0),
+        })
+        .collect()
+}
+
+/// Everything about to hurt someone: hostile attacks in progress plus
+/// fusing oil barrels. This is what the UI draws.
+pub fn all_telegraphs(world: &World, now: f32) -> Vec<Telegraph> {
+    let mut out = hostile_telegraphs(world, now);
+    out.extend(barrel_fuse_telegraphs(world));
     out
 }
 

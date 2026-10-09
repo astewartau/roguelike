@@ -279,10 +279,28 @@ impl MessageLog {
                     );
                 }
             }
+            DamageKind::ShieldBash => {
+                if attacker == me {
+                    let obj = self.object(world, target);
+                    self.push(format!("You shield-bash {obj} for {damage}!"), log_colors::INFO);
+                } else {
+                    let subj = self.subject(world, attacker);
+                    self.push(format!("{subj} shield-bashes you for {damage}!"), log_colors::HARM);
+                }
+            }
+            DamageKind::WallSlam => {
+                if target == me {
+                    self.push(format!("You slam into the wall for {damage}!"), log_colors::HARM);
+                } else {
+                    let subj = self.subject(world, target);
+                    self.push(format!("{subj} slams into the wall for {damage}!"), log_colors::INFO);
+                }
+            }
             // Projectile kinds never arrive here, and DoT ticks arrive as
             // `DotDamage` (see `record_event`).
             DamageKind::Arrow
             | DamageKind::CripplingShot
+            | DamageKind::GraveBolt
             | DamageKind::Potion
             | DamageKind::Poison
             | DamageKind::Bleed => {}
@@ -305,6 +323,7 @@ impl MessageLog {
         let weapon = match kind {
             DamageKind::Arrow => "arrow",
             DamageKind::CripplingShot => "crippling shot",
+            DamageKind::GraveBolt => "grave bolt",
             _ => return,
         };
 
@@ -478,6 +497,26 @@ impl MessageLog {
             GameEvent::BarrelExploded { .. } => {
                 self.push("An oil barrel explodes!".to_string(), log_colors::HARM);
             }
+            GameEvent::BarrelCracked { .. } => {
+                self.push("The barrel cracks and starts to hiss!".to_string(), log_colors::HARM);
+            }
+            GameEvent::BarrelSoaked { defused, .. } => {
+                let line = if *defused {
+                    "Water douses the burning oil barrel!"
+                } else {
+                    "The oil barrel is soaked through."
+                };
+                self.push(line.to_string(), log_colors::INFO);
+            }
+            GameEvent::PushBlocked { pusher } if *pusher == me => {
+                self.push("It won't budge.".to_string(), log_colors::SYSTEM);
+            }
+            GameEvent::DoorCloseBlocked { closer, .. } if *closer == me => {
+                self.push(
+                    "Something is in the doorway; the door won't close.".to_string(),
+                    log_colors::SYSTEM,
+                );
+            }
             GameEvent::BrazierToppled { .. } => {
                 self.push(
                     "The brazier topples, spilling burning coals!".to_string(),
@@ -613,6 +652,7 @@ impl MessageLog {
                     AbilityType::SnareTrap => "You set a snare trap.",
                     AbilityType::Guard => "You raise your guard.",
                     AbilityType::Thorns => "Thorny vines wreathe your body.",
+                    AbilityType::GraveBolt => "You hurl a shard of grave-bone.",
                     AbilityType::LearnedBlink
                     | AbilityType::LearnedFireball
                     | AbilityType::LearnedFear

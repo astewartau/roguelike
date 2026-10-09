@@ -23,7 +23,10 @@ use super::{interrupt_life_drain_on_damage, ActionResult};
 /// Returns `Err(reason)` describing why the swing would miss.
 pub fn melee_reach_check(world: &World, attacker: Entity, target: Entity) -> Result<(), MissReason> {
     let attackable = world.get::<&Attackable>(target).is_ok();
-    let alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true);
+    // A broken oil barrel sits at 0 HP while its fuse hisses and is still
+    // there to be hit (the hit sets it off): it is not "gone".
+    let alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true)
+        || world.get::<&crate::components::OilBarrel>(target).is_ok();
     let (Some(a), Some(t)) = (
         queries::get_entity_position(world, attacker),
         queries::get_entity_position(world, target),

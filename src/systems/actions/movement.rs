@@ -179,7 +179,54 @@ pub fn apply_open_door(
     ActionResult::Completed
 }
 
-/// Apply close door effect
+/// Whether something is standing in `door`'s doorway that would stop it
+/// closing: a blocker, a creature (flyers included), or items/bones on the
+/// floor.
+pub fn doorway_obstructed(world: &World, door: Entity) -> bool {
+    let Some(at) = queries::get_entity_position(world, door) else {
+        return true;
+    };
+    world.iter().any(|e| {
+        let id = e.entity();
+        if id == door {
+            return false;
+        }
+        let here = e.get::<&Position>().map(|p| (p.x, p.y) == at).unwrap_or(false);
+        here && (e.has::<BlocksMovement>()
+            || e.has::<crate::components::Attackable>()
+            || e.has::<crate::components::Health>()
+            || e.has::<Container>()
+            || e.has::<crate::components::GroundItemPile>())
+    })
+}
+
+/// Whether `closer` can close `door` right now: it is an open door on a tile
+/// adjacent to the closer (8-way, not the closer's own tile) and nothing is
+/// in the doorway. For the context menu and the CloseDoor intent.
+#[allow(dead_code)] // Reserved for the upcoming right-click context menu
+pub fn can_close_door(world: &World, closer: Entity, door: Entity) -> bool {
+    let open = world.get::<&Door>(door).map(|d| d.is_open).unwrap_or(false);
+    let (Some(a), Some(b)) = (
+        queries::get_entity_position(world, closer),
+        queries::get_entity_position(world, door),
+    ) else {
+        return false;
+    };
+    let dist = (a.0 - b.0).abs().max((a.1 - b.1).abs());
+    open && dist == 1 && !doorway_obstructed(world, door)
+}
+
+/// The door entity on `(x, y)`, if any (open or closed).
+pub fn door_at(world: &World, x: i32, y: i32) -> Option<Entity> {
+    world
+        .query::<(&Position, &Door)>()
+        .iter()
+        .find(|(_, (p, _))| p.x == x && p.y == y)
+        .map(|(id, _)| id)
+}
+
+/// Apply close door effect. Refused (with a `DoorCloseBlocked` event) while
+/// anything is in the doorway: a creature, a blocker, or items on the floor.
 pub fn apply_close_door(
     world: &mut World,
     closer: Entity,
@@ -197,17 +244,14 @@ pub fn apply_close_door(
         return ActionResult::Blocked;
     }
 
-    // Check nobody is standing on the door tile
     let door_pos = match world.get::<&Position>(door) {
         Ok(p) => (p.x, p.y),
         Err(_) => return ActionResult::Blocked,
     };
 
-    // Query for any entity with Position + BlocksMovement at the door's position (exclude the door itself)
-    for (id, (pos, _)) in world.query::<(&Position, &BlocksMovement)>().iter() {
-        if id != door && pos.x == door_pos.0 && pos.y == door_pos.1 {
-            return ActionResult::Blocked;
-        }
+    if doorway_obstructed(world, door) {
+        events.push(GameEvent::DoorCloseBlocked { closer, position: door_pos });
+        return ActionResult::Blocked;
     }
 
     // Close the door
@@ -229,8 +273,15 @@ pub fn apply_close_door(
 }
 
 /// Apply interact in a direction (Ctrl+movement).
-/// Checks for doors (open/close), toppleable braziers, and containers at the
-/// target tile.
+///
+/// What the adjacent tile holds decides what happens, first match wins (the
+/// same order as [`resolve_interact_direction`], which picks the action):
+/// 1. a door: open it, or close it if open;
+/// 2. a lit brazier: topple it;
+/// 3. room furniture (fountain/altar/shrine): use it;
+/// 4. a pushable object: push it (resolved to `ActionType::Push` up front,
+///    so it never reaches here from the player; kept for AI/other callers);
+/// 5. a container with something in it: open/loot it.
 pub fn apply_interact_direction(
     ctx: &mut EffectCtx,
     entity: Entity,
@@ -290,6 +341,16 @@ pub fn apply_interact_direction(
         }
     }
 
+    // A pushable (normally resolved to ActionType::Push before it starts).
+    if crate::systems::push::pushable_at(world, target_x, target_y).is_some() {
+        return crate::systems::push::apply_push(
+            &mut EffectCtx { world, grid, spatial: _spatial_cache, events, rng },
+            entity,
+            dx,
+            dy,
+        );
+    }
+
     // Check for closed or non-empty container at target
     let container_id: Option<hecs::Entity> = world
         .query::<(&Position, &Container)>()
@@ -304,6 +365,51 @@ pub fn apply_interact_direction(
     }
 
     ActionResult::Blocked
+}
+
+/// Which action a Ctrl+direction interact toward `(dx, dy)` starts.
+///
+/// Priority (first match wins), and why:
+/// 1. **door** -> `OpenDoor` / `CloseDoor`: doors are what Ctrl+direction was
+///    made for (closing one is otherwise impossible: bumping only opens);
+/// 2. **lit brazier**, 3. **room furniture** -> `InteractDirection` (resolved
+///    at completion as before; neither is pushable);
+/// 4. **pushable** -> `Push`: Ctrl+direction is the only way to shove, while
+///    a storage barrel can still be opened by bumping into it, so the push
+///    wins over the barrel's container;
+/// 5. anything else (a chest, nothing) -> `InteractDirection`, which opens a
+///    container or reports nothing to do.
+pub fn resolve_interact_direction(
+    world: &World,
+    entity: Entity,
+    dx: i32,
+    dy: i32,
+) -> crate::components::ActionType {
+    use crate::components::ActionType;
+    let fallback = ActionType::InteractDirection { dx, dy };
+    let Some((x, y)) = queries::get_entity_position(world, entity) else {
+        return fallback;
+    };
+    let (tx, ty) = (x + dx, y + dy);
+    if let Some(door) = door_at(world, tx, ty) {
+        let open = world.get::<&Door>(door).map(|d| d.is_open).unwrap_or(false);
+        return if open { ActionType::CloseDoor { door } } else { ActionType::OpenDoor { door } };
+    }
+    let brazier = world
+        .query::<(&Position, &crate::components::Brazier)>()
+        .iter()
+        .any(|(_, (p, b))| b.lit && p.x == tx && p.y == ty);
+    let furniture = world
+        .query::<(&Position, &crate::components::Furniture)>()
+        .iter()
+        .any(|(_, (p, _))| p.x == tx && p.y == ty);
+    if brazier || furniture {
+        return fallback;
+    }
+    if crate::systems::push::pushable_at(world, tx, ty).is_some() {
+        return ActionType::Push { dx, dy };
+    }
+    fallback
 }
 
 /// Apply use stairs effect - moves entity to stairs and emits floor transition event
@@ -729,5 +835,101 @@ mod tests {
         let rat = arena.rat(6, 6, 1.0);
         assert_eq!(step(&mut arena, rat, 0, -1), ActionResult::Completed);
         assert!(crate::queries::has_status_effect(&arena.world, rat, EffectType::Wet));
+    }
+
+    // =========================================================================
+    // Closing doors, and what Ctrl+direction resolves to.
+    // =========================================================================
+
+    fn open_door(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let mut door = Door::new();
+        door.is_open = true;
+        let pos = Position::new(x, y);
+        let id = arena.world.spawn((pos, VisualPosition::from_position(&pos), door));
+        arena.cache.rebuild_in_place(&arena.world);
+        id
+    }
+
+    #[test]
+    fn close_door_closes_an_open_door() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let door = open_door(&mut arena, 6, 5);
+        assert!(can_close_door(&arena.world, player, door));
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, 1, 0),
+            ActionType::CloseDoor { door: d } if d == door
+        ));
+
+        arena.player_does(ActionType::CloseDoor { door });
+        assert!(!arena.world.get::<&Door>(door).unwrap().is_open);
+        assert!(arena.world.get::<&BlocksMovement>(door).is_ok());
+        assert!(arena.seen.iter().any(|e| matches!(e, GameEvent::DoorClosed { .. })));
+        // Closed now: Ctrl+direction opens it again.
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, 1, 0),
+            ActionType::OpenDoor { .. }
+        ));
+    }
+
+    #[test]
+    fn close_door_refuses_when_the_doorway_is_occupied() {
+        // A creature in the doorway.
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let door = open_door(&mut arena, 6, 5);
+        arena.rat(6, 5, 1.0);
+        assert!(!can_close_door(&arena.world, player, door));
+        arena.player_does(ActionType::CloseDoor { door });
+        assert!(arena.world.get::<&Door>(door).unwrap().is_open);
+        assert!(arena.seen.iter().any(|e| matches!(e, GameEvent::DoorCloseBlocked { .. })));
+
+        // Items on the floor of the doorway.
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let door = open_door(&mut arena, 6, 5);
+        crate::systems::inventory::spawn_ground_item(
+            &mut arena.world,
+            6,
+            5,
+            crate::components::ItemInstance::plain(crate::components::ItemType::Arrow),
+        );
+        assert!(!can_close_door(&arena.world, player, door));
+        arena.player_does(ActionType::CloseDoor { door });
+        assert!(arena.world.get::<&Door>(door).unwrap().is_open);
+
+        // Not adjacent: the helper says no.
+        let mut arena = Arena::new((2, 5));
+        let door = open_door(&mut arena, 6, 5);
+        assert!(!can_close_door(&arena.world, arena.player, door));
+    }
+
+    /// Ctrl+direction priority: a door beats everything; a pushable beats the
+    /// storage barrel's own container (bumping still opens that).
+    #[test]
+    fn interact_direction_prefers_doors_then_pushes_over_containers() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let pos = Position::new(6, 5);
+        arena.world.spawn((
+            pos,
+            Container::barrel(vec![]),
+            BlocksMovement,
+            crate::components::Pushable,
+        ));
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, 1, 0),
+            ActionType::Push { dx: 1, dy: 0 }
+        ));
+        // Bumping into it still opens it.
+        assert!(matches!(
+            crate::systems::action_dispatch::determine_action_type(&arena.world, &arena.grid, player, 1, 0),
+            ActionType::OpenChest { .. }
+        ));
+        // Nothing there: plain interact.
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, -1, 0),
+            ActionType::InteractDirection { dx: -1, dy: 0 }
+        ));
     }
 }

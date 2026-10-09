@@ -153,6 +153,19 @@ pub const OIL_PUDDLE_TINT: (f32, f32, f32) = (0.35, 0.25, 0.2);
 
 /// Seconds between an oil barrel catching fire and its explosion.
 pub const OIL_BARREL_FUSE_SECONDS: f32 = 3.0;
+/// Seconds between an oil barrel being broken open (reduced to 0 HP) and its
+/// explosion. The cracked barrel hisses and its blast radius is telegraphed
+/// for this long; any further damage while the fuse runs detonates it at once.
+/// Up gives more time to back off (or to line up a second hit); down makes a
+/// broken barrel nearly as instant as the old behaviour. Keep it shorter than
+/// [`OIL_BARREL_FUSE_SECONDS`]: a split barrel is the more urgent hazard.
+pub const OIL_BARREL_BREAK_FUSE_SECONDS: f32 = 2.0;
+/// How long a water splash (thrown flask, Call Rain) keeps an oil barrel
+/// soaked, in game seconds. A soaked barrel is Wet, so fire cannot take hold
+/// of it (it can still be broken by damage, and a broken one still blows). A
+/// burning barrel that is soaked has its fire fuse put out. Up makes water a
+/// longer-lasting way to defuse a room; down makes it a brief window.
+pub const BARREL_SOAK_DURATION: f32 = 20.0;
 /// Raw damage dealt by an oil barrel explosion (through `apply_damage`).
 pub const OIL_BARREL_EXPLOSION_DAMAGE: i32 = 15;
 /// Chebyshev radius of the explosion's damage.

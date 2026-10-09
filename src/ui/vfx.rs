@@ -210,15 +210,16 @@ pub struct AttackTelegraphData {
     pub is_area: bool,
 }
 
-/// Visible hostile attacks in progress at game time `game_time`.
+/// Visible hostile attacks in progress at game time `game_time`, plus fusing
+/// oil barrels (drawn like the boss slam: an area filling toward detonation).
 ///
 /// Only attacks whose attacker stands on a visible tile are shown, and only
 /// the visible tiles of each; a swing in the dark stays a surprise.
 pub fn get_attack_telegraph_data(world: &World, grid: &Grid, game_time: f32) -> Vec<AttackTelegraphData> {
-    use crate::systems::telegraph::{hostile_telegraphs, TelegraphShape};
+    use crate::systems::telegraph::{all_telegraphs, TelegraphShape};
 
     let visible = |(x, y): (i32, i32)| grid.get(x, y).map(|t| t.visible).unwrap_or(false);
-    hostile_telegraphs(world, game_time)
+    all_telegraphs(world, game_time)
         .into_iter()
         .filter(|t| visible(t.attacker_pos))
         .filter_map(|t| {

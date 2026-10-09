@@ -188,6 +188,10 @@ pub fn ability_icon(icons: &UiIcons, ability: AbilityType) -> (egui::TextureId, 
         AbilityType::Thorns => (icons.texture_for_sheet(tile_ids::THORNS.0), icons.thorns_uv),
         AbilityType::Entangle => (icons.texture_for_sheet(tile_ids::ENTANGLE.0), icons.entangle_uv),
         AbilityType::CallRain => (icons.texture_for_sheet(tile_ids::CALL_RAIN.0), icons.call_rain_uv),
+        AbilityType::ShieldBash => {
+            (icons.texture_for_sheet(tile_ids::SHIELD_BASH.0), icons.shield_bash_uv)
+        }
+        AbilityType::GraveBolt => (icons.texture_for_sheet(tile_ids::GRAVE_BOLT.0), icons.grave_bolt_uv),
     }
 }
 
@@ -203,6 +207,10 @@ pub fn ability_icon_tint(ability: AbilityType) -> egui::Color32 {
         AbilityType::Thorns => egui::Color32::from_rgb(150, 230, 100),
         AbilityType::Entangle => egui::Color32::from_rgb(110, 220, 90),
         AbilityType::CallRain => egui::Color32::from_rgb(110, 160, 255),
+        // Warm steel, so the bash shield doesn't read as Guard's buckler.
+        AbilityType::ShieldBash => egui::Color32::from_rgb(255, 200, 150),
+        // Same pale bone-green as the bolt in flight (GRAVE_BOLT_TINT).
+        AbilityType::GraveBolt => egui::Color32::from_rgb(179, 255, 166),
         _ => egui::Color32::WHITE,
     }
 }
