@@ -197,3 +197,13 @@ pub const DAMAGE_NUMBER_CRIT_SCALE: f32 = 1.55;
 /// Font-size multiplier for damage the *player* takes, so a hit landing on you
 /// never reads the same as a hit you landed.
 pub const DAMAGE_NUMBER_TAKEN_SCALE: f32 = 1.25;
+
+/// Font-size multiplier for the floating "miss" text shown when a melee
+/// attack lands on an empty tile because its target stepped out of reach.
+/// Below 1.0 so a miss reads as quieter than any hit.
+pub const MISS_TEXT_SCALE: f32 = 0.85;
+/// How far the attacker leans toward its target while winding up a melee
+/// attack, in tiles, at the moment the attack lands (it grows linearly with
+/// the wind-up's progress). A cue that the swing is coming, not the swing
+/// itself, so keep it well under `LUNGE_DISTANCE`; 0.0 disables the lean.
+pub const ATTACK_TELEGRAPH_LEAN: f32 = 0.15;

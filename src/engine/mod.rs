@@ -607,7 +607,7 @@ impl GameEngine {
         // Visual lerping
         {
             profile_scope!("visual_lerp");
-            systems::visual_lerp(&mut state.world, dt);
+            systems::visual_lerp(&mut state.world, dt, state.game_clock.time);
             systems::lerp_projectiles_realtime(
                 &mut state.world,
                 dt,
@@ -1731,6 +1731,7 @@ impl GameEngine {
             if result.turn_result != simulation::TurnResult::Started
                 || result.enemy_spotted_player
                 || result.player_took_damage
+                || result.player_was_targeted
                 || hp_dropped
             {
                 mode.stop(self, mode.interrupt_message());
@@ -2333,8 +2334,11 @@ mod tests {
     /// stayed reproducible, they just took a different path.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        // Updated for the energy removal; see the note on the test above.
-        const EXPECTED: &str = "t=354.1439 floor=0 kills=14 hp=-9/50 pos=9,10 hunger=83.3344 fatigue=39.0035 n=92 roster=571df8a0";
+        // Re-recorded for melee reach-at-completion (a swing at a target that
+        // stepped away now misses) and for dead actors no longer completing
+        // queued actions. Either change alone moves this digest a long way
+        // (the swarm amplifies any divergence); the run stays reproducible.
+        const EXPECTED: &str = "t=350.1600 floor=0 kills=7 hp=-1/50 pos=8,8 hunger=83.3344 fatigue=40.4448 n=97 roster=020d0cf1";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2401,7 +2405,9 @@ mod tests {
         // Fatigue is now the integral of effort rather than a second clock, so
         // it is much higher than the original 7.5, and the run is shorter
         // because no actor ever stalls waiting to afford its next move.
-        const EXPECTED: &str = "t=262.4901 floor=1 kills=16 hp=99733/100000 pos=10,13 hunger=87.5008 fatigue=30.0590 n=95 roster=86f0c6b7";
+        // Re-recorded again for melee reach-at-completion (swings at targets
+        // that stepped out of reach now miss).
+        const EXPECTED: &str = "t=261.2761 floor=1 kills=17 hp=99768/100000 pos=10,13 hunger=87.5008 fatigue=30.6659 n=95 roster=61352377";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

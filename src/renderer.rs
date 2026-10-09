@@ -1231,6 +1231,7 @@ impl Renderer {
                     crate::vfx::VfxType::Slash { angle } => *angle,
                     crate::vfx::VfxType::DamageNumber { .. } => continue, // Rendered via egui
                     crate::vfx::VfxType::HealNumber { .. } => continue, // Rendered via egui
+                    crate::vfx::VfxType::MissText { .. } => continue, // Rendered via egui
                     crate::vfx::VfxType::Fire { .. } => continue, // Rendered separately
                     crate::vfx::VfxType::Alert => continue, // Rendered via egui
                     crate::vfx::VfxType::Explosion { .. } => continue, // Rendered via egui

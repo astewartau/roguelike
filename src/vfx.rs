@@ -94,6 +94,9 @@ pub enum VfxType {
     },
     /// Floating heal number (green, positive)
     HealNumber { amount: i32 },
+    /// Floating "miss" over a target that stepped out of a swing's reach.
+    /// Drawn in the damage-number style; `jitter` as for `DamageNumber`.
+    MissText { jitter: f32 },
     /// Fire particle effect (looping)
     #[allow(dead_code)] // Reserved for torch/fire terrain
     Fire { seed: f32 },
@@ -118,6 +121,7 @@ impl VfxType {
             VfxType::Slash { .. } => SLASH_VFX_DURATION,
             VfxType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
             VfxType::HealNumber { .. } => DAMAGE_NUMBER_DURATION, // Same duration as damage
+            VfxType::MissText { .. } => DAMAGE_NUMBER_DURATION,
             VfxType::Fire { .. } => f32::INFINITY, // Fire loops forever
             VfxType::Alert => ALERT_DURATION,
             VfxType::Explosion { .. } => EXPLOSION_DURATION,
@@ -245,6 +249,13 @@ impl VfxManager {
         self.spawn(x, y, VfxType::DamageNumber { amount, tier, jitter });
     }
 
+    /// Spawn a floating "miss" (a melee swing that found nobody in reach).
+    /// Jitter comes from the thread RNG for the same reason as damage numbers.
+    pub fn spawn_miss_text(&mut self, x: f32, y: f32) {
+        let jitter = (rand::random::<f32>() * 2.0 - 1.0) * DAMAGE_NUMBER_JITTER;
+        self.spawn(x, y, VfxType::MissText { jitter });
+    }
+
     /// Spawn an alert indicator "!" above an entity
     pub fn spawn_alert(&mut self, x: f32, y: f32) {
         self.spawn(x, y, VfxType::Alert);
@@ -344,6 +355,17 @@ impl VfxManager {
                         damage_tier(Some(*target), player, *damage, *crit),
                     );
                 }
+            }
+            GameEvent::AttackMissed {
+                target_pos: Some(target_pos),
+                reason: crate::events::MissReason::OutOfReach,
+                ..
+            } if grid
+                .get(target_pos.0 as i32, target_pos.1 as i32)
+                .map(|t| t.visible)
+                .unwrap_or(false) =>
+            {
+                self.spawn_miss_text(target_pos.0, target_pos.1);
             }
             GameEvent::ProjectileHit { position, damage, target, .. }
                 // Only show damage number if we hit an enemy (not a wall) AND position is visible

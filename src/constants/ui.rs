@@ -177,3 +177,38 @@ pub const LOOT_MARKER_BOB_AMPLITUDE: f32 = 1.5;
 pub const LOOT_MARKER_BOB_SPEED: f32 = 2.5;
 /// Opacity of the marker, 0-255. Down makes it fade into the floor.
 pub const LOOT_MARKER_ALPHA: u8 = 200;
+
+// =============================================================================
+// ATTACK TELEGRAPHS
+// =============================================================================
+// The red marker drawn on a tile a hostile is about to hit: a melee swing's
+// target, or every tile under a boss ground slam. Progress is measured in game
+// time, so the marker is frozen while the player decides. See
+// `ui::vfx::draw_attack_telegraphs`.
+
+/// Base colour of a telegraph, RGB. Red because it is a threat to the
+/// player; keep it clearly apart from the gold loot marker and the green
+/// heal numbers.
+pub const ATTACK_TELEGRAPH_COLOR: (u8, u8, u8) = (225, 40, 30);
+/// Fill opacity (0-255) of a telegraph whose attack has only just started.
+/// Up makes fresh swings louder; at 0 a new swing shows only its outline.
+pub const ATTACK_TELEGRAPH_ALPHA_MIN: u8 = 25;
+/// Fill opacity (0-255) of a telegraph whose attack is about to land. Past
+/// about 180 it hides the sprite standing on the tile.
+pub const ATTACK_TELEGRAPH_ALPHA_MAX: u8 = 140;
+/// Opacity (0-255) of the tile outline, which is drawn at full size from the
+/// first moment so the threatened tile is legible before the fill grows.
+pub const ATTACK_TELEGRAPH_OUTLINE_ALPHA: u8 = 170;
+/// Width of the tile outline, in points.
+pub const ATTACK_TELEGRAPH_OUTLINE_WIDTH: f32 = 1.5;
+/// Fraction of the tile the growing fill starts at. The fill scales from this
+/// up to the whole tile as the attack progresses; 0.0 grows it from a point.
+pub const ATTACK_TELEGRAPH_MIN_FILL: f32 = 0.25;
+/// Multiplier on the fill opacity for the ground-slam area, which covers up
+/// to 25 tiles at once; under 1.0 so the area does not drown the room.
+pub const SLAM_TELEGRAPH_ALPHA_SCALE: f32 = 0.75;
+/// Font size of the "0.3s" time-until-it-lands label, in points.
+pub const ATTACK_TELEGRAPH_LABEL_FONT_SIZE: f32 = 12.0;
+/// Where the label sits, in tiles above the threatened tile's bottom edge.
+/// 0.5 centres it on the tile; lower tucks it under the sprite's feet.
+pub const ATTACK_TELEGRAPH_LABEL_HEIGHT: f32 = 0.15;

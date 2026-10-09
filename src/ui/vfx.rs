@@ -9,7 +9,7 @@ use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, It
 use crate::constants::{
     DAMAGE_NUMBER_BIG_SCALE, DAMAGE_NUMBER_CRIT_SCALE, DAMAGE_NUMBER_FONT_SIZE,
     DAMAGE_NUMBER_OUTLINE_OFFSET, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
-    DAMAGE_NUMBER_TAKEN_SCALE, POTION_SPLASH_RADIUS,
+    DAMAGE_NUMBER_TAKEN_SCALE, MISS_TEXT_SCALE, POTION_SPLASH_RADIUS,
 };
 use crate::ease;
 use crate::grid::Grid;
@@ -178,6 +178,147 @@ pub fn draw_loot_indicators(ctx: &egui::Context, camera: &Camera, tiles: &[(i32,
     ctx.request_repaint();
 }
 
+/// One visible hostile attack in progress, ready to draw.
+pub struct AttackTelegraphData {
+    /// Visible tiles the attack will hit.
+    pub tiles: Vec<(i32, i32)>,
+    /// Tile the "time until it lands" label goes on.
+    pub label_tile: (i32, i32),
+    /// 0.0 just started, 1.0 about to land (game time, so frozen while the
+    /// player decides).
+    pub progress: f32,
+    /// Game seconds until it lands.
+    pub remaining: f32,
+    /// An area attack (ground slam) rather than a single melee swing.
+    pub is_area: bool,
+}
+
+/// Visible hostile attacks in progress at game time `game_time`.
+///
+/// Only attacks whose attacker stands on a visible tile are shown, and only
+/// the visible tiles of each; a swing in the dark stays a surprise.
+pub fn get_attack_telegraph_data(world: &World, grid: &Grid, game_time: f32) -> Vec<AttackTelegraphData> {
+    use crate::systems::telegraph::{hostile_telegraphs, TelegraphShape};
+
+    let visible = |(x, y): (i32, i32)| grid.get(x, y).map(|t| t.visible).unwrap_or(false);
+    hostile_telegraphs(world, game_time)
+        .into_iter()
+        .filter(|t| visible(t.attacker_pos))
+        .filter_map(|t| {
+            let tiles: Vec<(i32, i32)> = t.shape.tiles().into_iter().filter(|&p| visible(p)).collect();
+            if tiles.is_empty() {
+                return None;
+            }
+            let (label_tile, is_area) = match t.shape {
+                TelegraphShape::Tile(p) => (p, false),
+                TelegraphShape::Area { center, .. } => (center, true),
+            };
+            Some(AttackTelegraphData {
+                tiles,
+                label_tile,
+                progress: t.progress,
+                remaining: t.remaining,
+                is_area,
+            })
+        })
+        .collect()
+}
+
+/// Draw a red marker on every tile a visible hostile is about to hit.
+///
+/// The outline is there from the first moment; inside it a fill grows from
+/// `ATTACK_TELEGRAPH_MIN_FILL` of the tile to all of it and darkens as the
+/// attack nears landing. With `show_timer` (the player is choosing an action)
+/// each threatened tile also gets a "0.3s" label: the soonest attack landing
+/// there, in game seconds.
+pub fn draw_attack_telegraphs(
+    ctx: &egui::Context,
+    camera: &Camera,
+    telegraphs: &[AttackTelegraphData],
+    show_timer: bool,
+) {
+    use crate::constants::{
+        ATTACK_TELEGRAPH_ALPHA_MAX, ATTACK_TELEGRAPH_ALPHA_MIN, ATTACK_TELEGRAPH_COLOR,
+        ATTACK_TELEGRAPH_LABEL_FONT_SIZE, ATTACK_TELEGRAPH_LABEL_HEIGHT,
+        ATTACK_TELEGRAPH_MIN_FILL, ATTACK_TELEGRAPH_OUTLINE_ALPHA,
+        ATTACK_TELEGRAPH_OUTLINE_WIDTH, SLAM_TELEGRAPH_ALPHA_SCALE,
+    };
+
+    if telegraphs.is_empty() {
+        return;
+    }
+
+    // Same layer as the health bars and loot markers: over the world, under
+    // every panel.
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("attack_telegraphs"),
+    ));
+    let ppp = ctx.pixels_per_point();
+    let tile_size = camera.zoom / ppp;
+    let (r, g, b) = ATTACK_TELEGRAPH_COLOR;
+
+    // Tile rect in egui points: world (x, y) is the tile's bottom-left corner.
+    let tile_rect = |x: i32, y: i32| {
+        let (sx, sy) = camera.world_to_screen(x as f32, y as f32);
+        egui::Rect::from_min_size(
+            egui::pos2(sx / ppp, sy / ppp - tile_size),
+            egui::vec2(tile_size, tile_size),
+        )
+    };
+
+    // Soonest landing per tile, for the labels.
+    let mut soonest: Vec<((i32, i32), f32)> = Vec::new();
+
+    for t in telegraphs {
+        let p = t.progress.clamp(0.0, 1.0);
+        let scale = if t.is_area { SLAM_TELEGRAPH_ALPHA_SCALE } else { 1.0 };
+        let alpha_min = ATTACK_TELEGRAPH_ALPHA_MIN as f32;
+        let alpha_max = ATTACK_TELEGRAPH_ALPHA_MAX as f32;
+        let fill_alpha = ((alpha_min + (alpha_max - alpha_min) * p) * scale) as u8;
+        let outline_alpha = (ATTACK_TELEGRAPH_OUTLINE_ALPHA as f32 * scale) as u8;
+        let fill = egui::Color32::from_rgba_unmultiplied(r, g, b, fill_alpha);
+        let outline = egui::Stroke::new(
+            ATTACK_TELEGRAPH_OUTLINE_WIDTH,
+            egui::Color32::from_rgba_unmultiplied(r, g, b, outline_alpha),
+        );
+        let fill_frac = ATTACK_TELEGRAPH_MIN_FILL + (1.0 - ATTACK_TELEGRAPH_MIN_FILL) * p;
+
+        for &(x, y) in &t.tiles {
+            let rect = tile_rect(x, y);
+            painter.rect_stroke(rect.shrink(ATTACK_TELEGRAPH_OUTLINE_WIDTH / 2.0), 0.0, outline);
+            painter.rect_filled(
+                egui::Rect::from_center_size(rect.center(), rect.size() * fill_frac),
+                0.0,
+                fill,
+            );
+        }
+
+        match soonest.iter_mut().find(|(tile, _)| *tile == t.label_tile) {
+            Some((_, rem)) => *rem = rem.min(t.remaining),
+            None => soonest.push((t.label_tile, t.remaining)),
+        }
+    }
+
+    if !show_timer {
+        return;
+    }
+    let font = egui::FontId::monospace(ATTACK_TELEGRAPH_LABEL_FONT_SIZE);
+    let color = egui::Color32::from_rgb(r, g, b);
+    for ((x, y), remaining) in soonest {
+        let (sx, sy) =
+            camera.world_to_screen(x as f32 + 0.5, y as f32 + ATTACK_TELEGRAPH_LABEL_HEIGHT);
+        outlined_number(
+            &painter,
+            egui::pos2(sx / ppp, sy / ppp),
+            format!("{remaining:.1}s"),
+            font.clone(),
+            color,
+            style::colors::NUMBER_OUTLINE,
+        );
+    }
+}
+
 /// Extract health data for visible damaged enemies
 pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<EnemyHealthData> {
     world
@@ -253,9 +394,13 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
     for effect in effects {
         // Handle both damage and heal numbers. Heals are their own thing and
         // do not tier: there is no such thing as a critical heal here.
-        let (amount, tier, jitter) = match &effect.effect_type {
-            VfxType::DamageNumber { amount, tier, jitter } => (*amount, Some(*tier), *jitter),
-            VfxType::HealNumber { amount } => (*amount, None, 0.0),
+        // A miss is not a number at all, but it floats the same way.
+        let (amount, tier, jitter, is_miss) = match &effect.effect_type {
+            VfxType::DamageNumber { amount, tier, jitter } => {
+                (*amount, Some(*tier), *jitter, false)
+            }
+            VfxType::HealNumber { amount } => (*amount, None, 0.0, false),
+            VfxType::MissText { jitter } => (0, None, *jitter, true),
             _ => continue,
         };
 
@@ -283,6 +428,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
 
         let (base_color, tier_scale) = match tier {
             Some(tier) => damage_style(tier),
+            None if is_miss => (style::colors::MISS_TEXT, MISS_TEXT_SCALE),
             None => (style::colors::HEAL_NUMBER, 1.0),
         };
         let color = base_color.gamma_multiply(fade);
@@ -292,6 +438,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         let text = match tier {
             Some(DamageTier::Crit) => format!("{}!", amount),
             Some(_) => format!("{}", amount),
+            None if is_miss => "miss".to_string(),
             None => format!("+{}", amount),
         };
 

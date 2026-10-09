@@ -134,6 +134,9 @@ pub mod colors {
     /// on you is never confused with a hit you landed.
     pub const DAMAGE_TAKEN: Color32 = Color32::from_rgb(255, 64, 56);
     pub const HEAL_NUMBER: Color32 = Color32::from_rgb(105, 255, 105);
+    /// Floating "miss" when a swing finds its target out of reach. A cool
+    /// grey-blue so it reads as "nothing happened" next to the warm hit colours.
+    pub const MISS_TEXT: Color32 = Color32::from_rgb(175, 190, 215);
     /// Outline behind a floating number, so it survives a light floor.
     pub const NUMBER_OUTLINE: Color32 = Color32::BLACK;
 

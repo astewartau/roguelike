@@ -21,3 +21,11 @@ pub const ON_HIT_SLOW_DURATION: f32 = 5.0;
 pub const ON_HIT_FEAR_DURATION: f32 = 4.0;
 /// Health fraction below which LowHealthDamage affixes activate
 pub const LOW_HEALTH_DAMAGE_THRESHOLD: f32 = 0.3;
+
+/// How far a locked-target melee attack (`ActionType::Attack`) reaches, as a
+/// Chebyshev distance in tiles, checked when the swing *lands* rather than
+/// when it starts. 1 means the eight surrounding tiles, diagonals included. A
+/// target that has stepped further away than this by the time the attack
+/// completes is missed. Raising it would let every melee attacker hit across
+/// a gap; nothing in the game has a longer weapon today.
+pub const MELEE_REACH: i32 = 1;

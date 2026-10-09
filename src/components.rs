@@ -1176,6 +1176,10 @@ pub enum ActionType {
     StartRaiseDead { target: Entity },
     /// Recovery after shooting (auto-queued, allows arrow to fly)
     Recover,
+    /// Boss wind-up for Gnash's ground slam. The shockwave (damage + stun
+    /// within `BOSS_SLAM_RADIUS` of the boss) is applied when this completes,
+    /// so the wind-up is the window to get clear.
+    BossGroundSlam,
 }
 
 impl ActionType {
@@ -1215,6 +1219,7 @@ impl ActionType {
             ActionType::Attack { .. } => PerSecond(EXERTION_HEAVY),
             ActionType::AttackDirection { .. } => PerSecond(EXERTION_HEAVY),
             ActionType::ShootBow { .. } => PerSecond(EXERTION_HEAVY),
+            ActionType::BossGroundSlam => PerSecond(EXERTION_HEAVY),
 
             // --- Flat: deliberate abilities, each with its own price ---
             ActionType::Cleave => Flat(CLEAVE_ENERGY_COST),

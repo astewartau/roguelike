@@ -32,6 +32,16 @@ pub enum DamageKind {
     Slam,
 }
 
+/// Why a locked-target melee attack (`ActionType::Attack`) failed to connect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissReason {
+    /// The target is still there but stepped out of reach (`MELEE_REACH`)
+    /// before the swing landed.
+    OutOfReach,
+    /// The target died, despawned or stopped being attackable mid-swing.
+    TargetGone,
+}
+
 /// Game events that systems can emit and subscribe to.
 /// Many event fields exist for future handlers (VFX, audio, logging).
 #[derive(Debug, Clone)]
@@ -53,6 +63,17 @@ pub enum GameEvent {
         kind: DamageKind,
         /// Whether this was a critical hit.
         crit: bool,
+    },
+    /// A melee attack locked onto `target` landed on nothing: by the time
+    /// the swing completed the target had moved out of reach or was gone. No
+    /// damage was dealt.
+    AttackMissed {
+        attacker: Entity,
+        target: Entity,
+        /// Tile centre the target occupies now, if it still has a position
+        /// (for the floating "miss" text).
+        target_pos: Option<(f32, f32)>,
+        reason: MissReason,
     },
     /// An entity died
     EntityDied {
@@ -421,6 +442,13 @@ pub enum GameEvent {
     },
     /// A boss used its unique ability (message log / VFX flourish).
     BossAbilityUsed {
+        boss: Entity,
+        ability: crate::components::BossAbility,
+        position: (i32, i32),
+    },
+    /// A boss started winding up its unique ability; it lands when the
+    /// wind-up action completes (message log warning).
+    BossAbilityWindup {
         boss: Entity,
         ability: crate::components::BossAbility,
         position: (i32, i32),

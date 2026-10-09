@@ -39,11 +39,11 @@ pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
-    draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
+    draw_alert_indicators, draw_attack_telegraphs, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
     draw_resting_indicators,
     draw_potion_splashes, draw_taming_beams, get_buff_aura_data, get_enemy_health_data,
-    get_enemy_status_data, get_life_drain_beam_data, get_loot_indicator_data, get_taming_beam_data, LifeDrainBeamData,
+    get_attack_telegraph_data, get_enemy_status_data, get_life_drain_beam_data, get_loot_indicator_data, get_taming_beam_data, LifeDrainBeamData,
     TamingBeamData,
 };
 
@@ -415,6 +415,13 @@ pub fn run_ui(
     let enemy_status_data = get_enemy_status_data(world, grid);
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
     let loot_indicator_data = get_loot_indicator_data(world, grid, player_entity);
+    let attack_telegraph_data = get_attack_telegraph_data(world, grid, game_time);
+    // The countdown is for deciding; while the player's own action is
+    // resolving (auto-path, rest) it would only flicker.
+    let player_idle = world
+        .get::<&crate::components::Actor>(player_entity)
+        .map(|a| a.can_act())
+        .unwrap_or(false);
 
     egui_glow.run(window, |ctx| {
         // Enemy health bars (draw early so they're behind other indicators)
@@ -422,6 +429,9 @@ pub fn run_ui(
 
         // Markers over corpses and item piles with something left in them
         draw_loot_indicators(ctx, camera, &loot_indicator_data);
+
+        // Red markers on tiles hostiles are about to hit
+        draw_attack_telegraphs(ctx, camera, &attack_telegraph_data, player_idle);
 
         // Player buff auras (draw first so they're behind everything)
         draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());

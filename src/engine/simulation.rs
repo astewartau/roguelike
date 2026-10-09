@@ -42,6 +42,8 @@ pub struct TurnExecutionResult {
     pub floor_transition: Option<StairDirection>,
     pub player_attacked: bool,
     pub player_took_damage: bool,
+    /// Something swung at the player and missed (no damage, but an attack).
+    pub player_was_targeted: bool,
     pub enemy_spotted_player: bool,
     pub skeleton_spawns: Vec<(i32, i32)>,
     /// Positions where Raise Dead completed (spawn friendly skeletons here)
@@ -52,7 +54,10 @@ pub struct TurnExecutionResult {
 
 impl TurnExecutionResult {
     pub fn should_interrupt_path(&self) -> bool {
-        self.player_attacked || self.player_took_damage || self.enemy_spotted_player
+        self.player_attacked
+            || self.player_took_damage
+            || self.player_was_targeted
+            || self.enemy_spotted_player
     }
 }
 
@@ -361,6 +366,15 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
                     result.player_took_damage = true;
                     let source = entity_display_name(world, *attacker);
                     record_player_damage_source(world, player_entity, source);
+                }
+            }
+            // A swing that missed still means a fight: stop auto-pathing.
+            GameEvent::AttackMissed { attacker, target, .. } => {
+                if *attacker == player_entity {
+                    result.player_attacked = true;
+                }
+                if *target == player_entity {
+                    result.player_was_targeted = true;
                 }
             }
             GameEvent::ProjectileHit { source, target: Some(target), damage, .. }

@@ -300,6 +300,12 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
         return;
     }
 
+    // Killed earlier in this advance but not yet turned into bones (that
+    // happens once per frame): the dead do not pick a next action.
+    if world.get::<&Health>(entity).map(|h| h.current <= 0).unwrap_or(false) {
+        return;
+    }
+
     // Check if entity has AI (ChaseAI for enemies, CompanionAI for tamed animals)
     let has_chase_ai = world.get::<&ChaseAI>(entity).is_ok();
     let companion_ai = world.get::<&CompanionAI>(entity).ok().map(|ai| (ai.owner, ai.follow_distance));
@@ -629,7 +635,7 @@ fn determine_action(
     if !is_rooted {
         if let Some(action) = try_boss_ability(
             world, grid, entity, entity_pos, new_state,
-            &potential_targets, &visible_targets, spatial_cache, events, rng,
+            &potential_targets, &visible_targets, spatial_cache, events,
         ) {
             return action;
         }
@@ -746,8 +752,9 @@ fn determine_action(
 // =============================================================================
 
 /// Fire the boss's unique ability if it is ready and conditions are met.
-/// Returns Some(Wait) when the ability was used this turn (the cast IS the
-/// turn), None to fall through to normal behavior.
+/// Returns the action to start when the ability was used this turn — `Wait`
+/// for instant casts (the cast IS the turn), `BossGroundSlam` for the slam's
+/// telegraphed wind-up — or None to fall through to normal behavior.
 #[allow(clippy::too_many_arguments)]
 fn try_boss_ability(
     world: &mut World,
@@ -759,7 +766,6 @@ fn try_boss_ability(
     visible_targets: &HashSet<Entity>,
     spatial_cache: &SpatialCache,
     events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) -> Option<ActionType> {
     let (ability, ready) = match world.get::<&Boss>(entity) {
         Ok(boss) => (boss.ability, boss.cooldown <= 0.0),
@@ -781,34 +787,15 @@ fn try_boss_ability(
             if !in_range {
                 return None;
             }
-            events.push(GameEvent::BossAbilityUsed { boss: entity, ability, position: entity_pos });
-
-            // Damage + stun everything player-side caught in the radius
-            // (fellow enemies are spared — the shockwave is aimed).
-            let victims: Vec<(Entity, (i32, i32))> = potential_targets
-                .iter()
-                .filter(|&&(_, tp)| cheb(entity_pos, tp) <= BOSS_SLAM_RADIUS)
-                .copied()
-                .collect();
-            for (victim, vpos) in victims {
-                let damage =
-                    crate::systems::combat::apply_damage(world, victim, BOSS_SLAM_DAMAGE, rng);
-                crate::systems::effects::add_effect_to_entity(
-                    world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
-                );
-                events.push(GameEvent::AttackHit {
-                    attacker: entity,
-                    target: victim,
-                    target_pos: (vpos.0 as f32 + 0.5, vpos.1 as f32 + 0.5),
-                    damage,
-                    kind: crate::events::DamageKind::Slam,
-                    crit: false,
-                });
-            }
+            // Wind up rather than slam on the spot: the shockwave lands when
+            // the BossGroundSlam action completes (actions::apply_boss_ground_slam),
+            // hitting whoever is still inside the radius then. The cooldown
+            // starts now so the boss cannot queue a second slam meanwhile.
+            events.push(GameEvent::BossAbilityWindup { boss: entity, ability, position: entity_pos });
             if let Ok(mut boss) = world.get::<&mut Boss>(entity) {
                 boss.cooldown = BOSS_SLAM_COOLDOWN;
             }
-            Some(ActionType::Wait)
+            Some(ActionType::BossGroundSlam)
         }
         BossAbility::SummonSpiders => {
             if !aware {

@@ -265,6 +265,22 @@ impl MessageLog {
             } => {
                 self.record_attack(world, *attacker, *target, *damage, *kind, *crit);
             }
+            // Only a swing that the target actually stepped away from is
+            // news; a target that died mid-swing already has its death line.
+            GameEvent::AttackMissed {
+                attacker,
+                target,
+                reason: crate::events::MissReason::OutOfReach,
+                ..
+            } => {
+                if *target == me {
+                    let obj = self.object(world, *attacker);
+                    self.push(format!("You dodge {obj}'s attack."), log_colors::GOOD);
+                } else if *attacker == me {
+                    let subj = self.subject(world, *target);
+                    self.push(format!("{subj} evades your attack."), log_colors::INFO);
+                }
+            }
             GameEvent::ProjectileHit {
                 source,
                 target: Some(target),
@@ -627,6 +643,16 @@ impl MessageLog {
                         .to_string(),
                     log_colors::GOOD,
                 );
+            }
+            GameEvent::BossAbilityWindup { boss, ability, .. } => {
+                // Only the slam has a wind-up today; the warning is the point.
+                if *ability == crate::components::BossAbility::GroundSlam {
+                    let name = self.name(world, *boss);
+                    self.push(
+                        format!("{name} raises his weapon for a ground slam!"),
+                        log_colors::HARM,
+                    );
+                }
             }
             GameEvent::BossAbilityUsed { boss, ability, .. } => {
                 let name = self.name(world, *boss);

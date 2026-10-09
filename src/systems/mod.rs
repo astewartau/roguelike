@@ -13,6 +13,7 @@
 //! - `inventory`: Container and inventory interactions
 //! - `rendering`: FOV, visibility, and render data collection
 //! - `projectile`: Arrow and projectile movement
+//! - `telegraph`: Which tiles in-progress hostile attacks threaten (for UI/animation)
 
 pub mod action_dispatch;
 pub mod actions;
@@ -35,6 +36,7 @@ pub mod player_input;
 pub mod projectile;
 pub mod rendering;
 pub mod survival;
+pub mod telegraph;
 pub mod webs;
 
 // Re-export commonly used items

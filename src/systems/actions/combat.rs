@@ -5,23 +5,70 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    CompanionAI, EffectType, Equipment, Health, LungeAnimation, Player, Position, SecondaryAbility,
-    TamedBy,
+    Attackable, CompanionAI, EffectType, Equipment, Health, LungeAnimation, Player, Position,
+    SecondaryAbility, TamedBy,
 };
 use crate::constants::*;
-use crate::events::{EventQueue, GameEvent};
+use crate::events::{EventQueue, GameEvent, MissReason};
 use crate::queries;
 
 use super::{interrupt_life_drain_on_damage, ActionResult};
 
-/// Apply attack effect
+/// Whether a melee attack from `attacker` on `target` connects *now*: the
+/// target still exists, is still attackable and alive, and stands within
+/// `MELEE_REACH` (Chebyshev, so diagonals count) of the attacker.
+///
+/// `ActionType::Attack` locks its target when the swing starts, but the
+/// effect is applied when it completes; anything can happen in between.
+/// Returns `Err(reason)` describing why the swing would miss.
+pub fn melee_reach_check(world: &World, attacker: Entity, target: Entity) -> Result<(), MissReason> {
+    let attackable = world.get::<&Attackable>(target).is_ok();
+    let alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true);
+    let (Some(a), Some(t)) = (
+        queries::get_entity_position(world, attacker),
+        queries::get_entity_position(world, target),
+    ) else {
+        return Err(MissReason::TargetGone);
+    };
+    if !attackable || !alive {
+        return Err(MissReason::TargetGone);
+    }
+    let distance = (a.0 - t.0).abs().max((a.1 - t.1).abs());
+    if distance > MELEE_REACH {
+        return Err(MissReason::OutOfReach);
+    }
+    Ok(())
+}
+
+/// Apply attack effect.
+///
+/// The target was chosen when the attack started; if it has since moved out
+/// of reach or gone, the swing whiffs (see [`melee_reach_check`]).
 pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> ActionResult {
     let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
     let (world, grid) = (&mut **world, &mut **grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
+    if queries::get_entity_position(world, attacker).is_none() {
+        return ActionResult::Invalid;
+    }
+
     // Get target position for VFX
-    let target_pos = match queries::get_entity_position(world, target) {
+    let target_tile = queries::get_entity_position(world, target);
+
+    if let Err(reason) = melee_reach_check(world, attacker, target) {
+        let target_pos = target_tile.map(|p| (p.0 as f32 + 0.5, p.1 as f32 + 0.5));
+        // Swing at the air toward where the target is (or was) now, like the
+        // AttackDirection whiff. A target with no position left has no
+        // direction to swing at.
+        if let Some((tx, ty)) = target_pos {
+            let _ = world.insert_one(attacker, LungeAnimation::new(tx, ty));
+        }
+        events.push(GameEvent::AttackMissed { attacker, target, target_pos, reason });
+        return ActionResult::Completed;
+    }
+
+    let target_pos = match target_tile {
         Some(p) => (p.0 as f32, p.1 as f32),
         None => return ActionResult::Invalid,
     };
@@ -349,6 +396,60 @@ pub fn apply_activate_stun(
     ActionResult::Completed
 }
 
+/// Land a boss ground slam (the end of `ActionType::BossGroundSlam`).
+///
+/// Everything player-side — the player and living companions — within
+/// `BOSS_SLAM_RADIUS` (Chebyshev) of the boss *at this moment* takes
+/// `BOSS_SLAM_DAMAGE` and is Stunned. Fellow enemies are spared; the
+/// shockwave is aimed. Whoever got clear during the wind-up is untouched.
+pub fn apply_boss_ground_slam(ctx: &mut EffectCtx, boss: Entity) -> ActionResult {
+    let EffectCtx { world, events, rng, .. } = ctx;
+    let (world, events, rng) = (&mut **world, &mut **events, &mut **rng);
+
+    let Some(center) = queries::get_entity_position(world, boss) else {
+        return ActionResult::Invalid;
+    };
+    let ability = world
+        .get::<&crate::components::Boss>(boss)
+        .map(|b| b.ability)
+        .unwrap_or(crate::components::BossAbility::GroundSlam);
+    events.push(GameEvent::BossAbilityUsed { boss, ability, position: center });
+
+    let in_radius = |p: &Position| {
+        (p.x - center.0).abs().max((p.y - center.1).abs()) <= BOSS_SLAM_RADIUS
+    };
+    let mut victims: Vec<(Entity, (i32, i32))> = world
+        .query::<(&Position, &Player)>()
+        .iter()
+        .filter(|(_, (p, _))| in_radius(p))
+        .map(|(id, (p, _))| (id, (p.x, p.y)))
+        .collect();
+    victims.extend(
+        world
+            .query::<(&Position, &CompanionAI, &Health)>()
+            .iter()
+            .filter(|(_, (p, _, h))| h.current > 0 && in_radius(p))
+            .map(|(id, (p, _, _))| (id, (p.x, p.y))),
+    );
+
+    for (victim, vpos) in victims {
+        let damage = crate::systems::combat::apply_damage(world, victim, BOSS_SLAM_DAMAGE, rng);
+        crate::systems::effects::add_effect_to_entity(
+            world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
+        );
+        events.push(GameEvent::AttackHit {
+            attacker: boss,
+            target: victim,
+            target_pos: (vpos.0 as f32 + 0.5, vpos.1 as f32 + 0.5),
+            damage,
+            kind: crate::events::DamageKind::Slam,
+            crit: false,
+        });
+    }
+
+    ActionResult::Completed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +573,338 @@ mod tests {
         // The kill paid XP.
         let xp = world.get::<&Experience>(player).unwrap().current;
         assert!(xp > 0, "player gains XP from the kill");
+    }
+
+    // =========================================================================
+    // Reach at completion, death mid-swing, and the telegraphed ground slam.
+    // These drive the real scheduler (`advance_until_player_ready`), so time
+    // only moves while the player has an action in progress — exactly as in
+    // play.
+    // =========================================================================
+
+    use crate::active_ai_tracker::ActiveAITracker;
+    use crate::components::{ActionType, AIState, Boss, ChaseAI};
+    use crate::engine::ActorCtx;
+    use crate::events::MissReason;
+    use crate::spatial_cache::SpatialCache;
+    use crate::time_system::{self, ActionScheduler, GameClock};
+
+    /// A floor-only arena with a player and the full simulation context.
+    struct Arena {
+        world: World,
+        grid: Grid,
+        clock: GameClock,
+        scheduler: ActionScheduler,
+        tracker: ActiveAITracker,
+        cache: SpatialCache,
+        events: EventQueue,
+        rng: StdRng,
+        player: Entity,
+        /// Every event drained so far, in order.
+        seen: Vec<GameEvent>,
+    }
+
+    impl Arena {
+        fn new(player_at: (i32, i32)) -> Self {
+            let mut world = World::new();
+            let ppos = Position::new(player_at.0, player_at.1);
+            let player = world.spawn((
+                ppos,
+                VisualPosition::from_position(&ppos),
+                Player,
+                Actor::new(1.0),
+                Stats::new(14, 10, 10),
+                Health::new(30),
+                Equipment::with_weapon(Weapon::claws(3)),
+                Experience::new(),
+                StatusEffects::new(),
+                Attackable,
+                crate::components::BlocksMovement,
+            ));
+            let cache = SpatialCache::rebuild_from_world(&world);
+            Self {
+                world,
+                grid: make_grid(16, 16),
+                clock: GameClock::new(),
+                scheduler: ActionScheduler::new(),
+                tracker: ActiveAITracker::new(),
+                cache,
+                events: EventQueue::new(),
+                rng: StdRng::seed_from_u64(11),
+                player,
+                seen: Vec::new(),
+            }
+        }
+
+        /// Spawn a rat at (x, y) with the given speed, already hunting the player.
+        fn rat(&mut self, x: i32, y: i32, speed: f32) -> Entity {
+            let rat = crate::spawning::enemies::RAT.spawn(&mut self.world, x, y, &mut self.rng);
+            self.hunt(rat, speed);
+            rat
+        }
+
+        /// Wake `e`, point it at the player, fix its speed, and refresh the
+        /// caches that hand-placed entities bypass.
+        fn hunt(&mut self, e: Entity, speed: f32) {
+            let _ = self.world.remove_one::<crate::components::Asleep>(e);
+            let ppos = self.pos(self.player);
+            if let Ok(mut ai) = self.world.get::<&mut ChaseAI>(e) {
+                ai.state = AIState::Chasing;
+                ai.add_threat(self.player, WAKE_THREAT);
+                ai.update_target_pos(self.player, ppos);
+            }
+            self.world.get::<&mut Actor>(e).unwrap().speed = speed;
+            self.cache.rebuild_in_place(&self.world);
+            self.tracker.initialize_from_world(&self.world, ppos);
+        }
+
+        fn ctx(&mut self) -> ActorCtx<'_> {
+            ActorCtx {
+                world: &mut self.world,
+                grid: &mut self.grid,
+                player: self.player,
+                clock: &mut self.clock,
+                scheduler: &mut self.scheduler,
+                tracker: &mut self.tracker,
+                spatial: &mut self.cache,
+                events: &mut self.events,
+                rng: &mut self.rng,
+            }
+        }
+
+        /// Start `action` for a non-player entity, as the AI would.
+        fn start(&mut self, e: Entity, action: ActionType) {
+            time_system::start_action(&mut self.world, e, action, &self.clock, &mut self.scheduler)
+                .expect("action starts");
+        }
+
+        /// The player takes `action`; the world runs until they can act again.
+        fn player_does(&mut self, action: ActionType) {
+            let player = self.player;
+            self.start(player, action);
+            crate::engine::advance_until_player_ready(&mut self.ctx());
+            let drained: Vec<GameEvent> = self.events.drain().collect();
+            self.seen.extend(drained);
+        }
+
+        /// Wait in place until game time passes `t`.
+        fn wait_until(&mut self, t: f32) {
+            while self.clock.time <= t {
+                self.player_does(ActionType::Wait);
+            }
+        }
+
+        fn hp(&self, e: Entity) -> i32 {
+            self.world.get::<&Health>(e).map(|h| h.current).unwrap_or(i32::MIN)
+        }
+
+        fn pos(&self, e: Entity) -> (i32, i32) {
+            queries::get_entity_position(&self.world, e).expect("has a position")
+        }
+
+        fn action(&self, e: Entity) -> Option<ActionType> {
+            self.world.get::<&Actor>(e).ok()?.current_action.map(|a| a.action_type)
+        }
+
+        fn stunned(&self, e: Entity) -> bool {
+            queries::has_status_effect(&self.world, e, EffectType::Stunned)
+        }
+
+        fn missed(&self, attacker: Entity, target: Entity) -> bool {
+            self.seen.iter().any(|ev| {
+                matches!(ev, GameEvent::AttackMissed { attacker: a, target: t, reason: MissReason::OutOfReach, .. }
+                    if *a == attacker && *t == target)
+            })
+        }
+
+        fn hit(&self, attacker: Entity, target: Entity) -> bool {
+            self.seen.iter().any(|ev| {
+                matches!(ev, GameEvent::AttackHit { attacker: a, target: t, .. }
+                    if *a == attacker && *t == target)
+            })
+        }
+    }
+
+    /// (a) An enemy's swing is aimed when it starts but lands when it
+    /// completes. A player who steps out of reach in between is not hit.
+    #[test]
+    fn enemy_attack_whiffs_if_the_player_stepped_out_of_reach() {
+        let mut arena = Arena::new((5, 5));
+        // Slow rat: its 0.8s swing takes 1.6s, longer than the player's step.
+        let rat = arena.rat(6, 5, 0.5);
+        let player = arena.player;
+        arena.start(rat, ActionType::Attack { target: player });
+
+        arena.player_does(ActionType::Move { dx: -1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (4, 5), "the step resolved first");
+        assert!(
+            matches!(arena.action(rat), Some(ActionType::Attack { .. })),
+            "the rat is still mid-swing"
+        );
+
+        arena.wait_until(1.7);
+        assert_eq!(arena.hp(player), 30, "a swing at an empty tile deals nothing");
+        assert!(arena.missed(rat, player), "the swing reports a miss");
+        assert!(!arena.hit(rat, player));
+        assert!(
+            arena.world.get::<&LungeAnimation>(rat).is_ok(),
+            "the rat still lunges at the air"
+        );
+
+        let mut log = crate::ui::MessageLog::new(player);
+        for ev in &arena.seen {
+            log.record_event(ev, &arena.world);
+        }
+        assert!(
+            log.lines().iter().any(|l| l == "You dodge the Rat's attack."),
+            "got {:?}",
+            log.lines()
+        );
+    }
+
+    /// (b) The same rule for the player: an enemy that got away before the
+    /// player's swing landed is not hit.
+    #[test]
+    fn player_attack_whiffs_if_the_enemy_moved_away() {
+        let mut arena = Arena::new((5, 5));
+        // Fast rat: steps away in 0.5s, inside the player's 0.8s swing, and
+        // cannot step back before the swing lands.
+        let rat = arena.rat(6, 5, 2.0);
+        let player = arena.player;
+        let rat_hp = arena.hp(rat);
+
+        arena.start(rat, ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        arena.player_does(ActionType::Attack { target: rat });
+
+        assert_eq!(arena.pos(rat), (7, 5), "the rat stepped away");
+        assert_eq!(arena.hp(rat), rat_hp, "and took no damage");
+        assert!(arena.missed(player, rat));
+        assert!(!arena.hit(player, rat));
+
+        let mut log = crate::ui::MessageLog::new(player);
+        for ev in &arena.seen {
+            log.record_event(ev, &arena.world);
+        }
+        assert!(
+            log.lines().iter().any(|l| l == "The Rat evades your attack."),
+            "got {:?}",
+            log.lines()
+        );
+    }
+
+    /// (c) Reach is Chebyshev: a target that moved but is still diagonally
+    /// adjacent is still hit.
+    #[test]
+    fn diagonal_adjacency_is_still_in_reach() {
+        let mut arena = Arena::new((5, 5));
+        let rat = arena.rat(6, 5, 0.5);
+        let player = arena.player;
+        arena.start(rat, ActionType::Attack { target: player });
+
+        // Step from beside the rat to diagonal from it.
+        arena.player_does(ActionType::Move { dx: 0, dy: 1, is_diagonal: false });
+        assert_eq!(arena.pos(player), (5, 6));
+        arena.wait_until(1.7);
+
+        assert!(arena.hp(player) < 30, "the swing landed");
+        assert!(arena.hit(rat, player));
+        assert!(!arena.missed(rat, player));
+    }
+
+    /// (d) A rat killed mid-swing does not finish the swing, through the
+    /// normal per-frame death processing.
+    #[test]
+    fn an_enemy_killed_mid_swing_does_not_land_its_attack() {
+        let mut arena = Arena::new((5, 5));
+        let rat = arena.rat(6, 5, 0.5);
+        let player = arena.player;
+        arena.world.get::<&mut Health>(rat).unwrap().current = 1;
+        arena.start(rat, ActionType::Attack { target: player });
+
+        // The player's 0.8s swing lands well before the rat's 1.6s one.
+        arena.player_does(ActionType::Attack { target: rat });
+        assert!(arena.hp(rat) <= 0, "the player's hit was lethal");
+
+        // What the engine does once per frame after the simulation step.
+        let kills = crate::systems::combat::remove_dead_entities(&mut arena.ctx(), 0);
+        assert_eq!(kills, 1);
+
+        arena.wait_until(2.5);
+        assert_eq!(arena.hp(player), 30, "the dead rat's swing never landed");
+        assert!(!arena.hit(rat, player));
+    }
+
+    /// The same, for a death inside a single advance (a companion kill or a
+    /// burn tick), before the per-frame death processing has run: the
+    /// completion is still queued, and must do nothing.
+    #[test]
+    fn a_dead_attacker_still_queued_does_not_land_its_attack() {
+        let mut arena = Arena::new((5, 5));
+        let rat = arena.rat(6, 5, 0.5);
+        let player = arena.player;
+        arena.start(rat, ActionType::Attack { target: player });
+        arena.world.get::<&mut Health>(rat).unwrap().current = 0;
+
+        arena.wait_until(2.5);
+        assert_eq!(arena.hp(player), 30);
+        assert!(!arena.hit(rat, player));
+        assert!(arena.action(rat).is_none(), "the dead rat picked no new action");
+    }
+
+    /// Spawn Gnash at (x, y), slam off cooldown, hunting the player.
+    fn gnash(arena: &mut Arena, x: i32, y: i32, speed: f32) -> Entity {
+        let boss = crate::spawning::spawn_boss(&mut arena.world, 3, x, y, &mut arena.rng)
+            .expect("floor 3 has a boss");
+        arena.world.get::<&mut Boss>(boss).unwrap().cooldown = 0.0;
+        arena.hunt(boss, speed);
+        boss
+    }
+
+    /// The slam winds up first and lands at completion on whoever is still
+    /// inside the radius.
+    #[test]
+    fn ground_slam_stuns_only_when_the_wind_up_completes() {
+        let mut arena = Arena::new((5, 5));
+        let boss = gnash(&mut arena, 5 + BOSS_SLAM_RADIUS, 5, 1.0);
+        let player = arena.player;
+
+        crate::systems::ai::decide_action(&mut arena.ctx(), boss);
+        assert!(matches!(arena.action(boss), Some(ActionType::BossGroundSlam)), "winding up");
+        assert!(!arena.stunned(player), "nothing lands at the start of the wind-up");
+        assert_eq!(arena.hp(player), 30);
+
+        // Halfway through the wind-up: still nothing.
+        arena.player_does(ActionType::Wait);
+        assert!(arena.clock.time < BOSS_SLAM_WINDUP);
+        assert!(!arena.stunned(player));
+        assert_eq!(arena.hp(player), 30);
+
+        arena.wait_until(BOSS_SLAM_WINDUP + 0.1);
+        assert!(arena.stunned(player), "inside the radius at completion: stunned");
+        assert!(arena.hp(player) < 30, "and hurt");
+        assert!(arena.seen.iter().any(|e| matches!(e, GameEvent::BossAbilityUsed { .. })));
+    }
+
+    /// Getting clear during the wind-up avoids the slam entirely.
+    #[test]
+    fn leaving_the_radius_during_the_wind_up_avoids_the_slam() {
+        let mut arena = Arena::new((5, 5));
+        // Slow boss: a 2s wind-up, time for a 1s step out of range.
+        let boss = gnash(&mut arena, 5 + BOSS_SLAM_RADIUS, 5, 0.5);
+        let player = arena.player;
+
+        crate::systems::ai::decide_action(&mut arena.ctx(), boss);
+        assert!(matches!(arena.action(boss), Some(ActionType::BossGroundSlam)));
+
+        arena.player_does(ActionType::Move { dx: -1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(player), (4, 5), "now outside the radius");
+
+        arena.wait_until(2.0 * BOSS_SLAM_WINDUP + 0.1);
+        assert!(
+            arena.seen.iter().any(|e| matches!(e, GameEvent::BossAbilityUsed { .. })),
+            "the slam went off"
+        );
+        assert!(!arena.stunned(player), "but the player was out of range");
+        assert_eq!(arena.hp(player), 30);
     }
 }

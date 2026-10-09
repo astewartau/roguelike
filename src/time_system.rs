@@ -274,6 +274,22 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
         }
     };
 
+    // An actor killed earlier in this same advance (by a companion, a burn
+    // tick, ...) is not turned into bones until `remove_dead_entities` runs at
+    // the end of the frame, so its completion is still queued. A dead actor's
+    // action does nothing: in particular a swing it started cannot land.
+    let dead = ctx
+        .world
+        .get::<&Health>(entity)
+        .map(|h| h.current <= 0)
+        .unwrap_or(false);
+    if dead {
+        if let Ok(mut actor) = ctx.world.get::<&mut Actor>(entity) {
+            actor.current_action = None;
+        }
+        return ActionResult::Invalid;
+    }
+
     // Check if this is a bow shot that needs recovery follow-up
     let needs_recovery = matches!(
         action.action_type,
@@ -418,6 +434,9 @@ fn apply_action_effects(
             // Recovery is just a time delay, no effects
             ActionResult::Completed
         }
+        ActionType::BossGroundSlam => actions::apply_boss_ground_slam(
+            &mut effects(world, grid, spatial_cache, events, rng), entity,
+        ),
     }
 }
 

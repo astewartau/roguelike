@@ -186,6 +186,12 @@ pub const BOSS_SLAM_COOLDOWN: f32 = 12.0;
 pub const BOSS_SLAM_RADIUS: i32 = 2;
 pub const BOSS_SLAM_STUN_DURATION: f32 = 2.0;
 pub const BOSS_SLAM_DAMAGE: i32 = 6;
+/// Seconds Gnash spends winding up a ground slam before it lands (scaled by
+/// his speed like any action). The shockwave hits whatever is inside
+/// `BOSS_SLAM_RADIUS` of him when the wind-up *completes*, so this is the
+/// player's window to step out. Longer is more forgiving; at 0 the slam is
+/// unavoidable again.
+pub const BOSS_SLAM_WINDUP: f32 = 1.0;
 /// Silkrot's brood: cooldown / spiders per cast / max alive at once.
 pub const BOSS_SPIDER_SPAWN_COOLDOWN: f32 = 20.0;
 pub const BOSS_SPIDER_SPAWN_COUNT: usize = 2;
