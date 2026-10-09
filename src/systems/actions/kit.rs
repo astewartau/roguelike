@@ -924,4 +924,46 @@ mod tests {
             "stepping into the owner must not become an attack, got {action:?}"
         );
     }
+
+    #[test]
+    fn a_skeleton_behind_you_in_a_corridor_does_not_hit_you_to_reach_the_rat() {
+        // The reported case: a one-tile corridor, the necromancer standing on
+        // top of one raised skeleton (owners walk through their minions), a
+        // second skeleton behind them, and a rat in front. The rear skeleton
+        // paths toward the rat through the shared tile and used to resolve
+        // that step into an attack on whatever Attackable it found there —
+        // its own necromancer.
+        let mut arena = Arena::new((4, 5));
+        let player = arena.player;
+        for x in 0..12 {
+            for y in [4, 6] {
+                if let Some(t) = arena.grid.get_mut(x, y) {
+                    *t = crate::tile::Tile::new(crate::tile::TileType::Wall);
+                }
+            }
+        }
+        let front = raised_skeleton(&mut arena, 4, 5); // sharing the player's tile
+        let rear = raised_skeleton(&mut arena, 3, 5);
+        let rat = arena.rat(5, 5, 1.0);
+        for s in [front, rear] {
+            crate::systems::ai::generate_companion_threat(&mut arena.world, s, rat, 10.0);
+        }
+        arena.cache.rebuild_in_place(&arena.world);
+        let ppos = arena.pos(player);
+        arena.tracker.initialize_from_world(&arena.world, ppos);
+
+        crate::systems::ai::decide_action(&mut arena.ctx(), rear);
+        let action = arena.action(rear);
+        assert!(
+            !matches!(action, Some(crate::components::ActionType::Attack { target }) if target == player),
+            "the rear skeleton must not attack its owner, got {action:?}"
+        );
+
+        // And over a stretch of real fighting the owner is never struck by a
+        // companion.
+        let hp_before = arena.hp(player);
+        arena.wait_until(4.0);
+        assert!(!arena.hit(rear, player) && !arena.hit(front, player));
+        assert!(arena.hp(player) <= hp_before, "sanity");
+    }
 }
