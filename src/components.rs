@@ -166,6 +166,29 @@ pub enum AbilityType {
     LearnedInvisibility,
     /// Necromancer: channel over a bones pile to raise a skeleton companion
     RaiseDead,
+    /// Fighter: brace for a blow. Melee hits during the guard are mostly
+    /// blocked and the attacker is staggered. Reactive: active from the
+    /// moment the action starts.
+    Guard,
+    /// Necromancer: a ward of bones that absorbs the next few hits (more
+    /// charges with corpses nearby). Reactive: up at action start.
+    BoneWard,
+    /// Necromancer: swap places with one of your raised skeletons. Reactive:
+    /// the swap happens at action start, so swings at you find the skeleton.
+    Sacrifice,
+    /// Necromancer: detonate a corpse, damaging hostiles around it.
+    CorpseExplosion,
+    /// Druid: melee attackers take damage back while the buff lasts.
+    Thorns,
+    /// Druid: vines root hostiles around a tile (longer in grass).
+    Entangle,
+    /// Druid: a downpour over a tile douses fires and soaks everyone in it.
+    CallRain,
+    /// Fighter: bash an adjacent creature (damage, knockback, stun) or shove
+    /// an adjacent pushable object.
+    ShieldBash,
+    /// Necromancer: a bone shard bolt at a tile in line of sight.
+    GraveBolt,
 }
 
 impl AbilityType {
@@ -193,6 +216,15 @@ impl AbilityType {
             AbilityType::LearnedSpeed => "Speed",
             AbilityType::LearnedInvisibility => "Invisibility",
             AbilityType::RaiseDead => "Raise Dead",
+            AbilityType::Guard => "Guard",
+            AbilityType::BoneWard => "Bone Ward",
+            AbilityType::Sacrifice => "Sacrifice",
+            AbilityType::CorpseExplosion => "Corpse Explosion",
+            AbilityType::Thorns => "Thorns",
+            AbilityType::Entangle => "Entangle",
+            AbilityType::CallRain => "Call Rain",
+            AbilityType::ShieldBash => "Shield Bash",
+            AbilityType::GraveBolt => "Grave Bolt",
         }
     }
 
@@ -220,6 +252,15 @@ impl AbilityType {
             AbilityType::LearnedSpeed => "Move and act faster for a while (scales with INT)",
             AbilityType::LearnedInvisibility => "Fade from sight for a while (scales with INT)",
             AbilityType::RaiseDead => "Channel over bones to raise a skeleton ally",
+            AbilityType::Guard => "Brace: block 75% of melee hits and stagger the attacker",
+            AbilityType::BoneWard => "Absorb the next hit (+1 per nearby corpse, max 3)",
+            AbilityType::Sacrifice => "Swap places with one of your raised skeletons",
+            AbilityType::CorpseExplosion => "Detonate a corpse, hurting nearby enemies",
+            AbilityType::Thorns => "Melee attackers take damage back (scales with INT)",
+            AbilityType::Entangle => "Root enemies around a tile (longer in grass)",
+            AbilityType::CallRain => "Douse fires and soak everyone around a tile",
+            AbilityType::ShieldBash => "Bash an adjacent foe back 2 tiles and stun it, or shove a barrel",
+            AbilityType::GraveBolt => "Hurl a bone shard at a target in sight (scales with INT)",
         }
     }
 
@@ -248,11 +289,20 @@ impl AbilityType {
             AbilityType::LearnedSpeed => LEARNED_SPEED_ENERGY_COST,
             AbilityType::LearnedInvisibility => LEARNED_INVISIBILITY_ENERGY_COST,
             AbilityType::RaiseDead => RAISE_DEAD_ENERGY_COST,
+            AbilityType::Guard => GUARD_ENERGY_COST,
+            AbilityType::BoneWard => BONE_WARD_ENERGY_COST,
+            AbilityType::Sacrifice => SACRIFICE_ENERGY_COST,
+            AbilityType::CorpseExplosion => CORPSE_EXPLOSION_ENERGY_COST,
+            AbilityType::Thorns => THORNS_ENERGY_COST,
+            AbilityType::Entangle => ENTANGLE_ENERGY_COST,
+            AbilityType::CallRain => CALL_RAIN_ENERGY_COST,
+            AbilityType::ShieldBash => SHIELD_BASH_ENERGY_COST,
+            AbilityType::GraveBolt => GRAVE_BOLT_ENERGY_COST,
         }
     }
 
     /// Cooldown for a learned/studied spell (or Raise Dead). `None` for
-    /// abilities that live on other components (class/secondary/ranger).
+    /// abilities that live on other components (class/secondary/kit).
     pub fn learned_cooldown(&self) -> Option<f32> {
         match self {
             AbilityType::LearnedBlink => Some(LEARNED_BLINK_COOLDOWN),
@@ -1030,6 +1080,33 @@ pub enum EffectType {
     Invulnerable,
     /// Cannot act at all (from Fighter's Stun ability)
     Stunned,
+    /// Bracing (Fighter's Guard): melee hits are mostly blocked and the
+    /// attacker is staggered. Lasts as long as the Guard action.
+    Guarding,
+    /// Melee attackers take damage back (Druid's Thorns)
+    Thorns,
+    /// A ward of bones absorbs whole hits (Necromancer's Bone Ward). The
+    /// charge count lives on the [`BoneWard`] component; this effect is its
+    /// timer and HUD pip.
+    BoneWard,
+    /// Soaked (water, rain, a thrown flask). Cannot catch fire; gaining it
+    /// puts out Burning and washes off Oiled. Noisy: unaware enemies notice a
+    /// Wet player faster (`WET_STEALTH_PENALTY`).
+    Wet,
+    /// Slick with oil (stepped in an unlit oil puddle). Catches fire far more
+    /// readily, burns hotter while Burning, and is slippery
+    /// (`queries::is_slippery`). Burns off with the fire.
+    Oiled,
+    /// Venom in the blood: `POISON_DAMAGE` every `POISON_TICK_INTERVAL`,
+    /// ignoring armor (spider bites).
+    Poisoned,
+    /// An open wound: `BLEED_DAMAGE` every `BLEED_TICK_INTERVAL`, ignoring
+    /// armor (rat bites).
+    Bleeding,
+    /// Held by a zombie: cannot walk, but can still attack and use
+    /// abilities. Ends early when the grabber dies, is stunned or is no longer
+    /// adjacent (the holder is recorded in [`GrabbedBy`]).
+    Grabbed,
 }
 
 /// An active status effect with remaining duration
@@ -1176,6 +1253,43 @@ pub enum ActionType {
     StartRaiseDead { target: Entity },
     /// Recovery after shooting (auto-queued, allows arrow to fly)
     Recover,
+    /// Boss wind-up for Gnash's ground slam. The shockwave (damage + stun
+    /// within `BOSS_SLAM_RADIUS` of the boss) is applied when this completes,
+    /// so the wind-up is the window to get clear.
+    BossGroundSlam,
+    /// Fighter kit: Guard. Reactive — the Guarding effect goes up when the
+    /// action STARTS and drops when it completes.
+    Guard,
+    /// Necromancer kit: Bone Ward. Reactive — the ward goes up at start.
+    BoneWard,
+    /// Necromancer kit: swap places with a raised skeleton. Reactive — the
+    /// swap happens at start.
+    Sacrifice { skeleton: Entity },
+    /// Necromancer kit: detonate a corpse (applied at completion).
+    CorpseExplosion { corpse: Entity },
+    /// Druid kit: Thorns self-buff (applied at completion).
+    ActivateThorns,
+    /// Druid kit: root hostiles around a tile (applied at completion).
+    Entangle { target_x: i32, target_y: i32 },
+    /// Druid kit: rain over a tile (applied at completion).
+    CallRain { target_x: i32, target_y: i32 },
+    /// Orc charge wind-up. The direction (a unit step) is fixed when the
+    /// wind-up starts, and the lane down it is telegraphed; on completion
+    /// the orc dashes along it (`systems::charge::apply_orc_charge`), so
+    /// sidestepping out of the lane dodges.
+    OrcChargeWindup { dx: i32, dy: i32 },
+    /// Universal: shove the `Pushable` object on the adjacent tile (dx, dy)
+    /// one tile further in the same direction. The pusher stays put. See
+    /// `systems::push`.
+    Push { dx: i32, dy: i32 },
+    /// Close an open door (refused while anything stands in the doorway).
+    CloseDoor { door: Entity },
+    /// Fighter kit: Shield Bash the creature or pushable on an adjacent tile
+    /// (applied at completion; see `systems::actions::kit::apply_shield_bash`).
+    ShieldBash { target_x: i32, target_y: i32 },
+    /// Necromancer kit: fire a Grave Bolt at a tile (the bone shard flies
+    /// through the projectile system).
+    GraveBolt { target_x: i32, target_y: i32 },
 }
 
 impl ActionType {
@@ -1210,11 +1324,16 @@ impl ActionType {
             ActionType::DropItem { .. } => PerSecond(EXERTION_LIGHT),
             ActionType::DropEquippedWeapon => PerSecond(EXERTION_LIGHT),
             ActionType::ThrowPotion { .. } => PerSecond(EXERTION_LIGHT),
+            ActionType::CloseDoor { .. } => PerSecond(EXERTION_LIGHT),
+            // Shoving a barrel is real work, like fighting.
+            ActionType::Push { .. } => PerSecond(EXERTION_HEAVY),
 
             // --- Heavy: fighting ---
             ActionType::Attack { .. } => PerSecond(EXERTION_HEAVY),
             ActionType::AttackDirection { .. } => PerSecond(EXERTION_HEAVY),
             ActionType::ShootBow { .. } => PerSecond(EXERTION_HEAVY),
+            ActionType::BossGroundSlam => PerSecond(EXERTION_HEAVY),
+            ActionType::OrcChargeWindup { .. } => PerSecond(EXERTION_HEAVY),
 
             // --- Flat: deliberate abilities, each with its own price ---
             ActionType::Cleave => Flat(CLEAVE_ENERGY_COST),
@@ -1233,6 +1352,15 @@ impl ActionType {
             ActionType::CastFireball { .. } => Flat(LEARNED_FIREBALL_ENERGY_COST),
             ActionType::StartRaiseDead { .. } => Flat(RAISE_DEAD_ENERGY_COST),
             ActionType::CastLearnedSpell { ability, .. } => Flat(ability.energy_cost()),
+            ActionType::Guard => Flat(GUARD_ENERGY_COST),
+            ActionType::BoneWard => Flat(BONE_WARD_ENERGY_COST),
+            ActionType::Sacrifice { .. } => Flat(SACRIFICE_ENERGY_COST),
+            ActionType::CorpseExplosion { .. } => Flat(CORPSE_EXPLOSION_ENERGY_COST),
+            ActionType::ActivateThorns => Flat(THORNS_ENERGY_COST),
+            ActionType::Entangle { .. } => Flat(ENTANGLE_ENERGY_COST),
+            ActionType::CallRain { .. } => Flat(CALL_RAIN_ENERGY_COST),
+            ActionType::ShieldBash { .. } => Flat(SHIELD_BASH_ENERGY_COST),
+            ActionType::GraveBolt { .. } => Flat(GRAVE_BOLT_ENERGY_COST),
         }
     }
 
@@ -1882,6 +2010,20 @@ pub struct Projectile {
     /// Fire arrows: ignites the landing tile (grass catches) and burns up
     /// on impact (never recoverable).
     pub incendiary: bool,
+    /// What is flying: a physical missile (arrow / thrown potion) or a spell.
+    pub kind: ProjectileKind,
+}
+
+/// What a projectile is, for the parts of impact handling that differ between
+/// a weapon's missile and a spell's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjectileKind {
+    /// Arrows and thrown potions: weapon on-hit affixes apply to arrows, and
+    /// a spent arrow may be recovered.
+    #[default]
+    Missile,
+    /// The Necromancer's Grave Bolt: no weapon affixes, nothing to recover.
+    GraveBolt,
 }
 
 /// Marker component for projectiles (for queries)
@@ -2159,16 +2301,59 @@ pub struct BurningOil {
 /// Marker for explosive oil barrels. Blocks movement and is highly
 /// combustible: once Burning, a short fuse (`BarrelFuse`) starts, then the
 /// barrel explodes — damage in a radius plus a spray of burning oil puddles.
-/// Destroying one by damage also sets it off.
+/// Breaking one open (0 HP) starts a shorter fuse; any damage to a barrel
+/// whose fuse is already running detonates it at once (see `systems::fire`).
 #[derive(Debug, Clone, Copy)]
 pub struct OilBarrel;
 
-/// Lit fuse on an ignited oil barrel. Ticked by `systems::fire`; the barrel
-/// explodes when `remaining` reaches zero.
+/// What lit an oil barrel's fuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuseCause {
+    /// The barrel caught fire (`OIL_BARREL_FUSE_SECONDS`). Water puts this
+    /// fuse out along with the flames.
+    Fire,
+    /// The barrel was broken open by damage (`OIL_BARREL_BREAK_FUSE_SECONDS`).
+    /// Oil is already spilling over the spark: water does not stop it.
+    Broken,
+}
+
+/// Lit fuse on an oil barrel. Ticked in game time by `systems::fire`; the
+/// barrel explodes when `remaining` reaches zero. Damage to a fusing barrel
+/// zeroes `remaining` (immediate detonation on the next fire tick).
 #[derive(Debug, Clone, Copy)]
 pub struct BarrelFuse {
     pub remaining: f32,
+    /// The fuse's full length, for the telegraph's fill progress.
+    pub total: f32,
+    pub cause: FuseCause,
 }
+
+impl BarrelFuse {
+    /// A fresh fuse of `seconds`.
+    pub fn new(seconds: f32, cause: FuseCause) -> Self {
+        Self { remaining: seconds, total: seconds, cause }
+    }
+
+    /// 0.0 when lit, 1.0 when it blows.
+    pub fn progress(&self) -> f32 {
+        if self.total <= f32::EPSILON {
+            return 1.0;
+        }
+        (1.0 - self.remaining / self.total).clamp(0.0, 1.0)
+    }
+}
+
+/// Light furniture that can be shoved a tile at a time: by the universal Push
+/// action (Ctrl+direction) and by the Fighter's Shield Bash.
+///
+/// Carried by oil barrels and food/storage barrels. Deliberately *not* by
+/// chests and coffins (heavy, and a loot container wandering off its spot
+/// would be confusing), braziers (interacting topples them instead), room
+/// furniture (fountains, altars, shrines), shop decor or stalagmites. A
+/// pushable only matters while it also `BlocksMovement`: a looted storage
+/// barrel becomes walkable scenery and there is nothing left to shove.
+#[derive(Debug, Clone, Copy)]
+pub struct Pushable;
 
 /// Grass tile soaked by a water splash: unignitable until it dries out.
 /// Lives as an invisible timer entity on the tile, checked by fire spread.
@@ -2279,39 +2464,111 @@ pub struct Furniture {
 pub struct SecretDoor;
 
 // =============================================================================
-// RANGER ABILITIES
+// CLASS KIT
 // =============================================================================
 
-/// Tracks all Ranger abilities with independent cooldowns
-#[derive(Debug, Clone)]
-pub struct RangerAbilities {
-    /// Array of (ability_type, cooldown_remaining, cooldown_total)
-    pub abilities: [(AbilityType, f32, f32); 4],
+/// One ability in a [`ClassKit`], with its own cooldown.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KitAbility {
+    pub ability: AbilityType,
+    /// Seconds remaining on cooldown (0 = ready)
+    pub cooldown_remaining: f32,
+    /// Total cooldown duration
+    pub cooldown_total: f32,
 }
 
-impl RangerAbilities {
-    pub fn new() -> Self {
+/// The per-class list of extra abilities, each with an independent cooldown.
+///
+/// Every class gets one at init (see [`ClassKit::for_class`]); it sits beside
+/// the single [`ClassAbility`] / [`SecondaryAbility`] slots rather than
+/// replacing them. Replaces the Ranger-only `RangerAbilities` array.
+#[derive(Debug, Clone, Default)]
+pub struct ClassKit {
+    pub abilities: Vec<KitAbility>,
+}
+
+impl ClassKit {
+    /// Build a kit from (ability, cooldown) pairs, all starting ready.
+    pub fn new(entries: &[(AbilityType, f32)]) -> Self {
         Self {
-            abilities: [
-                (AbilityType::Disengage, 0.0, DISENGAGE_COOLDOWN),
-                (AbilityType::Tumble, 0.0, TUMBLE_COOLDOWN),
-                (AbilityType::SnareTrap, 0.0, SNARE_TRAP_COOLDOWN),
-                (AbilityType::CripplingShot, 0.0, CRIPPLING_SHOT_COOLDOWN),
-            ],
+            abilities: entries
+                .iter()
+                .map(|&(ability, cooldown_total)| KitAbility {
+                    ability,
+                    cooldown_remaining: 0.0,
+                    cooldown_total,
+                })
+                .collect(),
         }
     }
 
-    /// Get the ability at the given index (0-3)
-    pub fn get(&self, index: usize) -> Option<&(AbilityType, f32, f32)> {
+    /// The starting kit for a class.
+    pub fn for_class(class: PlayerClass) -> Self {
+        match class {
+            PlayerClass::Fighter => Self::new(&[
+                (AbilityType::Guard, GUARD_COOLDOWN),
+                (AbilityType::ShieldBash, SHIELD_BASH_COOLDOWN),
+            ]),
+            PlayerClass::Ranger => Self::new(&[
+                (AbilityType::Disengage, DISENGAGE_COOLDOWN),
+                (AbilityType::Tumble, TUMBLE_COOLDOWN),
+                (AbilityType::SnareTrap, SNARE_TRAP_COOLDOWN),
+                (AbilityType::CripplingShot, CRIPPLING_SHOT_COOLDOWN),
+            ]),
+            PlayerClass::Druid => Self::new(&[
+                (AbilityType::Thorns, THORNS_COOLDOWN),
+                (AbilityType::Entangle, ENTANGLE_COOLDOWN),
+                (AbilityType::CallRain, CALL_RAIN_COOLDOWN),
+            ]),
+            PlayerClass::Necromancer => Self::new(&[
+                (AbilityType::BoneWard, BONE_WARD_COOLDOWN),
+                (AbilityType::Sacrifice, SACRIFICE_COOLDOWN),
+                (AbilityType::CorpseExplosion, CORPSE_EXPLOSION_COOLDOWN),
+                (AbilityType::GraveBolt, GRAVE_BOLT_COOLDOWN),
+            ]),
+        }
+    }
+
+    /// The ability at `index`, if any.
+    pub fn get(&self, index: usize) -> Option<&KitAbility> {
         self.abilities.get(index)
     }
 
-    /// Start cooldown for ability at index
+    /// Index of `ability` in the kit, if the kit holds it.
+    pub fn position(&self, ability: AbilityType) -> Option<usize> {
+        self.abilities.iter().position(|k| k.ability == ability)
+    }
+
+    /// Start the cooldown for the ability at `index` (no-op if out of range).
     pub fn start_cooldown(&mut self, index: usize) {
-        if let Some((_, cooldown_remaining, cooldown_total)) = self.abilities.get_mut(index) {
-            *cooldown_remaining = *cooldown_total;
+        if let Some(k) = self.abilities.get_mut(index) {
+            k.cooldown_remaining = k.cooldown_total;
         }
     }
+
+    /// Start the cooldown for `ability` (no-op if the kit doesn't hold it).
+    pub fn start_cooldown_for(&mut self, ability: AbilityType) {
+        if let Some(index) = self.position(ability) {
+            self.start_cooldown(index);
+        }
+    }
+
+    /// Advance every cooldown by `elapsed` game seconds.
+    pub fn tick(&mut self, elapsed: f32) {
+        for k in self.abilities.iter_mut() {
+            if k.cooldown_remaining > 0.0 {
+                k.cooldown_remaining = (k.cooldown_remaining - elapsed).max(0.0);
+            }
+        }
+    }
+}
+
+/// Charges left on a Necromancer's Bone Ward. Each damaging hit through
+/// `combat::apply_damage` spends one and is fully absorbed, while the
+/// `EffectType::BoneWard` timer is running. Removed when the last charge goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoneWard {
+    pub charges: u32,
 }
 
 // =============================================================================
@@ -2485,12 +2742,95 @@ pub struct BossMinion {
 #[derive(Debug, Clone, Copy)]
 pub struct FearImmune;
 
-/// A venomous melee attacker: successful hits apply Slowed for this long
-/// (Giant Spider). Applied directly in the enemy melee path since enemy
-/// natural weapons are not item instances with on-hit affixes.
+/// A venomous melee attacker: successful hits apply Slowed and/or Poisoned
+/// for these durations (0 = none) — Giant Spider slows and poisons, Lesser
+/// Giant Spider only poisons, briefly. Applied directly in the enemy melee path
+/// since enemy natural weapons are not item instances with on-hit affixes.
 #[derive(Debug, Clone, Copy)]
 pub struct Venomous {
     pub slow_duration: f32,
+    pub poison_duration: f32,
+}
+
+/// A melee attacker whose connecting hits open a wound (Bleeding) with this
+/// chance (rats). Applied in the enemy melee path, like [`Venomous`].
+#[derive(Debug, Clone, Copy)]
+pub struct Lacerating {
+    pub bleed_chance: f32,
+}
+
+/// Airborne creature (bats). Flyers pass over non-creature blockers —
+/// furniture, chests, barrels, stalagmites — and may hover on such a tile, but
+/// are still stopped by walls, closed doors and other creatures. They do not
+/// touch the ground, so water, oil, webs, traps and burning ground leave them
+/// alone (`tile_effects::touches_ground`); fire from other sources (a
+/// fireball, an adjacent blaze, a burning attacker) still catches them.
+#[derive(Debug, Clone, Copy)]
+pub struct Flying;
+
+/// Hit-and-run melee (bats): after each swing, hit or miss, break off and
+/// fly away from the target for `BAT_RETREAT_DURATION`, then re-engage.
+/// `retreat_remaining` counts down in game time (`ai::tick_role_cooldowns`).
+/// Deliberately not the Feared status, which drives UI/VFX of its own.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HitAndRun {
+    pub retreat_remaining: f32,
+}
+
+/// A melee attacker whose connecting hits Grab the victim (zombies): see
+/// [`EffectType::Grabbed`] and [`GrabbedBy`].
+#[derive(Debug, Clone, Copy)]
+pub struct Grabber;
+
+/// Who is holding this entity in a grab. Lives alongside the
+/// [`EffectType::Grabbed`] timer so the grab can end early when the grabber
+/// dies, is stunned or is no longer adjacent (`systems::grab`).
+#[derive(Debug, Clone, Copy)]
+pub struct GrabbedBy {
+    pub grabber: Entity,
+}
+
+/// A creature that splits in two when badly hurt (slimes). `generation` is
+/// how many splits produced this one (0 = an original slime); a creature
+/// splits only while `generation < SLIME_MAX_SPLITS` and only once
+/// (`spent`). See `systems::split`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Splits {
+    pub generation: u8,
+    pub spent: bool,
+}
+
+/// A bruiser that charges (orcs): when its target lies on a straight line
+/// `ORC_CHARGE_MIN_RANGE..=ORC_CHARGE_MAX_RANGE` away down a clear lane, it
+/// winds up (`ActionType::OrcChargeWindup`, telegraphed) and then dashes
+/// down that lane. `cooldown` counts down in game time
+/// (`ai::tick_role_cooldowns`). See `systems::charge`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Charger {
+    pub cooldown: f32,
+}
+
+/// Hunts in packs (rats). Alone — no living packmate within
+/// `RAT_PACK_RADIUS` — it flees from a hostile rather than fighting, unless
+/// cornered; with its pack it shrugs off the wounded-morale panic, and when
+/// it becomes aware of a foe (or is hit) its packmates do too. See
+/// `systems::pack`.
+#[derive(Debug, Clone, Copy)]
+pub struct PackHunter;
+
+/// Works around the target's flank (goblins): when an ally is already
+/// adjacent to the target, it heads for the free tile on the far side of the
+/// target from that ally rather than the nearest one.
+#[derive(Debug, Clone, Copy)]
+pub struct Flanker;
+
+/// The Rooted remaining-duration at the moment this entity was last told it
+/// is stuck fast, so the "You're stuck fast!" line is said once per root
+/// application rather than on every step attempt (`grab::pinned_in_place`).
+/// A root applied afresh has more time left than this and is announced again.
+#[derive(Debug, Clone, Copy)]
+pub struct RootStruggleNoticed {
+    pub remaining: f32,
 }
 
 #[cfg(test)]

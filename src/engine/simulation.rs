@@ -42,6 +42,8 @@ pub struct TurnExecutionResult {
     pub floor_transition: Option<StairDirection>,
     pub player_attacked: bool,
     pub player_took_damage: bool,
+    /// Something swung at the player and missed (no damage, but an attack).
+    pub player_was_targeted: bool,
     pub enemy_spotted_player: bool,
     pub skeleton_spawns: Vec<(i32, i32)>,
     /// Positions where Raise Dead completed (spawn friendly skeletons here)
@@ -52,7 +54,10 @@ pub struct TurnExecutionResult {
 
 impl TurnExecutionResult {
     pub fn should_interrupt_path(&self) -> bool {
-        self.player_attacked || self.player_took_damage || self.enemy_spotted_player
+        self.player_attacked
+            || self.player_took_damage
+            || self.player_was_targeted
+            || self.enemy_spotted_player
     }
 }
 
@@ -84,14 +89,10 @@ pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExec
             }
         };
 
-    if time_system::start_action(
-        ctx.world,
-        player_entity,
-        action_type,
-        ctx.clock,
-        ctx.scheduler,
-    )
-    .is_err()
+    // Through the start-effects path, so a reactive ability (Sacrifice) acts
+    // the moment it starts.
+    if time_system::start_action_with_start_effects(&mut ctx.actors(), player_entity, action_type)
+        .is_err()
     {
         return TurnExecutionResult {
             turn_result: TurnResult::Blocked,
@@ -99,19 +100,12 @@ pub fn execute_player_intent(ctx: &mut SimCtx, intent: PlayerIntent) -> TurnExec
         };
     }
 
-    // Start cooldown for Ranger abilities
-    if let Ok(mut ra) = ctx
-        .world
-        .get::<&mut crate::components::RangerAbilities>(player_entity)
-    {
-        let ability_index = match &action_type {
-            ActionType::Tumble { .. } => Some(1), // Index 1 = Tumble
-            ActionType::PlaceSnareTrap { .. } => Some(2), // Index 2 = SnareTrap
-            ActionType::ShootCripplingShot { .. } => Some(3), // Index 3 = CripplingShot
-            _ => None,
-        };
-        if let Some(index) = ability_index {
-            ra.start_cooldown(index);
+    // Targeted kit abilities (Tumble, Snare Trap, Crippling Shot, Sacrifice,
+    // Corpse Explosion, Entangle) are activated by a click rather than through
+    // their hotbar slot, so their cooldown starts here.
+    if let Some(ability) = systems::actions::kit_ability_for_action(&action_type) {
+        if let Ok(mut kit) = ctx.world.get::<&mut crate::components::ClassKit>(player_entity) {
+            kit.start_cooldown_for(ability);
         }
     }
 
@@ -244,6 +238,7 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
 
         time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
         time_system::tick_burn_damage(ctx.world, now, ctx.events);
+        time_system::tick_dot_damage(ctx.world, now, ctx.rng, ctx.events);
         time_system::tick_status_effects(ctx.world, elapsed);
         time_system::tick_ability_cooldowns(ctx.world, elapsed);
         time_system::tick_ranged_cooldowns(ctx.world, elapsed);
@@ -252,6 +247,12 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
         systems::ai::tick_role_cooldowns(ctx.world, elapsed);
 
         time_system::complete_action(ctx, next_entity);
+
+        // Post-action consequences that need the full actor context or must
+        // land before anyone picks their next action: grabs whose holder died
+        // or drifted away let go, and badly hurt slimes split.
+        systems::grab::tick_grabs(ctx.world, ctx.events);
+        systems::split::process_splits(ctx);
 
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
@@ -327,6 +328,7 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
 
     for event in event_list {
         vfx.handle_event(&event, grid, player_entity);
+        vfx.hitstop.on_event(&*world, player_entity, &event);
         ui_state.handle_event(&event);
         ui_state.message_log.record_event(&event, &*world);
 
@@ -363,6 +365,15 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
                     record_player_damage_source(world, player_entity, source);
                 }
             }
+            // A swing that missed still means a fight: stop auto-pathing.
+            GameEvent::AttackMissed { attacker, target, .. } => {
+                if *attacker == player_entity {
+                    result.player_attacked = true;
+                }
+                if *target == player_entity {
+                    result.player_was_targeted = true;
+                }
+            }
             GameEvent::ProjectileHit { source, target: Some(target), damage, .. }
                 if *target == player_entity && *damage > 0 =>
             {
@@ -371,6 +382,13 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
             }
             GameEvent::BurnDamage { entity, .. } if *entity == player_entity => {
                 record_player_damage_source(world, player_entity, "burning".to_string());
+            }
+            GameEvent::DotDamage { entity, kind, .. } if *entity == player_entity => {
+                let source = match kind {
+                    crate::events::DamageKind::Bleed => "bleeding",
+                    _ => "poison",
+                };
+                record_player_damage_source(world, player_entity, source.to_string());
             }
             GameEvent::StarvationDamage { entity, .. } if *entity == player_entity => {
                 record_player_damage_source(world, player_entity, "starvation".to_string());

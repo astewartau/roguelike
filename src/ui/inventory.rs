@@ -6,7 +6,7 @@ use super::icons::UiIcons;
 use super::style;
 use super::{ability_icon, ability_status, CharacterTab, GameUiState, HotbarDrag, HotbarEntry, UiActions};
 use crate::components::{
-    AbilityType, ClassAbility, Equipment, Inventory, RangerAbilities, SecondaryAbility, Stats,
+    AbilityType, ClassAbility, ClassKit, Equipment, Inventory, SecondaryAbility, Stats,
 };
 use crate::systems;
 use hecs::World;
@@ -529,7 +529,7 @@ fn draw_spellbook_column(
         style::panel_header(ui, "SPELLBOOK");
         ui.add_space(10.0);
 
-        // Collect the player's abilities (class, then secondary, then ranger).
+        // Collect the player's abilities (class, then secondary, then kit).
         let mut abilities: Vec<AbilityType> = Vec::new();
         if let Ok(a) = world.get::<&ClassAbility>(player_entity) {
             abilities.push(a.ability_type);
@@ -537,10 +537,8 @@ fn draw_spellbook_column(
         if let Ok(a) = world.get::<&SecondaryAbility>(player_entity) {
             abilities.push(a.ability_type);
         }
-        if let Ok(ra) = world.get::<&RangerAbilities>(player_entity) {
-            for (at, _, _) in ra.abilities.iter() {
-                abilities.push(*at);
-            }
+        if let Ok(kit) = world.get::<&ClassKit>(player_entity) {
+            abilities.extend(kit.abilities.iter().map(|k| k.ability));
         }
         // Learned spells (studied scrolls + the Necromancer's Raise Dead).
         if let Ok(la) = world.get::<&crate::components::LearnedAbilities>(player_entity) {
@@ -583,6 +581,7 @@ fn draw_spellbook_column(
                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, 110)
                 };
                 let (tex, uv) = ability_icon(icons, ability);
+                let tint = super::hotbar::mul_tint(tint, super::hotbar::ability_icon_tint(ability));
                 egui::Image::new(egui::load::SizedTexture::new(tex, size))
                     .uv(uv)
                     .tint(tint)

@@ -39,6 +39,13 @@ mod log_colors {
     pub const SYSTEM: Color32 = Color32::from_rgb(150, 140, 125);
 }
 
+/// How a hit landed, beyond its damage: what the log line remarks on.
+#[derive(Debug, Clone, Copy)]
+struct HitNotes {
+    crit: bool,
+    flanked: bool,
+}
+
 /// A single log line, with a repeat counter so spammy events collapse.
 struct LogMessage {
     text: String,
@@ -142,14 +149,30 @@ impl MessageLog {
         target: Entity,
         damage: i32,
         kind: DamageKind,
-        crit: bool,
+        notes: HitNotes,
     ) {
+        let HitNotes { crit, flanked } = notes;
         let me = self.player_entity;
         // Only log hits the player is part of, to keep the log readable.
         if attacker != me && target != me {
             return;
         }
-        let end = if crit { "!" } else { "." };
+        // A hit on the player that did no damage was fully negated: a Bone
+        // Ward absorb logs its own line, and Tumble's invulnerability gets
+        // one here, rather than "hits you for 0".
+        if target == me && damage == 0 {
+            if crate::queries::has_status_effect(world, me, crate::components::EffectType::Invulnerable) {
+                let subj = self.subject(world, attacker);
+                self.push(format!("{subj}'s attack passes harmlessly by you."), log_colors::GOOD);
+            }
+            return;
+        }
+
+        let end = match (crit || flanked, flanked) {
+            (true, true) => " (flanked)!",
+            (true, false) => "!",
+            _ => ".",
+        };
         let crit_word = if crit { "critically " } else { "" };
 
         match kind {
@@ -194,6 +217,23 @@ impl MessageLog {
                     );
                 }
             }
+            DamageKind::Charge => {
+                // An orc's charge; the charger is never the player.
+                if target == me {
+                    let subj = self.subject(world, attacker);
+                    self.push(
+                        format!("{subj}'s charge slams into you for {damage}{end}"),
+                        log_colors::HARM,
+                    );
+                } else {
+                    let subj = self.subject(world, attacker);
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("{subj}'s charge slams into {obj} for {damage}{end}"),
+                        log_colors::INFO,
+                    );
+                }
+            }
             DamageKind::Slam => {
                 // Boss ground slam; the attacker is never the player.
                 if target == me {
@@ -209,8 +249,61 @@ impl MessageLog {
                     );
                 }
             }
-            // Projectile kinds never arrive here.
-            DamageKind::Arrow | DamageKind::CripplingShot | DamageKind::Potion => {}
+            DamageKind::Thorns => {
+                // `attacker` is the thorny defender, `target` the one pricked.
+                if attacker == me {
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("Your thorns prick {obj} for {damage}."),
+                        log_colors::INFO,
+                    );
+                } else {
+                    let subj = self.subject(world, attacker);
+                    self.push(
+                        format!("{subj}'s thorns prick you for {damage}."),
+                        log_colors::HARM,
+                    );
+                }
+            }
+            DamageKind::CorpseExplosion => {
+                if target == me {
+                    self.push(
+                        format!("The exploding corpse hits you for {damage}."),
+                        log_colors::HARM,
+                    );
+                } else {
+                    let obj = self.object(world, target);
+                    self.push(
+                        format!("The blast tears into {obj} for {damage}."),
+                        log_colors::INFO,
+                    );
+                }
+            }
+            DamageKind::ShieldBash => {
+                if attacker == me {
+                    let obj = self.object(world, target);
+                    self.push(format!("You shield-bash {obj} for {damage}!"), log_colors::INFO);
+                } else {
+                    let subj = self.subject(world, attacker);
+                    self.push(format!("{subj} shield-bashes you for {damage}!"), log_colors::HARM);
+                }
+            }
+            DamageKind::WallSlam => {
+                if target == me {
+                    self.push(format!("You slam into the wall for {damage}!"), log_colors::HARM);
+                } else {
+                    let subj = self.subject(world, target);
+                    self.push(format!("{subj} slams into the wall for {damage}!"), log_colors::INFO);
+                }
+            }
+            // Projectile kinds never arrive here, and DoT ticks arrive as
+            // `DotDamage` (see `record_event`).
+            DamageKind::Arrow
+            | DamageKind::CripplingShot
+            | DamageKind::GraveBolt
+            | DamageKind::Potion
+            | DamageKind::Poison
+            | DamageKind::Bleed => {}
         }
     }
 
@@ -230,6 +323,7 @@ impl MessageLog {
         let weapon = match kind {
             DamageKind::Arrow => "arrow",
             DamageKind::CripplingShot => "crippling shot",
+            DamageKind::GraveBolt => "grave bolt",
             _ => return,
         };
 
@@ -261,9 +355,78 @@ impl MessageLog {
                 damage,
                 kind,
                 crit,
+                flanked,
                 ..
             } => {
-                self.record_attack(world, *attacker, *target, *damage, *kind, *crit);
+                let notes = HitNotes { crit: *crit, flanked: *flanked };
+                self.record_attack(world, *attacker, *target, *damage, *kind, notes);
+            }
+            // Only a swing that the target actually stepped away from is
+            // news; a target that died mid-swing already has its death line.
+            GameEvent::AttackMissed {
+                attacker,
+                target,
+                reason: crate::events::MissReason::OutOfReach,
+                ..
+            } => {
+                if *target == me {
+                    let obj = self.object(world, *attacker);
+                    self.push(format!("You dodge {obj}'s attack."), log_colors::GOOD);
+                } else if *attacker == me {
+                    let subj = self.subject(world, *target);
+                    self.push(format!("{subj} evades your attack."), log_colors::INFO);
+                }
+            }
+            GameEvent::AttackBlocked { attacker, defender, .. } => {
+                if *defender == me {
+                    let obj = self.object(world, *attacker);
+                    self.push(format!("You block {obj}'s blow!"), log_colors::GOOD);
+                } else if *attacker == me {
+                    let subj = self.subject(world, *defender);
+                    self.push(format!("{subj} blocks your blow!"), log_colors::INFO);
+                }
+            }
+            GameEvent::BoneWardRaised { entity, charges } if *entity == me => {
+                let s = if *charges == 1 { "" } else { "s" };
+                self.push(
+                    format!("Bones rise to ward you ({charges} charge{s})."),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::BoneWardAbsorbed { entity, charges_left, .. } if *entity == me => {
+                if *charges_left == 0 {
+                    self.push(
+                        "Your bone ward absorbs the blow and shatters.".to_string(),
+                        log_colors::GOOD,
+                    );
+                } else {
+                    self.push(
+                        format!("Your bone ward absorbs the blow ({charges_left} left)."),
+                        log_colors::GOOD,
+                    );
+                }
+            }
+            GameEvent::SacrificeSwapped { caster, .. } if *caster == me => {
+                self.push(
+                    "You trade places with your skeleton.".to_string(),
+                    log_colors::INFO,
+                );
+            }
+            GameEvent::CorpseExploded { caster, hits, .. } if *caster == me => {
+                let line = match hits {
+                    0 => "The corpse explodes, but catches no one.".to_string(),
+                    1 => "The corpse explodes!".to_string(),
+                    n => format!("The corpse explodes, catching {n} enemies!"),
+                };
+                self.push(line, log_colors::INFO);
+            }
+            GameEvent::EntangleCast { caster, rooted, .. } if *caster == me => {
+                let line = match rooted {
+                    0 => "Vines burst from the ground, but snare nothing.".to_string(),
+                    1 => "Vines burst from the ground and snare an enemy!".to_string(),
+                    n => format!("Vines burst from the ground and snare {n} enemies!"),
+                };
+                self.push(line, log_colors::INFO);
             }
             GameEvent::ProjectileHit {
                 source,
@@ -290,6 +453,39 @@ impl MessageLog {
                     self.push(format!("{who} burns for {damage}."), log_colors::INFO);
                 }
             }
+            GameEvent::DotDamage { entity, damage, kind, .. } => {
+                let (you, them) = match kind {
+                    DamageKind::Bleed => ("You bleed", "bleeds"),
+                    _ => ("Poison burns you", "suffers from poison"),
+                };
+                if *entity == me {
+                    self.push(format!("{you} for {damage}."), log_colors::HARM);
+                } else {
+                    let who = self.subject(world, *entity);
+                    self.push(format!("{who} {them} for {damage}."), log_colors::INFO);
+                }
+            }
+            GameEvent::StatusEffectGained { entity, effect } if *entity == me => {
+                use crate::components::EffectType;
+                let line = match effect {
+                    EffectType::Wet => Some("You are soaked."),
+                    EffectType::Oiled => Some("You are slick with oil."),
+                    EffectType::Poisoned => Some("You are poisoned."),
+                    EffectType::Bleeding => Some("You are bleeding."),
+                    _ => None,
+                };
+                if let Some(line) = line {
+                    self.push(line.to_string(), log_colors::HARM);
+                }
+            }
+            GameEvent::RainCalled { caster, doused, .. } if *caster == me => {
+                let line = match doused {
+                    0 => "Rain pours down from nowhere.".to_string(),
+                    1 => "Rain pours down and puts out a fire.".to_string(),
+                    n => format!("Rain pours down and puts out {n} fires."),
+                };
+                self.push(line, log_colors::INFO);
+            }
             GameEvent::CaughtFire { entity, .. } => {
                 if *entity == me {
                     self.push("You catch fire!".to_string(), log_colors::HARM);
@@ -300,6 +496,26 @@ impl MessageLog {
             }
             GameEvent::BarrelExploded { .. } => {
                 self.push("An oil barrel explodes!".to_string(), log_colors::HARM);
+            }
+            GameEvent::BarrelCracked { .. } => {
+                self.push("The barrel cracks and starts to hiss!".to_string(), log_colors::HARM);
+            }
+            GameEvent::BarrelSoaked { defused, .. } => {
+                let line = if *defused {
+                    "Water douses the burning oil barrel!"
+                } else {
+                    "The oil barrel is soaked through."
+                };
+                self.push(line.to_string(), log_colors::INFO);
+            }
+            GameEvent::PushBlocked { pusher } if *pusher == me => {
+                self.push("It won't budge.".to_string(), log_colors::SYSTEM);
+            }
+            GameEvent::DoorCloseBlocked { closer, .. } if *closer == me => {
+                self.push(
+                    "Something is in the doorway; the door won't close.".to_string(),
+                    log_colors::SYSTEM,
+                );
             }
             GameEvent::BrazierToppled { .. } => {
                 self.push(
@@ -434,6 +650,9 @@ impl MessageLog {
                     AbilityType::Disengage => "You disengage to safety.",
                     AbilityType::Tumble => "You tumble away.",
                     AbilityType::SnareTrap => "You set a snare trap.",
+                    AbilityType::Guard => "You raise your guard.",
+                    AbilityType::Thorns => "Thorny vines wreathe your body.",
+                    AbilityType::GraveBolt => "You hurl a shard of grave-bone.",
                     AbilityType::LearnedBlink
                     | AbilityType::LearnedFireball
                     | AbilityType::LearnedFear
@@ -606,6 +825,49 @@ impl MessageLog {
                 let obj = self.object(world, *target);
                 self.push(format!("{who} shrieks — {obj} speeds up!"), log_colors::INFO);
             }
+            GameEvent::Grabbed { grabber, target } => {
+                let who = self.subject(world, *grabber);
+                if *target == me {
+                    self.push(format!("{who} grabs you!"), log_colors::HARM);
+                } else {
+                    let whom = self.object(world, *target);
+                    self.push(format!("{who} grabs {whom}."), log_colors::INFO);
+                }
+            }
+            GameEvent::GrabSlipped { grabber, target } => {
+                let holder = self.object(world, *grabber);
+                if *target == me {
+                    self.push(format!("You slip out of {holder}'s grasp!"), log_colors::GOOD);
+                } else {
+                    let who = self.subject(world, *target);
+                    self.push(format!("{who} slips out of {holder}'s grasp."), log_colors::INFO);
+                }
+            }
+            GameEvent::GrabReleased { entity } if *entity == me => {
+                self.push("You break free.".to_string(), log_colors::GOOD);
+            }
+            GameEvent::GrabStruggle { entity } if *entity == me => {
+                self.push("You struggle against the grip!".to_string(), log_colors::HARM);
+            }
+            GameEvent::RootStruggle { entity } if *entity == me => {
+                self.push("You're stuck fast!".to_string(), log_colors::HARM);
+            }
+            GameEvent::ChargeWindup { attacker, .. } => {
+                let who = self.subject(world, *attacker);
+                self.push(format!("{who} lowers its head to charge!"), log_colors::HARM);
+            }
+            GameEvent::ChargeMissed { attacker, outcome, .. } => {
+                let who = self.subject(world, *attacker);
+                let line = match outcome {
+                    crate::events::ChargeOutcome::Wall => format!("{who} slams into the wall!"),
+                    crate::events::ChargeOutcome::Stumble => format!("{who} stumbles past!"),
+                };
+                self.push(line, log_colors::GOOD);
+            }
+            GameEvent::SlimeSplit { parent, .. } => {
+                let who = self.subject(world, *parent);
+                self.push(format!("{who} splits in two!"), log_colors::INFO);
+            }
             GameEvent::WebTouched { victim, .. } => {
                 if *victim == me {
                     self.push(
@@ -627,6 +889,16 @@ impl MessageLog {
                         .to_string(),
                     log_colors::GOOD,
                 );
+            }
+            GameEvent::BossAbilityWindup { boss, ability, .. } => {
+                // Only the slam has a wind-up today; the warning is the point.
+                if *ability == crate::components::BossAbility::GroundSlam {
+                    let name = self.name(world, *boss);
+                    self.push(
+                        format!("{name} raises his weapon for a ground slam!"),
+                        log_colors::HARM,
+                    );
+                }
             }
             GameEvent::BossAbilityUsed { boss, ability, .. } => {
                 let name = self.name(world, *boss);

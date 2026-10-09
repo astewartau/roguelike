@@ -15,6 +15,12 @@ use crate::tile::tile_ids;
 use hecs::{Entity, World};
 use rand::Rng;
 
+/// Whether `entity` has health and it has run out. Entities without a
+/// `Health` (already converted to bones, scenery) are not "dead" here.
+pub fn is_dead(world: &World, entity: Entity) -> bool {
+    world.get::<&Health>(entity).map(|h| h.current <= 0).unwrap_or(false)
+}
+
 /// Calculate total damage for a weapon
 pub fn weapon_damage(weapon: &Weapon) -> i32 {
     weapon.base_damage + weapon.damage_bonus
@@ -124,13 +130,14 @@ pub fn resolve_weapon_on_hit(
             // fire::try_combat_ignite); the fire system then handles
             // spread, grass ignition, and dousing.
             Affix::OnHitIgnite(chance) if !target_died && rng.gen::<f32>() < *chance => {
-                crate::systems::effects::add_effect_to_entity(
+                // A Wet target refuses the fire (see effects::add_effect).
+                let ignited = crate::systems::effects::add_effect_to_entity(
                     world,
                     target,
                     EffectType::Burning,
                     BURNING_DURATION,
                 );
-                if let Some(pos) = crate::queries::get_entity_position(world, target) {
+                if let Some(pos) = crate::queries::get_entity_position(world, target).filter(|_| ignited) {
                     events.push(GameEvent::CaughtFire { entity: target, position: pos });
                 }
             }
@@ -180,10 +187,79 @@ fn heal_entity(world: &mut World, entity: Entity, amount: i32) {
     }
 }
 
+/// Which side of the fight a creature is on, for flanking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatSide {
+    /// The player and their companions (tamed or raised).
+    Player,
+    /// Hostile monsters: ChaseAI and not tamed.
+    Enemy,
+}
+
+/// Which side `entity` fights on, or None for anything that is not a
+/// combatant (scenery, NPCs).
+pub fn combat_side(world: &World, entity: Entity) -> Option<CombatSide> {
+    let Ok(e) = world.entity(entity) else {
+        return None;
+    };
+    if e.has::<crate::components::Player>()
+        || e.has::<crate::components::TamedBy>()
+        || e.has::<CompanionAI>()
+    {
+        Some(CombatSide::Player)
+    } else if e.has::<ChaseAI>() {
+        Some(CombatSide::Enemy)
+    } else {
+        None
+    }
+}
+
+/// Whether the tile offset `d` (from the target) lies at least 135 degrees
+/// around from the attacker's offset `a`: the tile directly opposite the
+/// attacker, or either tile beside it that also touches the target. Integer
+/// form of `cos(angle) <= -1/sqrt(2)`.
+fn is_far_side(a: (i32, i32), d: (i32, i32)) -> bool {
+    let dot = a.0 * d.0 + a.1 * d.1;
+    let a2 = a.0 * a.0 + a.1 * a.1;
+    let d2 = d.0 * d.0 + d.1 * d.1;
+    dot < 0 && 2 * dot * dot >= a2 * d2
+}
+
+/// Whether `target` is flanked against a melee blow from `attacker`: some
+/// other living, un-Stunned creature hostile to the target stands on its far
+/// side (see [`is_far_side`]) — the player with a companion opposite, or an
+/// orc and a goblin either side of the player.
+pub fn is_flanked(world: &World, attacker: Entity, target: Entity) -> bool {
+    let (Some(a), Some(t)) = (
+        crate::queries::get_entity_position(world, attacker),
+        crate::queries::get_entity_position(world, target),
+    ) else {
+        return false;
+    };
+    let Some(target_side) = combat_side(world, target) else {
+        return false;
+    };
+    let toward_attacker = (a.0 - t.0, a.1 - t.1);
+    if toward_attacker == (0, 0) {
+        return false;
+    }
+    world.query::<(&Position, &Health)>().iter().any(|(id, (p, h))| {
+        let d = (p.x - t.0, p.y - t.1);
+        id != attacker
+            && id != target
+            && h.current > 0
+            && d.0.abs().max(d.1.abs()) == 1
+            && is_far_side(toward_attacker, d)
+            && combat_side(world, id).is_some_and(|side| side != target_side)
+            && !crate::queries::has_status_effect(world, id, EffectType::Stunned)
+    })
+}
+
 /// Push `target` one tile directly away from `attacker` if the destination
 /// tile is walkable and unoccupied. Updates the spatial cache and emits an
-/// `EntityMoved` event so downstream systems stay consistent.
-fn try_knockback(
+/// `EntityMoved` event so downstream systems stay consistent. Returns whether
+/// the target moved (false: a wall or blocker stopped it).
+pub(crate) fn try_knockback(
     world: &mut World,
     grid: &Grid,
     spatial_cache: &mut SpatialCache,
@@ -191,33 +267,33 @@ fn try_knockback(
     target: Entity,
     events: &mut EventQueue,
     rng: &mut impl Rng,
-) {
+) -> bool {
     let Some((ax, ay)) = crate::queries::get_entity_position(world, attacker) else {
-        return;
+        return false;
     };
     let Some((tx, ty)) = crate::queries::get_entity_position(world, target) else {
-        return;
+        return false;
     };
 
     let dx = (tx - ax).signum();
     let dy = (ty - ay).signum();
     if dx == 0 && dy == 0 {
-        return;
+        return false;
     }
 
     let dest = (tx + dx, ty + dy);
     if !grid.is_walkable(dest.0, dest.1) {
-        return;
+        return false;
     }
     if crate::queries::is_position_blocked(spatial_cache, dest.0, dest.1, Some(target)) {
-        return;
+        return false;
     }
 
     if let Ok(mut pos) = world.get::<&mut Position>(target) {
         pos.x = dest.0;
         pos.y = dest.1;
     } else {
-        return;
+        return false;
     }
     // Snap the visual so the shove reads as an impact rather than a stroll.
     if let Ok(mut vis) = world.get::<&mut VisualPosition>(target) {
@@ -231,6 +307,9 @@ fn try_knockback(
         to: dest,
     });
 
+    // Whatever the victim lands in acts on them: water, oil, fire, traps.
+    crate::systems::tile_effects::on_enter_tile(world, grid, target, dest, events, rng);
+
     // Knocked into a lit brazier? It topples onto the victim, spilling fire
     // over the tile they just landed on (see systems::fire::topple_brazier).
     let brazier_hit: Option<Entity> = world
@@ -241,6 +320,7 @@ fn try_knockback(
     if let Some(brazier) = brazier_hit {
         crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
     }
+    true
 }
 
 /// Apply `raw` incoming damage to `target`, accounting for invulnerability,
@@ -256,32 +336,69 @@ pub fn apply_damage(
     target: Entity,
     raw: i32,
     rng: &mut impl Rng,
+    events: &mut crate::events::EventQueue,
+) -> i32 {
+    apply_damage_inner(world, target, raw, false, rng, events)
+}
+
+/// Apply one damage-over-time tick (Poisoned, Bleeding) to `target`.
+///
+/// DoTs are not blows, so compared with [`apply_damage`] they **bypass armor**
+/// (venom and open wounds are not stopped by a breastplate), get no sneak
+/// multiplier, do not spend a Bone Ward charge (the ward absorbs *hits*), and
+/// make no combat noise. Invulnerability and Protected/Barkskin still apply,
+/// as do waking an unaware victim and the morale check.
+pub fn apply_damage_dot(
+    world: &mut World,
+    target: Entity,
+    raw: i32,
+    rng: &mut impl Rng,
+    events: &mut crate::events::EventQueue,
+) -> i32 {
+    apply_damage_inner(world, target, raw, true, rng, events)
+}
+
+fn apply_damage_inner(
+    world: &mut World,
+    target: Entity,
+    raw: i32,
+    dot: bool,
+    rng: &mut impl Rng,
+    events: &mut crate::events::EventQueue,
 ) -> i32 {
     // Invulnerable negates all damage.
     if crate::queries::has_status_effect(world, target, EffectType::Invulnerable) {
         return 0;
     }
 
+    // A Bone Ward swallows the whole hit and spends a charge.
+    if !dot && absorb_with_bone_ward(world, target, events) {
+        return 0;
+    }
+
     // Sneak attack: an unaware target takes extra damage from this hit.
     // Symmetric for the player: while asleep (the `Asleep` marker the sleep
     // action adds) the player counts as unaware and eats the same multiplier.
-    let unaware = world
-        .get::<&ChaseAI>(target)
-        .map(|ai| ai.state == crate::components::AIState::Unaware)
-        .unwrap_or(false)
-        || world.get::<&crate::components::Asleep>(target).is_ok();
+    let unaware = !dot
+        && (world
+            .get::<&ChaseAI>(target)
+            .map(|ai| ai.state == crate::components::AIState::Unaware)
+            .unwrap_or(false)
+            || world.get::<&crate::components::Asleep>(target).is_ok());
     let mut dmg = if unaware {
         (raw as f32 * SNEAK_ATTACK_MULT) as i32
     } else {
         raw
     };
 
-    // Flat armor reduction (0 for entities without armor).
-    let defense = world
-        .get::<&Equipment>(target)
-        .map(|e| e.total_defense())
-        .unwrap_or(0);
-    dmg -= defense;
+    // Flat armor reduction (0 for entities without armor). DoTs bypass it.
+    if !dot {
+        let defense = world
+            .get::<&Equipment>(target)
+            .map(|e| e.total_defense())
+            .unwrap_or(0);
+        dmg -= defense;
+    }
 
     // Multiplicative damage reduction from Protected / Barkskin.
     if crate::queries::has_status_effect(world, target, EffectType::Protected)
@@ -299,15 +416,26 @@ pub fn apply_damage(
         hp_after = (health.current, health.max.max(1));
     }
 
+    // An oil barrel cracks open at 0 HP (break fuse), and any hit on one
+    // whose fuse is already running sets it off. DoT ticks are not blows.
+    if !dot {
+        crate::systems::fire::on_barrel_damaged(world, target, events);
+    }
+
     // Taking a hit cancels any alarm shout and wakes an unaware victim.
     crate::systems::ai::interrupt_shout_on_damage(world, target);
     crate::systems::ai::wake_on_attacked(world, target);
 
+    // A pack rat that is hit alerts its packmates.
+    crate::systems::pack::alert_pack_of_attack(world, target);
+
     // Morale: a surviving enemy that drops below the HP threshold may panic.
-    // Bosses (FearImmune) never break.
+    // Bosses (FearImmune) never break, nor does a pack rat with its pack
+    // around it.
     if hp_after.0 > 0
         && world.get::<&ChaseAI>(target).is_ok()
         && world.get::<&crate::components::FearImmune>(target).is_err()
+        && !crate::systems::pack::steadied_by_pack(world, target)
     {
         let frac = hp_after.0 as f32 / hp_after.1 as f32;
         if frac < MORALE_HP_THRESHOLD && rng.gen_bool(MORALE_FLEE_CHANCE) {
@@ -321,11 +449,48 @@ pub fn apply_damage(
     }
 
     // Combat is loud: wake nearby sleeping enemies that "hear" the impact.
-    if let Some(pos) = pos {
+    // A DoT tick is silent.
+    if let Some(pos) = pos.filter(|_| !dot) {
         crate::systems::ai::wake_enemies_in_radius(world, pos, MELEE_NOISE_RADIUS);
     }
 
     dmg
+}
+
+/// Spend one Bone Ward charge on an incoming hit, if `target` has a live ward.
+/// Returns true if the hit was absorbed. The ward needs both the charge
+/// component and its (timed) status effect: when the effect expires the
+/// leftover charges are discarded here rather than lingering.
+fn absorb_with_bone_ward(
+    world: &mut World,
+    target: Entity,
+    events: &mut crate::events::EventQueue,
+) -> bool {
+    let Some(charges) = world.get::<&crate::components::BoneWard>(target).ok().map(|w| w.charges)
+    else {
+        return false;
+    };
+    if charges == 0 || !crate::queries::has_status_effect(world, target, EffectType::BoneWard) {
+        let _ = world.remove_one::<crate::components::BoneWard>(target);
+        return false;
+    }
+    let charges_left = charges - 1;
+    if charges_left == 0 {
+        let _ = world.remove_one::<crate::components::BoneWard>(target);
+        crate::systems::effects::remove_effect_from_entity(world, target, EffectType::BoneWard);
+    } else if let Ok(mut ward) = world.get::<&mut crate::components::BoneWard>(target) {
+        ward.charges = charges_left;
+    }
+    let position = world
+        .get::<&Position>(target)
+        .map(|p| (p.x as f32 + 0.5, p.y as f32 + 0.5))
+        .unwrap_or((0.0, 0.0));
+    events.push(crate::events::GameEvent::BoneWardAbsorbed {
+        entity: target,
+        charges_left,
+        position,
+    });
+    true
 }
 
 /// Handle a ContainerOpened event - update sprite for containers
@@ -403,8 +568,10 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // Never convert the player into a corpse - the player keeps its Health
         // component (at <=0) so the engine can detect death and show the retry
         // screen. The dead player is handled separately by the game over flow.
-        // Oil barrels are also skipped: a destroyed barrel detonates in the
-        // fire system (systems::fire::tick_fire) instead of leaving bones.
+        // Oil barrels are also skipped: a broken barrel (0 HP) stays in the
+        // world, still attackable, while its break fuse runs, and then
+        // detonates in the fire system (systems::fire::tick_fire) instead of
+        // leaving bones.
         if world.entity(id).map(|e| e.has::<crate::components::OilBarrel>()).unwrap_or(false) {
             continue;
         }
@@ -414,7 +581,16 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
                 .entity(id)
                 .map(|e| e.has::<crate::components::Boss>())
                 .unwrap_or(false);
-            let xp = calculate_xp_value(stats) * if is_boss { BOSS_XP_MULT } else { 1 };
+            let mut xp = calculate_xp_value(stats) * if is_boss { BOSS_XP_MULT } else { 1 };
+            // Split slimes pay half per generation, so the two halves of a
+            // split together are worth what the original was.
+            let split_generation = world
+                .get::<&crate::components::Splits>(id)
+                .map(|s| s.generation)
+                .unwrap_or(0);
+            if split_generation > 0 {
+                xp = (xp >> split_generation.min(31)).max(1);
+            }
             // Kill counter: hostile enemies only (companions carry
             // CompanionAI instead of ChaseAI and don't count).
             if world.entity(id).map(|e| e.has::<ChaseAI>()).unwrap_or(false) {
@@ -562,6 +738,75 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::StatusEffects;
+
+    /// A knockback shove lands its victim on a tile like any other arrival:
+    /// shoved into an unlit oil puddle, it comes up Oiled (and slippery);
+    /// shoved into water, it comes up Wet and no longer burning.
+    #[test]
+    fn knockback_landing_runs_tile_effects() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        let mut grid = crate::grid::Grid::new_floor(20, 20, 0, &mut rng);
+        grid.water_positions.clear();
+        for x in 1..10 {
+            for y in 1..4 {
+                if let Some(t) = grid.get_mut(x, y) {
+                    t.tile_type = crate::tile::TileType::Floor;
+                }
+            }
+        }
+        grid.water_positions.push((4, 3));
+
+        let mut world = World::new();
+        let attacker = world.spawn((Position::new(1, 1),));
+        let victim = world.spawn((Position::new(2, 1), StatusEffects::new()));
+        let wet_victim = world.spawn((Position::new(2, 3), StatusEffects::new()));
+        let shover = world.spawn((Position::new(1, 3),));
+        crate::spawning::spawn_oil_puddle(&mut world, 3, 1);
+        crate::systems::effects::add_effect_to_entity(
+            &mut world,
+            wet_victim,
+            EffectType::Burning,
+            BURNING_DURATION,
+        );
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        let mut events = crate::events::EventQueue::new();
+
+        try_knockback(&mut world, &grid, &mut cache, attacker, victim, &mut events, &mut rng);
+        assert_eq!(crate::queries::get_entity_position(&world, victim), Some((3, 1)));
+        assert!(crate::queries::has_status_effect(&world, victim, EffectType::Oiled));
+        assert!(crate::queries::is_slippery(&world, victim));
+
+        // Shove the burning victim twice, (2,3) -> (3,3) -> (4,3): into the water.
+        try_knockback(&mut world, &grid, &mut cache, shover, wet_victim, &mut events, &mut rng);
+        if let Ok(mut p) = world.get::<&mut Position>(shover) {
+            p.x = 2;
+        }
+        try_knockback(&mut world, &grid, &mut cache, shover, wet_victim, &mut events, &mut rng);
+        assert_eq!(crate::queries::get_entity_position(&world, wet_victim), Some((4, 3)));
+        assert!(crate::queries::has_status_effect(&world, wet_victim, EffectType::Wet));
+        assert!(!crate::queries::has_status_effect(&world, wet_victim, EffectType::Burning));
+    }
+
+    /// DoT damage bypasses armor; a normal hit does not.
+    #[test]
+    fn dot_damage_ignores_armor() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let mut events = crate::events::EventQueue::new();
+        let mut world = World::new();
+        let mut armor = crate::components::Equipment::with_weapon(Weapon::claws(1));
+        armor.body = Some(crate::components::ItemInstance::plain(crate::components::ItemType::ChainMail));
+        let defense = armor.total_defense();
+        assert!(defense >= 1, "the test needs real armor");
+        let e = world.spawn((Health::new(50), armor, StatusEffects::new()));
+
+        let hit = apply_damage(&mut world, e, defense, &mut rng, &mut events);
+        assert_eq!(hit, 1, "armor soaks a hit down to the minimum");
+        let dot = apply_damage_dot(&mut world, e, 2, &mut rng, &mut events);
+        assert_eq!(dot, 2, "a DoT tick ignores armor");
+    }
 
     #[test]
     fn test_weapon_damage() {

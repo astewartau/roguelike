@@ -136,3 +136,23 @@ pub const CAVERN_GIANT_SPIDER_FLOOR: u32 = 3;
 /// this pushes fire further from doors but leaves small rooms with nowhere
 /// valid to put it.
 pub const DOORWAY_FIRE_CLEARANCE: i32 = 1;
+
+// =============================================================================
+// OIL SPILLS (unlit puddles placed at floor construction)
+// =============================================================================
+// See `engine::initialization::spawn_oil_spills`. Unlit puddles are harmless
+// until fire reaches them, but anything that walks through one is Oiled.
+
+/// Chance each oil barrel on a floor has leaked a small spill beside it.
+pub const OIL_SPILL_BARREL_CHANCE: f64 = 0.6;
+/// Puddle tiles in a barrel spill (min).
+pub const OIL_SPILL_BARREL_MIN: usize = 1;
+/// Puddle tiles in a barrel spill (max).
+pub const OIL_SPILL_BARREL_MAX: usize = 3;
+/// Chance each room (except the shop) has a stray spill somewhere on its floor.
+/// Higher turns every room into a fire trap.
+pub const OIL_SPILL_ROOM_CHANCE: f64 = 0.1;
+/// Puddle tiles in a stray room spill (min).
+pub const OIL_SPILL_ROOM_MIN: usize = 2;
+/// Puddle tiles in a stray room spill (max).
+pub const OIL_SPILL_ROOM_MAX: usize = 4;

@@ -94,6 +94,11 @@ pub enum VfxType {
     },
     /// Floating heal number (green, positive)
     HealNumber { amount: i32 },
+    /// Floating word over a swing that did not land as a hit: "miss" for a
+    /// target that stepped out of reach, "BLOCK" for a guarded blow, "WARD"
+    /// for a hit a bone ward swallowed. Drawn in the damage-number style;
+    /// `jitter` as for `DamageNumber`.
+    MissText { jitter: f32, label: &'static str },
     /// Fire particle effect (looping)
     #[allow(dead_code)] // Reserved for torch/fire terrain
     Fire { seed: f32 },
@@ -118,6 +123,7 @@ impl VfxType {
             VfxType::Slash { .. } => SLASH_VFX_DURATION,
             VfxType::DamageNumber { .. } => DAMAGE_NUMBER_DURATION,
             VfxType::HealNumber { .. } => DAMAGE_NUMBER_DURATION, // Same duration as damage
+            VfxType::MissText { .. } => DAMAGE_NUMBER_DURATION,
             VfxType::Fire { .. } => f32::INFINITY, // Fire loops forever
             VfxType::Alert => ALERT_DURATION,
             VfxType::Explosion { .. } => EXPLOSION_DURATION,
@@ -198,6 +204,9 @@ pub struct VfxManager {
     /// in the simulation, where the camera is not reachable, while the engine
     /// tick has both this and the camera in hand.
     shake_requests: Vec<ShakeRequest>,
+    /// Hit-stop timer, fed by events alongside the rest of the vfx and read
+    /// by the engine tick to slow the animation clock (`systems::hitstop`).
+    pub hitstop: crate::systems::hitstop::HitStop,
 }
 
 impl VfxManager {
@@ -209,6 +218,7 @@ impl VfxManager {
             taming_beams: Vec::new(),
             resting_bubble: None,
             shake_requests: Vec::new(),
+            hitstop: crate::systems::hitstop::HitStop::new(),
         }
     }
 
@@ -243,6 +253,18 @@ impl VfxManager {
     pub fn spawn_damage_number(&mut self, x: f32, y: f32, amount: i32, tier: DamageTier) {
         let jitter = (rand::random::<f32>() * 2.0 - 1.0) * DAMAGE_NUMBER_JITTER;
         self.spawn(x, y, VfxType::DamageNumber { amount, tier, jitter });
+    }
+
+    /// Spawn a floating "miss" (a melee swing that found nobody in reach).
+    /// Jitter comes from the thread RNG for the same reason as damage numbers.
+    pub fn spawn_miss_text(&mut self, x: f32, y: f32) {
+        self.spawn_float_text(x, y, "miss");
+    }
+
+    /// Spawn a floating word in the miss-text style ("BLOCK", "WARD").
+    pub fn spawn_float_text(&mut self, x: f32, y: f32, label: &'static str) {
+        let jitter = (rand::random::<f32>() * 2.0 - 1.0) * DAMAGE_NUMBER_JITTER;
+        self.spawn(x, y, VfxType::MissText { jitter, label });
     }
 
     /// Spawn an alert indicator "!" above an entity
@@ -331,7 +353,7 @@ impl VfxManager {
     /// Only spawns VFX for positions visible to the player (not in fog of war).
     pub fn handle_event(&mut self, event: &GameEvent, grid: &Grid, player: hecs::Entity) {
         match event {
-            GameEvent::AttackHit { target, target_pos, damage, crit, .. } => {
+            GameEvent::AttackHit { target, target_pos, damage, crit, flanked, .. } => {
                 // Only show VFX if the position is visible to the player
                 let tile_x = target_pos.0 as i32;
                 let tile_y = target_pos.1 as i32;
@@ -343,6 +365,53 @@ impl VfxManager {
                         *damage,
                         damage_tier(Some(*target), player, *damage, *crit),
                     );
+                    // A flanked hit says so beside its number.
+                    if *flanked {
+                        self.spawn_float_text(target_pos.0, target_pos.1, "FLANK");
+                    }
+                }
+            }
+            GameEvent::ChargeMissed { position, outcome: crate::events::ChargeOutcome::Wall, .. } => {
+                self.spawn_float_text(position.0 as f32 + 0.5, position.1 as f32 + 0.5, "SLAM");
+            }
+            GameEvent::AttackMissed {
+                target_pos: Some(target_pos),
+                reason: crate::events::MissReason::OutOfReach,
+                ..
+            } if grid
+                .get(target_pos.0 as i32, target_pos.1 as i32)
+                .map(|t| t.visible)
+                .unwrap_or(false) =>
+            {
+                self.spawn_miss_text(target_pos.0, target_pos.1);
+            }
+            GameEvent::AttackBlocked { defender_pos, .. }
+                if grid
+                    .get(defender_pos.0 as i32, defender_pos.1 as i32)
+                    .map(|t| t.visible)
+                    .unwrap_or(false) =>
+            {
+                self.spawn_float_text(defender_pos.0, defender_pos.1, "BLOCK");
+            }
+            GameEvent::BoneWardAbsorbed { position, .. }
+                if grid
+                    .get(position.0 as i32, position.1 as i32)
+                    .map(|t| t.visible)
+                    .unwrap_or(false) =>
+            {
+                self.spawn_float_text(position.0, position.1, "WARD");
+            }
+            // Vines burst out of every tile of the patch: the green potion
+            // splash, reused rather than a new effect.
+            GameEvent::EntangleCast { tiles, .. } => {
+                for &(x, y) in tiles {
+                    if grid.get(x, y).map(|t| t.visible).unwrap_or(false) {
+                        self.spawn_potion_splash(
+                            x as f32 + 0.5,
+                            y as f32 + 0.5,
+                            crate::components::ItemType::RegenerationPotion,
+                        );
+                    }
                 }
             }
             GameEvent::ProjectileHit { position, damage, target, .. }
@@ -384,6 +453,33 @@ impl VfxManager {
                         if grid.get(tx, ty).map(|t| t.visible).unwrap_or(false) {
                             self.spawn_slash(tx as f32 + 0.5, ty as f32 + 0.5);
                         }
+                    }
+                }
+            }
+            GameEvent::DotDamage { entity, position, damage, .. }
+                if grid
+                    .get(position.0 as i32, position.1 as i32)
+                    .map(|t| t.visible)
+                    .unwrap_or(false) =>
+            {
+                // Poison and bleed ticks float a number like burn damage does.
+                self.spawn_damage_number(
+                    position.0,
+                    position.1,
+                    *damage,
+                    damage_tier(Some(*entity), player, *damage, false),
+                );
+            }
+            // Rain falls on every tile of the patch: the water-flask splash,
+            // reused rather than a new effect.
+            GameEvent::RainCalled { tiles, .. } => {
+                for &(x, y) in tiles {
+                    if grid.get(x, y).map(|t| t.visible).unwrap_or(false) {
+                        self.spawn_potion_splash(
+                            x as f32 + 0.5,
+                            y as f32 + 0.5,
+                            crate::components::ItemType::WaterFlaskFull,
+                        );
                     }
                 }
             }

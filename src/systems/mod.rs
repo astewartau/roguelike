@@ -13,12 +13,22 @@
 //! - `inventory`: Container and inventory interactions
 //! - `rendering`: FOV, visibility, and render data collection
 //! - `projectile`: Arrow and projectile movement
+//! - `push`: Shoving pushable furniture (Push action, Shield Bash)
+//! - `charge`: Orc charges (wind-up lane, dash, impact / wall stun / stumble)
+//! - `grab`: Zombie grabs (hold a victim in place; early release)
+//! - `hitstop`: Brief real-time freeze of visual animation on heavy blows
+//! - `pack`: Rat packs (alone-means-flee, pack morale, shared alerts)
+//! - `split`: Slimes splitting in two when badly hurt
+//! - `telegraph`: Which tiles in-progress hostile attacks threaten (for UI/animation)
+//! - `tile_context`: What the player knows about a tile, and what they can do there (info panel, context menu)
+//! - `tile_effects`: What a tile does to whoever enters or stands on it
 
 pub mod action_dispatch;
 pub mod actions;
 pub mod ai;
 pub mod animation;
 pub mod camera_shake;
+pub mod charge;
 pub mod combat;
 pub mod dev_tools;
 pub mod dialogue;
@@ -27,14 +37,22 @@ pub mod effects;
 pub mod experience;
 pub mod fire;
 pub mod furniture;
+pub mod hitstop;
+pub mod grab;
 pub mod identify;
 pub mod inventory;
 pub mod item_defs;
 pub mod items;
+pub mod pack;
 pub mod player_input;
 pub mod projectile;
+pub mod push;
 pub mod rendering;
+pub mod split;
 pub mod survival;
+pub mod telegraph;
+pub mod tile_context;
+pub mod tile_effects;
 pub mod webs;
 
 // Re-export commonly used items

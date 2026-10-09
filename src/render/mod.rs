@@ -47,6 +47,9 @@ pub struct SceneLighting<'a> {
     /// the falloff, so it colours everything the player can see.
     pub player_light_color: (f32, f32, f32),
     pub light_sources: &'a [SceneLight],
+    /// Tile to lighten slightly (the one under the mouse cursor), if any.
+    /// See `HOVER_TILE_BRIGHTEN`.
+    pub highlight_tile: Option<(i32, i32)>,
 }
 
 /// The flicker signal for one light at one instant, in `[-scale, scale]`.

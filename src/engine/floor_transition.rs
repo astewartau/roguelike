@@ -88,6 +88,14 @@ pub enum SavedEntityType {
         kind: crate::components::FurnitureKind,
         used: bool,
     },
+    /// An unlit oil puddle. A puddle that is burning when the player leaves
+    /// is not saved: it would have burned away long before they returned.
+    OilPuddle,
+    /// An intact explosive oil barrel (a lit fuse is not saved; the barrel
+    /// comes back cold, at its saved health).
+    OilBarrel {
+        health_current: i32,
+    },
 }
 
 /// Result of a floor transition. The new grid is written straight into the
@@ -234,6 +242,33 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
         });
     }
 
+    // Save unlit oil puddles (burning ones would be gone by the next visit).
+    for (_, pos) in world
+        .query::<&Position>()
+        .with::<&crate::components::OilPuddle>()
+        .without::<&crate::components::BurningOil>()
+        .iter()
+    {
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type: SavedEntityType::OilPuddle,
+        });
+    }
+
+    // Save oil barrels that are still standing.
+    for (_, (pos, health)) in world
+        .query::<(&Position, &Health)>()
+        .with::<&crate::components::OilBarrel>()
+        .iter()
+    {
+        if health.current > 0 {
+            entities.push(SavedEntity {
+                pos: (pos.x, pos.y),
+                entity_type: SavedEntityType::OilBarrel { health_current: health.current },
+            });
+        }
+    }
+
     SavedFloor { grid, entities }
 }
 
@@ -362,6 +397,10 @@ pub fn load_floor(
                 } else if !looted {
                     let _ = ctx.world.insert_one(entity, BlocksMovement);
                 }
+                // Storage barrels can be shoved (see `components::Pushable`).
+                if *container_type == ContainerType::Barrel {
+                    let _ = ctx.world.insert_one(entity, crate::components::Pushable);
+                }
             }
             SavedEntityType::Door { is_open } => {
                 if *is_open {
@@ -414,6 +453,15 @@ pub fn load_floor(
                 let piece = spawning::spawn_furniture(ctx.world, pos.x, pos.y, *kind);
                 if *used {
                     crate::systems::furniture::mark_spent(ctx.world, piece);
+                }
+            }
+            SavedEntityType::OilPuddle => {
+                spawning::spawn_oil_puddle(ctx.world, pos.x, pos.y);
+            }
+            SavedEntityType::OilBarrel { health_current } => {
+                let barrel = spawning::spawn_oil_barrel(ctx.world, pos.x, pos.y);
+                if let Ok(mut health) = ctx.world.get::<&mut Health>(barrel) {
+                    health.current = *health_current;
                 }
             }
         }
@@ -651,5 +699,74 @@ mod tests {
 
         let skeleton = find_named(&world, "Skeleton");
         assert_eq!(world.get::<&Health>(skeleton).unwrap().current, 9);
+    }
+
+    fn unlit_puddles(world: &World) -> Vec<(i32, i32)> {
+        let mut v: Vec<(i32, i32)> = world
+            .query::<&Position>()
+            .with::<&crate::components::OilPuddle>()
+            .without::<&crate::components::BurningOil>()
+            .iter()
+            .map(|(_, p)| (p.x, p.y))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Floor construction spills unlit oil (beside barrels and in rooms), on
+    /// plain floor only and never under a blocker; and the puddles — and the
+    /// barrels — come back when the floor is revisited.
+    #[test]
+    fn generated_oil_spills_are_unlit_valid_and_survive_a_revisit() {
+        use crate::components::{BlocksMovement, OilBarrel, PlayerClass};
+        let mut total = 0;
+        let mut checked_round_trip = false;
+        for seed in 0..12u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let grid = Grid::new_floor(DUNGEON_DEFAULT_WIDTH, DUNGEON_DEFAULT_HEIGHT, 0, &mut rng);
+            let (mut world, player, _) =
+                super::super::initialization::init_world(&grid, PlayerClass::Fighter, &mut rng);
+            let puddles = unlit_puddles(&world);
+            total += puddles.len();
+            for &(x, y) in &puddles {
+                assert_eq!(
+                    grid.get(x, y).map(|t| t.tile_type),
+                    Some(crate::tile::TileType::Floor),
+                    "seed {seed}: puddle on plain floor"
+                );
+                assert!(!grid.water_positions.contains(&(x, y)));
+                let blocked = world
+                    .query::<(&Position, &BlocksMovement)>()
+                    .iter()
+                    .any(|(id, (p, _))| id != player && (p.x, p.y) == (x, y));
+                assert!(!blocked, "seed {seed}: no puddle under a blocker at {x},{y}");
+            }
+
+            if !puddles.is_empty() && !checked_round_trip {
+                let barrels = world.query::<&OilBarrel>().iter().count();
+                save_and_reload(&mut world, grid, player);
+                assert_eq!(unlit_puddles(&world), puddles, "seed {seed}: puddles survive");
+                assert_eq!(
+                    world.query::<&OilBarrel>().iter().count(),
+                    barrels,
+                    "seed {seed}: oil barrels survive"
+                );
+                checked_round_trip = true;
+            }
+        }
+        assert!(total > 0, "twelve floors produced no oil spill at all");
+        assert!(checked_round_trip);
+    }
+
+    /// A puddle that is burning when the player leaves is not saved.
+    #[test]
+    fn burning_puddles_are_not_saved() {
+        let (mut world, grid, player) = setup();
+        let lit = spawning::spawn_oil_puddle(&mut world, 3, 3);
+        crate::systems::fire::ignite_oil_puddle(&mut world, lit);
+        spawning::spawn_oil_puddle(&mut world, 4, 4);
+        save_and_reload(&mut world, grid, player);
+        assert_eq!(unlit_puddles(&world), vec![(4, 4)]);
+        assert_eq!(world.query::<&crate::components::OilPuddle>().iter().count(), 1);
     }
 }

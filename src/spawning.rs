@@ -56,10 +56,32 @@ pub struct EnemyDef {
     pub flammability: f32,
     /// Venomous bite: melee hits apply Slowed for this many seconds (0 = none)
     pub venom_slow: f32,
+    /// Venomous bite: melee hits apply Poisoned for this many seconds (0 = none)
+    pub venom_poison: f32,
+    /// Chance a connecting melee hit opens a wound (Bleeding; 0 = never)
+    pub bleed_chance: f32,
     /// Support caster (Goblin Shaman): kites and heals/hastes allies
     pub support: bool,
     /// Spider-kin: ignores webs and periodically lays them
     pub spider: bool,
+    /// Airborne (bats): flies over furniture and ground hazards (`Flying`)
+    pub flying: bool,
+    /// Breaks off after every melee swing and re-engages (`HitAndRun`)
+    pub hit_and_run: bool,
+    /// Connecting melee hits Grab the victim in place (zombies; `Grabber`)
+    pub grabs: bool,
+    /// Splits in two when badly hurt (slimes; `Splits`)
+    pub splits: bool,
+    /// How many splits produced this creature (0 = an original). Split
+    /// halves are tinted smaller-looking and pay XP halved per generation.
+    /// Part of the template so a revisited floor keeps the lineage.
+    pub split_generation: u8,
+    /// Charges down straight lanes at a distant target (orcs; `Charger`)
+    pub charges: bool,
+    /// Hunts in packs: spawns in groups, flees when alone (rats; `PackHunter`)
+    pub pack: bool,
+    /// Works round to the far side of an engaged target (goblins; `Flanker`)
+    pub flanks: bool,
 }
 
 impl EnemyDef {
@@ -162,11 +184,23 @@ impl EnemyDef {
             );
         }
 
-        // Venomous biters apply Slowed on melee hits (enemy melee path).
-        if self.venom_slow > 0.0 {
+        // Venomous biters apply Slowed and/or Poisoned on melee hits (enemy
+        // melee path).
+        if self.venom_slow > 0.0 || self.venom_poison > 0.0 {
             let _ = world.insert_one(
                 entity,
-                crate::components::Venomous { slow_duration: self.venom_slow },
+                crate::components::Venomous {
+                    slow_duration: self.venom_slow,
+                    poison_duration: self.venom_poison,
+                },
+            );
+        }
+
+        // Biters that open wounds (rats) can leave their victim Bleeding.
+        if self.bleed_chance > 0.0 {
+            let _ = world.insert_one(
+                entity,
+                crate::components::Lacerating { bleed_chance: self.bleed_chance },
             );
         }
 
@@ -190,6 +224,44 @@ impl EnemyDef {
                     },
                 ),
             );
+        }
+
+        // Bats fly (over furniture and ground hazards) and hit-and-run.
+        if self.flying {
+            let _ = world.insert_one(entity, crate::components::Flying);
+        }
+        if self.hit_and_run {
+            let _ = world.insert_one(entity, crate::components::HitAndRun::default());
+        }
+
+        // Zombies grab whoever they hit.
+        if self.grabs {
+            let _ = world.insert_one(entity, crate::components::Grabber);
+        }
+
+        // Orcs charge; rats hunt in packs; goblins flank.
+        if self.charges {
+            let _ = world.insert_one(entity, crate::components::Charger::default());
+        }
+        if self.pack {
+            let _ = world.insert_one(entity, crate::components::PackHunter);
+        }
+        if self.flanks {
+            let _ = world.insert_one(entity, crate::components::Flanker);
+        }
+
+        // Slimes split when badly hurt. Split halves carry their generation
+        // (so they never split again past SLIME_MAX_SPLITS) and a paler tint
+        // (the renderer has no per-entity scale, so the tint says "smaller").
+        if self.splits {
+            let _ = world.insert_one(
+                entity,
+                crate::components::Splits { generation: self.split_generation, spent: false },
+            );
+        }
+        if self.split_generation > 0 {
+            let (r, g, b) = crate::constants::SLIME_SPLIT_TINT;
+            let _ = world.insert_one(entity, crate::components::SpriteTint { r, g, b });
         }
 
         entity
@@ -217,8 +289,18 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.0, // bone doesn't burn
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -237,8 +319,18 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: RAT_BLEED_CHANCE,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: true,
+        flanks: false,
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -261,8 +353,18 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.0, // bone doesn't burn
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const GOBLIN: EnemyDef = EnemyDef {
@@ -281,8 +383,18 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: true,
     };
 
     pub const ORC: EnemyDef = EnemyDef {
@@ -301,8 +413,18 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: true,
+        pack: false,
+        flanks: false,
     };
 
     pub const ZOMBIE: EnemyDef = EnemyDef {
@@ -321,8 +443,18 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.2, // rotting flesh, smoulders
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: true,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const BAT: EnemyDef = EnemyDef {
@@ -341,8 +473,18 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: true,
+        hit_and_run: true,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -361,8 +503,18 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.0, // wet, doesn't burn
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: false,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: true,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const GOBLIN_SHAMAN: EnemyDef = EnemyDef {
@@ -381,8 +533,18 @@ pub mod enemies {
         can_open_doors: true,
         flammability: 0.35,
         venom_slow: 0.0,
+        venom_poison: 0.0,
+        bleed_chance: 0.0,
         support: true,
         spider: false,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const LESSER_GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -401,8 +563,18 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.5, // bristly and dry — catches easily
         venom_slow: 0.0,
+        venom_poison: LESSER_SPIDER_POISON_DURATION,
+        bleed_chance: 0.0,
         support: false,
         spider: true,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 
     pub const GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -421,8 +593,18 @@ pub mod enemies {
         can_open_doors: false,
         flammability: 0.5,
         venom_slow: SPIDER_VENOM_SLOW_DURATION,
+        venom_poison: POISON_DURATION,
+        bleed_chance: 0.0,
         support: false,
         spider: true,
+        flying: false,
+        hit_and_run: false,
+        grabs: false,
+        splits: false,
+        split_generation: 0,
+        charges: false,
+        pack: false,
+        flanks: false,
     };
 }
 
@@ -556,9 +738,16 @@ impl SpawnConfig {
             excluded_room.map(|r| r.contains(x, y)).unwrap_or(false)
         };
 
-        // Spawn all enemies using the unified template system
+        // Membership set for growing packs over the walkable tiles.
+        let walkable_set: std::collections::HashSet<(i32, i32)> =
+            walkable_tiles.iter().copied().collect();
+
+        // Spawn all enemies using the unified template system. `count` is a
+        // head count: a pack hunter (rats) spends one per member, so packs
+        // regroup the floor's rats rather than multiplying them.
         for entry in &self.entries {
-            for _ in 0..entry.count {
+            let mut remaining = entry.count;
+            while remaining > 0 {
                 // Find a valid spawn position (free tile, not in excluded room)
                 let available: Vec<_> = walkable_tiles
                     .iter()
@@ -573,11 +762,92 @@ impl SpawnConfig {
                 entry.enemy.spawn(world, x, y, rng);
                 occupancy.claim((x, y));
                 spawned += 1;
+                remaining -= 1;
+
+                if entry.enemy.pack {
+                    let size = pack_size(remaining + 1, rng);
+                    let spots = pack_spots(
+                        (x, y),
+                        size - 1,
+                        &walkable_set,
+                        occupancy,
+                        &is_in_excluded_room,
+                        rng,
+                    );
+                    for (px, py) in spots {
+                        entry.enemy.spawn(world, px, py, rng);
+                        occupancy.claim((px, py));
+                        spawned += 1;
+                        remaining -= 1;
+                    }
+                }
             }
         }
 
         spawned
     }
+}
+
+/// How many of the `remaining` pack hunters on the roster the next pack
+/// takes: `RAT_PACK_MIN..=RAT_PACK_MAX`, capped at what is left, and never
+/// leaving a single straggler behind (a lone pack rat only flees).
+fn pack_size(remaining: usize, rng: &mut impl Rng) -> usize {
+    use crate::constants::{RAT_PACK_MAX, RAT_PACK_MIN};
+    if remaining <= RAT_PACK_MIN {
+        return remaining;
+    }
+    let size = rng.gen_range(RAT_PACK_MIN..=RAT_PACK_MAX).min(remaining);
+    if remaining - size == 1 {
+        if size < RAT_PACK_MAX {
+            size + 1
+        } else {
+            size - 1
+        }
+    } else {
+        size
+    }
+}
+
+/// Up to `want` free tiles for the rest of a pack around its first member at
+/// `leader`: grown over the walkable spawn tiles, at most
+/// `RAT_PACK_SPAWN_SPREAD` steps away, so a pack stays huddled in one spot
+/// (and never ends up on the far side of a wall). Fewer if it is cramped.
+fn pack_spots(
+    leader: (i32, i32),
+    want: usize,
+    walkable: &std::collections::HashSet<(i32, i32)>,
+    occupancy: &TileOccupancy,
+    excluded: &dyn Fn(i32, i32) -> bool,
+    rng: &mut impl Rng,
+) -> Vec<(i32, i32)> {
+    use crate::constants::RAT_PACK_SPAWN_SPREAD;
+    if want == 0 {
+        return Vec::new();
+    }
+    let mut seen = std::collections::HashSet::from([leader]);
+    let mut frontier = vec![leader];
+    let mut candidates = Vec::new();
+    for _ in 0..RAT_PACK_SPAWN_SPREAD {
+        let mut next = Vec::new();
+        for &(x, y) in &frontier {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                let p = (x + dx, y + dy);
+                if !walkable.contains(&p) || !seen.insert(p) {
+                    continue;
+                }
+                next.push(p);
+                if occupancy.is_free(p) && !excluded(p.0, p.1) {
+                    candidates.push(p);
+                }
+            }
+        }
+        frontier = next;
+    }
+    let mut out = Vec::with_capacity(want);
+    while out.len() < want && !candidates.is_empty() {
+        out.push(candidates.swap_remove(rng.gen_range(0..candidates.len())));
+    }
+    out
 }
 
 /// Cave ecology: caverns are home to bats and spiders rather than the
@@ -1105,6 +1375,8 @@ fn boss_def_for_floor(floor: u32) -> Option<(EnemyDef, &'static str, crate::comp
     let cycle_mult = BOSS_CYCLE_HEALTH_MULT.powi(laps as i32);
 
     let mut def = base;
+    // Gnash fights with his ground slam, not an orc's charge.
+    def.charges = false;
     def.health = ((def.health as f32) * BOSS_HEALTH_MULT * cycle_mult).round() as i32;
     def.damage = ((def.damage as f32) * BOSS_DAMAGE_MULT * cycle_mult).round() as i32;
     def.strength = ((def.strength as f32) * BOSS_STAT_MULT).round() as i32;
@@ -1157,6 +1429,8 @@ pub fn apply_boss_role(
 
     // Awake (asleep=false), just not yet alerted.
     let _ = world.remove_one::<Asleep>(entity);
+    // Bosses use their own ability, never the base enemy's charge.
+    let _ = world.remove_one::<crate::components::Charger>(entity);
     // Unique display name replaces the base enemy's.
     let _ = world.insert_one(entity, Name::new(name));
     let _ = world.insert(
@@ -1176,9 +1450,9 @@ pub fn apply_boss_role(
     }
 }
 
-/// Spawn an explosive oil barrel: blocks movement, highly combustible, and
-/// attackable (destroying it by damage sets it off — see `systems::fire`).
-/// Distinguished from food storage barrels by a red/dark tint.
+/// Spawn an explosive oil barrel: blocks movement, highly combustible,
+/// attackable (breaking it open lights a short fuse — see `systems::fire`)
+/// and pushable. Distinguished from food storage barrels by a red/dark tint.
 pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     use crate::components::{Combustible, Health, Name, OilBarrel, Sprite, SpriteTint};
     use crate::constants::{OIL_BARREL_FLAMMABILITY, OIL_BARREL_HEALTH, OIL_BARREL_TINT};
@@ -1197,6 +1471,7 @@ pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         Combustible { flammability: OIL_BARREL_FLAMMABILITY },
         Attackable,
         BlocksMovement,
+        crate::components::Pushable,
     ))
 }
 
@@ -1290,6 +1565,75 @@ mod tests {
     /// blocks. `walkable_tiles` describes terrain, and the prop passes
     /// (chests, coffins, barrels, doors, furniture) have already run by the
     /// time the roster spawns, so terrain walkability alone is not enough.
+    #[test]
+    fn rats_spawn_in_packs_of_two_to_four_without_inflating_the_head_count() {
+        use crate::components::PackHunter;
+        for seed in 0..20u64 {
+            let mut world = World::new();
+            let mut rng = StdRng::seed_from_u64(seed);
+            let walkable: Vec<(i32, i32)> =
+                (0..40).flat_map(|y| (0..40).map(move |x| (x, y))).collect();
+            let config = SpawnConfig {
+                entries: vec![SpawnEntry { enemy: enemies::RAT.clone(), count: 10 }],
+            };
+            let mut occupancy = TileOccupancy::from_world(&world);
+            let n = config.spawn_all(&mut world, &walkable, &[], None, &mut occupancy, &mut rng);
+            assert_eq!(n, 10, "the roster's rat count is honoured");
+
+            let rats: Vec<(i32, i32)> = world
+                .query::<(&Position, &PackHunter)>()
+                .iter()
+                .map(|(_, (p, _))| (p.x, p.y))
+                .collect();
+            assert_eq!(rats.len(), 10);
+            // Group rats into packs: connected within the spawn spread.
+            let spread = crate::constants::RAT_PACK_SPAWN_SPREAD;
+            let mut pack_of = vec![usize::MAX; rats.len()];
+            let mut packs = 0;
+            for i in 0..rats.len() {
+                if pack_of[i] != usize::MAX {
+                    continue;
+                }
+                let mut stack = vec![i];
+                pack_of[i] = packs;
+                while let Some(j) = stack.pop() {
+                    for k in 0..rats.len() {
+                        let near = (rats[j].0 - rats[k].0).abs().max((rats[j].1 - rats[k].1).abs())
+                            <= 2 * spread;
+                        if pack_of[k] == usize::MAX && near {
+                            pack_of[k] = packs;
+                            stack.push(k);
+                        }
+                    }
+                }
+                packs += 1;
+            }
+            for p in 0..packs {
+                let size = pack_of.iter().filter(|&&q| q == p).count();
+                // Two packs may land near each other and read as one bigger
+                // group; what must never happen is a rat on its own.
+                assert!(size >= crate::constants::RAT_PACK_MIN, "seed {seed}: a lone rat at spawn");
+            }
+            assert!(packs < 10, "seed {seed}: rats came in packs, not singly");
+        }
+    }
+
+    #[test]
+    fn pack_sizes_stay_in_range_and_leave_no_straggler() {
+        let mut rng = StdRng::seed_from_u64(5);
+        for remaining in 1..30usize {
+            for _ in 0..20 {
+                let size = pack_size(remaining, &mut rng);
+                assert!(size >= 1 && size <= remaining);
+                if remaining >= crate::constants::RAT_PACK_MIN {
+                    assert!(size >= crate::constants::RAT_PACK_MIN, "{remaining} -> {size}");
+                    assert!(size <= crate::constants::RAT_PACK_MAX);
+                    assert_ne!(remaining - size, 1, "{remaining} -> {size} strands one rat");
+                }
+            }
+        }
+    }
+
     #[test]
     fn spawn_all_skips_tiles_that_already_hold_a_blocker() {
         use rand::SeedableRng;

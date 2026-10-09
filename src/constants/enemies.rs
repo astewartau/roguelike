@@ -36,6 +36,24 @@ pub const RAT_INTELLIGENCE: i32 = 1;
 pub const RAT_AGILITY: i32 = 8;
 /// Rat attack damage (weak bite)
 pub const RAT_DAMAGE: i32 = 5;
+/// Chance a connecting rat bite opens a wound (Bleeding for `BLEED_DURATION`).
+/// Higher makes rat packs a slow attrition threat rather than chip damage.
+pub const RAT_BLEED_CHANCE: f32 = 0.3;
+/// Smallest rat pack spawned together on a floor. Rats are counted
+/// individually against the floor roster: a pack spends as many roster rats
+/// as it has members.
+pub const RAT_PACK_MIN: usize = 2;
+/// Largest rat pack spawned together.
+pub const RAT_PACK_MAX: usize = 4;
+/// How far (in steps over walkable spawn tiles, from the first rat) the rest
+/// of a pack may be placed. Small keeps packs huddled in one spot.
+pub const RAT_PACK_SPAWN_SPREAD: i32 = 3;
+/// Chebyshev radius within which pack rats count as together. A pack rat
+/// with no living packmate this close is alone: it flees instead of
+/// fighting (unless cornered). With its pack it ignores the wounded-morale
+/// panic, and an alert spreads to every packmate this close. Larger makes
+/// packs harder to split up.
+pub const RAT_PACK_RADIUS: i32 = 4;
 
 // SKELETON ARCHER
 /// Skeleton archer health (slightly weaker than melee skeleton)
@@ -78,6 +96,30 @@ pub const ORC_STRENGTH: i32 = 15;
 pub const ORC_INTELLIGENCE: i32 = 2;
 pub const ORC_AGILITY: i32 = 3;
 pub const ORC_DAMAGE: i32 = 13;
+/// Closest a target can be (Chebyshev tiles, on one of the eight straight
+/// lines from the orc) for it to start a charge. Below this it just walks up
+/// and swings. Lower makes the charge an opener at almost any distance.
+pub const ORC_CHARGE_MIN_RANGE: i32 = 3;
+/// Farthest a charge target can be. The dash itself runs one tile further
+/// (`ORC_CHARGE_MAX_RANGE + 1`) so a target that backs straight away along
+/// the lane is still caught. Higher makes orcs threaten whole rooms.
+pub const ORC_CHARGE_MAX_RANGE: i32 = 6;
+/// Base wind-up of the charge in game seconds (divided by the orc's speed,
+/// like every action): the window to step out of the telegraphed lane.
+/// Shorter makes the charge much harder to dodge.
+pub const ORC_CHARGE_WINDUP: f32 = 0.8;
+/// Damage multiplier on a charge that connects, over the orc's normal melee
+/// hit (guard, armour and wards still apply after it).
+pub const ORC_CHARGE_DAMAGE_MULT: f32 = 1.5;
+/// How long (game seconds) an orc that charges into a wall or furniture is
+/// Stunned: the punishment for baiting it into one. Longer turns a dodged
+/// charge into a free beating.
+pub const ORC_WALL_STUN: f32 = 1.5;
+/// How long (game seconds) an orc that charges the full distance without
+/// hitting anything (or is stopped by one of its own) stumbles, Stunned.
+pub const ORC_STUMBLE_DURATION: f32 = 0.8;
+/// Game seconds between charges, counted from the wind-up starting.
+pub const ORC_CHARGE_COOLDOWN: f32 = 10.0;
 
 // ZOMBIE - very slow, high HP, relentless
 pub const ZOMBIE_HEALTH: i32 = 60;
@@ -87,6 +129,12 @@ pub const ZOMBIE_STRENGTH: i32 = 12;
 pub const ZOMBIE_INTELLIGENCE: i32 = 1;
 pub const ZOMBIE_AGILITY: i32 = 1;
 pub const ZOMBIE_DAMAGE: i32 = 8;
+/// How long (game seconds) a zombie's connecting hit holds its victim Grabbed:
+/// unable to walk away, though still free to swing back or use abilities. The
+/// grab also ends early if the zombie dies, is stunned, or stops being
+/// adjacent. Longer makes zombies far more dangerous to melee; shorter turns
+/// the grab into a mere stutter-step.
+pub const ZOMBIE_GRAB_DURATION: f32 = 1.5;
 
 // GIANT BAT - very fast, fragile harasser
 pub const BAT_HEALTH: i32 = 16;
@@ -96,6 +144,11 @@ pub const BAT_STRENGTH: i32 = 3;
 pub const BAT_INTELLIGENCE: i32 = 2;
 pub const BAT_AGILITY: i32 = 13;
 pub const BAT_DAMAGE: i32 = 3;
+/// Hit-and-run: after every melee swing (hit or miss) a bat breaks off and
+/// flutters away from its target for this many game seconds before diving
+/// back in. Longer means fewer bites and easier ranged shots at it; shorter
+/// makes bats behave like ordinary (very fast) chasers.
+pub const BAT_RETREAT_DURATION: f32 = 2.5;
 
 // SLIME - slow, weak chip-damage fodder
 pub const SLIME_HEALTH: i32 = 24;
@@ -105,6 +158,17 @@ pub const SLIME_STRENGTH: i32 = 5;
 pub const SLIME_INTELLIGENCE: i32 = 1;
 pub const SLIME_AGILITY: i32 = 2;
 pub const SLIME_DAMAGE: i32 = 4;
+/// A slime splits the first time a hit leaves it at or below this fraction of
+/// its max HP (and it survives). Higher splits earlier, while there is more HP
+/// left to share between the halves.
+pub const SLIME_SPLIT_HP_FRACTION: f32 = 0.5;
+/// How many generations of splitting a slime lineage allows. 1 = an original
+/// slime splits once into two smaller ones, and those never split again.
+/// Raising it multiplies the number of slimes a single kill can produce.
+pub const SLIME_MAX_SPLITS: u8 = 1;
+/// Tint applied to split (smaller) slimes so they read as the lesser halves.
+/// Multiplies the sprite (1.0 = untinted); a paler, washed-out green.
+pub const SLIME_SPLIT_TINT: (f32, f32, f32) = (0.75, 1.0, 0.75);
 
 // GOBLIN SHAMAN - fragile support caster: heals/hastes allies, kites, raises the alarm
 pub const GOBLIN_SHAMAN_HEALTH: i32 = 20;
@@ -147,6 +211,9 @@ pub const GIANT_SPIDER_AGILITY: i32 = 6;
 pub const GIANT_SPIDER_DAMAGE: i32 = 9;
 /// Duration of the Slowed venom applied by a giant spider's bite.
 pub const SPIDER_VENOM_SLOW_DURATION: f32 = 4.0;
+/// Poisoned duration from a lesser giant spider's bite (weaker venom than the
+/// Giant Spider's `POISON_DURATION`). 0 would make lesser spiders non-venomous.
+pub const LESSER_SPIDER_POISON_DURATION: f32 = 3.0;
 
 // WEBS (see systems/webs.rs and the web arm of systems/fire.rs)
 /// Seconds between a spider laying webs (while chasing or idling).
@@ -186,6 +253,12 @@ pub const BOSS_SLAM_COOLDOWN: f32 = 12.0;
 pub const BOSS_SLAM_RADIUS: i32 = 2;
 pub const BOSS_SLAM_STUN_DURATION: f32 = 2.0;
 pub const BOSS_SLAM_DAMAGE: i32 = 6;
+/// Seconds Gnash spends winding up a ground slam before it lands (scaled by
+/// his speed like any action). The shockwave hits whatever is inside
+/// `BOSS_SLAM_RADIUS` of him when the wind-up *completes*, so this is the
+/// player's window to step out. Longer is more forgiving; at 0 the slam is
+/// unavoidable again.
+pub const BOSS_SLAM_WINDUP: f32 = 1.0;
 /// Silkrot's brood: cooldown / spiders per cast / max alive at once.
 pub const BOSS_SPIDER_SPAWN_COOLDOWN: f32 = 20.0;
 pub const BOSS_SPIDER_SPAWN_COUNT: usize = 2;
@@ -259,6 +332,10 @@ pub const SNEAK_ALERTNESS_MULT: f32 = 0.35;
 /// Multiplier on a not-yet-alerted (Idle) enemy's sight range vs a sneaking
 /// player — lets you slip past awake-but-unalerted wanderers.
 pub const SNEAK_SIGHT_MULT: f32 = 0.5;
+/// Multiplier on how fast unaware enemies gain alertness on a Wet player:
+/// dripping, squelching footsteps are noisy. Stacks with sneaking (a wet sneak
+/// is still quieter than a wet walk). 1.0 would make water stealth-neutral.
+pub const WET_STEALTH_PENALTY: f32 = 1.5;
 
 /// Effective detection radius (tiles) when the target is standing in concealing
 /// terrain (tall grass). At 1, only an adjacent enemy can pick you out of the

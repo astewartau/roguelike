@@ -17,7 +17,7 @@ use super::{interrupt_life_drain_on_damage, ActionResult};
 
 /// Check if an entity stepping on a fire trap should trigger it.
 /// Fire traps ignore their owner and the owner's tamed pets.
-pub(super) fn check_fire_trap_trigger(
+pub(crate) fn check_fire_trap_trigger(
     world: &mut World,
     victim: Entity,
     target_x: i32,
@@ -58,7 +58,7 @@ pub(super) fn check_fire_trap_trigger(
 
     // Trap triggered! Apply burst damage (handles invulnerability, armor defense,
     // Protected/Barkskin) and a burning effect.
-    crate::systems::combat::apply_damage(world, victim, burst_damage, rng);
+    crate::systems::combat::apply_damage(world, victim, burst_damage, rng, events);
 
     // Interrupt life drain if victim was channeling
     interrupt_life_drain_on_damage(world, victim, events);
@@ -67,8 +67,8 @@ pub(super) fn check_fire_trap_trigger(
     crate::systems::ai::generate_threat(world, victim, trap_owner, burst_damage as f32 * THREAT_PER_DAMAGE);
     crate::systems::ai::generate_companion_threat(world, victim, trap_owner, burst_damage as f32 * THREAT_PER_DAMAGE);
 
-    // Apply burning effect
-    effects::add_effect_to_entity(world, victim, EffectType::Burning, BURNING_DURATION);
+    // Apply burning effect (a Wet victim takes the burst but not the fire)
+    let ignited = effects::add_effect_to_entity(world, victim, EffectType::Burning, BURNING_DURATION);
 
     // Emit events
     events.push(GameEvent::FireTrapTriggered {
@@ -77,10 +77,12 @@ pub(super) fn check_fire_trap_trigger(
         position: (target_x, target_y),
     });
 
-    events.push(GameEvent::CaughtFire {
-        entity: victim,
-        position: (target_x, target_y),
-    });
+    if ignited {
+        events.push(GameEvent::CaughtFire {
+            entity: victim,
+            position: (target_x, target_y),
+        });
+    }
 
     // Destroy the trap after triggering
     let _ = world.despawn(trap_entity);
@@ -88,7 +90,7 @@ pub(super) fn check_fire_trap_trigger(
 
 /// Check if an entity stepping on a snare trap should trigger it.
 /// Snare traps ignore their owner and the owner's tamed pets.
-pub(super) fn check_snare_trap_trigger(
+pub(crate) fn check_snare_trap_trigger(
     world: &mut World,
     victim: Entity,
     target_x: i32,
@@ -144,7 +146,7 @@ pub(super) fn check_snare_trap_trigger(
 /// Unlike player-placed traps there is no owner exemption: everything that
 /// steps on one (player, enemy, companion) sets it off, revealed or not.
 /// Triggered traps are consumed.
-pub(super) fn check_dungeon_trap_trigger(
+pub(crate) fn check_dungeon_trap_trigger(
     world: &mut World,
     grid: &crate::grid::Grid,
     victim: Entity,
@@ -174,14 +176,14 @@ pub(super) fn check_dungeon_trap_trigger(
     match kind {
         DungeonTrapKind::Spike => {
             damage = crate::systems::combat::apply_damage(
-                world, victim, DUNGEON_SPIKE_TRAP_DAMAGE, rng,
+                world, victim, DUNGEON_SPIKE_TRAP_DAMAGE, rng, events,
             );
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);
         }
         DungeonTrapKind::Fire => {
             damage = crate::systems::combat::apply_damage(
-                world, victim, DUNGEON_FIRE_TRAP_DAMAGE, rng,
+                world, victim, DUNGEON_FIRE_TRAP_DAMAGE, rng, events,
             );
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);

@@ -10,7 +10,10 @@
 //! 5. Once visual catches up, the arrow is despawned
 
 
-use crate::components::{Attackable, EffectType, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
+use crate::components::{
+    Attackable, EffectType, ItemType, Position, Projectile, ProjectileKind, ProjectileMarker,
+    VisualPosition,
+};
 use crate::events::GameEvent;
 use crate::grid::Grid;
 use crate::systems::actions::apply_potion_splash;
@@ -26,8 +29,17 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
     let (world, grid) = (&mut **world, &mut **grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
-    // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity, potion_type)
-    type Hit = (Entity, Option<Entity>, (i32, i32), i32, Option<(EffectType, f32)>, Entity, Option<ItemType>);
+    // (projectile_entity, target_entity, position, damage, on_hit_effect, source_entity, potion_type, kind)
+    type Hit = (
+        Entity,
+        Option<Entity>,
+        (i32, i32),
+        i32,
+        Option<(EffectType, f32)>,
+        Entity,
+        Option<ItemType>,
+        ProjectileKind,
+    );
     let mut hits: Vec<Hit> = Vec::new();
     // (projectile_entity, x, y, potion_type, incendiary)
     let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>, bool)> = Vec::new();
@@ -71,7 +83,16 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
             let tile = grid.get(tile_x, tile_y);
             let is_wall = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
             if is_wall {
-                hits.push((projectile_entity, None, (tile_x, tile_y), projectile.damage, projectile.on_hit_effect, projectile.source, projectile.potion_type));
+                hits.push((
+                    projectile_entity,
+                    None,
+                    (tile_x, tile_y),
+                    projectile.damage,
+                    projectile.on_hit_effect,
+                    projectile.source,
+                    projectile.potion_type,
+                    projectile.kind,
+                ));
                 // Mark as finished at wall position (one tile before the wall)
                 let final_pos = if i > 0 {
                     let (px, py, _) = projectile.path[i - 1];
@@ -105,6 +126,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
                         projectile.on_hit_effect,
                         projectile.source,
                         projectile.potion_type,
+                        projectile.kind,
                     ));
                     finished_projectiles.push((
                         projectile_entity,
@@ -149,7 +171,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
     }
 
     // Apply damage and emit events
-    for (projectile_entity, target, position, damage, on_hit_effect, source, potion_type) in hits {
+    for (projectile_entity, target, position, damage, on_hit_effect, source, potion_type, kind) in hits {
         let mut actual_damage = damage;
         if let Some(target_entity) = target {
             // Mark that this projectile hit an enemy (for arrow recovery)
@@ -159,7 +181,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
 
             // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
             actual_damage =
-                crate::systems::combat::apply_damage(world, target_entity, actual_damage, rng);
+                crate::systems::combat::apply_damage(world, target_entity, actual_damage, rng, events);
 
             if actual_damage > 0 {
                 // Interrupt life drain if target was channeling
@@ -178,8 +200,8 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
             }
 
             // Resolve weapon on-hit affixes for ranged hits through the shared
-            // chokepoint (potions carry no weapon affixes).
-            if potion_type.is_none() {
+            // chokepoint (potions and spells carry no weapon affixes).
+            if potion_type.is_none() && kind == ProjectileKind::Missile {
                 crate::systems::combat::resolve_weapon_on_hit(
                     &mut EffectCtx { world, grid, spatial: spatial_cache, events, rng },
                     source,
@@ -190,7 +212,9 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
         }
 
         // Classify the projectile so the log can describe it specifically.
-        let kind = if potion_type.is_some() {
+        let kind = if kind == ProjectileKind::GraveBolt {
+            crate::events::DamageKind::GraveBolt
+        } else if potion_type.is_some() {
             crate::events::DamageKind::Potion
         } else if matches!(on_hit_effect, Some((EffectType::Slowed, _))) {
             crate::events::DamageKind::CripplingShot
@@ -229,7 +253,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
         // If this is a potion projectile, apply splash effect and emit event
         if let Some(ptype) = potion_type {
             let thrower = world.get::<&Projectile>(entity).map(|p| p.source).ok();
-            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y);
+            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y, events);
             events.push(GameEvent::PotionSplash {
                 x: final_x,
                 y: final_y,
@@ -346,9 +370,12 @@ pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<ArrowRec
             // Visual has caught up, safe to despawn
             to_despawn.push(entity);
 
-            // If this was an arrow (not a potion), it may be recoverable.
-            // Fire arrows burn up on impact and are never recovered.
-            if projectile.potion_type.is_none() && !projectile.incendiary {
+            // If this was an arrow (not a potion or a spell), it may be
+            // recoverable. Fire arrows burn up on impact and are never recovered.
+            if projectile.potion_type.is_none()
+                && !projectile.incendiary
+                && projectile.kind == ProjectileKind::Missile
+            {
                 arrow_recovery_info.push(((pos.x, pos.y), projectile.hit_enemy));
             }
         }

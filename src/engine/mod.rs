@@ -29,7 +29,7 @@ use rand::Rng;
 
 use crate::audio::AudioManager;
 use crate::components::{
-    AbilityType, ActionType, Actor, ClassAbility, Health, PlayerClass, RangerAbilities,
+    AbilityType, ActionType, Actor, ClassAbility, ClassKit, Health, PlayerClass,
     SecondaryAbility,
 };
 
@@ -158,6 +158,10 @@ pub struct GameEngine {
     /// All recorded runs from `runs_history.jsonl`, newest first. The start
     /// screen aggregates stats over the lot and lists the most recent few.
     pub past_runs: Vec<crate::run_history::RunRecord>,
+
+    /// Set when a left press only dismissed the right-click tile menu, so the
+    /// matching release doesn't also walk the player to the clicked tile.
+    swallow_left_release: bool,
 }
 
 impl GameEngine {
@@ -195,6 +199,7 @@ impl GameEngine {
             seed_input: String::new(),
             stats_open: false,
             past_runs: crate::run_history::load_recent(usize::MAX),
+            swallow_left_release: false,
         }
     }
 
@@ -250,31 +255,15 @@ impl GameEngine {
 
         let mut ui_state = GameUiState::new(state.player_entity);
 
-        // Auto-fill the main hotbar with the player's abilities (class, then
-        // secondary, then ranger, in order) so they're usable right away.
+        // Auto-fill the hotbars with the player's abilities so they're usable
+        // right away: main bar first, overflow onto the Shift bar.
         {
-            let mut entries: Vec<AbilityType> = Vec::new();
-            if let Ok(a) = state.world.get::<&ClassAbility>(state.player_entity) {
-                entries.push(a.ability_type);
-            }
-            if let Ok(a) = state.world.get::<&SecondaryAbility>(state.player_entity) {
-                entries.push(a.ability_type);
-            }
-            if let Ok(ra) = state.world.get::<&RangerAbilities>(state.player_entity) {
-                for (at, _, _) in ra.abilities.iter() {
-                    entries.push(*at);
-                }
-            }
-            // Spell-list abilities (the Necromancer starts with Raise Dead).
-            if let Ok(la) = state
-                .world
-                .get::<&crate::components::LearnedAbilities>(state.player_entity)
-            {
-                for spell in la.spells.iter() {
-                    entries.push(spell.ability);
-                }
-            }
-            for (slot, ability) in ui_state.hotbar_main.iter_mut().zip(entries) {
+            let entries = starting_hotbar_abilities(&state.world, state.player_entity);
+            let slots = ui_state
+                .hotbar_main
+                .iter_mut()
+                .chain(ui_state.hotbar_shift.iter_mut());
+            for (slot, ability) in slots.zip(entries) {
                 *slot = Some(crate::ui::HotbarEntry::Ability(ability));
             }
 
@@ -383,18 +372,24 @@ impl GameEngine {
                     self.input.cancel_targeting();
                     return None;
                 }
-                // 2. Close the dev menu.
+                // 2. Close the right-click tile menu.
+                if let Some(ui) = self.ui_state.as_mut() {
+                    if ui.close_tile_menu() {
+                        return None;
+                    }
+                }
+                // 3. Close the dev menu.
                 if self.dev_menu.visible {
                     self.dev_menu.visible = false;
                     return None;
                 }
-                // 3. Close any open game UI window (inventory, dialogue, shop, loot).
+                // 4. Close any open game UI window (inventory, dialogue, shop, loot).
                 if let Some(ui) = self.ui_state.as_mut() {
                     if ui.close_open_menus() {
                         return None;
                     }
                 }
-                // 4. Nothing open — open the pause menu.
+                // 5. Nothing open — open the pause menu.
                 self.game_mode = GameMode::Paused;
                 self.pause_selected = 0;
                 self.input.keys_pressed.clear();
@@ -439,6 +434,21 @@ impl GameEngine {
                 self.input.mouse_pos = (position.x as f32, position.y as f32);
             }
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
+                // A left click on the map while the tile menu is open only
+                // closes the menu.
+                if !egui_consumed && *button == MouseButton::Left {
+                    if *btn_state == ElementState::Pressed {
+                        if let Some(ui) = self.ui_state.as_mut() {
+                            if ui.close_tile_menu() {
+                                self.swallow_left_release = true;
+                                return None;
+                            }
+                        }
+                    } else if std::mem::take(&mut self.swallow_left_release) {
+                        self.input.mouse_down = false;
+                        return None;
+                    }
+                }
                 if !egui_consumed && *button == MouseButton::Left {
                     let was_down = self.input.mouse_down;
                     self.input.mouse_down = *btn_state == ElementState::Pressed;
@@ -471,10 +481,19 @@ impl GameEngine {
                         }
                     }
                 }
+                // Right click: cancels targeting; otherwise the quick
+                // alternate action (the instant bow shot at the cursor).
+                // Shift+right-click opens the tile action menu.
                 if !egui_consumed && *button == MouseButton::Right
                     && *btn_state == ElementState::Released {
+                        let shift = self.input.keys_pressed.contains(&KeyCode::ShiftLeft)
+                            || self.input.keys_pressed.contains(&KeyCode::ShiftRight);
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
+                        } else if shift {
+                            if self.game_mode == GameMode::Playing {
+                                self.open_tile_menu(camera);
+                            }
                         } else {
                             self.input.pending_right_click = true;
                         }
@@ -569,12 +588,18 @@ impl GameEngine {
         let state = self.state.as_mut().expect("State checked above");
         let _ui_state = self.ui_state.as_mut().expect("UI state should exist when state exists");
 
+        // Animation time for this frame: real time, unless a hit-stop is
+        // freezing it (systems::hitstop; fed by last frame's events). Only
+        // visuals ride on it — the simulation is event-driven and the camera
+        // shake keeps real time so the knock still rattles through a freeze.
+        let anim_dt = self.vfx.hitstop.visual_dt(dt);
+
         // Update animations
         {
             profile_scope!("animations");
-            systems::update_lunge_animations(&mut state.world, dt);
-            systems::update_hit_flashes(&mut state.world, dt);
-            self.vfx.update(dt);
+            systems::update_lunge_animations(&mut state.world, anim_dt);
+            systems::update_hit_flashes(&mut state.world, anim_dt);
+            self.vfx.update(anim_dt);
         }
 
         // Remove dead entities (loot rolls draw from the seeded game rng);
@@ -584,6 +609,15 @@ impl GameEngine {
             let floor = state.current_floor;
             state.kills +=
                 systems::remove_dead_entities(&mut state.actor_ctx(&mut self.events), floor);
+        }
+
+        // Slimes hurt outside an action (an exploding barrel during last
+        // frame's fire tick) split here; in-action damage is handled in the
+        // advance loop. Grabs whose holder just died are let go.
+        {
+            profile_scope!("splits_and_grabs");
+            systems::split::process_splits(&mut state.actor_ctx(&mut self.events));
+            systems::grab::tick_grabs(&mut state.world, &mut self.events);
         }
 
         // Process events from remove_dead_entities
@@ -607,10 +641,10 @@ impl GameEngine {
         // Visual lerping
         {
             profile_scope!("visual_lerp");
-            systems::visual_lerp(&mut state.world, dt);
+            systems::visual_lerp(&mut state.world, anim_dt, state.game_clock.time);
             systems::lerp_projectiles_realtime(
                 &mut state.world,
-                dt,
+                anim_dt,
                 crate::constants::ARROW_SPEED,
             );
         }
@@ -802,6 +836,11 @@ impl GameEngine {
             self.try_use_ability(ability_type);
         }
 
+        // An entry picked from the right-click tile menu
+        if let Some((tile, ref command)) = actions.tile_choice {
+            self.run_tile_command(tile, command);
+        }
+
         let ui_state = self.ui_state.as_mut().expect("UI state should exist");
         // Apply UI state changes
         if let Some(targeting) = ui_result.enter_targeting {
@@ -883,6 +922,15 @@ impl GameEngine {
     #[allow(dead_code)] // Public API for external callers
     pub fn world(&self) -> Option<&hecs::World> {
         self.state.as_ref().map(|s| &s.world)
+    }
+
+    /// The tile the world renderer should draw slightly lighter (under the
+    /// cursor), as decided by the last UI pass.
+    pub fn hover_highlight_tile(&self) -> Option<(i32, i32)> {
+        if !self.is_playing() {
+            return None;
+        }
+        self.ui_state.as_ref().and_then(|u| u.hover_highlight)
     }
 
     /// Should show grid lines?
@@ -1047,6 +1095,18 @@ impl GameEngine {
             GameMode::Playing => {
                 let state = self.state.as_ref().expect("State should exist when playing");
                 let ui_state = self.ui_state.as_mut().expect("UI state should exist when playing");
+
+                // Keep an open tile menu current (cooldowns tick, creatures
+                // move) so what it greys out is what would be refused now.
+                if let Some(menu) = ui_state.tile_menu.as_mut() {
+                    menu.actions = systems::tile_context::context_actions(
+                        &state.world,
+                        &state.grid,
+                        &state.spatial_cache,
+                        state.player_entity,
+                        menu.tile,
+                    );
+                }
 
                 // Extract life drain beam data for rendering
                 let life_drain_beams = crate::ui::get_life_drain_beam_data(
@@ -1355,6 +1415,71 @@ impl GameEngine {
         result
     }
 
+    /// Open the right-click menu on the tile under the cursor.
+    fn open_tile_menu(&mut self, camera: &Camera) {
+        let (Some(state), Some(ui)) = (self.state.as_ref(), self.ui_state.as_mut()) else {
+            return;
+        };
+        let tile = input::cursor_tile(camera, self.input.mouse_pos);
+        let actions = systems::tile_context::context_actions(
+            &state.world,
+            &state.grid,
+            &state.spatial_cache,
+            state.player_entity,
+            tile,
+        );
+        ui.tile_menu = Some(crate::ui::TileMenu {
+            tile,
+            screen_pos: self.input.mouse_pos,
+            actions,
+        });
+    }
+
+    /// Run a command picked from the tile menu, through the same path the
+    /// equivalent click or key takes. Re-validated first: the menu may be a
+    /// frame stale, and a disabled entry must never run.
+    fn run_tile_command(
+        &mut self,
+        tile: (i32, i32),
+        command: &systems::tile_context::ContextCommand,
+    ) {
+        use systems::tile_context::{validate_choice, ContextCommand};
+        let (Some(state), Some(ui)) = (self.state.as_ref(), self.ui_state.as_mut()) else {
+            return;
+        };
+        ui.close_tile_menu();
+        let player = state.player_entity;
+        if let Err(reason) = validate_choice(
+            &state.world,
+            &state.grid,
+            &state.spatial_cache,
+            player,
+            tile,
+            command,
+        ) {
+            ui.message_log.system(reason);
+            return;
+        }
+        match command {
+            ContextCommand::ClickTo { x, y } => {
+                input::click_to_move_tile(&mut self.input, &state.world, &state.grid, player, (*x, *y));
+            }
+            ContextCommand::Approach { x, y } => {
+                if !input::approach_and_bump(&mut self.input, &state.world, &state.grid, player, (*x, *y)) {
+                    ui.message_log.system("You can't find a way there.");
+                }
+            }
+            ContextCommand::Intent(intent) => {
+                // Executed next frame by process_input, exactly as a key press.
+                self.input.pending_intent = Some(intent.clone());
+            }
+            ContextCommand::Examine { x, y } => {
+                let info = systems::tile_context::describe_tile(&state.world, &state.grid, player, (*x, *y));
+                ui.message_log.system(info.summary());
+            }
+        }
+    }
+
     fn handle_dev_spawn(&mut self, camera: &Camera) {
         let Some(tool) = self.dev_menu.selected_tool else {
             return;
@@ -1396,7 +1521,7 @@ impl GameEngine {
         enum Route {
             Class,
             Secondary,
-            Ranger(usize),
+            Kit(usize),
             Learned,
         }
 
@@ -1420,11 +1545,11 @@ impl GameEngine {
             {
                 Route::Secondary
             } else if let Some(index) = world
-                .get::<&RangerAbilities>(player)
+                .get::<&ClassKit>(player)
                 .ok()
-                .and_then(|ra| ra.abilities.iter().position(|(at, _, _)| *at == ability_type))
+                .and_then(|kit| kit.position(ability_type))
             {
-                Route::Ranger(index)
+                Route::Kit(index)
             } else if world
                 .get::<&crate::components::LearnedAbilities>(player)
                 .map(|la| la.knows(ability_type))
@@ -1439,7 +1564,7 @@ impl GameEngine {
         self.try_use_slot(match route {
             Route::Class => AbilitySlot::Class,
             Route::Secondary => AbilitySlot::Secondary,
-            Route::Ranger(index) => AbilitySlot::Ranger(index),
+            Route::Kit(index) => AbilitySlot::Kit(index),
             Route::Learned => AbilitySlot::Learned(ability_type),
         });
     }
@@ -1731,6 +1856,7 @@ impl GameEngine {
             if result.turn_result != simulation::TurnResult::Started
                 || result.enemy_spotted_player
                 || result.player_took_damage
+                || result.player_was_targeted
                 || hp_dropped
             {
                 mode.stop(self, mode.interrupt_message());
@@ -1850,6 +1976,27 @@ fn pick_campfire_spot(
         })
 }
 
+/// The player's abilities in default hotbar order: class ability, secondary,
+/// spell list (the Necromancer's Raise Dead keeps its old slot), then the
+/// class kit. The caller lays these out over the main bar and then the Shift
+/// bar, so a kit longer than the main bar spills over instead of being lost.
+fn starting_hotbar_abilities(world: &hecs::World, player: Entity) -> Vec<AbilityType> {
+    let mut entries: Vec<AbilityType> = Vec::new();
+    if let Ok(a) = world.get::<&ClassAbility>(player) {
+        entries.push(a.ability_type);
+    }
+    if let Ok(a) = world.get::<&SecondaryAbility>(player) {
+        entries.push(a.ability_type);
+    }
+    if let Ok(la) = world.get::<&crate::components::LearnedAbilities>(player) {
+        entries.extend(la.spells.iter().map(|spell| spell.ability));
+    }
+    if let Ok(kit) = world.get::<&ClassKit>(player) {
+        entries.extend(kit.abilities.iter().map(|k| k.ability));
+    }
+    entries
+}
+
 fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
     let ActorCtx { world, player: owner, clock, scheduler, tracker: active_ai_tracker, spatial: spatial_cache, rng, .. } = ctx;
     let (world, owner) = (&mut **world, *owner);
@@ -1935,8 +2082,9 @@ enum AbilitySlot {
     Secondary,
     /// A spell studied from a scroll, plus the Necromancer's Raise Dead.
     Learned(AbilityType),
-    /// One of the Ranger's four indexed abilities.
-    Ranger(usize),
+    /// An indexed ability in the player's [`ClassKit`] (Guard; the Ranger's
+    /// four; Thorns/Entangle; Bone Ward/Sacrifice/Corpse Explosion).
+    Kit(usize),
 }
 
 /// What the targeting check decided about an ability that is about to activate.
@@ -1971,10 +2119,10 @@ impl AbilitySlot {
                 let spell = la.get(ability_type)?;
                 (spell.cooldown_remaining <= 0.0).then_some(ability_type)
             }
-            AbilitySlot::Ranger(index) => {
-                let ra = world.get::<&RangerAbilities>(player).ok()?;
-                let &(ability_type, cooldown_remaining, _) = ra.get(index)?;
-                (cooldown_remaining <= 0.0).then_some(ability_type)
+            AbilitySlot::Kit(index) => {
+                let kit = world.get::<&ClassKit>(player).ok()?;
+                let entry = kit.get(index)?;
+                (entry.cooldown_remaining <= 0.0).then_some(entry.ability)
             }
         }
     }
@@ -2013,9 +2161,49 @@ impl AbilitySlot {
             (AbilitySlot::Learned(_), AbilityType::LearnedFireball) => {
                 Targeting::Enter(FIREBALL_RANGE)
             }
-            (AbilitySlot::Ranger(_), AbilityType::Tumble) => Targeting::Enter(TUMBLE_DISTANCE),
-            (AbilitySlot::Ranger(_), AbilityType::SnareTrap) => Targeting::Enter(SNARE_TRAP_RANGE),
-            (AbilitySlot::Ranger(_), AbilityType::CripplingShot) => Targeting::Enter(BOW_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::Tumble) => Targeting::Enter(TUMBLE_DISTANCE),
+            (AbilitySlot::Kit(_), AbilityType::SnareTrap) => Targeting::Enter(SNARE_TRAP_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::CripplingShot) => Targeting::Enter(BOW_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::Sacrifice) => {
+                // Nothing to swap with: say so rather than entering a
+                // targeting mode with no valid target.
+                let has_skeleton = ctx
+                    .world
+                    .query::<(&crate::components::RaisedUndead, &crate::components::TamedBy)>()
+                    .iter()
+                    .any(|(e, (_, t))| {
+                        t.owner == player
+                            && systems::actions::is_valid_sacrifice_target(ctx.world, player, e)
+                    });
+                if !has_skeleton {
+                    ctx.ui
+                        .message_log
+                        .system("You have no raised skeleton close enough to sacrifice.".to_string());
+                    return Targeting::Refused;
+                }
+                Targeting::Enter(SACRIFICE_RANGE)
+            }
+            (AbilitySlot::Kit(_), AbilityType::CorpseExplosion) => {
+                Targeting::Enter(CORPSE_EXPLOSION_RANGE)
+            }
+            (AbilitySlot::Kit(_), AbilityType::Entangle) => Targeting::Enter(ENTANGLE_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::CallRain) => Targeting::Enter(CALL_RAIN_RANGE),
+            (AbilitySlot::Kit(_), AbilityType::ShieldBash) => {
+                // Nothing beside you to bash: say so instead of entering a
+                // targeting mode with no valid tile.
+                let Some((px, py)) = crate::queries::get_entity_position(ctx.world, player) else {
+                    return Targeting::Refused;
+                };
+                let any = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (px + dx, py + dy)))
+                    .any(|t| systems::actions::can_shield_bash(ctx.world, player, t));
+                if !any {
+                    ctx.ui.message_log.system("There is nothing next to you to bash.".to_string());
+                    return Targeting::Refused;
+                }
+                Targeting::Enter(SHIELD_BASH_RANGE)
+            }
+            (AbilitySlot::Kit(_), AbilityType::GraveBolt) => Targeting::Enter(GRAVE_BOLT_RANGE),
             _ => Targeting::Immediate,
         }
     }
@@ -2023,7 +2211,7 @@ impl AbilitySlot {
     /// The action an untargeted activation of `ability_type` starts, or `None`
     /// if this slot can't use that ability (unreachable for every ability the
     /// slots actually grant - see `PlayerClass::ability`, the `SecondaryAbility`
-    /// inserts in `initialization`, and `RangerAbilities::new`).
+    /// inserts in `initialization`, and `ClassKit::for_class`).
     fn action_for(self, ability_type: AbilityType) -> Option<ActionType> {
         match (self, ability_type) {
             (AbilitySlot::Class, AbilityType::Cleave) => Some(ActionType::Cleave),
@@ -2033,7 +2221,10 @@ impl AbilitySlot {
             }
             (AbilitySlot::Secondary, AbilityType::Fear) => Some(ActionType::ActivateFear),
             (AbilitySlot::Secondary, AbilityType::Stun) => Some(ActionType::ActivateStun),
-            (AbilitySlot::Ranger(_), AbilityType::Disengage) => Some(ActionType::Disengage),
+            (AbilitySlot::Kit(_), AbilityType::Disengage) => Some(ActionType::Disengage),
+            (AbilitySlot::Kit(_), AbilityType::Guard) => Some(ActionType::Guard),
+            (AbilitySlot::Kit(_), AbilityType::BoneWard) => Some(ActionType::BoneWard),
+            (AbilitySlot::Kit(_), AbilityType::Thorns) => Some(ActionType::ActivateThorns),
             (AbilitySlot::Learned(_), _) => Some(ActionType::CastLearnedSpell {
                 ability: ability_type,
                 target_x: 0,
@@ -2056,9 +2247,9 @@ impl AbilitySlot {
                     ability.start_cooldown();
                 }
             }
-            AbilitySlot::Ranger(index) => {
-                if let Ok(mut ra) = world.get::<&mut RangerAbilities>(player) {
-                    ra.start_cooldown(index);
+            AbilitySlot::Kit(index) => {
+                if let Ok(mut kit) = world.get::<&mut ClassKit>(player) {
+                    kit.start_cooldown(index);
                 }
             }
             AbilitySlot::Secondary | AbilitySlot::Learned(_) => {}
@@ -2103,8 +2294,10 @@ fn activate_ability(ctx: &mut SimCtx, slot: AbilitySlot) -> bool {
         return false;
     };
 
+    // Through the start-effects path: Guard and Bone Ward take hold the
+    // moment they start, not when they complete.
     let start_result =
-        time_system::start_action(ctx.world, player, action_type, ctx.clock, ctx.scheduler);
+        time_system::start_action_with_start_effects(&mut ctx.actors(), player, action_type);
 
     if start_result.is_ok() {
         slot.start_cooldown(ctx.world, player);
@@ -2333,8 +2526,28 @@ mod tests {
     /// stayed reproducible, they just took a different path.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        // Updated for the energy removal; see the note on the test above.
-        const EXPECTED: &str = "t=354.1439 floor=0 kills=14 hp=-9/50 pos=9,10 hunger=83.3344 fatigue=39.0035 n=92 roster=571df8a0";
+        // Re-recorded for melee reach-at-completion (a swing at a target that
+        // stepped away now misses) and for dead actors no longer completing
+        // queued actions. Either change alone moves this digest a long way
+        // (the swarm amplifies any divergence); the run stays reproducible.
+        // Re-recorded for the surface-status phase: floors now carry unlit oil
+        // spills (more entities, more rng draws at construction), rats and
+        // lesser spiders gained on-hit components (archetype moves), and rat
+        // bites roll for Bleeding. Two separate runs agreed before recording.
+        // Re-recorded for phase 4 creature traits: floor-0 bats now fly
+        // over furniture and hit-and-run instead of trading blows.
+        // Re-recorded for phase 4b: floor-0 rats now spawn in packs (the
+        // floor's rats regrouped, so different spawn tiles and rng draws),
+        // lone rats flee, goblins flank, orcs charge, everyone gets the
+        // flanking bonus and roots hold the player. Three separate test
+        // processes produced this same digest before recording.
+        // Re-recorded for oil barrels in corridors no longer getting a spill
+        // beside them (fewer spill rng draws at floor construction, so the
+        // room spills land elsewhere). Only the roster moved; disabling that
+        // one generation filter restores the old digest exactly, so the
+        // fuse/push/bash/bolt changes do not touch this script. Two separate
+        // processes agreed before recording.
+        const EXPECTED: &str = "t=357.0720 floor=0 kills=18 hp=0/50 pos=9,11 hunger=83.3344 fatigue=37.8297 n=100 roster=eb7c2f09";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2401,7 +2614,21 @@ mod tests {
         // Fatigue is now the integral of effort rather than a second clock, so
         // it is much higher than the original 7.5, and the run is shorter
         // because no actor ever stalls waiting to afford its next move.
-        const EXPECTED: &str = "t=262.4901 floor=1 kills=16 hp=99733/100000 pos=10,13 hunger=87.5008 fatigue=30.0590 n=95 roster=86f0c6b7";
+        // Re-recorded again for melee reach-at-completion (swings at targets
+        // that stepped out of reach now miss).
+        // Re-recorded again for oil spills, on-hit DoTs and the oil barrels
+        // and puddles that floor save/load now keeps (see the other golden).
+        // Re-recorded for phase 4 creature traits: bats now fly over
+        // furniture and hit-and-run. (Disabling slime splitting leaves this
+        // digest unchanged, so no split happens in this script; the two
+        // extra kills come from the reshaped fights.)
+        // Re-recorded for phase 4b (rat packs, flanking, goblin flank
+        // routing, orc charges, rooted player): see the other golden.
+        // Reproduced in three separate processes before recording.
+        // Re-recorded for corridor oil barrels no longer leaking a spill (two
+        // fewer puddles on the floor, n=98 -> 96; see the other golden, same
+        // cause, confirmed the same way, two processes agreed).
+        const EXPECTED: &str = "t=267.1041 floor=1 kills=21 hp=99962/100000 pos=10,13 hunger=87.5008 fatigue=28.4922 n=96 roster=50f83c36";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -3263,4 +3490,246 @@ mod tests {
         }
     }
 
+    // =========================================================================
+    // Class kits: initialisation, hotbar layout, and activation plumbing.
+    // =========================================================================
+
+    fn engine_for(class: PlayerClass) -> GameEngine {
+        let mut engine = GameEngine::new();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        engine.start_game(class, 1234, &mut camera);
+        engine
+    }
+
+    fn hotbar_abilities(slots: &[Option<crate::ui::HotbarEntry>]) -> Vec<AbilityType> {
+        slots
+            .iter()
+            .filter_map(|e| match e {
+                Some(crate::ui::HotbarEntry::Ability(a)) => Some(*a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every class gets a ClassKit at init, and every starting ability lands
+    /// on a hotbar: the main bar first, the overflow on the Shift bar.
+    #[test]
+    fn every_class_starts_with_its_kit_on_the_hotbars() {
+        use AbilityType as A;
+        let expected = [
+            (PlayerClass::Fighter, vec![A::Cleave, A::Stun, A::Guard, A::ShieldBash], vec![]),
+            (
+                PlayerClass::Ranger,
+                vec![A::Sprint, A::Disengage, A::Tumble, A::SnareTrap, A::CripplingShot],
+                vec![],
+            ),
+            (PlayerClass::Druid, vec![A::Tame, A::Barkskin, A::Thorns, A::Entangle, A::CallRain], vec![]),
+            (
+                PlayerClass::Necromancer,
+                vec![A::LifeDrain, A::Fear, A::RaiseDead, A::BoneWard, A::Sacrifice],
+                vec![A::CorpseExplosion, A::GraveBolt],
+            ),
+        ];
+        for (class, main, shift) in expected {
+            let engine = engine_for(class);
+            let state = engine.state.as_ref().expect("run");
+            assert!(
+                state.world.get::<&ClassKit>(state.player_entity).is_ok(),
+                "{class:?} has a ClassKit"
+            );
+            let ui = engine.ui_state.as_ref().expect("ui");
+            assert_eq!(hotbar_abilities(&ui.hotbar_main), main, "{class:?} main bar");
+            assert_eq!(hotbar_abilities(&ui.hotbar_shift), shift, "{class:?} shift bar");
+        }
+    }
+
+    /// Guard goes through the kit slot: it starts the kit cooldown, the guard
+    /// was up during the action, and it is down once the player can act again.
+    #[test]
+    fn guard_activates_from_the_kit_slot() {
+        let mut engine = engine_for(PlayerClass::Fighter);
+        engine.try_use_ability(AbilityType::Guard);
+
+        let state = engine.state.as_ref().expect("run");
+        let player = state.player_entity;
+        let kit = state.world.get::<&ClassKit>(player).expect("kit");
+        let guard = kit.get(0).expect("guard");
+        assert_eq!(guard.ability, AbilityType::Guard);
+        assert!(guard.cooldown_remaining > 0.0, "cooldown started");
+        assert!(state.game_clock.time >= crate::constants::GUARD_DURATION - 1e-4);
+        assert!(!crate::queries::has_status_effect(
+            &state.world,
+            player,
+            crate::components::EffectType::Guarding
+        ));
+        assert!(
+            log_lines(&engine).iter().any(|l| l == "You raise your guard."),
+            "got {:?}",
+            log_lines(&engine)
+        );
+    }
+
+    /// A targeted kit ability activated by a click (here the Ranger's Tumble)
+    /// starts its own cooldown in the kit, and only its own.
+    #[test]
+    fn a_targeted_kit_ability_starts_its_cooldown() {
+        let mut engine = engine_for(PlayerClass::Ranger);
+        let target = {
+            let state = engine.state.as_ref().expect("run");
+            let (px, py) = crate::queries::get_entity_position(&state.world, state.player_entity)
+                .expect("player position");
+            [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+                .into_iter()
+                .map(|(dx, dy)| (px + dx, py + dy))
+                .find(|&(x, y)| {
+                    state.grid.is_walkable(x, y) && !state.spatial_cache.is_blocked((x, y))
+                })
+                .expect("a free tile beside the player")
+        };
+        let result = {
+            let mut ctx = engine.sim_ctx().expect("ctx");
+            execute_player_intent(
+                &mut ctx,
+                crate::systems::player_input::PlayerIntent::Tumble {
+                    target_x: target.0,
+                    target_y: target.1,
+                },
+            )
+        };
+        assert_eq!(result.turn_result, simulation::TurnResult::Started);
+
+        let state = engine.state.as_ref().expect("run");
+        let kit = state.world.get::<&ClassKit>(state.player_entity).expect("kit");
+        for k in &kit.abilities {
+            if k.ability == AbilityType::Tumble {
+                assert!(k.cooldown_remaining > 0.0, "Tumble is on cooldown");
+            } else {
+                assert_eq!(k.cooldown_remaining, 0.0, "{:?} untouched", k.ability);
+            }
+        }
+    }
+
+    /// A free floor tile orthogonally beside the player with nothing on it.
+    fn empty_neighbour(engine: &GameEngine) -> (i32, i32) {
+        let state = engine.state.as_ref().expect("run");
+        let (px, py) = crate::queries::get_entity_position(&state.world, state.player_entity)
+            .expect("player position");
+        [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .map(|(dx, dy)| (px + dx, py + dy))
+            .find(|&(x, y)| {
+                state.grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
+                    && !state
+                        .world
+                        .query::<&crate::components::Position>()
+                        .iter()
+                        .any(|(_, p)| (p.x, p.y) == (x, y))
+            })
+            .expect("an empty floor tile beside the player")
+    }
+
+    fn see(engine: &mut GameEngine, (x, y): (i32, i32)) {
+        let tile = engine.state.as_mut().expect("run").grid.get_mut(x, y).expect("in bounds");
+        tile.visible = true;
+        tile.explored = true;
+    }
+
+    fn choose(engine: &mut GameEngine, tile: (i32, i32), command: systems::tile_context::ContextCommand) {
+        engine.process_ui_actions(&UiActions {
+            tile_choice: Some((tile, command)),
+            ..Default::default()
+        });
+    }
+
+    /// Picking "Close door" from the tile menu runs the CloseDoor intent
+    /// through the normal input path on the next frame.
+    #[test]
+    fn close_door_from_the_tile_menu_closes_the_door() {
+        use crate::components::{Door, Position, VisualPosition};
+        use systems::tile_context::context_actions;
+        let mut engine = engine_with_run();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let at = empty_neighbour(&engine);
+        see(&mut engine, at);
+        let door = {
+            let state = engine.state.as_mut().expect("run");
+            // Spawned closed and opened the way the game opens one, so the
+            // spatial cache tracks it like a generated door.
+            let pos = Position::new(at.0, at.1);
+            let door = state.world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                Door::new(),
+                crate::components::BlocksMovement,
+                crate::components::BlocksVision,
+            ));
+            state.spatial_cache.rebuild_in_place(&state.world);
+            state.world.get::<&mut Door>(door).expect("door").is_open = true;
+            let _ = state.world.remove::<(crate::components::BlocksMovement, crate::components::BlocksVision)>(door);
+            state.spatial_cache.clear_blocking_flags(door);
+            door
+        };
+        let entry = {
+            let state = engine.state.as_ref().expect("run");
+            context_actions(&state.world, &state.grid, &state.spatial_cache, state.player_entity, at)
+                .into_iter()
+                .find(|a| a.label == "Close door")
+                .expect("the menu offers Close door")
+        };
+        assert!(entry.enabled, "{:?}", entry.reason);
+        choose(&mut engine, at, entry.command);
+        assert!(matches!(
+            engine.input.pending_intent,
+            Some(crate::systems::player_input::PlayerIntent::CloseDoor { .. })
+        ));
+        engine.tick(0.016, &mut camera);
+        let state = engine.state.as_ref().expect("run");
+        assert!(!state.world.get::<&Door>(door).expect("door").is_open, "the door closed");
+        assert!(engine.input.pending_intent.is_none());
+    }
+
+    /// A command the menu would not offer (a fighter has no Grave Bolt) is
+    /// refused with a log line and never reaches the simulation.
+    #[test]
+    fn a_tile_command_the_menu_would_not_offer_is_refused() {
+        use systems::tile_context::ContextCommand;
+        let mut engine = engine_with_run();
+        let at = empty_neighbour(&engine);
+        see(&mut engine, at);
+        let bolt = ContextCommand::Intent(crate::systems::player_input::PlayerIntent::GraveBolt {
+            target_x: at.0,
+            target_y: at.1,
+        });
+        choose(&mut engine, at, bolt);
+        assert!(engine.input.pending_intent.is_none());
+        assert!(log_lines(&engine).iter().any(|l| l == "You can't do that now."), "{:?}", log_lines(&engine));
+    }
+
+    /// Examine writes the tile's description to the message log.
+    #[test]
+    fn examine_logs_the_tile_description() {
+        use systems::tile_context::ContextCommand;
+        let mut engine = engine_with_run();
+        let at = empty_neighbour(&engine);
+        see(&mut engine, at);
+        choose(&mut engine, at, ContextCommand::Examine { x: at.0, y: at.1 });
+        assert!(log_lines(&engine).iter().any(|l| l == "Floor."), "{:?}", log_lines(&engine));
+    }
+
+    /// Escape closes the tile menu first; only the next Escape pauses.
+    #[test]
+    fn escape_closes_the_tile_menu_before_pausing() {
+        let mut engine = engine_with_run();
+        engine.game_mode = GameMode::Playing;
+        engine.ui_state.as_mut().expect("ui").tile_menu = Some(crate::ui::TileMenu {
+            tile: (0, 0),
+            screen_pos: (10.0, 10.0),
+            actions: Vec::new(),
+        });
+        engine.handle_escape();
+        assert_eq!(engine.game_mode, GameMode::Playing);
+        assert!(engine.ui_state.as_ref().expect("ui").tile_menu.is_none());
+        engine.handle_escape();
+        assert_eq!(engine.game_mode, GameMode::Paused);
+    }
 }

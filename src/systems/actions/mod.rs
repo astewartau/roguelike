@@ -8,12 +8,16 @@
 //! - `combat`: melee attacks, cleave, stun
 //! - `items`: equip/unequip/drop
 //! - `abilities`: class abilities (blink, fireball, taming, life drain, etc.)
+//! - `kit`: per-class kit abilities (guard, bone ward, sacrifice, corpse
+//!   explosion, thorns, entangle), including the start-of-action hook that
+//!   reactive abilities use
 //! - `traps`: trap placement/triggering and container opening
 //! - `projectiles`: bow shots, thrown potions, projectile paths
 
 mod abilities;
 mod combat;
 mod items;
+mod kit;
 mod movement;
 mod projectiles;
 mod traps;
@@ -21,9 +25,15 @@ mod traps;
 pub use abilities::*;
 pub use combat::*;
 pub use items::*;
+pub use kit::*;
 pub use movement::*;
 pub use projectiles::*;
 pub use traps::*;
+
+/// The action-level test arena (player + full simulation context), shared
+/// with tests outside this module (AI, grabs, splits).
+#[cfg(test)]
+pub(crate) use combat::tests::Arena as TestArena;
 
 use hecs::Entity;
 

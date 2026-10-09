@@ -9,7 +9,7 @@ use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, It
 use crate::constants::{
     DAMAGE_NUMBER_BIG_SCALE, DAMAGE_NUMBER_CRIT_SCALE, DAMAGE_NUMBER_FONT_SIZE,
     DAMAGE_NUMBER_OUTLINE_OFFSET, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
-    DAMAGE_NUMBER_TAKEN_SCALE, POTION_SPLASH_RADIUS,
+    DAMAGE_NUMBER_TAKEN_SCALE, MISS_TEXT_SCALE, POTION_SPLASH_RADIUS,
 };
 use crate::ease;
 use crate::grid::Grid;
@@ -46,6 +46,13 @@ pub struct PlayerBuffAuraData {
     pub has_regen: bool,
     pub has_protected: bool,
     pub has_barkskin: bool,
+    /// Fighter's Guard is up: a bright steel ring.
+    pub has_guarding: bool,
+    /// Druid's Thorns: green spikes.
+    pub has_thorns: bool,
+    /// Necromancer's Bone Ward charges left (0 = no ward): one orbiting bone
+    /// mote per charge.
+    pub bone_ward_charges: u32,
     pub is_sneaking: bool,
     /// Hunger meter at zero: dim red pulse (the body consuming itself).
     pub is_starving: bool,
@@ -64,6 +71,16 @@ pub fn get_buff_aura_data(world: &World, player_entity: Entity) -> Option<Player
         has_regen: effects::has_effect(&status_effects, EffectType::Regenerating),
         has_protected: effects::has_effect(&status_effects, EffectType::Protected),
         has_barkskin: effects::has_effect(&status_effects, EffectType::Barkskin),
+        has_guarding: effects::has_effect(&status_effects, EffectType::Guarding),
+        has_thorns: effects::has_effect(&status_effects, EffectType::Thorns),
+        bone_ward_charges: if effects::has_effect(&status_effects, EffectType::BoneWard) {
+            world
+                .get::<&crate::components::BoneWard>(player_entity)
+                .map(|w| w.charges)
+                .unwrap_or(0)
+        } else {
+            0
+        },
         is_sneaking: world.get::<&crate::components::Sneaking>(player_entity).is_ok(),
         is_starving: world
             .get::<&crate::components::Hunger>(player_entity)
@@ -178,6 +195,156 @@ pub fn draw_loot_indicators(ctx: &egui::Context, camera: &Camera, tiles: &[(i32,
     ctx.request_repaint();
 }
 
+/// One visible hostile attack in progress, ready to draw.
+pub struct AttackTelegraphData {
+    /// Visible tiles the attack will hit.
+    pub tiles: Vec<(i32, i32)>,
+    /// Tile the "time until it lands" label goes on.
+    pub label_tile: (i32, i32),
+    /// 0.0 just started, 1.0 about to land (game time, so frozen while the
+    /// player decides).
+    pub progress: f32,
+    /// Game seconds until it lands.
+    pub remaining: f32,
+    /// An area attack (ground slam) rather than a single melee swing.
+    pub is_area: bool,
+}
+
+/// Visible hostile attacks in progress at game time `game_time`, plus fusing
+/// oil barrels (drawn like the boss slam: an area filling toward detonation).
+///
+/// Only attacks whose attacker stands on a visible tile are shown, and only
+/// the visible tiles of each; a swing in the dark stays a surprise.
+pub fn get_attack_telegraph_data(world: &World, grid: &Grid, game_time: f32) -> Vec<AttackTelegraphData> {
+    use crate::systems::telegraph::{all_telegraphs, TelegraphShape};
+
+    let visible = |(x, y): (i32, i32)| grid.get(x, y).map(|t| t.visible).unwrap_or(false);
+    all_telegraphs(world, game_time)
+        .into_iter()
+        .filter(|t| visible(t.attacker_pos))
+        .filter_map(|t| {
+            let mut tiles = t.shape.tiles();
+            // A charge lane ends at the first wall: the dash cannot go further.
+            if let TelegraphShape::Lane { .. } = t.shape {
+                let open = tiles.iter().take_while(|&&(x, y)| grid.is_walkable(x, y)).count();
+                tiles.truncate(open);
+            }
+            let tiles: Vec<(i32, i32)> = tiles.into_iter().filter(|&p| visible(p)).collect();
+            let (label_tile, is_area) = match t.shape {
+                TelegraphShape::Tile(p) => (p, false),
+                TelegraphShape::Area { center, .. } => (center, true),
+                // Label the lane where it starts, next to the orc.
+                TelegraphShape::Lane { .. } => (*tiles.first()?, false),
+            };
+            if tiles.is_empty() {
+                return None;
+            }
+            Some(AttackTelegraphData {
+                tiles,
+                label_tile,
+                progress: t.progress,
+                remaining: t.remaining,
+                is_area,
+            })
+        })
+        .collect()
+}
+
+/// Draw a red marker on every tile a visible hostile is about to hit.
+///
+/// The outline is there from the first moment; inside it a fill grows from
+/// `ATTACK_TELEGRAPH_MIN_FILL` of the tile to all of it and darkens as the
+/// attack nears landing. With `show_timer` (the player is choosing an action)
+/// each threatened tile also gets a "0.3s" label: the soonest attack landing
+/// there, in game seconds.
+pub fn draw_attack_telegraphs(
+    ctx: &egui::Context,
+    camera: &Camera,
+    telegraphs: &[AttackTelegraphData],
+    show_timer: bool,
+) {
+    use crate::constants::{
+        ATTACK_TELEGRAPH_ALPHA_MAX, ATTACK_TELEGRAPH_ALPHA_MIN, ATTACK_TELEGRAPH_COLOR,
+        ATTACK_TELEGRAPH_LABEL_FONT_SIZE, ATTACK_TELEGRAPH_LABEL_HEIGHT,
+        ATTACK_TELEGRAPH_MIN_FILL, ATTACK_TELEGRAPH_OUTLINE_ALPHA,
+        ATTACK_TELEGRAPH_OUTLINE_WIDTH, SLAM_TELEGRAPH_ALPHA_SCALE,
+    };
+
+    if telegraphs.is_empty() {
+        return;
+    }
+
+    // Same layer as the health bars and loot markers: over the world, under
+    // every panel.
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("attack_telegraphs"),
+    ));
+    let ppp = ctx.pixels_per_point();
+    let tile_size = camera.zoom / ppp;
+    let (r, g, b) = ATTACK_TELEGRAPH_COLOR;
+
+    // Tile rect in egui points: world (x, y) is the tile's bottom-left corner.
+    let tile_rect = |x: i32, y: i32| {
+        let (sx, sy) = camera.world_to_screen(x as f32, y as f32);
+        egui::Rect::from_min_size(
+            egui::pos2(sx / ppp, sy / ppp - tile_size),
+            egui::vec2(tile_size, tile_size),
+        )
+    };
+
+    // Soonest landing per tile, for the labels.
+    let mut soonest: Vec<((i32, i32), f32)> = Vec::new();
+
+    for t in telegraphs {
+        let p = t.progress.clamp(0.0, 1.0);
+        let scale = if t.is_area { SLAM_TELEGRAPH_ALPHA_SCALE } else { 1.0 };
+        let alpha_min = ATTACK_TELEGRAPH_ALPHA_MIN as f32;
+        let alpha_max = ATTACK_TELEGRAPH_ALPHA_MAX as f32;
+        let fill_alpha = ((alpha_min + (alpha_max - alpha_min) * p) * scale) as u8;
+        let outline_alpha = (ATTACK_TELEGRAPH_OUTLINE_ALPHA as f32 * scale) as u8;
+        let fill = egui::Color32::from_rgba_unmultiplied(r, g, b, fill_alpha);
+        let outline = egui::Stroke::new(
+            ATTACK_TELEGRAPH_OUTLINE_WIDTH,
+            egui::Color32::from_rgba_unmultiplied(r, g, b, outline_alpha),
+        );
+        let fill_frac = ATTACK_TELEGRAPH_MIN_FILL + (1.0 - ATTACK_TELEGRAPH_MIN_FILL) * p;
+
+        for &(x, y) in &t.tiles {
+            let rect = tile_rect(x, y);
+            painter.rect_stroke(rect.shrink(ATTACK_TELEGRAPH_OUTLINE_WIDTH / 2.0), 0.0, outline);
+            painter.rect_filled(
+                egui::Rect::from_center_size(rect.center(), rect.size() * fill_frac),
+                0.0,
+                fill,
+            );
+        }
+
+        match soonest.iter_mut().find(|(tile, _)| *tile == t.label_tile) {
+            Some((_, rem)) => *rem = rem.min(t.remaining),
+            None => soonest.push((t.label_tile, t.remaining)),
+        }
+    }
+
+    if !show_timer {
+        return;
+    }
+    let font = egui::FontId::monospace(ATTACK_TELEGRAPH_LABEL_FONT_SIZE);
+    let color = egui::Color32::from_rgb(r, g, b);
+    for ((x, y), remaining) in soonest {
+        let (sx, sy) =
+            camera.world_to_screen(x as f32 + 0.5, y as f32 + ATTACK_TELEGRAPH_LABEL_HEIGHT);
+        outlined_number(
+            &painter,
+            egui::pos2(sx / ppp, sy / ppp),
+            format!("{remaining:.1}s"),
+            font.clone(),
+            color,
+            style::colors::NUMBER_OUTLINE,
+        );
+    }
+}
+
 /// Extract health data for visible damaged enemies
 pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<EnemyHealthData> {
     world
@@ -253,11 +420,16 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
     for effect in effects {
         // Handle both damage and heal numbers. Heals are their own thing and
         // do not tier: there is no such thing as a critical heal here.
-        let (amount, tier, jitter) = match &effect.effect_type {
-            VfxType::DamageNumber { amount, tier, jitter } => (*amount, Some(*tier), *jitter),
-            VfxType::HealNumber { amount } => (*amount, None, 0.0),
+        // A miss is not a number at all, but it floats the same way.
+        let (amount, tier, jitter, miss_label) = match &effect.effect_type {
+            VfxType::DamageNumber { amount, tier, jitter } => {
+                (*amount, Some(*tier), *jitter, None)
+            }
+            VfxType::HealNumber { amount } => (*amount, None, 0.0, None),
+            VfxType::MissText { jitter, label } => (0, None, *jitter, Some(*label)),
             _ => continue,
         };
+        let is_miss = miss_label.is_some();
 
         let progress = effect.progress();
 
@@ -283,6 +455,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
 
         let (base_color, tier_scale) = match tier {
             Some(tier) => damage_style(tier),
+            None if is_miss => (style::colors::MISS_TEXT, MISS_TEXT_SCALE),
             None => (style::colors::HEAL_NUMBER, 1.0),
         };
         let color = base_color.gamma_multiply(fade);
@@ -292,6 +465,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         let text = match tier {
             Some(DamageTier::Crit) => format!("{}!", amount),
             Some(_) => format!("{}", amount),
+            None if is_miss => miss_label.unwrap_or("miss").to_string(),
             None => format!("+{}", amount),
         };
 
@@ -765,6 +939,9 @@ pub fn draw_player_buff_auras(
     if !data.has_regen
         && !data.has_protected
         && !data.has_barkskin
+        && !data.has_guarding
+        && !data.has_thorns
+        && data.bone_ward_charges == 0
         && !data.is_sneaking
         && !data.is_starving
         && !data.is_exhausted
@@ -882,6 +1059,43 @@ pub fn draw_player_buff_auras(
         let inner_bark_alpha = (50.0 * pulse) as u8;
         let inner_bark_color = egui::Color32::from_rgba_unmultiplied(101, 67, 33, inner_bark_alpha);
         painter.circle_stroke(center, bark_radius * 0.7, egui::Stroke::new(2.0, inner_bark_color));
+    }
+
+    // Guard: a solid, bright steel ring — it only lasts a fraction of a
+    // second, so it does not pulse.
+    if data.has_guarding {
+        let color = egui::Color32::from_rgba_unmultiplied(210, 220, 240, 190);
+        painter.circle_stroke(center, tile_size * 0.52, egui::Stroke::new(3.0_f32, color));
+    }
+
+    // Thorns: short green spikes radiating from a ring.
+    if data.has_thorns {
+        let color = egui::Color32::from_rgba_unmultiplied(110, 190, 70, (150.0 * pulse) as u8);
+        let inner = tile_size * 0.44;
+        let outer = tile_size * 0.58;
+        for i in 0..8 {
+            let angle = i as f32 * std::f32::consts::PI / 4.0 + real_time * 0.3;
+            let (c, s) = (angle.cos(), angle.sin());
+            painter.line_segment(
+                [
+                    egui::pos2(center.x + c * inner, center.y + s * inner),
+                    egui::pos2(center.x + c * outer, center.y + s * outer),
+                ],
+                egui::Stroke::new(2.0_f32, color),
+            );
+        }
+    }
+
+    // Bone Ward: one bone-white mote orbiting per charge left.
+    if data.bone_ward_charges > 0 {
+        let color = egui::Color32::from_rgba_unmultiplied(235, 230, 210, 210);
+        let radius = tile_size * 0.5;
+        let n = data.bone_ward_charges;
+        for i in 0..n {
+            let angle = i as f32 * std::f32::consts::TAU / n as f32 + real_time * 1.2;
+            let p = egui::pos2(center.x + angle.cos() * radius, center.y + angle.sin() * radius);
+            painter.circle_filled(p, 3.0_f32, color);
+        }
     }
 }
 

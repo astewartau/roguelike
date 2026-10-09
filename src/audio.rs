@@ -287,6 +287,14 @@ impl AudioManager {
                     let dist = Self::distance(player_pos, pos);
                     self.play_at_distance(SoundType::MeleeSwing, dist);
                 }
+                // A swing at air still swooshes; there is just no impact.
+                GameEvent::AttackMissed { target_pos: Some(target_pos), reason, .. }
+                    if *reason == crate::events::MissReason::OutOfReach =>
+                {
+                    let pos = (target_pos.0 as i32, target_pos.1 as i32);
+                    let dist = Self::distance(player_pos, pos);
+                    self.play_at_distance(SoundType::MeleeSwing, dist);
+                }
                 GameEvent::EntityDied { position, .. } => {
                     let pos = (position.0 as i32, position.1 as i32);
                     let dist = Self::distance(player_pos, pos);
@@ -334,6 +342,10 @@ impl AudioManager {
                 }
                 GameEvent::FireballExplosion { x, y, .. } => {
                     let dist = Self::distance(player_pos, (*x, *y));
+                    self.play_at_distance(SoundType::Spell, dist);
+                }
+                GameEvent::RainCalled { position, .. } => {
+                    let dist = Self::distance(player_pos, *position);
                     self.play_at_distance(SoundType::Spell, dist);
                 }
                 GameEvent::PotionSplash { x, y, .. } => {

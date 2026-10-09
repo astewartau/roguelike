@@ -46,6 +46,13 @@ pub fn has_status_effect(world: &World, entity: Entity, effect: EffectType) -> b
     effects::entity_has_effect(world, entity, effect)
 }
 
+/// Whether `entity` is slippery — slick with oil (Oiled) — and so hard to
+/// get a grip on. Grabs and holds (the zombie grab) should fail or slip on a
+/// slippery target.
+pub fn is_slippery(world: &World, entity: Entity) -> bool {
+    has_status_effect(world, entity, EffectType::Oiled)
+}
+
 /// Check if an entity can perform an action (has energy and is not busy).
 pub fn can_entity_act(world: &World, entity: Entity) -> bool {
     world
@@ -104,6 +111,55 @@ pub fn is_position_blocked(
     exclude: Option<Entity>,
 ) -> bool {
     spatial_cache.is_blocked_excluding((x, y), exclude)
+}
+
+// =============================================================================
+// FLIGHT
+// =============================================================================
+
+/// Whether `entity` is airborne (bats). See [`crate::components::Flying`].
+pub fn is_flying(world: &World, entity: Entity) -> bool {
+    world.get::<&crate::components::Flying>(entity).is_ok()
+}
+
+/// Whether a movement blocker is something a flyer cannot pass over: a
+/// creature (anything that acts, can be attacked, or talks) or a closed door.
+/// Everything else that blocks movement — chests, barrels, coffins,
+/// furniture, stalagmites, shop decor — is scenery a flyer passes over.
+fn stops_flyers(world: &World, blocker: Entity) -> bool {
+    world
+        .entity(blocker)
+        .map(|e| {
+            e.has::<Actor>()
+                || e.has::<Attackable>()
+                || e.has::<crate::components::FriendlyNPC>()
+                || e.has::<crate::components::Door>()
+        })
+        .unwrap_or(false)
+}
+
+/// Whether a flyer is stopped at `(x, y)` by an entity (walls are the grid's
+/// business): some movement blocker other than `exclude` that is a creature or
+/// a closed door. A tile blocked only by scenery is free to a flyer.
+pub fn blocks_flyer_at(world: &World, x: i32, y: i32, exclude: Option<Entity>) -> bool {
+    world
+        .query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .any(|(id, (p, _))| {
+            p.x == x && p.y == y && exclude != Some(id) && stops_flyers(world, id)
+        })
+}
+
+/// Every tile a flyer cannot enter because of an entity on it (creatures and
+/// closed doors; scenery is left out). The flyer's counterpart of
+/// `SpatialCache::blocked_tiles`, for pathfinding and wander/flee choices.
+pub fn flyer_blocked_tiles(world: &World, exclude: Option<Entity>) -> HashSet<(i32, i32)> {
+    world
+        .query::<(&Position, &BlocksMovement)>()
+        .iter()
+        .filter(|(id, _)| exclude != Some(*id) && stops_flyers(world, *id))
+        .map(|(_, (p, _))| (p.x, p.y))
+        .collect()
 }
 
 #[cfg(test)]

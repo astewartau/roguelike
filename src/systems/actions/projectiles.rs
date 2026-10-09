@@ -161,6 +161,7 @@ pub fn apply_shoot_bow(
             on_hit_effect,
             hit_enemy: false,
             incendiary: is_fire_arrow,
+            kind: crate::components::ProjectileKind::Missile,
         },
         ProjectileMarker,
     ));
@@ -306,6 +307,7 @@ pub fn apply_throw_potion(
             on_hit_effect: None,
             hit_enemy: false,
             incendiary: false,
+            kind: crate::components::ProjectileKind::Missile,
         },
         ProjectileMarker,
     ));
@@ -338,11 +340,15 @@ pub fn apply_potion_splash(
     potion_type: ItemType,
     center_x: i32,
     center_y: i32,
+    events: &mut EventQueue,
 ) {
-    // Water flasks don't buff anyone: the splash extinguishes fires (entities,
-    // grass, oil) and soaks grass tiles. Handled wholesale by the fire system.
+    // Water flasks don't buff anyone: the splash soaks creatures (Wet),
+    // extinguishes fires (entities, grass, oil) and soaks grass tiles. Handled
+    // wholesale by the fire system.
     if potion_type == ItemType::WaterFlaskFull {
-        crate::systems::fire::splash_water(world, grid, center_x, center_y, WATER_SPLASH_RADIUS);
+        crate::systems::fire::splash_water(
+            world, grid, center_x, center_y, WATER_SPLASH_RADIUS, events,
+        );
         return;
     }
     // INT-scaled confusion when the player throws it (magic-adjacent trick);

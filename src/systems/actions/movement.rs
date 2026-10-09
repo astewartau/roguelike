@@ -3,13 +3,11 @@
 use crate::engine::EffectCtx;
 use hecs::{Entity, World};
 
-use crate::components::{BlocksMovement, Container, Door, EffectType, Player, Position};
+use crate::components::{BlocksMovement, Container, Door, Player, Position};
 use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::queries;
 use crate::spatial_cache::SpatialCache;
-use crate::systems::effects;
 
-use super::traps::{check_dungeon_trap_trigger, check_fire_trap_trigger, check_snare_trap_trigger};
 use super::{apply_open_chest, interrupt_raise_dead, interrupt_taming, ActionResult};
 
 /// Apply movement effect
@@ -70,11 +68,20 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         return ActionResult::Blocked;
     }
 
-    // Check for container (chest) at target
+    // A flyer passes over scenery (chests, barrels, furniture, stalagmites)
+    // and may hover on its tile; only creatures and closed doors stop it.
+    let flying = queries::is_flying(world, entity);
+    let is_player = world.get::<&Player>(entity).is_ok();
+
+    // Check for container (chest) at target. A flying creature hovers over a
+    // chest rather than opening it.
     let mut chest_action: Option<(Entity, bool, bool)> = None;
     for (id, (chest_pos, container, _)) in
         world.query::<(&Position, &Container, &BlocksMovement)>().iter()
     {
+        if flying && !is_player {
+            break;
+        }
         if chest_pos.x == target_x && chest_pos.y == target_y {
             chest_action = Some((id, container.is_open, container.is_empty()));
             break;
@@ -104,9 +111,20 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
     // blocked — but its owner walks through it, same as any other companion.
     // Without this exception a Necromancer trailing skeletons at follow
     // distance 2 would wall itself into any corridor it backed down.
-    if !passing_through_own_companion
-        && queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity))
-    {
+    let blocked = if flying {
+        queries::blocks_flyer_at(world, target_x, target_y, Some(entity))
+    } else {
+        queries::is_position_blocked(spatial_cache, target_x, target_y, Some(entity))
+    };
+    if !passing_through_own_companion && blocked {
+        return ActionResult::Blocked;
+    }
+
+    // Held in a zombie's grab or rooted (web, snare, Entangle): the step
+    // goes nowhere (the turn is spent struggling). A grab whose holder has
+    // died, been stunned or drifted away is let go first, so a just-freed
+    // walker is not stuck a turn.
+    if crate::systems::grab::pinned_in_place(world, entity, events) {
         return ActionResult::Blocked;
     }
 
@@ -123,45 +141,16 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         });
     }
 
-    // Check if entity stepped into water (extinguishes fire)
-    if grid.water_positions.contains(&(target_x, target_y)) {
-        effects::remove_effect_from_entity(world, entity, EffectType::Burning);
-    }
-
-    // Check if entity stepped into a fire source (brazier, campfire) and catches fire
-    let stepped_on_fire = world
-        .query::<(&Position, &crate::components::CausesBurning)>()
-        .iter()
-        .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
-
-    if stepped_on_fire {
-        use crate::constants::BURNING_DURATION;
-        effects::add_effect_to_entity(world, entity, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire {
-            entity,
-            position: (target_x, target_y),
-        });
-    }
-
-    // Check if entity blundered into a spider web (non-spiders are rooted,
-    // web consumed)
-    crate::systems::webs::trigger_web_at(world, entity, target_x, target_y, events);
-
-    // Check if entity stepped on a fire trap
-    check_fire_trap_trigger(world, entity, target_x, target_y, events, rng);
-
-    // Check if entity stepped on a snare trap
-    check_snare_trap_trigger(world, entity, target_x, target_y, events);
-
-    // Check if entity stepped on a dungeon-generated floor trap (no owner
-    // exemption — enemies set these off too)
-    check_dungeon_trap_trigger(world, grid, entity, target_x, target_y, events, rng);
-
-    // After a player step: roll passive detection for hidden traps and secret
-    // doors within one tile (Agility-scaled).
-    if world.get::<&Player>(entity).is_ok() {
-        crate::systems::discovery::roll_player_discovery(world, entity, events, rng);
-    }
+    // Everything the destination tile does to an arrival (water, oil, fire,
+    // webs, traps, discovery) lives in one hook shared by every relocation.
+    crate::systems::tile_effects::on_enter_tile(
+        world,
+        grid,
+        entity,
+        (target_x, target_y),
+        events,
+        rng,
+    );
 
     ActionResult::Completed
 }
@@ -190,7 +179,53 @@ pub fn apply_open_door(
     ActionResult::Completed
 }
 
-/// Apply close door effect
+/// Whether something is standing in `door`'s doorway that would stop it
+/// closing: a blocker, a creature (flyers included), or items/bones on the
+/// floor.
+pub fn doorway_obstructed(world: &World, door: Entity) -> bool {
+    let Some(at) = queries::get_entity_position(world, door) else {
+        return true;
+    };
+    world.iter().any(|e| {
+        let id = e.entity();
+        if id == door {
+            return false;
+        }
+        let here = e.get::<&Position>().map(|p| (p.x, p.y) == at).unwrap_or(false);
+        here && (e.has::<BlocksMovement>()
+            || e.has::<crate::components::Attackable>()
+            || e.has::<crate::components::Health>()
+            || e.has::<Container>()
+            || e.has::<crate::components::GroundItemPile>())
+    })
+}
+
+/// Whether `closer` can close `door` right now: it is an open door on a tile
+/// adjacent to the closer (8-way, not the closer's own tile) and nothing is
+/// in the doorway. For the context menu and the CloseDoor intent.
+pub fn can_close_door(world: &World, closer: Entity, door: Entity) -> bool {
+    let open = world.get::<&Door>(door).map(|d| d.is_open).unwrap_or(false);
+    let (Some(a), Some(b)) = (
+        queries::get_entity_position(world, closer),
+        queries::get_entity_position(world, door),
+    ) else {
+        return false;
+    };
+    let dist = (a.0 - b.0).abs().max((a.1 - b.1).abs());
+    open && dist == 1 && !doorway_obstructed(world, door)
+}
+
+/// The door entity on `(x, y)`, if any (open or closed).
+pub fn door_at(world: &World, x: i32, y: i32) -> Option<Entity> {
+    world
+        .query::<(&Position, &Door)>()
+        .iter()
+        .find(|(_, (p, _))| p.x == x && p.y == y)
+        .map(|(id, _)| id)
+}
+
+/// Apply close door effect. Refused (with a `DoorCloseBlocked` event) while
+/// anything is in the doorway: a creature, a blocker, or items on the floor.
 pub fn apply_close_door(
     world: &mut World,
     closer: Entity,
@@ -208,17 +243,14 @@ pub fn apply_close_door(
         return ActionResult::Blocked;
     }
 
-    // Check nobody is standing on the door tile
     let door_pos = match world.get::<&Position>(door) {
         Ok(p) => (p.x, p.y),
         Err(_) => return ActionResult::Blocked,
     };
 
-    // Query for any entity with Position + BlocksMovement at the door's position (exclude the door itself)
-    for (id, (pos, _)) in world.query::<(&Position, &BlocksMovement)>().iter() {
-        if id != door && pos.x == door_pos.0 && pos.y == door_pos.1 {
-            return ActionResult::Blocked;
-        }
+    if doorway_obstructed(world, door) {
+        events.push(GameEvent::DoorCloseBlocked { closer, position: door_pos });
+        return ActionResult::Blocked;
     }
 
     // Close the door
@@ -240,8 +272,15 @@ pub fn apply_close_door(
 }
 
 /// Apply interact in a direction (Ctrl+movement).
-/// Checks for doors (open/close), toppleable braziers, and containers at the
-/// target tile.
+///
+/// What the adjacent tile holds decides what happens, first match wins (the
+/// same order as [`resolve_interact_direction`], which picks the action):
+/// 1. a door: open it, or close it if open;
+/// 2. a lit brazier: topple it;
+/// 3. room furniture (fountain/altar/shrine): use it;
+/// 4. a pushable object: push it (resolved to `ActionType::Push` up front,
+///    so it never reaches here from the player; kept for AI/other callers);
+/// 5. a container with something in it: open/loot it.
 pub fn apply_interact_direction(
     ctx: &mut EffectCtx,
     entity: Entity,
@@ -301,6 +340,16 @@ pub fn apply_interact_direction(
         }
     }
 
+    // A pushable (normally resolved to ActionType::Push before it starts).
+    if crate::systems::push::pushable_at(world, target_x, target_y).is_some() {
+        return crate::systems::push::apply_push(
+            &mut EffectCtx { world, grid, spatial: _spatial_cache, events, rng },
+            entity,
+            dx,
+            dy,
+        );
+    }
+
     // Check for closed or non-empty container at target
     let container_id: Option<hecs::Entity> = world
         .query::<(&Position, &Container)>()
@@ -315,6 +364,51 @@ pub fn apply_interact_direction(
     }
 
     ActionResult::Blocked
+}
+
+/// Which action a Ctrl+direction interact toward `(dx, dy)` starts.
+///
+/// Priority (first match wins), and why:
+/// 1. **door** -> `OpenDoor` / `CloseDoor`: doors are what Ctrl+direction was
+///    made for (closing one is otherwise impossible: bumping only opens);
+/// 2. **lit brazier**, 3. **room furniture** -> `InteractDirection` (resolved
+///    at completion as before; neither is pushable);
+/// 4. **pushable** -> `Push`: Ctrl+direction is the only way to shove, while
+///    a storage barrel can still be opened by bumping into it, so the push
+///    wins over the barrel's container;
+/// 5. anything else (a chest, nothing) -> `InteractDirection`, which opens a
+///    container or reports nothing to do.
+pub fn resolve_interact_direction(
+    world: &World,
+    entity: Entity,
+    dx: i32,
+    dy: i32,
+) -> crate::components::ActionType {
+    use crate::components::ActionType;
+    let fallback = ActionType::InteractDirection { dx, dy };
+    let Some((x, y)) = queries::get_entity_position(world, entity) else {
+        return fallback;
+    };
+    let (tx, ty) = (x + dx, y + dy);
+    if let Some(door) = door_at(world, tx, ty) {
+        let open = world.get::<&Door>(door).map(|d| d.is_open).unwrap_or(false);
+        return if open { ActionType::CloseDoor { door } } else { ActionType::OpenDoor { door } };
+    }
+    let brazier = world
+        .query::<(&Position, &crate::components::Brazier)>()
+        .iter()
+        .any(|(_, (p, b))| b.lit && p.x == tx && p.y == ty);
+    let furniture = world
+        .query::<(&Position, &crate::components::Furniture)>()
+        .iter()
+        .any(|(_, (p, _))| p.x == tx && p.y == ty);
+    if brazier || furniture {
+        return fallback;
+    }
+    if crate::systems::push::pushable_at(world, tx, ty).is_some() {
+        return ActionType::Push { dx, dy };
+    }
+    fallback
 }
 
 /// Apply use stairs effect - moves entity to stairs and emits floor transition event
@@ -336,6 +430,11 @@ pub fn apply_use_stairs(
     direction: StairDirection,
     events: &mut EventQueue,
 ) -> ActionResult {
+    // A zombie's grab or a root holds you off the stairs too.
+    if crate::systems::grab::pinned_in_place(world, entity, events) {
+        return ActionResult::Blocked;
+    }
+
     // Get current position
     let current_pos = match queries::get_entity_position(world, entity) {
         Some(p) => p,
@@ -370,6 +469,101 @@ mod tests {
     use super::*;
     use crate::components::{Attackable, CompanionAI, TamedBy, VisualPosition};
     use rand::SeedableRng;
+
+    // =========================================================================
+    // The on-enter-tile hook runs for every way of arriving on a tile.
+    // =========================================================================
+
+    use crate::components::{ActionType, EffectType};
+    use crate::systems::actions::combat::tests::Arena;
+
+    fn has(arena: &Arena, effect: EffectType) -> bool {
+        crate::queries::has_status_effect(&arena.world, arena.player, effect)
+    }
+
+    fn set_burning(arena: &mut Arena) {
+        crate::systems::effects::add_effect_to_entity(
+            &mut arena.world,
+            arena.player,
+            EffectType::Burning,
+            crate::constants::BURNING_DURATION,
+        );
+    }
+
+    /// A normal step into water still puts the fire out (as before the hook
+    /// existed), and now also leaves the walker Wet.
+    #[test]
+    fn stepping_into_water_soaks_and_extinguishes() {
+        let mut arena = Arena::new((5, 5));
+        arena.grid.water_positions.push((6, 5));
+        set_burning(&mut arena);
+
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(arena.player), (6, 5));
+        assert!(!has(&arena, EffectType::Burning), "water puts the fire out");
+        assert!(has(&arena, EffectType::Wet), "and soaks the walker");
+        assert!(arena.seen.iter().any(|e| matches!(e,
+            GameEvent::StatusEffectGained { effect: EffectType::Wet, .. })));
+    }
+
+    /// Blinking into a pool behaves exactly like walking into it: before the
+    /// hook, a teleport left you burning in the water.
+    #[test]
+    fn blinking_into_water_soaks_and_extinguishes() {
+        let mut arena = Arena::new((3, 3));
+        arena.grid.water_positions.push((7, 3));
+        set_burning(&mut arena);
+
+        arena.player_does(ActionType::Blink { target_x: 7, target_y: 3 });
+        assert_eq!(arena.pos(arena.player), (7, 3), "the blink landed");
+        assert!(!has(&arena, EffectType::Burning));
+        assert!(has(&arena, EffectType::Wet));
+    }
+
+    /// Tumble's landing tile acts on the ranger: rolling into an unlit oil
+    /// puddle leaves them Oiled.
+    #[test]
+    fn tumbling_into_oil_leaves_you_oiled() {
+        let mut arena = Arena::new((3, 3));
+        crate::spawning::spawn_oil_puddle(&mut arena.world, 5, 3);
+
+        arena.player_does(ActionType::Tumble { target_x: 5, target_y: 3 });
+        assert_eq!(arena.pos(arena.player), (5, 3));
+        assert!(has(&arena, EffectType::Oiled));
+        assert!(crate::queries::is_slippery(&arena.world, arena.player), "oiled means slippery");
+    }
+
+    /// A burning puddle sets you alight instead of oiling you.
+    #[test]
+    fn stepping_into_burning_oil_ignites_rather_than_oils() {
+        let mut arena = Arena::new((5, 5));
+        let puddle = crate::spawning::spawn_oil_puddle(&mut arena.world, 6, 5);
+        crate::systems::fire::ignite_oil_puddle(&mut arena.world, puddle);
+
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert!(has(&arena, EffectType::Burning));
+        assert!(!has(&arena, EffectType::Oiled));
+    }
+
+    /// A Wet walker steps into a fire source and does not catch — and is not
+    /// told it did.
+    #[test]
+    fn a_wet_walker_does_not_catch_fire() {
+        let mut arena = Arena::new((5, 5));
+        let puddle = crate::spawning::spawn_oil_puddle(&mut arena.world, 6, 5);
+        crate::systems::fire::ignite_oil_puddle(&mut arena.world, puddle);
+        crate::systems::effects::add_effect_to_entity(
+            &mut arena.world,
+            arena.player,
+            EffectType::Wet,
+            crate::constants::WET_DURATION,
+        );
+
+        arena.player_does(ActionType::Move { dx: 1, dy: 0, is_diagonal: false });
+        assert_eq!(arena.pos(arena.player), (6, 5));
+        assert!(!has(&arena, EffectType::Burning));
+        assert!(!arena.seen.iter().any(|e| matches!(e, GameEvent::CaughtFire { .. })));
+    }
 
     /// Walking onto a staircase is a real move, and the entity can end up
     /// standing there: `can_transition_floor` refuses `Up` on floor 0, so
@@ -489,5 +683,252 @@ mod tests {
         );
         assert_eq!(result, ActionResult::Blocked, "a non-owner is screened by the companion");
         let _ = companion;
+    }
+
+    // =========================================================================
+    // Flight: bats pass over scenery, not creatures, and skip the ground.
+    // =========================================================================
+
+    use crate::components::{BlocksMovement, Health};
+
+    /// A cave bat, awake and hunting the arena's player.
+    fn bat(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, x, y, &mut arena.rng);
+        arena.hunt(bat, crate::constants::BAT_SPEED);
+        bat
+    }
+
+    /// A piece of non-creature scenery (barrel, stalagmite, furniture...).
+    fn scenery(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let e = arena.world.spawn((Position::new(x, y), BlocksMovement));
+        arena.cache.rebuild_in_place(&arena.world);
+        e
+    }
+
+    fn step(arena: &mut Arena, e: Entity, dx: i32, dy: i32) -> ActionResult {
+        apply_move(&mut arena.ctx().effects(), e, dx, dy)
+    }
+
+    #[test]
+    fn bats_are_flying_and_cave_bats_too() {
+        let mut arena = Arena::new((1, 1));
+        let b = bat(&mut arena, 5, 5);
+        assert!(crate::queries::is_flying(&arena.world, b));
+        assert!(arena.world.get::<&crate::components::HitAndRun>(b).is_ok());
+        // Cave fauna use the same template, so they fly as well.
+        let (flying, hit_and_run) = arena
+            .world
+            .get::<&crate::spawning::EnemyDef>(b)
+            .map(|d| (d.flying, d.hit_and_run))
+            .unwrap();
+        assert!(flying && hit_and_run);
+        let rat = arena.rat(7, 7, 1.0);
+        assert!(!crate::queries::is_flying(&arena.world, rat), "rats walk");
+    }
+
+    /// A bat moves onto a furniture tile and hovers there; the player can
+    /// still hit it (bump-attack goes to the Attackable), and when it leaves
+    /// the furniture's blocker count is all that remains.
+    #[test]
+    fn flyer_hovers_over_furniture_and_can_still_be_attacked() {
+        let mut arena = Arena::new((7, 5));
+        let b = bat(&mut arena, 5, 5);
+        scenery(&mut arena, 6, 5);
+
+        // A walker is stopped by the same furniture.
+        let rat = arena.rat(5, 7, 1.0);
+        scenery(&mut arena, 6, 7);
+        assert_eq!(step(&mut arena, rat, 1, 0), ActionResult::Blocked);
+
+        assert_eq!(step(&mut arena, b, 1, 0), ActionResult::Completed);
+        assert_eq!(arena.pos(b), (6, 5), "the bat hovers over the furniture");
+        arena.cache.assert_coherent_with_world(&arena.world, "bat over furniture");
+
+        // The player's bump on that tile is an attack on the bat.
+        let player = arena.player;
+        let action = crate::systems::action_dispatch::determine_action_type(
+            &arena.world, &arena.grid, player, -1, 0,
+        );
+        assert!(matches!(action, ActionType::Attack { target } if target == b));
+        let before = arena.hp(b);
+        arena.player_does(action);
+        assert!(arena.hp(b) < before, "the hovering bat takes the hit");
+
+        // Leaving restores the tile to just the furniture.
+        arena.world.get::<&mut Health>(b).unwrap().current = 10;
+        assert_eq!(step(&mut arena, b, 0, 1), ActionResult::Completed);
+        arena.cache.assert_coherent_with_world(&arena.world, "bat left the furniture");
+        assert!(arena.cache.is_blocked((6, 5)), "the furniture still blocks walkers");
+        assert_eq!(arena.pos(b), (6, 6));
+    }
+
+    /// Flight is over scenery only: creatures, walls and closed doors stop a
+    /// bat like anyone else.
+    #[test]
+    fn flyer_cannot_pass_creatures_walls_or_closed_doors() {
+        let mut arena = Arena::new((1, 1));
+        let b = bat(&mut arena, 5, 5);
+        let _rat = arena.rat(6, 5, 1.0);
+        assert_eq!(step(&mut arena, b, 1, 0), ActionResult::Blocked, "creature");
+
+        if let Some(t) = arena.grid.get_mut(4, 5) {
+            *t = crate::tile::Tile::new(crate::tile::TileType::Wall);
+        }
+        assert_eq!(step(&mut arena, b, -1, 0), ActionResult::Blocked, "wall");
+
+        arena.world.spawn((
+            Position::new(5, 6),
+            crate::components::Door::new(),
+            BlocksMovement,
+            crate::components::BlocksVision,
+        ));
+        arena.cache.rebuild_in_place(&arena.world);
+        assert_eq!(step(&mut arena, b, 0, 1), ActionResult::Blocked, "closed door");
+        assert_eq!(arena.pos(b), (5, 5));
+        // And a chest under it is not opened by the bat.
+        let chest = arena.world.spawn((
+            Position::new(5, 4),
+            crate::components::Container::chest(vec![], 5),
+            BlocksMovement,
+        ));
+        arena.cache.rebuild_in_place(&arena.world);
+        assert_eq!(step(&mut arena, b, 0, -1), ActionResult::Completed);
+        assert!(!arena.world.get::<&crate::components::Container>(chest).unwrap().is_open);
+    }
+
+    /// Water, oil, webs and traps act on what touches the ground; a bat
+    /// passing over them is untouched (a walking rat is not).
+    #[test]
+    fn flyer_skips_ground_effects() {
+        let mut arena = Arena::new((1, 1));
+        arena.grid.water_positions.push((6, 5));
+        crate::spawning::spawn_oil_puddle(&mut arena.world, 7, 5);
+        crate::spawning::spawn_web(&mut arena.world, 8, 5, None);
+        let trap = crate::spawning::spawn_dungeon_trap(
+            &mut arena.world, 9, 5, crate::components::DungeonTrapKind::Snare,
+        );
+        let b = bat(&mut arena, 5, 5);
+        for _ in 0..4 {
+            assert_eq!(step(&mut arena, b, 1, 0), ActionResult::Completed);
+        }
+        assert_eq!(arena.pos(b), (9, 5));
+        for effect in [EffectType::Wet, EffectType::Oiled, EffectType::Rooted] {
+            assert!(
+                !crate::queries::has_status_effect(&arena.world, b, effect),
+                "a flyer gains no {effect:?} from the ground"
+            );
+        }
+        assert!(arena.world.contains(trap), "the trap was not sprung");
+
+        // Standing still over the puddle doesn't oil it either.
+        crate::systems::tile_effects::refresh_standing_effects(
+            &mut arena.world, &arena.grid, &mut arena.events,
+        );
+        assert!(!crate::queries::has_status_effect(&arena.world, b, EffectType::Oiled));
+
+        // Fire spilled onto its tile passes beneath it; a walker there burns.
+        crate::systems::fire::spill_fire_at(&mut arena.world, &arena.grid, 9, 5, &mut arena.events);
+        assert!(!crate::queries::has_status_effect(&arena.world, b, EffectType::Burning));
+
+        // Control: a walker in the same water is soaked.
+        let rat = arena.rat(6, 6, 1.0);
+        assert_eq!(step(&mut arena, rat, 0, -1), ActionResult::Completed);
+        assert!(crate::queries::has_status_effect(&arena.world, rat, EffectType::Wet));
+    }
+
+    // =========================================================================
+    // Closing doors, and what Ctrl+direction resolves to.
+    // =========================================================================
+
+    fn open_door(arena: &mut Arena, x: i32, y: i32) -> Entity {
+        let mut door = Door::new();
+        door.is_open = true;
+        let pos = Position::new(x, y);
+        let id = arena.world.spawn((pos, VisualPosition::from_position(&pos), door));
+        arena.cache.rebuild_in_place(&arena.world);
+        id
+    }
+
+    #[test]
+    fn close_door_closes_an_open_door() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let door = open_door(&mut arena, 6, 5);
+        assert!(can_close_door(&arena.world, player, door));
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, 1, 0),
+            ActionType::CloseDoor { door: d } if d == door
+        ));
+
+        arena.player_does(ActionType::CloseDoor { door });
+        assert!(!arena.world.get::<&Door>(door).unwrap().is_open);
+        assert!(arena.world.get::<&BlocksMovement>(door).is_ok());
+        assert!(arena.seen.iter().any(|e| matches!(e, GameEvent::DoorClosed { .. })));
+        // Closed now: Ctrl+direction opens it again.
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, 1, 0),
+            ActionType::OpenDoor { .. }
+        ));
+    }
+
+    #[test]
+    fn close_door_refuses_when_the_doorway_is_occupied() {
+        // A creature in the doorway.
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let door = open_door(&mut arena, 6, 5);
+        arena.rat(6, 5, 1.0);
+        assert!(!can_close_door(&arena.world, player, door));
+        arena.player_does(ActionType::CloseDoor { door });
+        assert!(arena.world.get::<&Door>(door).unwrap().is_open);
+        assert!(arena.seen.iter().any(|e| matches!(e, GameEvent::DoorCloseBlocked { .. })));
+
+        // Items on the floor of the doorway.
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let door = open_door(&mut arena, 6, 5);
+        crate::systems::inventory::spawn_ground_item(
+            &mut arena.world,
+            6,
+            5,
+            crate::components::ItemInstance::plain(crate::components::ItemType::Arrow),
+        );
+        assert!(!can_close_door(&arena.world, player, door));
+        arena.player_does(ActionType::CloseDoor { door });
+        assert!(arena.world.get::<&Door>(door).unwrap().is_open);
+
+        // Not adjacent: the helper says no.
+        let mut arena = Arena::new((2, 5));
+        let door = open_door(&mut arena, 6, 5);
+        assert!(!can_close_door(&arena.world, arena.player, door));
+    }
+
+    /// Ctrl+direction priority: a door beats everything; a pushable beats the
+    /// storage barrel's own container (bumping still opens that).
+    #[test]
+    fn interact_direction_prefers_doors_then_pushes_over_containers() {
+        let mut arena = Arena::new((5, 5));
+        let player = arena.player;
+        let pos = Position::new(6, 5);
+        arena.world.spawn((
+            pos,
+            Container::barrel(vec![]),
+            BlocksMovement,
+            crate::components::Pushable,
+        ));
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, 1, 0),
+            ActionType::Push { dx: 1, dy: 0 }
+        ));
+        // Bumping into it still opens it.
+        assert!(matches!(
+            crate::systems::action_dispatch::determine_action_type(&arena.world, &arena.grid, player, 1, 0),
+            ActionType::OpenChest { .. }
+        ));
+        // Nothing there: plain interact.
+        assert!(matches!(
+            resolve_interact_direction(&arena.world, player, -1, 0),
+            ActionType::InteractDirection { dx: -1, dy: 0 }
+        ));
     }
 }

@@ -3,7 +3,7 @@
 use crate::components::{
     AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ClassAbility,
     Container, Door, Equipment, Experience, Health, Inventory, ItemInstance, ItemType, Name, Player,
-    PlayerClass, Position, RangerAbilities, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
+    PlayerClass, Position, ClassKit, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
 use crate::constants::*;
 use crate::dungeon_gen::RoomTheme;
@@ -238,6 +238,13 @@ fn spawn_cave_features(world: &mut World, grid: &Grid, occupancy: &mut TileOccup
     }
 }
 
+/// Whether `(x, y)` lies inside any room. Everything walkable outside every
+/// room is corridor (how `spawn_oil_barrels` picks its corridor barrels, and
+/// how `spawn_oil_spills` recognises them).
+fn in_any_room(grid: &Grid, x: i32, y: i32) -> bool {
+    grid.themed_rooms.iter().any(|r| r.rect.contains(x, y))
+}
+
 /// Spawn explosive oil barrels: 1-2 hide among the Storage-room food barrels
 /// (their positions are returned so `spawn_barrels` can skip them), and some
 /// floors also get 1-2 out in the corridors.
@@ -279,14 +286,11 @@ fn spawn_oil_barrels(
     if rng.gen_bool(OIL_BARREL_CORRIDOR_FLOOR_CHANCE) {
         let door_tiles: Vec<(i32, i32)> =
             grid.door_positions.iter().map(|((x, y), _)| (*x, *y)).collect();
-        let in_any_room = |x: i32, y: i32| {
-            grid.themed_rooms.iter().any(|r| r.rect.contains(x, y))
-        };
         let corridor_tiles: Vec<(i32, i32)> = (0..grid.height as i32)
             .flat_map(|y| (0..grid.width as i32).map(move |x| (x, y)))
             .filter(|&(x, y)| {
                 grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
-                    && !in_any_room(x, y)
+                    && !in_any_room(grid, x, y)
                     && !door_tiles.contains(&(x, y))
                     && Some((x, y)) != grid.stairs_up_pos
                     && Some((x, y)) != grid.stairs_down_pos
@@ -313,6 +317,126 @@ fn spawn_oil_barrels(
         if occupancy.claim((x, y)) {
             spawning::spawn_oil_barrel(world, x, y);
         }
+    }
+}
+
+/// Spill unlit oil on the floor: a small spill (1-3 tiles) beside some oil
+/// barrels, and an occasional stray spill in a room.
+///
+/// Only barrels standing in a room leak. A barrel out in a corridor gets no
+/// spill: the corridor is one tile wide, so a puddle beside the barrel lies
+/// across the only way past it, and a fire there (or the barrel blowing) would
+/// turn the passage into a trap the player cannot route around. In a room
+/// there is always space to step around a spill.
+///
+/// Runs last in floor construction, after every blocker is placed, so that
+/// `occupancy` can keep puddles out from under chests and furniture. Puddles
+/// themselves do not block movement, so they never claim tiles. A puddle only
+/// lands on plain floor (not grass, water, stairs or doorways), never on
+/// `avoid` (the player's spawn), never in the starting room or the shop, and
+/// never within one tile of a standing fire (`CausesBurning`: braziers, the
+/// campfire) — oil next to a flame would be alight before the player arrived.
+fn spawn_oil_spills(
+    world: &mut World,
+    grid: &Grid,
+    occupancy: &TileOccupancy,
+    avoid: &[(i32, i32)],
+    rng: &mut impl Rng,
+) {
+    use crate::components::{CausesBurning, OilBarrel};
+    use std::collections::HashSet;
+
+    let fires: Vec<(i32, i32)> = world
+        .query::<&Position>()
+        .with::<&CausesBurning>()
+        .iter()
+        .map(|(_, p)| (p.x, p.y))
+        .collect();
+    let door_tiles: HashSet<(i32, i32)> =
+        grid.door_positions.iter().map(|(p, _)| *p).collect();
+    let shop_or_start = |x: i32, y: i32| {
+        grid.starting_room.map(|r| r.contains(x, y)).unwrap_or(false)
+            || grid
+                .themed_rooms
+                .iter()
+                .any(|r| r.theme == RoomTheme::Shop && r.rect.contains(x, y))
+    };
+    let valid = |(x, y): (i32, i32)| {
+        grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
+            && !grid.water_positions.contains(&(x, y))
+            && !door_tiles.contains(&(x, y))
+            && occupancy.is_free((x, y))
+            && !avoid.contains(&(x, y))
+            && !shop_or_start(x, y)
+            && !fires.iter().any(|&(fx, fy)| (fx - x).abs().max((fy - y).abs()) <= 1)
+    };
+
+    let mut taken: HashSet<(i32, i32)> = HashSet::new();
+    // Grow a spill of up to `size` orthogonally connected tiles from `start`.
+    let grow = |start: (i32, i32), size: usize, taken: &mut HashSet<(i32, i32)>, rng: &mut _| {
+        let mut spill = vec![start];
+        taken.insert(start);
+        while spill.len() < size {
+            let candidates: Vec<(i32, i32)> = spill
+                .iter()
+                .flat_map(|&(x, y)| [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)])
+                .filter(|t| valid(*t) && !taken.contains(t))
+                .collect();
+            let Some(&next) = candidates.choose(rng) else {
+                break;
+            };
+            taken.insert(next);
+            spill.push(next);
+        }
+        spill
+    };
+
+    let mut puddles: Vec<(i32, i32)> = Vec::new();
+
+    // Leaks beside oil barrels standing in rooms (not corridor barrels; see
+    // above). Sorted so a seed replays identically.
+    let mut barrels: Vec<(i32, i32)> = world
+        .query::<&Position>()
+        .with::<&OilBarrel>()
+        .iter()
+        .map(|(_, p)| (p.x, p.y))
+        .filter(|&(x, y)| in_any_room(grid, x, y))
+        .collect();
+    barrels.sort_unstable();
+    for (bx, by) in barrels {
+        if !rng.gen_bool(OIL_SPILL_BARREL_CHANCE) {
+            continue;
+        }
+        let beside: Vec<(i32, i32)> = (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (bx + dx, by + dy)))
+            .filter(|&t| t != (bx, by) && valid(t) && !taken.contains(&t))
+            .collect();
+        let Some(&start) = beside.choose(rng) else {
+            continue;
+        };
+        let size = rng.gen_range(OIL_SPILL_BARREL_MIN..=OIL_SPILL_BARREL_MAX);
+        puddles.extend(grow(start, size, &mut taken, rng));
+    }
+
+    // Stray spills in rooms.
+    for room in &grid.themed_rooms {
+        if !rng.gen_bool(OIL_SPILL_ROOM_CHANCE) {
+            continue;
+        }
+        let r = room.rect;
+        let floor: Vec<(i32, i32)> = (r.y..r.y + r.height)
+            .flat_map(|y| (r.x..r.x + r.width).map(move |x| (x, y)))
+            .filter(|&t| valid(t) && !taken.contains(&t))
+            .collect();
+        let Some(&start) = floor.choose(rng) else {
+            continue;
+        };
+        let size = rng.gen_range(OIL_SPILL_ROOM_MIN..=OIL_SPILL_ROOM_MAX);
+        puddles.extend(grow(start, size, &mut taken, rng));
+    }
+
+    for (x, y) in puddles {
+        spawning::spawn_oil_puddle(world, x, y);
     }
 }
 
@@ -349,6 +473,7 @@ fn spawn_barrels(
             Sprite::from_ref(tile_ids::BARREL),
             Container::barrel(items),
             BlocksMovement,
+            crate::components::Pushable,
         ));
     }
 }
@@ -705,10 +830,9 @@ pub fn init_world(
         let _ = world.insert_one(player_entity, learned);
     }
 
-    // Ranger gets the RangerAbilities component for number key abilities
-    if player_class == PlayerClass::Ranger {
-        let _ = world.insert_one(player_entity, RangerAbilities::new());
-    }
+    // Every class gets its kit of extra abilities (Guard; the Ranger's four;
+    // Thorns/Entangle; Bone Ward/Sacrifice/Corpse Explosion).
+    let _ = world.insert_one(player_entity, ClassKit::for_class(player_class));
 
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     // (all rolls come from the caller's rng — seeded for reproducible floors).
@@ -783,6 +907,15 @@ pub fn init_world(
     );
 
     // Floor 0 has no boss (see `is_boss_floor`), so there is no boss pass here.
+
+    // Unlit oil spills go down last, once every blocker has its tile.
+    spawn_oil_spills(
+        &mut world,
+        grid,
+        &occupancy,
+        &[(player_start.x, player_start.y)],
+        rng,
+    );
 
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(&world, "init_world");
@@ -890,9 +1023,54 @@ pub fn spawn_floor_entities(
     // Every 3rd floor: a named boss guarding a Rare+ chest in the largest room.
     spawn_boss_encounter(world, grid, floor_num, &mut occupancy, rng);
 
+    // Unlit oil spills go down last, once every blocker has its tile.
+    spawn_oil_spills(world, grid, &occupancy, &[player_spawn_pos], rng);
+
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(world, "spawn_floor_entities");
 
     // Initialize AI
     initialize_ai_actors(ctx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::OilPuddle;
+    use rand::SeedableRng;
+
+    /// Oil leaks beside barrels that stand in rooms, never beside a corridor
+    /// barrel (a spill across a one-tile corridor would make the barrel an
+    /// inescapable trap).
+    #[test]
+    fn corridor_barrels_get_no_oil_spills() {
+        let mut corridor_spills = 0;
+        let mut room_spills = 0;
+        for seed in 0..60u64 {
+            let mut grid = crate::systems::actions::TestArena::new((0, 0)).grid;
+            grid.themed_rooms.push(crate::dungeon_gen::ThemedRoom {
+                rect: crate::dungeon_gen::Rect::new(1, 1, 7, 7),
+                theme: RoomTheme::Storage,
+            });
+            let mut world = World::new();
+            spawning::spawn_oil_barrel(&mut world, 4, 4);
+            spawning::spawn_oil_barrel(&mut world, 12, 12);
+            let occupancy = TileOccupancy::from_world(&world);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            spawn_oil_spills(&mut world, &grid, &occupancy, &[], &mut rng);
+
+            let near = |(bx, by): (i32, i32)| {
+                world
+                    .query::<&Position>()
+                    .with::<&OilPuddle>()
+                    .iter()
+                    .filter(|(_, p)| (p.x - bx).abs().max((p.y - by).abs()) <= 1)
+                    .count()
+            };
+            corridor_spills += near((12, 12));
+            room_spills += near((4, 4));
+        }
+        assert_eq!(corridor_spills, 0, "a corridor barrel never leaks");
+        assert!(room_spills > 0, "room barrels still do");
+    }
 }

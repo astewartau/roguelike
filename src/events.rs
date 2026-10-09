@@ -30,6 +30,34 @@ pub enum DamageKind {
     Potion,
     /// A boss ground slam (Gnash's shockwave).
     Slam,
+    /// An orc's charge connecting at the end of its dash.
+    Charge,
+    /// Druid's Thorns biting back at a melee attacker. The "attacker" of the
+    /// hit is the thorny defender.
+    Thorns,
+    /// Necromancer's Corpse Explosion blast.
+    CorpseExplosion,
+    /// A Poisoned damage-over-time tick (never in `AttackHit`; see `DotDamage`).
+    Poison,
+    /// A Bleeding damage-over-time tick (never in `AttackHit`; see `DotDamage`).
+    Bleed,
+    /// Fighter's Shield Bash connecting.
+    ShieldBash,
+    /// A shield-bashed creature slammed into a wall or blocker mid-shove.
+    /// The "attacker" is the basher.
+    WallSlam,
+    /// Necromancer's Grave Bolt (a projectile; arrives in `ProjectileHit`).
+    GraveBolt,
+}
+
+/// Why a locked-target melee attack (`ActionType::Attack`) failed to connect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissReason {
+    /// The target is still there but stepped out of reach (`MELEE_REACH`)
+    /// before the swing landed.
+    OutOfReach,
+    /// The target died, despawned or stopped being attackable mid-swing.
+    TargetGone,
 }
 
 /// Game events that systems can emit and subscribe to.
@@ -53,6 +81,63 @@ pub enum GameEvent {
         kind: DamageKind,
         /// Whether this was a critical hit.
         crit: bool,
+        /// The target was flanked: a creature hostile to it stood on the far
+        /// side from the attacker, and the hit took `FLANK_DAMAGE_MULT`.
+        flanked: bool,
+        /// The hit left the target dead (hit-stop, kill feedback).
+        killed: bool,
+    },
+    /// A melee attack locked onto `target` landed on nothing: by the time
+    /// the swing completed the target had moved out of reach or was gone. No
+    /// damage was dealt.
+    AttackMissed {
+        attacker: Entity,
+        target: Entity,
+        /// Tile centre the target occupies now, if it still has a position
+        /// (for the floating "miss" text).
+        target_pos: Option<(f32, f32)>,
+        reason: MissReason,
+    },
+    /// A melee blow landed on a Guarding defender: most of it was blocked
+    /// and the attacker was staggered. An `AttackHit` for the reduced damage
+    /// follows.
+    AttackBlocked {
+        attacker: Entity,
+        defender: Entity,
+        /// Tile centre of the defender (for the floating "BLOCK" text).
+        defender_pos: (f32, f32),
+    },
+    /// A Bone Ward went up with this many charges.
+    BoneWardRaised {
+        entity: Entity,
+        charges: u32,
+    },
+    /// A Bone Ward absorbed a whole hit; `charges_left` is 0 when it shatters.
+    BoneWardAbsorbed {
+        entity: Entity,
+        charges_left: u32,
+        /// Tile centre of the warded entity.
+        position: (f32, f32),
+    },
+    /// A necromancer swapped places with one of their raised skeletons.
+    SacrificeSwapped {
+        caster: Entity,
+        skeleton: Entity,
+    },
+    /// A corpse was detonated. `hits` is how many hostiles the blast struck.
+    /// VFX/audio/shake ride on the `FireballExplosion` emitted alongside.
+    CorpseExploded {
+        caster: Entity,
+        position: (i32, i32),
+        hits: u32,
+    },
+    /// Entangle took hold around `position`; `rooted` hostiles were caught.
+    /// `tiles` is the patch, for the vine-burst VFX.
+    EntangleCast {
+        caster: Entity,
+        position: (i32, i32),
+        rooted: u32,
+        tiles: Vec<(i32, i32)>,
     },
     /// An entity died
     EntityDied {
@@ -221,6 +306,29 @@ pub enum GameEvent {
         /// Whether the item turned out to carry a curse affix
         cursed: bool,
     },
+    /// A damage-over-time status (Poisoned / Bleeding) ticked. `kind` is
+    /// `DamageKind::Poison` or `DamageKind::Bleed`.
+    DotDamage {
+        entity: Entity,
+        position: (f32, f32),
+        damage: i32,
+        kind: DamageKind,
+    },
+    /// An entity newly gained a status effect that the player should hear
+    /// about (Wet, Oiled, Poisoned, Bleeding). Refreshes are not announced.
+    StatusEffectGained {
+        entity: Entity,
+        effect: crate::components::EffectType,
+    },
+    /// A Druid called down rain over `position`. `tiles` is the soaked patch,
+    /// for the splash VFX; `doused` counts fires put out (creatures, grass,
+    /// oil, webs).
+    RainCalled {
+        caster: Entity,
+        position: (i32, i32),
+        tiles: Vec<(i32, i32)>,
+        doused: u32,
+    },
     /// An entity took burn damage from being on fire
     BurnDamage {
         entity: Entity,
@@ -235,6 +343,35 @@ pub enum GameEvent {
     /// An oil barrel exploded (damage + burning oil spray). VFX/audio reuse
     /// the FireballExplosion event emitted alongside this one.
     BarrelExploded {
+        position: (i32, i32),
+    },
+    /// An oil barrel was broken open (0 HP) and its break fuse started: it
+    /// hisses, its blast radius is telegraphed, and the next hit sets it off.
+    BarrelCracked {
+        barrel: Entity,
+        position: (i32, i32),
+    },
+    /// Water soaked an oil barrel: it cannot catch fire for a while.
+    /// `defused` is true when this put out a burning barrel's fire fuse.
+    BarrelSoaked {
+        barrel: Entity,
+        position: (i32, i32),
+        defused: bool,
+    },
+    /// A pushable object was shoved one tile (by Push or a Shield Bash).
+    ObjectPushed {
+        pusher: Entity,
+        object: Entity,
+        from: (i32, i32),
+        to: (i32, i32),
+    },
+    /// A push went nowhere: nothing pushable there, or its way is blocked.
+    PushBlocked {
+        pusher: Entity,
+    },
+    /// A door could not be closed: something is standing in the doorway.
+    DoorCloseBlocked {
+        closer: Entity,
         position: (i32, i32),
     },
     /// A brazier was toppled (by interaction or knockback), spilling fire.
@@ -405,6 +542,53 @@ pub enum GameEvent {
         target: Entity,
         position: (i32, i32),
     },
+    /// A zombie's hit took hold: `target` is Grabbed (cannot walk) for a
+    /// moment.
+    Grabbed {
+        grabber: Entity,
+        target: Entity,
+    },
+    /// A grab failed to take hold because the target was slippery (Oiled).
+    GrabSlipped {
+        grabber: Entity,
+        target: Entity,
+    },
+    /// `entity` is no longer held: the grab timed out, or its holder died,
+    /// was stunned or is no longer adjacent.
+    GrabReleased {
+        entity: Entity,
+    },
+    /// `entity` tried to walk while Grabbed and spent the step struggling.
+    GrabStruggle {
+        entity: Entity,
+    },
+    /// `entity` tried to walk while Rooted and spent the step struggling.
+    /// Said once per root application, not on every attempt
+    /// (`grab::pinned_in_place`).
+    RootStruggle {
+        entity: Entity,
+    },
+    /// An orc lowered its head to charge down a lane (a unit step `dir`);
+    /// the dash comes when the wind-up completes. Only emitted when the orc
+    /// stands on a tile the player can see.
+    ChargeWindup {
+        attacker: Entity,
+        position: (i32, i32),
+        dir: (i32, i32),
+    },
+    /// A charge that hit nobody ended (a hit is reported as an `AttackHit`
+    /// of kind `Charge`). Only emitted when the end tile is visible.
+    ChargeMissed {
+        attacker: Entity,
+        position: (i32, i32),
+        outcome: ChargeOutcome,
+    },
+    /// A badly hurt slime split in two: `child` appeared at `position`.
+    SlimeSplit {
+        parent: Entity,
+        child: Entity,
+        position: (i32, i32),
+    },
     /// A non-spider entity blundered into a web (Rooted; web consumed).
     WebTouched {
         victim: Entity,
@@ -425,12 +609,29 @@ pub enum GameEvent {
         ability: crate::components::BossAbility,
         position: (i32, i32),
     },
+    /// A boss started winding up its unique ability; it lands when the
+    /// wind-up action completes (message log warning).
+    BossAbilityWindup {
+        boss: Entity,
+        ability: crate::components::BossAbility,
+        position: (i32, i32),
+    },
     /// A boss summoned a minion: spawn it at this position (handled by the
     /// engine like CoffinSkeletonSpawn, since spawning needs the scheduler).
     BossMinionSpawn {
         boss: Entity,
         position: (i32, i32),
     },
+}
+
+/// How a charge that hit nobody ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChargeOutcome {
+    /// Ran into a wall or furniture: stunned for `ORC_WALL_STUN`.
+    Wall,
+    /// Ran its full length, or was stopped by one of its own: stunned for
+    /// `ORC_STUMBLE_DURATION`.
+    Stumble,
 }
 
 /// What drinking from a fountain did (for the message log / VFX).

@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, ChaseAI, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -37,10 +37,31 @@ pub fn generate_threat(world: &mut World, enemy: Entity, threat_source: Entity, 
 
 /// Generate threat on a companion from a damage source.
 /// Call this whenever an entity deals damage to a companion.
+///
+/// Friendly fire never turns a companion: damage from its own owner (a
+/// fireball that clips a skeleton, a stray arrow, a trap) or from a sibling
+/// companion of the same owner generates no threat, so the companion does not
+/// go after its own side.
 pub fn generate_companion_threat(world: &mut World, companion: Entity, threat_source: Entity, amount: f32) {
+    if is_own_side_of_companion(world, companion, threat_source) {
+        return;
+    }
     if let Ok(mut ai) = world.get::<&mut CompanionAI>(companion) {
         ai.add_threat(threat_source, amount);
     }
+}
+
+/// Whether `other` is on `companion`'s own side: its owner, or another
+/// companion tamed by the same owner.
+fn is_own_side_of_companion(world: &World, companion: Entity, other: Entity) -> bool {
+    let Ok(owner) = world.get::<&CompanionAI>(companion).map(|ai| ai.owner) else {
+        return false;
+    };
+    other == owner
+        || world
+            .get::<&TamedBy>(other)
+            .map(|t| t.owner == owner)
+            .unwrap_or(false)
 }
 
 // =============================================================================
@@ -214,6 +235,22 @@ pub fn tick_role_cooldowns(world: &mut World, elapsed: f32) {
     for (_, boss) in world.query_mut::<&mut Boss>() {
         boss.cooldown = (boss.cooldown - elapsed).max(0.0);
     }
+    for (_, hit_and_run) in world.query_mut::<&mut HitAndRun>() {
+        hit_and_run.retreat_remaining = (hit_and_run.retreat_remaining - elapsed).max(0.0);
+    }
+    for (_, charger) in world.query_mut::<&mut Charger>() {
+        charger.cooldown = (charger.cooldown - elapsed).max(0.0);
+    }
+}
+
+/// A melee swing by `attacker` just resolved (hit or miss). Hit-and-run
+/// creatures (bats) now break off for `BAT_RETREAT_DURATION` of game time;
+/// no-op for everything else. Called from the melee action handler so the
+/// retreat is in place before the attacker picks its next action.
+pub fn begin_hit_and_run_retreat(world: &mut World, attacker: Entity) {
+    if let Ok(mut h) = world.get::<&mut HitAndRun>(attacker) {
+        h.retreat_remaining = BAT_RETREAT_DURATION;
+    }
 }
 
 /// Announce any boss the player can now see for the first time
@@ -300,6 +337,12 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
         return;
     }
 
+    // Killed earlier in this advance but not yet turned into bones (that
+    // happens once per frame): the dead do not pick a next action.
+    if world.get::<&Health>(entity).map(|h| h.current <= 0).unwrap_or(false) {
+        return;
+    }
+
     // Check if entity has AI (ChaseAI for enemies, CompanionAI for tamed animals)
     let has_chase_ai = world.get::<&ChaseAI>(entity).is_ok();
     let companion_ai = world.get::<&CompanionAI>(entity).ok().map(|ai| (ai.owner, ai.follow_distance));
@@ -342,7 +385,13 @@ fn determine_action(
     let is_stunned = queries::has_status_effect(world, entity, EffectType::Stunned);
     let is_confused = queries::has_status_effect(world, entity, EffectType::Confused);
     let is_feared = queries::has_status_effect(world, entity, EffectType::Feared);
-    let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted);
+    // Grabbed (zombie hold) pins a creature exactly like Rooted: it can
+    // still swing at whatever is adjacent, but cannot walk.
+    let is_rooted = queries::has_status_effect(world, entity, EffectType::Rooted)
+        || queries::has_status_effect(world, entity, EffectType::Grabbed);
+    // Walkers and flyers judge free tiles differently (flyers pass over
+    // furniture); every wander/flee step below asks this.
+    let passability = Passability::for_entity(world, spatial_cache, entity);
 
     // Stunned: cannot act at all - skip the turn entirely.
     if is_stunned {
@@ -351,7 +400,7 @@ fn determine_action(
 
     // Confused: move randomly, ignore everything (including fire hazards)
     if is_confused && !is_rooted {
-        let (dx, dy) = random_wander(grid, entity_pos, spatial_cache, &HashSet::new(), rng);
+        let (dx, dy) = random_wander(grid, entity_pos, &passability, &HashSet::new(), rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -381,7 +430,7 @@ fn determine_action(
             .and_then(|ai| ai.highest_threat().map(|e| e.entity))
             .and_then(|e| queries::get_entity_position(world, e))
             .unwrap_or_else(|| queries::get_entity_position(world, player_entity).unwrap_or(entity_pos));
-        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, spatial_cache, rng);
+        let (dx, dy) = flee_from_target(grid, entity_pos, flee_from, &passability, rng);
         if dx == 0 && dy == 0 {
             return ActionType::Wait;
         }
@@ -446,6 +495,10 @@ fn determine_action(
             } else if player_sneaking {
                 gain *= SNEAK_ALERTNESS_MULT;
             }
+            // Dripping wet: squelching footsteps carry (stacks with sneaking).
+            if queries::has_status_effect(world, player_entity, crate::components::EffectType::Wet) {
+                gain *= WET_STEALTH_PENALTY;
+            }
             let new_alert = world.get::<&ChaseAI>(entity).map(|a| a.alertness + gain).unwrap_or(0.0);
             if new_alert >= ALERTNESS_WAKE_THRESHOLD {
                 woke = true;
@@ -475,7 +528,7 @@ fn determine_action(
         } else {
             // Awake but unaware: patrol/wander.
             let fire = fire_positions(world);
-            let (dx, dy) = random_wander(grid, entity_pos, spatial_cache, &fire, rng);
+            let (dx, dy) = random_wander(grid, entity_pos, &passability, &fire, rng);
             if dx == 0 && dy == 0 {
                 return ActionType::Wait;
             }
@@ -629,9 +682,27 @@ fn determine_action(
     if !is_rooted {
         if let Some(action) = try_boss_ability(
             world, grid, entity, entity_pos, new_state,
-            &potential_targets, &visible_targets, spatial_cache, events, rng,
+            &potential_targets, &visible_targets, spatial_cache, events,
         ) {
             return action;
+        }
+    }
+
+    // A pack rat that knows about a foe makes sure its packmates do too.
+    if is_aware && world.get::<&PackHunter>(entity).is_ok() {
+        if let (Some(te), Some(tp)) = (chase_target_entity, move_target) {
+            crate::systems::pack::alert_packmates(world, entity, te, tp);
+        }
+    }
+
+    // Orc charge: a visible target down a clear straight lane, in range.
+    if !is_rooted && target_visible && new_state == AIState::Chasing {
+        if let Some(tp) = chase_pos {
+            if let Some(action) = crate::systems::charge::try_start_charge(
+                world, grid, spatial_cache, entity, entity_pos, tp, events,
+            ) {
+                return action;
+            }
         }
     }
 
@@ -656,6 +727,41 @@ fn determine_action(
             }
         }
         return ActionType::Wait;
+    }
+
+    // Hit-and-run (bats): fresh off a swing, fly away from the target until
+    // the retreat timer runs out, then dive back in. Cornered (nowhere to
+    // flee), it falls through and fights like anything else.
+    let retreating = world
+        .get::<&HitAndRun>(entity)
+        .map(|h| h.retreat_remaining > 0.0)
+        .unwrap_or(false);
+    if retreating {
+        if let Some(target_pos) = move_target {
+            let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, &passability, rng);
+            if fdx != 0 || fdy != 0 {
+                let action = action_dispatch::determine_action_type(world, grid, entity, fdx, fdy);
+                if matches!(action, ActionType::Move { .. }) {
+                    return action;
+                }
+            }
+        }
+    }
+
+    // A pack rat on its own runs from whatever it is aware of rather than
+    // fight it — unless cornered (no step takes it further away), when it
+    // falls through and fights.
+    if is_aware && crate::systems::pack::is_alone(world, entity) {
+        if let Some(target_pos) = move_target {
+            if let Some((fdx, fdy)) =
+                flee_step_away(grid, entity_pos, target_pos, &passability, rng)
+            {
+                let action = action_dispatch::determine_action_type(world, grid, entity, fdx, fdy);
+                if matches!(action, ActionType::Move { .. }) {
+                    return action;
+                }
+            }
+        }
     }
 
     // Check for ranged attack against best visible target in range
@@ -704,7 +810,7 @@ fn determine_action(
                 .abs()
                 .max((entity_pos.1 - target_pos.1).abs());
             if dist < SHAMAN_KITE_MIN {
-                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, spatial_cache, rng);
+                let (fdx, fdy) = flee_from_target(grid, entity_pos, target_pos, &passability, rng);
                 if fdx == 0 && fdy == 0 {
                     return ActionType::Wait;
                 }
@@ -715,14 +821,31 @@ fn determine_action(
             // dist > SHAMAN_KITE_MAX: fall through to normal approach.
         }
         let can_open = world.get::<&CanOpenDoors>(entity).is_ok();
-        let pathfinding_blocked = ai_pathfinding_blocked(world, spatial_cache, can_open);
-        pathfinding::next_step_toward(grid, entity_pos, target_pos, &pathfinding_blocked)
+        let pathfinding_blocked = match &passability {
+            Passability::Walker(_) => ai_pathfinding_blocked(world, spatial_cache, can_open),
+            Passability::Flyer(stops) => ai_flyer_pathfinding_blocked(world, stops, can_open),
+        };
+        // A flanker heads round to the far side of a target an ally is
+        // already engaging, instead of queueing up beside the ally.
+        let goal = if target_visible && world.get::<&Flanker>(entity).is_ok() {
+            chase_target_entity
+                .and_then(|te| {
+                    flank_destination(
+                        world, grid, spatial_cache, entity, entity_pos, te, target_pos,
+                        &pathfinding_blocked,
+                    )
+                })
+                .unwrap_or(target_pos)
+        } else {
+            target_pos
+        };
+        pathfinding::next_step_toward(grid, entity_pos, goal, &pathfinding_blocked)
             .map(|(nx, ny)| (nx - entity_pos.0, ny - entity_pos.1))
             .unwrap_or((0, 0))
     } else {
         // Idle wandering — avoid wandering into fire hazards.
         let fire = fire_positions(world);
-        random_wander(grid, entity_pos, spatial_cache, &fire, rng)
+        random_wander(grid, entity_pos, &passability, &fire, rng)
     };
 
     if dx == 0 && dy == 0 {
@@ -746,8 +869,9 @@ fn determine_action(
 // =============================================================================
 
 /// Fire the boss's unique ability if it is ready and conditions are met.
-/// Returns Some(Wait) when the ability was used this turn (the cast IS the
-/// turn), None to fall through to normal behavior.
+/// Returns the action to start when the ability was used this turn — `Wait`
+/// for instant casts (the cast IS the turn), `BossGroundSlam` for the slam's
+/// telegraphed wind-up — or None to fall through to normal behavior.
 #[allow(clippy::too_many_arguments)]
 fn try_boss_ability(
     world: &mut World,
@@ -759,7 +883,6 @@ fn try_boss_ability(
     visible_targets: &HashSet<Entity>,
     spatial_cache: &SpatialCache,
     events: &mut EventQueue,
-    rng: &mut impl Rng,
 ) -> Option<ActionType> {
     let (ability, ready) = match world.get::<&Boss>(entity) {
         Ok(boss) => (boss.ability, boss.cooldown <= 0.0),
@@ -781,34 +904,15 @@ fn try_boss_ability(
             if !in_range {
                 return None;
             }
-            events.push(GameEvent::BossAbilityUsed { boss: entity, ability, position: entity_pos });
-
-            // Damage + stun everything player-side caught in the radius
-            // (fellow enemies are spared — the shockwave is aimed).
-            let victims: Vec<(Entity, (i32, i32))> = potential_targets
-                .iter()
-                .filter(|&&(_, tp)| cheb(entity_pos, tp) <= BOSS_SLAM_RADIUS)
-                .copied()
-                .collect();
-            for (victim, vpos) in victims {
-                let damage =
-                    crate::systems::combat::apply_damage(world, victim, BOSS_SLAM_DAMAGE, rng);
-                crate::systems::effects::add_effect_to_entity(
-                    world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
-                );
-                events.push(GameEvent::AttackHit {
-                    attacker: entity,
-                    target: victim,
-                    target_pos: (vpos.0 as f32 + 0.5, vpos.1 as f32 + 0.5),
-                    damage,
-                    kind: crate::events::DamageKind::Slam,
-                    crit: false,
-                });
-            }
+            // Wind up rather than slam on the spot: the shockwave lands when
+            // the BossGroundSlam action completes (actions::apply_boss_ground_slam),
+            // hitting whoever is still inside the radius then. The cooldown
+            // starts now so the boss cannot queue a second slam meanwhile.
+            events.push(GameEvent::BossAbilityWindup { boss: entity, ability, position: entity_pos });
             if let Ok(mut boss) = world.get::<&mut Boss>(entity) {
                 boss.cooldown = BOSS_SLAM_COOLDOWN;
             }
-            Some(ActionType::Wait)
+            Some(ActionType::BossGroundSlam)
         }
         BossAbility::SummonSpiders => {
             if !aware {
@@ -1038,11 +1142,8 @@ fn determine_companion_action(
         entries.sort_by(|a, b| b.threat.partial_cmp(&a.threat).unwrap_or(std::cmp::Ordering::Equal));
 
         for entry in entries {
-            // Skip sibling companions
-            let is_sibling = world.get::<&TamedBy>(entry.entity)
-                .map(|t| t.owner == owner)
-                .unwrap_or(false);
-            if is_sibling {
+            // Never fight our own side: the owner or a sibling companion
+            if is_own_side_of_companion(world, entity, entry.entity) {
                 continue;
             }
 
@@ -1338,6 +1439,65 @@ fn ai_pathfinding_blocked(
     blocked
 }
 
+/// The flyer's blocked set for pathfinding: tiles holding a creature or a
+/// closed door (`stops`, from `queries::flyer_blocked_tiles`), minus other AI
+/// actors (walked through, as for walkers) and, for door-openers, closed
+/// doors. Furniture and other scenery never appear in it.
+fn ai_flyer_pathfinding_blocked(
+    world: &World,
+    stops: &HashSet<(i32, i32)>,
+    can_open_doors: bool,
+) -> HashSet<(i32, i32)> {
+    let mut blocked = stops.clone();
+    for (_id, (pos, _)) in world.query::<(&Position, &ChaseAI)>().iter() {
+        blocked.remove(&(pos.x, pos.y));
+    }
+    for (_id, (pos, _)) in world.query::<(&Position, &CompanionAI)>().iter() {
+        blocked.remove(&(pos.x, pos.y));
+    }
+    if can_open_doors {
+        for (_id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
+            if !door.is_open {
+                blocked.remove(&(pos.x, pos.y));
+            }
+        }
+    }
+    blocked
+}
+
+/// How an AI mover decides whether a neighbouring tile is free to step on,
+/// for wander and flee steps. Walkers ask the spatial cache (any blocker
+/// stops them); flyers carry the set of tiles holding a creature or closed
+/// door, and pass over everything else (see `queries::blocks_flyer_at`,
+/// which `apply_move` uses for the same rule).
+enum Passability<'a> {
+    Walker(&'a SpatialCache),
+    Flyer(HashSet<(i32, i32)>),
+}
+
+impl<'a> Passability<'a> {
+    fn for_entity(world: &World, spatial_cache: &'a SpatialCache, entity: Entity) -> Self {
+        if queries::is_flying(world, entity) {
+            Passability::Flyer(queries::flyer_blocked_tiles(world, Some(entity)))
+        } else {
+            Passability::Walker(spatial_cache)
+        }
+    }
+
+    /// Whether an entity on `pos` stops this mover.
+    fn is_blocked(&self, pos: (i32, i32)) -> bool {
+        match self {
+            Passability::Walker(cache) => cache.is_blocked(pos),
+            Passability::Flyer(stops) => stops.contains(&pos),
+        }
+    }
+
+    /// Walkable terrain with nothing on it that stops this mover.
+    fn is_free(&self, grid: &Grid, pos: (i32, i32)) -> bool {
+        grid.is_walkable(pos.0, pos.1) && !self.is_blocked(pos)
+    }
+}
+
 /// Collect tile positions that cause burning (campfires, braziers, fire traps).
 /// Used so idle AI doesn't casually wander into a fire.
 fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
@@ -1356,7 +1516,7 @@ fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
 fn random_wander(
     grid: &Grid,
     pos: (i32, i32),
-    spatial_cache: &SpatialCache,
+    passability: &Passability,
     fire: &HashSet<(i32, i32)>,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
@@ -1364,10 +1524,7 @@ fn random_wander(
     let mut count = 0;
     for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
         let target = (pos.0 + dx, pos.1 + dy);
-        if grid.is_walkable(target.0, target.1)
-            && !spatial_cache.is_blocked(target)
-            && !fire.contains(&target)
-        {
+        if passability.is_free(grid, target) && !fire.contains(&target) {
             valid[count] = (dx, dy);
             count += 1;
         }
@@ -1380,43 +1537,134 @@ fn random_wander(
     }
 }
 
+/// A flee step that actually opens distance from `target` (Chebyshev), or
+/// None if the creature is cornered. Unlike [`flee_from_target`] there is no
+/// random fallback: a creature that cannot get further away stands and
+/// fights.
+fn flee_step_away(
+    grid: &Grid,
+    pos: (i32, i32),
+    target: (i32, i32),
+    passability: &Passability,
+    rng: &mut impl Rng,
+) -> Option<(i32, i32)> {
+    let cheb = |p: (i32, i32)| (p.0 - target.0).abs().max((p.1 - target.1).abs());
+    let here = cheb(pos);
+    let (dx, dy) = flee_from_target(grid, pos, target, passability, rng);
+    if (dx, dy) != (0, 0) && cheb((pos.0 + dx, pos.1 + dy)) > here {
+        return Some((dx, dy));
+    }
+    // The straight-away steps are shut; any other neighbour that still gains
+    // ground will do.
+    (-1..=1)
+        .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
+        .filter(|&d| d != (0, 0))
+        .find(|&(dx, dy)| {
+            let p = (pos.0 + dx, pos.1 + dy);
+            passability.is_free(grid, p) && cheb(p) > here
+        })
+}
+
+/// Where a flanker (goblin) should head to attack `target` at `target_pos`:
+/// when another hostile (ChaseAI, untamed, alive) is already adjacent to the
+/// target, the free walkable tile adjacent to the target most nearly opposite
+/// those allies (smallest angle-cosine, at the target, to the nearest-in-angle
+/// ally), ties broken by the shorter path. None when the flanker is already adjacent
+/// (it just attacks), when no ally is engaged, or when no such tile is free
+/// and reachable — the caller then paths straight at the target.
+#[allow(clippy::too_many_arguments)]
+fn flank_destination(
+    world: &World,
+    grid: &Grid,
+    spatial_cache: &SpatialCache,
+    entity: Entity,
+    entity_pos: (i32, i32),
+    target: Entity,
+    target_pos: (i32, i32),
+    blocked: &HashSet<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    let adjacent = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs().max((a.1 - b.1).abs()) == 1;
+    if adjacent(entity_pos, target_pos) {
+        return None;
+    }
+    let allies: Vec<(i32, i32)> = world
+        .query::<(&Position, &ChaseAI, &Health)>()
+        .without::<&TamedBy>()
+        .iter()
+        .filter(|(id, (p, _, h))| {
+            *id != entity && *id != target && h.current > 0 && adjacent((p.x, p.y), target_pos)
+        })
+        .map(|(_, (p, _, _))| (p.x, p.y))
+        .collect();
+    if allies.is_empty() {
+        return None;
+    }
+    // How far round from the nearest-in-angle ally a tile is: the cosine of
+    // the angle (at the target) between the tile and that ally. -1 is
+    // directly opposite; lower is better.
+    let closeness = |tile: (i32, i32)| -> f32 {
+        let d = ((tile.0 - target_pos.0) as f32, (tile.1 - target_pos.1) as f32);
+        allies
+            .iter()
+            .map(|a| {
+                let v = ((a.0 - target_pos.0) as f32, (a.1 - target_pos.1) as f32);
+                (v.0 * d.0 + v.1 * d.1) / ((v.0.hypot(v.1)) * (d.0.hypot(d.1)))
+            })
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    let mut best: Option<(f32, usize, (i32, i32))> = None;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let tile = (target_pos.0 + dx, target_pos.1 + dy);
+            if (dx, dy) == (0, 0)
+                || !grid.is_walkable(tile.0, tile.1)
+                || spatial_cache.is_blocked(tile)
+            {
+                continue;
+            }
+            let score = closeness(tile);
+            let Some(path) = pathfinding::find_path(grid, entity_pos, tile, blocked) else {
+                continue;
+            };
+            let better = match best {
+                None => true,
+                Some((s, len, _)) => {
+                    score < s - 1e-4 || ((score - s).abs() <= 1e-4 && path.len() < len)
+                }
+            };
+            if better {
+                best = Some((score, path.len(), tile));
+            }
+        }
+    }
+    best.map(|(_, _, tile)| tile)
+}
+
 /// Flee from a target position - move in the opposite direction.
 fn flee_from_target(
     grid: &Grid,
     pos: (i32, i32),
     target: (i32, i32),
-    spatial_cache: &SpatialCache,
+    passability: &Passability,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
     let flee_dx = (pos.0 - target.0).signum();
     let flee_dy = (pos.1 - target.1).signum();
 
     if flee_dx != 0 || flee_dy != 0 {
-        let nx = pos.0 + flee_dx;
-        let ny = pos.1 + flee_dy;
-        if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
+        if passability.is_free(grid, (pos.0 + flee_dx, pos.1 + flee_dy)) {
             return (flee_dx, flee_dy);
         }
-
-        if flee_dx != 0 {
-            let nx = pos.0 + flee_dx;
-            let ny = pos.1;
-            if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
-                return (flee_dx, 0);
-            }
+        if flee_dx != 0 && passability.is_free(grid, (pos.0 + flee_dx, pos.1)) {
+            return (flee_dx, 0);
         }
-
-        if flee_dy != 0 {
-            let nx = pos.0;
-            let ny = pos.1 + flee_dy;
-            if grid.is_walkable(nx, ny) && !spatial_cache.is_blocked((nx, ny)) {
-                return (0, flee_dy);
-            }
+        if flee_dy != 0 && passability.is_free(grid, (pos.0, pos.1 + flee_dy)) {
+            return (0, flee_dy);
         }
     }
 
     // Panicked flee fallback — desperation overrides fire avoidance.
-    random_wander(grid, pos, spatial_cache, &HashSet::new(), rng)
+    random_wander(grid, pos, passability, &HashSet::new(), rng)
 }
 
 #[cfg(test)]
@@ -1575,5 +1823,206 @@ mod tests {
 
         // Empty input degrades gracefully.
         assert_eq!(select_heal_target(&[]), None);
+    }
+
+    // =========================================================================
+    // Flight-aware pathing and the bat's hit-and-run.
+    // =========================================================================
+
+    use crate::systems::actions::TestArena as Arena;
+    use crate::components::BlocksMovement;
+
+    /// Wall column at x = 8 with two gaps: (8, 5) plugged by a barrel and
+    /// (8, 12) open. The target is straight across at (10, 5).
+    fn wall_with_plugged_gap(arena: &mut Arena) {
+        for y in 0..16 {
+            if y != 5 && y != 12 {
+                if let Some(t) = arena.grid.get_mut(8, y) {
+                    *t = crate::tile::Tile::new(crate::tile::TileType::Wall);
+                }
+            }
+        }
+        arena.world.spawn((Position::new(8, 5), BlocksMovement));
+        arena.cache.rebuild_in_place(&arena.world);
+    }
+
+    fn decided_step(arena: &mut Arena, e: Entity) -> Option<(i32, i32)> {
+        decide_action(&mut arena.ctx(), e);
+        match arena.world.get::<&Actor>(e).ok()?.current_action?.action_type {
+            ActionType::Move { dx, dy, .. } => Some((dx, dy)),
+            _ => None,
+        }
+    }
+
+    /// The flyer heads straight for the barrel-plugged gap and over it; a
+    /// walker in the same spot routes the long way round through the open
+    /// gap.
+    #[test]
+    fn flyer_paths_over_furniture_where_a_walker_goes_around() {
+        let mut arena = Arena::new((10, 5));
+        wall_with_plugged_gap(&mut arena);
+
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        assert_eq!(decided_step(&mut arena, bat), Some((1, 0)), "the bat flies straight on");
+
+        // The routes themselves: over the barrel for the flyer, round
+        // through the far gap for a walker.
+        let flyer_blocked = ai_flyer_pathfinding_blocked(
+            &arena.world,
+            &queries::flyer_blocked_tiles(&arena.world, Some(bat)),
+            false,
+        );
+        let flyer_path = pathfinding::find_path(&arena.grid, (6, 5), (10, 5), &flyer_blocked)
+            .expect("flyer has a route");
+        assert!(flyer_path.contains(&(8, 5)) && flyer_path.len() <= 6, "{flyer_path:?}");
+
+        let mut arena = Arena::new((10, 5));
+        wall_with_plugged_gap(&mut arena);
+        let rat = arena.rat(6, 5, 1.0);
+        let walker_blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, false);
+        let walker_path = pathfinding::find_path(&arena.grid, (6, 5), (10, 5), &walker_blocked)
+            .expect("walker has a route");
+        assert!(!walker_path.contains(&(8, 5)), "the walker never enters the barrel tile");
+        assert!(walker_path.contains(&(8, 12)), "it goes round through the open gap");
+        let _ = rat;
+
+        // Played out: the bat crosses the barrel's tile and reaches the player.
+        let mut arena = Arena::new((10, 5));
+        wall_with_plugged_gap(&mut arena);
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        decide_action(&mut arena.ctx(), bat);
+        let mut crossed = false;
+        while arena.clock.time < 4.0 {
+            arena.player_does(ActionType::Wait);
+            crossed |= arena.pos(bat) == (8, 5);
+            arena.cache.assert_coherent_with_world(&arena.world, "bat crossing");
+        }
+        assert!(crossed, "the bat passed over the barrel");
+        assert!(arena.hit(bat, arena.player) || arena.missed(bat, arena.player)
+            || arena.seen.iter().any(|e| matches!(e, GameEvent::AttackMissed { attacker, .. } if attacker == &bat)),
+            "and went for the player");
+    }
+
+    /// Flee/wander steps for a flyer also pass over scenery but not creatures.
+    #[test]
+    fn flyer_flee_passes_over_furniture_but_not_creatures() {
+        let mut arena = Arena::new((5, 5));
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        // Furniture directly behind the bat, a rat diagonally behind it.
+        arena.world.spawn((Position::new(7, 5), BlocksMovement));
+        let _rat = arena.rat(7, 6, 1.0);
+        let pass = Passability::for_entity(&arena.world, &arena.cache, bat);
+        assert!(!pass.is_blocked((7, 5)), "scenery is free to a flyer");
+        assert!(pass.is_blocked((7, 6)), "a creature is not");
+        let walker = Passability::Walker(&arena.cache);
+        assert!(walker.is_blocked((7, 5)));
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        use rand::SeedableRng;
+        assert_eq!(flee_from_target(&arena.grid, (6, 5), (5, 5), &pass, &mut rng), (1, 0));
+    }
+
+    /// A goblin heads for the tile opposite an ally already fighting the
+    /// player, not the nearest free one.
+    #[test]
+    fn a_goblin_flanks_to_the_far_side_of_an_engaged_target() {
+        let mut arena = Arena::new((8, 8));
+        let player = arena.player;
+        let ally = crate::spawning::enemies::SKELETON.spawn(&mut arena.world, 7, 8, &mut arena.rng);
+        arena.hunt(ally, 1.0);
+        let gob = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, 8, 4, &mut arena.rng);
+        arena.hunt(gob, GOBLIN_SPEED);
+        assert!(arena.world.get::<&Flanker>(gob).is_ok(), "goblins flank");
+
+        let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+        let dest = flank_destination(
+            &arena.world, &arena.grid, &arena.cache, gob, (8, 4), player, (8, 8), &blocked,
+        );
+        assert_eq!(dest, Some((9, 8)), "directly opposite the skeleton");
+
+        // From the other side, with the ally to the south: north of the player.
+        let dest = {
+            arena.world.get::<&mut Position>(ally).unwrap().y = 9;
+            arena.world.get::<&mut Position>(ally).unwrap().x = 8;
+            arena.cache.rebuild_in_place(&arena.world);
+            let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+            flank_destination(
+                &arena.world, &arena.grid, &arena.cache, gob, (12, 8), player, (8, 8), &blocked,
+            )
+        };
+        assert_eq!(dest, Some((8, 7)));
+
+        // Already adjacent: no detour, it just attacks.
+        let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+        assert_eq!(
+            flank_destination(&arena.world, &arena.grid, &arena.cache, gob, (9, 9), player, (8, 8), &blocked),
+            None
+        );
+    }
+
+    /// With nobody engaged yet there is no flank to take: straight in.
+    #[test]
+    fn a_goblin_with_no_engaged_ally_goes_straight_in() {
+        let mut arena = Arena::new((8, 8));
+        let player = arena.player;
+        let gob = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, 8, 4, &mut arena.rng);
+        arena.hunt(gob, GOBLIN_SPEED);
+        // A tamed "ally" next to the player does not count.
+        let pet = crate::spawning::enemies::SKELETON.spawn(&mut arena.world, 7, 8, &mut arena.rng);
+        arena.world.insert_one(pet, TamedBy { owner: player }).unwrap();
+        // Awake, so the goblin has nobody to shout awake first.
+        arena.world.get::<&mut ChaseAI>(pet).unwrap().state = AIState::Idle;
+        arena.cache.rebuild_in_place(&arena.world);
+        let blocked = ai_pathfinding_blocked(&arena.world, &arena.cache, true);
+        assert_eq!(
+            flank_destination(&arena.world, &arena.grid, &arena.cache, gob, (8, 4), player, (8, 8), &blocked),
+            None
+        );
+        assert_eq!(decided_step(&mut arena, gob), Some((0, 1)));
+    }
+
+    /// After a swing (hit or miss) a bat flies off for BAT_RETREAT_DURATION,
+    /// then comes back for another bite.
+    #[test]
+    fn bat_retreats_after_attacking_and_reengages() {
+        let mut arena = Arena::new((8, 8));
+        let bat = crate::spawning::enemies::BAT.spawn(&mut arena.world, 9, 8, &mut arena.rng);
+        arena.hunt(bat, BAT_SPEED);
+        let player = arena.player;
+        arena.start(bat, ActionType::Attack { target: player });
+
+        let swings = |arena: &Arena| {
+            arena.seen.iter().filter(|e| matches!(e,
+                GameEvent::AttackHit { attacker, .. } | GameEvent::AttackMissed { attacker, .. }
+                    if attacker == &bat)).count()
+        };
+
+        // Run until the first swing lands.
+        while swings(&arena) == 0 {
+            arena.player_does(ActionType::Wait);
+        }
+        let swung_at = arena.clock.time;
+        let retreat = arena.world.get::<&HitAndRun>(bat).map(|h| h.retreat_remaining).unwrap();
+        assert!(retreat > 0.0, "the swing started a retreat");
+        assert!(!queries::has_status_effect(&arena.world, bat, EffectType::Feared),
+            "retreat is not the Feared status");
+
+        // During the retreat it opens distance and does not swing again.
+        let mut max_dist = 0;
+        while arena.clock.time < swung_at + BAT_RETREAT_DURATION - 0.6 {
+            arena.player_does(ActionType::Wait);
+            let (bx, by) = arena.pos(bat);
+            max_dist = max_dist.max((bx - 8).abs().max((by - 8).abs()));
+        }
+        assert!(max_dist >= 2, "the bat flew away (max distance {max_dist})");
+        assert_eq!(swings(&arena), 1, "no second bite while retreating");
+
+        // Once the retreat has run out it comes back and attacks again.
+        while arena.clock.time < swung_at + BAT_RETREAT_DURATION + 6.0 && swings(&arena) < 2 {
+            arena.player_does(ActionType::Wait);
+        }
+        assert!(swings(&arena) >= 2, "the bat re-engaged");
     }
 }
