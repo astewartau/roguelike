@@ -3,16 +3,18 @@
 //! Handles rendering of damage numbers, alert indicators, explosions,
 //! health bars, status indicators, and buff auras.
 
+use super::style;
 use crate::camera::Camera;
 use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, ItemType, StatusEffects, VisualPosition};
 use crate::constants::{
-    DAMAGE_NUMBER_FONT_SIZE, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
-    POTION_SPLASH_RADIUS,
+    DAMAGE_NUMBER_BIG_SCALE, DAMAGE_NUMBER_CRIT_SCALE, DAMAGE_NUMBER_FONT_SIZE,
+    DAMAGE_NUMBER_OUTLINE_OFFSET, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
+    DAMAGE_NUMBER_TAKEN_SCALE, POTION_SPLASH_RADIUS,
 };
 use crate::ease;
 use crate::grid::Grid;
 use crate::systems::effects;
-use crate::vfx::{VfxType, VisualEffect};
+use crate::vfx::{DamageTier, VfxType, VisualEffect};
 use hecs::{Entity, World};
 
 /// Data for an enemy with active status effects
@@ -104,6 +106,78 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
         .collect()
 }
 
+/// Visible tiles holding something the player could loot: a corpse or item
+/// pile with anything in it, or an opened chest left half-emptied. Closed
+/// chests do not count — what is in them is not known yet. The player's own
+/// tile is skipped (the loot window covers that), and each tile appears once
+/// however many containers share it.
+pub fn get_loot_indicator_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<(i32, i32)> {
+    let player_tile = world
+        .get::<&crate::components::Position>(player_entity)
+        .map(|p| (p.x, p.y))
+        .ok();
+    let mut tiles: Vec<(i32, i32)> = world
+        .query::<(&crate::components::Position, &crate::components::Container)>()
+        .iter()
+        .filter(|(id, (_, container))| {
+            !container.is_empty()
+                && (container.is_open
+                    || world.get::<&crate::components::BlocksMovement>(*id).is_err())
+        })
+        .map(|(_, (pos, _))| (pos.x, pos.y))
+        .filter(|&tile| Some(tile) != player_tile)
+        .filter(|&(x, y)| grid.get(x, y).map(|t| t.visible).unwrap_or(false))
+        .collect();
+    tiles.sort_unstable();
+    tiles.dedup();
+    tiles
+}
+
+/// Draw a small gold diamond over each lootable tile.
+pub fn draw_loot_indicators(ctx: &egui::Context, camera: &Camera, tiles: &[(i32, i32)]) {
+    use crate::constants::{
+        LOOT_MARKER_ALPHA, LOOT_MARKER_BOB_AMPLITUDE, LOOT_MARKER_BOB_SPEED,
+        LOOT_MARKER_HALF_SIZE, LOOT_MARKER_HEIGHT,
+    };
+
+    if tiles.is_empty() {
+        return;
+    }
+
+    // Same layer as the enemy health bars: over the world, under the panels.
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("loot_indicators"),
+    ));
+    let ppp = ctx.pixels_per_point();
+    let time = ctx.input(|i| i.time) as f32;
+
+    let fill = style::colors::TEXT_ACCENT.gamma_multiply(LOOT_MARKER_ALPHA as f32 / 255.0);
+    let outline = egui::Stroke::new(
+        1.0,
+        egui::Color32::from_black_alpha(LOOT_MARKER_ALPHA),
+    );
+
+    for &(x, y) in tiles {
+        let (sx, sy) = camera.world_to_screen(x as f32 + 0.5, y as f32 + LOOT_MARKER_HEIGHT);
+        // Offset each tile's phase by its position so a room full of corpses
+        // does not bob in lockstep.
+        let phase = (x * 7 + y * 13) as f32 * 0.37;
+        let bob = (time * LOOT_MARKER_BOB_SPEED + phase).sin() * LOOT_MARKER_BOB_AMPLITUDE;
+        let c = egui::pos2(sx / ppp, sy / ppp + bob);
+        let h = LOOT_MARKER_HALF_SIZE;
+        let diamond = vec![
+            egui::pos2(c.x, c.y - h),
+            egui::pos2(c.x + h, c.y),
+            egui::pos2(c.x, c.y + h),
+            egui::pos2(c.x - h, c.y),
+        ];
+        painter.add(egui::Shape::convex_polygon(diamond, fill, outline));
+    }
+    // Keep the bob moving even when nothing else is asking for a repaint.
+    ctx.request_repaint();
+}
+
 /// Extract health data for visible damaged enemies
 pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<EnemyHealthData> {
     world
@@ -128,6 +202,44 @@ pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) 
         .collect()
 }
 
+/// Colour and font-size multiplier for a damage tier.
+fn damage_style(tier: DamageTier) -> (egui::Color32, f32) {
+    match tier {
+        DamageTier::Dealt => (style::colors::DAMAGE_DEALT, 1.0),
+        DamageTier::Big => (style::colors::DAMAGE_BIG, DAMAGE_NUMBER_BIG_SCALE),
+        DamageTier::Crit => (style::colors::DAMAGE_CRIT, DAMAGE_NUMBER_CRIT_SCALE),
+        DamageTier::Taken => (style::colors::DAMAGE_TAKEN, DAMAGE_NUMBER_TAKEN_SCALE),
+    }
+}
+
+/// Draw `text` centred on `pos` with a black outline behind it.
+///
+/// The outline is the number drawn four times at the diagonals; without it
+/// these vanish over a lit stone floor. Two galleys are laid out rather than
+/// five, because only the colour differs between the copies.
+fn outlined_number(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    text: String,
+    font: egui::FontId,
+    color: egui::Color32,
+    outline: egui::Color32,
+) {
+    let shadow = painter.layout_no_wrap(text.clone(), font.clone(), outline);
+    let face = painter.layout_no_wrap(text, font, color);
+    let top_left = pos - face.size() / 2.0;
+    let d = DAMAGE_NUMBER_OUTLINE_OFFSET;
+    for offset in [
+        egui::vec2(-d, -d),
+        egui::vec2(d, -d),
+        egui::vec2(-d, d),
+        egui::vec2(d, d),
+    ] {
+        painter.galley(top_left + offset, shadow.clone(), outline);
+    }
+    painter.galley(top_left, face, color);
+}
+
 /// Render floating damage and heal numbers
 pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -139,10 +251,11 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
     let ppp = ctx.pixels_per_point();
 
     for effect in effects {
-        // Handle both damage and heal numbers
-        let (amount, is_heal) = match &effect.effect_type {
-            VfxType::DamageNumber { amount } => (*amount, false),
-            VfxType::HealNumber { amount } => (*amount, true),
+        // Handle both damage and heal numbers. Heals are their own thing and
+        // do not tier: there is no such thing as a critical heal here.
+        let (amount, tier, jitter) = match &effect.effect_type {
+            VfxType::DamageNumber { amount, tier, jitter } => (*amount, Some(*tier), *jitter),
+            VfxType::HealNumber { amount } => (*amount, None, 0.0),
             _ => continue,
         };
 
@@ -153,7 +266,9 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         // Eased rather than linear: the number leaps away from the hit and
         // settles, instead of drifting at a constant speed.
         let rise_offset = ease::out_cubic(progress) * DAMAGE_NUMBER_RISE;
-        let world_x = effect.x;
+        // The jitter is per instance, so three hits on one tile fan out
+        // instead of overprinting each other.
+        let world_x = effect.x + jitter;
         let world_y = effect.y + rise_offset; // Rise up (positive Y is up in world space)
 
         // Transform from world to screen coordinates (in physical pixels)
@@ -164,35 +279,39 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
         let egui_y = screen_pos.1 / ppp;
 
         // Fade out as progress increases
-        let alpha = ((1.0 - progress) * 255.0) as u8;
+        let fade = 1.0 - progress;
 
-        // Color: red for damage, green for healing
-        let color = if is_heal {
-            egui::Color32::from_rgba_unmultiplied(80, 255, 80, alpha)
-        } else {
-            egui::Color32::from_rgba_unmultiplied(255, 80, 80, alpha)
+        let (base_color, tier_scale) = match tier {
+            Some(tier) => damage_style(tier),
+            None => (style::colors::HEAL_NUMBER, 1.0),
+        };
+        let color = base_color.gamma_multiply(fade);
+        let outline = style::colors::NUMBER_OUTLINE.gamma_multiply(fade);
+
+        // Crits announce themselves; heals keep their + prefix.
+        let text = match tier {
+            Some(DamageTier::Crit) => format!("{}!", amount),
+            Some(_) => format!("{}", amount),
+            None => format!("+{}", amount),
         };
 
-        // Draw the number (with + prefix for healing)
-        let text = if is_heal {
-            format!("+{}", amount)
-        } else {
-            format!("{}", amount)
-        };
         // Punch out oversized and settle back, so a hit lands rather than
         // merely appearing. Rounded to a step because egui caches rasterized
-        // glyphs per distinct font size.
-        let popped = DAMAGE_NUMBER_FONT_SIZE * ease::pop(progress);
+        // glyphs per distinct font size — the tier multipliers multiply the
+        // number of distinct sizes, so the rounding matters more now, not
+        // less.
+        let popped = DAMAGE_NUMBER_FONT_SIZE * tier_scale * ease::pop(progress);
         let font_size =
             (popped / DAMAGE_NUMBER_POP_SIZE_STEP).round() * DAMAGE_NUMBER_POP_SIZE_STEP;
         let font_id = egui::FontId::monospace(font_size);
 
-        painter.text(
+        outlined_number(
+            &painter,
             egui::pos2(egui_x, egui_y),
-            egui::Align2::CENTER_CENTER,
             text,
             font_id,
             color,
+            outline,
         );
     }
 }

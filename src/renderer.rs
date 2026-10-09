@@ -1,4 +1,6 @@
 use crate::camera::Camera;
+use crate::constants::MAX_SCENE_LIGHTS as MAX_LIGHTS;
+use crate::constants::LIGHT_AMBIENT_TINT;
 use crate::grid::Grid;
 use crate::multi_tileset::MultiTileset;
 use crate::systems::RenderEntity;
@@ -35,9 +37,20 @@ void main() {
 }
 "#;
 
-const MAX_LIGHTS: usize = 256;
+/// Fragment source, with the light-array size substituted in.
+///
+/// The array bound has to agree between the GLSL declaration, the loop bound
+/// and the Rust-side packing, so it comes from
+/// [`crate::constants::MAX_SCENE_LIGHTS`] in all three places rather than
+/// being written as a literal in the shader string. That constant's doc
+/// comment explains why it is 64 and not 256: two parallel arrays at 64 cost
+/// 512 fragment uniform components, half the 1024 that GL 3.3 core
+/// guarantees, where `vec4[256]` alone already spent the entire guarantee.
+fn fragment_shader_src() -> String {
+    FRAGMENT_SHADER_TEMPLATE.replace("MAX_LIGHTS", &MAX_LIGHTS.to_string())
+}
 
-const FRAGMENT_SHADER_SRC: &str = r#"#version 330 core
+const FRAGMENT_SHADER_TEMPLATE: &str = r#"#version 330 core
 in vec2 vTexCoord;
 in vec2 vWorldPos;
 in float vFogBase;
@@ -47,8 +60,11 @@ in vec3 vTint;
 uniform sampler2D uTileset;
 uniform vec2 uPlayerPos;
 uniform float uPlayerLightRadius;
+uniform vec3 uPlayerLightColor;
+uniform float uAmbientTint;
 uniform int uLightCount;
-uniform vec4 uLights[256];  // x, y, radius, intensity for each light
+uniform vec4 uLights[MAX_LIGHTS];       // x, y, radius, intensity per light
+uniform vec3 uLightColors[MAX_LIGHTS];  // linear RGB tint per light
 
 out vec4 FragColor;
 
@@ -56,36 +72,50 @@ void main() {
     vec4 texColor = texture(uTileset, vTexCoord);
     if (texColor.a < 0.1) discard;  // Discard transparent pixels
 
-    // If fog base is low (fog of war), just use that value
-    // This handles explored-but-not-visible tiles
-    float brightness;
+    // Accumulated light is a colour, not a scalar: each source adds its own
+    // tint, so a tile lit by a brazier and a crystal at once gets both. The
+    // radius and intensity arriving here have already been flickered on the
+    // CPU (see Engine::light_sources).
+    vec3 light;
     if (vFogBase < 0.25) {
-        brightness = vFogBase;
+        // Fog of war: explored but not visible, so no light colour at all -
+        // a remembered tile is grey, not tinted by a fire it cannot see.
+        light = vec3(vFogBase);
     } else {
         // Calculate smooth per-pixel lighting from player
         float distToPlayer = distance(vWorldPos, uPlayerPos);
         float t = clamp(1.0 - distToPlayer / uPlayerLightRadius, 0.0, 1.0);
-        brightness = 0.3 + 0.7 * t * t;  // Quadratic falloff with ambient
+        // The focused falloff always carries the light's full colour; the
+        // flat ambient term only takes `uAmbientTint` of it. Tinting the
+        // ambient fully washes every surface in the room with the light's
+        // hue, and a warm wash over this tileset's blue-grey stone reads as
+        // khaki rather than as firelight.
+        light = mix(vec3(1.0), uPlayerLightColor, uAmbientTint) * 0.3
+              + uPlayerLightColor * (0.7 * t * t);
 
         // Add smooth contributions from other light sources (braziers, campfires)
-        for (int i = 0; i < uLightCount && i < 256; i++) {
+        for (int i = 0; i < uLightCount && i < MAX_LIGHTS; i++) {
             vec2 lightPos = uLights[i].xy;
             float lightRadius = uLights[i].z;
             float lightIntensity = uLights[i].w;
             float distToLight = distance(vWorldPos, lightPos);
             if (distToLight < lightRadius) {
                 float lt = 1.0 - distToLight / lightRadius;
-                // Match player light intensity (0.7 contribution at center)
-                brightness += 0.7 * lightIntensity * lt * lt;
-                // Add ambient boost near light sources (like player's 0.3 base)
-                brightness += 0.3 * lightIntensity * lt;
+                // Match player light intensity (0.7 contribution at center),
+                // carrying the light's colour, plus a neutral ambient boost
+                // near the source (like the player's 0.3 base). Only the
+                // focused term is tinted, so a brazier lays a warm pool over
+                // stone that still reads as stone further out.
+                light += uLightColors[i] * (0.7 * lightIntensity * lt * lt);
+                light += mix(vec3(1.0), uLightColors[i], uAmbientTint)
+                       * (0.3 * lightIntensity * lt);
             }
         }
 
-        brightness = min(brightness, 1.5);  // Allow slight overbrightness
+        light = min(light, vec3(1.5));  // Allow slight overbrightness
     }
 
-    vec3 color = texColor.rgb * brightness * vTint;
+    vec3 color = texColor.rgb * light * vTint;
     FragColor = vec4(color, texColor.a * vAlpha);
 }
 "#;
@@ -314,8 +344,11 @@ pub struct Renderer {
     // Per-pixel lighting uniforms
     player_pos_loc: NativeUniformLocation,
     player_light_radius_loc: NativeUniformLocation,
+    player_light_color_loc: NativeUniformLocation,
+    ambient_tint_loc: NativeUniformLocation,
     light_count_loc: NativeUniformLocation,
     lights_loc: NativeUniformLocation,
+    light_colors_loc: NativeUniformLocation,
     // Grid line rendering
     grid_program: NativeProgram,
     grid_vao: NativeVertexArray,
@@ -351,7 +384,7 @@ impl Renderer {
             let fragment_shader = gl
                 .create_shader(FRAGMENT_SHADER)
                 .map_err(|e| format!("Failed to create fragment shader: {}", e))?;
-            gl.shader_source(fragment_shader, FRAGMENT_SHADER_SRC);
+            gl.shader_source(fragment_shader, &fragment_shader_src());
             gl.compile_shader(fragment_shader);
             if !gl.get_shader_compile_status(fragment_shader) {
                 return Err(gl.get_shader_info_log(fragment_shader));
@@ -382,12 +415,21 @@ impl Renderer {
             let player_light_radius_loc = gl
                 .get_uniform_location(program, "uPlayerLightRadius")
                 .ok_or("Failed to get player light radius uniform location")?;
+            let player_light_color_loc = gl
+                .get_uniform_location(program, "uPlayerLightColor")
+                .ok_or("Failed to get player light color uniform location")?;
+            let ambient_tint_loc = gl
+                .get_uniform_location(program, "uAmbientTint")
+                .ok_or("Failed to get ambient tint uniform location")?;
             let light_count_loc = gl
                 .get_uniform_location(program, "uLightCount")
                 .ok_or("Failed to get light count uniform location")?;
             let lights_loc = gl
                 .get_uniform_location(program, "uLights")
                 .ok_or("Failed to get lights uniform location")?;
+            let light_colors_loc = gl
+                .get_uniform_location(program, "uLightColors")
+                .ok_or("Failed to get light colors uniform location")?;
 
             // Create quad vertices (0,0 to 1,1)
             let vertices: [f32; 12] = [
@@ -692,8 +734,11 @@ impl Renderer {
                 tileset_loc,
                 player_pos_loc,
                 player_light_radius_loc,
+                player_light_color_loc,
+                ambient_tint_loc,
                 light_count_loc,
                 lights_loc,
+                light_colors_loc,
                 grid_program,
                 grid_vao,
                 grid_vbo,
@@ -720,8 +765,12 @@ impl Renderer {
         lighting: crate::render::SceneLighting<'_>,
         show_grid_lines: bool,
     ) -> Result<(), String> {
-        let crate::render::SceneLighting { player_pos, player_light_radius, light_sources } =
-            lighting;
+        let crate::render::SceneLighting {
+            player_pos,
+            player_light_radius,
+            player_light_color,
+            light_sources,
+        } = lighting;
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
 
@@ -735,20 +784,38 @@ impl Renderer {
             // Set lighting uniforms
             self.gl.uniform_2_f32(Some(&self.player_pos_loc), player_pos.0, player_pos.1);
             self.gl.uniform_1_f32(Some(&self.player_light_radius_loc), player_light_radius);
+            self.gl.uniform_3_f32(
+                Some(&self.player_light_color_loc),
+                player_light_color.0,
+                player_light_color.1,
+                player_light_color.2,
+            );
 
-            // Pack light sources into array (up to MAX_LIGHTS)
+            // Pack light sources into the two parallel arrays (up to
+            // MAX_LIGHTS). `light_sources` is already sorted nearest-first, so
+            // truncating here drops the far lights.
             let light_count = light_sources.len().min(MAX_LIGHTS);
+            self.gl
+                .uniform_1_f32(Some(&self.ambient_tint_loc), LIGHT_AMBIENT_TINT);
             self.gl.uniform_1_i32(Some(&self.light_count_loc), light_count as i32);
 
             if light_count > 0 {
                 let mut light_data = [0.0f32; MAX_LIGHTS * 4];
-                for (i, &(x, y, radius, intensity)) in light_sources.iter().take(MAX_LIGHTS).enumerate() {
-                    light_data[i * 4] = x;
-                    light_data[i * 4 + 1] = y;
-                    light_data[i * 4 + 2] = radius;
-                    light_data[i * 4 + 3] = intensity;
+                let mut color_data = [0.0f32; MAX_LIGHTS * 3];
+                for (i, light) in light_sources.iter().take(MAX_LIGHTS).enumerate() {
+                    light_data[i * 4] = light.pos.0;
+                    light_data[i * 4 + 1] = light.pos.1;
+                    light_data[i * 4 + 2] = light.radius;
+                    light_data[i * 4 + 3] = light.intensity;
+                    color_data[i * 3] = light.color.0;
+                    color_data[i * 3 + 1] = light.color.1;
+                    color_data[i * 3 + 2] = light.color.2;
                 }
                 self.gl.uniform_4_f32_slice(Some(&self.lights_loc), &light_data[..light_count * 4]);
+                self.gl.uniform_3_f32_slice(
+                    Some(&self.light_colors_loc),
+                    &color_data[..light_count * 3],
+                );
             }
 
             // Get visible bounds

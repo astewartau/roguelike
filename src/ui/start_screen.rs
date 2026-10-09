@@ -304,13 +304,19 @@ pub fn run_start_screen(
         // draggable by its title bar, closable via the X (which resets
         // stats_open through .open()).
         if *stats_open {
-            egui::Window::new("Stats")
-                .open(stats_open)
-                .pivot(egui::Align2::CENTER_CENTER)
-                .default_pos(ctx.screen_rect().center())
-                .resizable(false)
-                .collapsible(false)
-                .show(ctx, |ui| {
+            style::dungeon_window(
+                ctx,
+                icons,
+                "Stats",
+                |window| {
+                    window
+                        .open(stats_open)
+                        .pivot(egui::Align2::CENTER_CENTER)
+                        .default_pos(ctx.screen_rect().center())
+                        .resizable(false)
+                        .collapsible(false)
+                },
+                |ui| {
                     if past_runs.is_empty() {
                         ui.label(
                             egui::RichText::new("No completed runs yet.")
@@ -369,7 +375,8 @@ pub fn run_start_screen(
                                 ui.end_row();
                             }
                         });
-                });
+                },
+            );
         }
     });
 

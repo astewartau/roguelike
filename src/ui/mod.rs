@@ -25,7 +25,10 @@ pub use altar_window::{draw_altar_window, get_altar_window_data};
 pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data};
 pub use game_over_screen::{run_game_over_screen, GameOverChoice, GameOverStats};
-pub use hotbar::{ability_icon, ability_status, draw_drag_ghost, draw_hotbars, HotbarDrag, HotbarEntry};
+pub use hotbar::{
+    ability_icon, ability_status, draw_drag_ghost, draw_hotbars, HotbarAnim, HotbarDrag,
+    HotbarEntry,
+};
 pub use icons::UiIcons;
 pub use inventory::{draw_inventory_window, InventoryWindowData};
 pub use loot_window::{draw_loot_window, get_loot_window_data};
@@ -33,14 +36,14 @@ pub use message_log::{draw_message_log, MessageLog};
 pub use pause_screen::{run_pause_screen, PauseChoice};
 pub use shop_window::{draw_shop_window, get_shop_window_data};
 pub use start_screen::run_start_screen;
-pub use status_bar::{draw_status_bar, get_status_bar_data};
+pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
-    draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars,
+    draw_alert_indicators, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
     draw_resting_indicators,
     draw_potion_splashes, draw_taming_beams, get_buff_aura_data, get_enemy_health_data,
-    get_enemy_status_data, get_life_drain_beam_data, get_taming_beam_data, LifeDrainBeamData,
+    get_enemy_status_data, get_life_drain_beam_data, get_loot_indicator_data, get_taming_beam_data, LifeDrainBeamData,
     TamingBeamData,
 };
 
@@ -70,9 +73,13 @@ pub struct UiActions {
     pub unequip_weapon: bool,
     /// Unequip an armor slot (put the piece back in inventory)
     pub unequip_armor: Option<crate::systems::item_defs::ArmorSlot>,
-    pub chest_item_to_take: Option<usize>,
+    /// Take an item (the whole stack, for stackables) from one of the
+    /// containers in the loot window: (container, index in its items)
+    pub chest_item_to_take: Option<(Entity, usize)>,
+    /// Take everything from every container in the loot window
     pub chest_take_all: bool,
-    pub chest_take_gold: bool,
+    /// Take the gold from one of the containers in the loot window
+    pub chest_take_gold: Option<Entity>,
     pub close_chest: bool,
     /// Index of dialogue option selected by player
     pub dialogue_option_selected: Option<usize>,
@@ -121,6 +128,9 @@ pub enum CharacterTab {
 pub struct GameUiState {
     /// Currently open chest/container (for loot window)
     pub open_chest: Option<Entity>,
+    /// Tile the open loot window is looting. Every walkable container on it
+    /// is shown alongside `open_chest` (see `systems::loot_sources`).
+    pub loot_tile: (i32, i32),
     /// Currently talking to NPC (for dialogue window)
     pub talking_to: Option<Entity>,
     /// Highlighted dialogue response option (for keyboard navigation)
@@ -145,8 +155,14 @@ pub struct GameUiState {
     pub hotbar_shift: [Option<HotbarEntry>; 5],
     /// Q/E/R hotbar (keys Q, E and R). The R slot is pre-filled with Rest.
     pub hotbar_qer: [Option<HotbarEntry>; 3],
+    /// Frame-to-frame animation state for the hotbar slots (cooldown sweeps,
+    /// ready and denied flashes). Presentation only; see [`HotbarAnim`].
+    hotbar_anim: HotbarAnim,
     /// Scrolling combat/message log
     pub message_log: MessageLog,
+    /// Frame-to-frame animation state for the status bar (the HP chip bar and
+    /// the low-HP pulse). Presentation only; see [`StatusBarAnim`].
+    status_anim: StatusBarAnim,
     /// The player entity (needed to filter events)
     player_entity: Entity,
 }
@@ -155,6 +171,7 @@ impl GameUiState {
     pub fn new(player_entity: Entity) -> Self {
         Self {
             open_chest: None,
+            loot_tile: (0, 0),
             talking_to: None,
             dialogue_selected: 0,
             shopping_at: None,
@@ -167,7 +184,9 @@ impl GameUiState {
             hotbar_main: [None; 5],
             hotbar_shift: [None; 5],
             hotbar_qer: [None; 3],
+            hotbar_anim: HotbarAnim::new(),
             message_log: MessageLog::new(player_entity),
+            status_anim: StatusBarAnim::new(),
             player_entity,
         }
     }
@@ -176,10 +195,11 @@ impl GameUiState {
     pub fn handle_event(&mut self, event: &GameEvent) {
         match event {
             // Only open loot window if player opened the container
-            GameEvent::ContainerOpened { container, opener, .. }
+            GameEvent::ContainerOpened { container, opener, position, .. }
                 if *opener == self.player_entity =>
             {
                 self.open_chest = Some(*container);
+                self.loot_tile = *position;
             }
             // Open dialogue window if player started the conversation
             GameEvent::DialogueStarted { npc, player } if *player == self.player_entity => {
@@ -352,6 +372,7 @@ pub fn run_ui(
     let loot_data = get_loot_window_data(
         world,
         ui_state.open_chest,
+        ui_state.loot_tile,
         camera.viewport_width,
         camera.viewport_height,
     );
@@ -393,10 +414,14 @@ pub fn run_ui(
         .or_else(|| get_targeting_overlay_data(world, player_entity, targeting_mode, mouse_pos, camera));
     let enemy_status_data = get_enemy_status_data(world, grid);
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
+    let loot_indicator_data = get_loot_indicator_data(world, grid, player_entity);
 
     egui_glow.run(window, |ctx| {
         // Enemy health bars (draw early so they're behind other indicators)
         draw_enemy_health_bars(ctx, camera, &enemy_health_data);
+
+        // Markers over corpses and item piles with something left in them
+        draw_loot_indicators(ctx, camera, &loot_indicator_data);
 
         // Player buff auras (draw first so they're behind everything)
         draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());
@@ -407,7 +432,7 @@ pub fn run_ui(
         }
 
         // Status bar (always visible)
-        draw_status_bar(ctx, &status_data, icons, game_time);
+        draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time);
 
         // Scrolling combat/message log (bottom-left)
         draw_message_log(ctx, &ui_state.message_log);
@@ -421,6 +446,7 @@ pub fn run_ui(
             &mut ui_state.hotbar_main,
             &mut ui_state.hotbar_shift,
             &mut ui_state.hotbar_qer,
+            &mut ui_state.hotbar_anim,
             &mut actions,
         );
 

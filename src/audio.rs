@@ -66,33 +66,50 @@ impl AudioManager {
         Some(manager)
     }
 
-    /// Open an output stream, preferring a device that routes through the system
-    /// sound server (PipeWire/PulseAudio). cpal's raw ALSA default grabs the
-    /// first hardware card directly (`hw:0`), which bypasses PipeWire entirely —
-    /// so audio comes out of the built-in analog jack and never follows the
-    /// user's chosen default sink (e.g. a Bluetooth speaker). Routing through the
-    /// "pipewire"/"pulse" PCM lets the OS send our audio wherever it's pointed.
+    /// Open an output stream through the system sound server (PipeWire or
+    /// PulseAudio) so audio follows the user's chosen sink and shares the card
+    /// with everything else. Falls back to the host's default device.
+    ///
+    /// We can't just use ALSA's "default": it only points at PipeWire when
+    /// `pipewire-alsa` (or the Pulse equivalent) is installed, and otherwise
+    /// it's `dmix` on a raw card, which fails while PipeWire owns that card.
+    ///
+    /// cpal 0.15 can only reach the "pipewire"/"pulse" PCMs by enumerating, and
+    /// its ALSA enumerator opens every device it yields (playback and capture)
+    /// for as long as that `Device` lives. So walk the list lazily, drop each
+    /// non-match immediately, and stop before the first per-card entry
+    /// (`CARD=...`): ALSA lists the virtual plugin PCMs first, so this never
+    /// touches the HDMI/analog hardware PipeWire is driving. Never `collect()`
+    /// the list, and never use rodio's `OutputStream::try_default()`, which
+    /// enumerates and opens everything when the default fails.
     fn open_output_stream() -> Option<(OutputStream, OutputStreamHandle)> {
         use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
         let host = rodio::cpal::default_host();
-        if let Ok(devices) = host.output_devices() {
-            let devices: Vec<_> = devices.collect();
-            for target in ["pipewire", "pulse"] {
-                for dev in &devices {
-                    if dev.name().map(|n| n == target).unwrap_or(false) {
-                        if let Ok(stream) = OutputStream::try_from_device(dev) {
-                            eprintln!("[audio] output via '{target}' (follows system default sink)");
-                            return Some(stream);
-                        }
-                    }
-                }
+
+        // `devices()`, not `output_devices()`: the latter silently skips
+        // input-only cards, which would hide the `CARD=` stop marker.
+        let server = host.devices().ok().and_then(|devices| {
+            devices
+                .take_while(|d| !d.name().is_ok_and(|n| n.contains("CARD=")))
+                .find(|d| matches!(d.name().as_deref(), Ok("pipewire" | "pulse")))
+        });
+
+        let device = match server {
+            Some(dev) => dev,
+            None => host.default_output_device()?,
+        };
+        let name = device.name().unwrap_or_default();
+        match OutputStream::try_from_device(&device) {
+            Ok(stream) => {
+                eprintln!("[audio] output via '{name}'");
+                Some(stream)
+            }
+            Err(e) => {
+                eprintln!("[audio] '{name}' output unavailable ({e}); running without sound");
+                None
             }
         }
-
-        // Fall back to cpal's default device (raw ALSA / other platforms).
-        eprintln!("[audio] no PipeWire/Pulse device found; using cpal default");
-        OutputStream::try_default().ok()
     }
 
     /// Load all sound file paths

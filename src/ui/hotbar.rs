@@ -11,9 +11,13 @@
 //! value, not by index, so they survive inventory churn. Activation reuses the
 //! existing item-use and ability-activation paths via `UiActions`.
 
+use std::time::Instant;
+
 use super::icons::UiIcons;
 use super::style;
 use super::UiActions;
+use crate::constants::*;
+use crate::ease;
 use crate::components::{
     AbilityType, Actor, ClassAbility, Inventory, ItemType, LearnedAbilities, RangerAbilities,
     SecondaryAbility,
@@ -36,8 +40,97 @@ enum Bar {
     Qe,
 }
 
+impl Bar {
+    /// Row index into [`HotbarAnim`]'s per-slot tables.
+    fn index(self) -> usize {
+        match self {
+            Bar::Main => 0,
+            Bar::Shift => 1,
+            Bar::Qe => 2,
+        }
+    }
+}
+
 /// Address of a specific hotbar slot.
 type SlotAddr = (Bar, usize);
+
+/// Number of hotbars, and the largest slot count any of them has.
+const BAR_COUNT: usize = 3;
+const MAX_SLOTS: usize = 5;
+
+/// Per-slot presentation state for the hotbars.
+///
+/// Real-time paced like the rest of the HUD (see the note in
+/// `constants::animation`): a ready flash that froze because the game clock
+/// stopped would be telling the player nothing at the moment they most need
+/// to know the ability is back.
+pub struct HotbarAnim {
+    /// Cooldown remaining seen last frame, to catch the moment it hits zero.
+    last_cooldown: [[f32; MAX_SLOTS]; BAR_COUNT],
+    /// When each slot last came off cooldown.
+    ready_at: [[Option<Instant>; MAX_SLOTS]; BAR_COUNT],
+    /// When the player last pressed a slot they could not use.
+    denied_at: [[Option<Instant>; MAX_SLOTS]; BAR_COUNT],
+}
+
+impl Default for HotbarAnim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Decay a flash started `at` over `duration`: 1.0 the instant it fires,
+/// falling to 0.0, eased so it drops away sharply rather than fading linearly.
+fn flash_decay(at: Option<Instant>, duration: f32) -> f32 {
+    let Some(at) = at else {
+        return 0.0;
+    };
+    let t = at.elapsed().as_secs_f32() / duration;
+    if t >= 1.0 {
+        0.0
+    } else {
+        1.0 - ease::out_cubic(t)
+    }
+}
+
+impl HotbarAnim {
+    pub fn new() -> Self {
+        Self {
+            last_cooldown: [[0.0; MAX_SLOTS]; BAR_COUNT],
+            ready_at: [[None; MAX_SLOTS]; BAR_COUNT],
+            denied_at: [[None; MAX_SLOTS]; BAR_COUNT],
+        }
+    }
+
+    /// Record this frame's cooldown for a slot, and return how far through its
+    /// "just came off cooldown" flash it is (1.0 the moment it fires, 0.0 once
+    /// the flash is spent). Call once per slot per frame.
+    fn note_cooldown(&mut self, (bar, i): SlotAddr, cooldown: f32) -> f32 {
+        let (bar, i) = (bar.index(), i.min(MAX_SLOTS - 1));
+        if cooldown > 0.0 {
+            // Back on cooldown: whatever the flash was saying is no longer
+            // true, so it stops rather than finishing over a dimmed slot.
+            self.ready_at[bar][i] = None;
+        } else if self.last_cooldown[bar][i] > 0.0 {
+            self.ready_at[bar][i] = Some(Instant::now());
+        }
+        self.last_cooldown[bar][i] = cooldown;
+        flash_decay(self.ready_at[bar][i], HOTBAR_READY_FLASH_DURATION)
+    }
+
+    /// Note that the player asked for a slot they cannot currently use.
+    fn note_denied(&mut self, (bar, i): SlotAddr) {
+        self.denied_at[bar.index()][i.min(MAX_SLOTS - 1)] = Some(Instant::now());
+    }
+
+    /// How far through its red "can't use that" flash a slot is.
+    fn denied_flash(&self, (bar, i): SlotAddr) -> f32 {
+        flash_decay(
+            self.denied_at[bar.index()][i.min(MAX_SLOTS - 1)],
+            HOTBAR_DENIED_FLASH_DURATION,
+        )
+    }
+}
 
 /// The egui drag-and-drop payload for hotbar entries. Carries the source slot
 /// (when dragged from a hotbar) so a drop onto another slot can swap them.
@@ -129,6 +222,7 @@ pub fn draw_hotbars(
     main: &mut [Option<HotbarEntry>; 5],
     shift: &mut [Option<HotbarEntry>; 5],
     qer: &mut [Option<HotbarEntry>; 3],
+    anim: &mut HotbarAnim,
     actions: &mut UiActions,
 ) {
     let shift_held = ctx.input(|i| i.modifiers.shift);
@@ -152,30 +246,36 @@ pub fn draw_hotbars(
     let mut pending_drop: Option<(SlotAddr, HotbarDrag)> = None;
     let mut pending_clear: Option<SlotAddr> = None;
 
-    egui::Window::new("Hotbars")
-        .fixed_pos([pos_x, pos_y])
-        .title_bar(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Hotbars",
+        |window| {
+            window
+                .fixed_pos([pos_x, pos_y])
+                .title_bar(false)
+                .resizable(false)
+        },
+        |ui| {
             ui.horizontal(|ui| {
                 draw_bar(
                     ui, world, player, icons, &qer[..], Bar::Qe,
                     &[egui::Key::Q, egui::Key::E, egui::Key::R], false, shift_held,
-                    actions, &mut pending_drop, &mut pending_clear,
+                    anim, actions, &mut pending_drop, &mut pending_clear,
                 );
                 ui.add_space(GROUP_GAP);
                 draw_bar(
                     ui, world, player, icons, &main[..], Bar::Main, &nums, false, shift_held,
-                    actions, &mut pending_drop, &mut pending_clear,
+                    anim, actions, &mut pending_drop, &mut pending_clear,
                 );
                 ui.add_space(GROUP_GAP);
                 draw_bar(
                     ui, world, player, icons, &shift[..], Bar::Shift, &nums, true, shift_held,
-                    actions, &mut pending_drop, &mut pending_clear,
+                    anim, actions, &mut pending_drop, &mut pending_clear,
                 );
             });
-        });
+        },
+    );
 
     // Apply deferred mutations.
     if let Some((tgt, drag)) = pending_drop {
@@ -242,6 +342,7 @@ fn draw_bar(
     keys: &[egui::Key],
     require_shift: bool,
     shift_held: bool,
+    anim: &mut HotbarAnim,
     actions: &mut UiActions,
     pending_drop: &mut Option<(SlotAddr, HotbarDrag)>,
     pending_clear: &mut Option<SlotAddr>,
@@ -288,12 +389,14 @@ fn draw_bar(
         ui.painter().rect_filled(rect, 0.0, bg);
 
         // Draw the entry and determine whether it can be activated right now.
+        // `ready_pop` rides the moment an ability comes off cooldown.
         let mut usable = false;
+        let mut ready_pop = 0.0;
         match entry {
             Some(HotbarEntry::Item(item)) => {
                 let count = count_of(item);
                 usable = count > 0;
-                paint_icon(ui, rect, icons.items_texture_id, icons.get_item_uv(item), slot_tint(usable));
+                paint_icon(ui, rect, icons.items_texture_id, icons.get_item_uv(item), slot_tint(usable), 1.0);
                 if count > 1 {
                     draw_count_badge(ui, rect, count);
                 }
@@ -304,13 +407,36 @@ fn draw_bar(
                 ));
             }
             Some(HotbarEntry::Ability(ab)) => {
-                let (cd, _total, can_afford) = ability_status(world, player, ab);
+                let (cd, total, can_afford) = ability_status(world, player, ab);
                 usable = cd <= 0.0 && can_afford;
+                ready_pop = anim.note_cooldown(addr, cd);
                 let (tex, uv) = ability_icon(icons, ab);
-                paint_icon(ui, rect, tex, uv, slot_tint(usable));
+                // The icon swells for an instant as the ability returns.
+                let pop = 1.0 + (HOTBAR_READY_POP_SCALE - 1.0) * ready_pop;
+                paint_icon(ui, rect, tex, uv, slot_tint(usable), pop);
                 if cd > 0.0 {
-                    ui.painter()
-                        .rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+                    // A wipe rather than a uniform dim: the sweep uncovers the
+                    // icon from the bottom as the cooldown runs down, so the
+                    // slot shows how far along it is without being read.
+                    let remaining = if total > 0.0 {
+                        (cd / total).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    let wipe = egui::Rect::from_min_size(
+                        rect.left_top(),
+                        egui::vec2(rect.width(), rect.height() * remaining),
+                    );
+                    ui.painter().rect_filled(
+                        wipe,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(
+                            style::colors::HOTBAR_COOLDOWN_SWEEP.r(),
+                            style::colors::HOTBAR_COOLDOWN_SWEEP.g(),
+                            style::colors::HOTBAR_COOLDOWN_SWEEP.b(),
+                            HOTBAR_COOLDOWN_SWEEP_ALPHA,
+                        ),
+                    );
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
@@ -327,6 +453,44 @@ fn draw_bar(
                 ));
             }
             None => {}
+        }
+
+        // White flash the instant an ability comes back, and a red one when
+        // the player asks for something they cannot have. Both sit over the
+        // icon and the cooldown wipe, under the border.
+        if ready_pop > 0.0 {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                tinted(
+                    style::colors::HOTBAR_READY_FLASH,
+                    (HOTBAR_READY_FLASH_ALPHA as f32 * ready_pop) as u8,
+                ),
+            );
+        }
+        let denied = anim.denied_flash(addr);
+        if denied > 0.0 {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                tinted(
+                    style::colors::HOTBAR_DENIED_FLASH,
+                    (HOTBAR_DENIED_FLASH_ALPHA as f32 * denied) as u8,
+                ),
+            );
+        }
+
+        // Ready cue: a glow just inside the border, so a usable slot reads as
+        // usable at a glance rather than only on a border-colour comparison.
+        if usable {
+            ui.painter().rect_stroke(
+                rect.shrink(HOTBAR_READY_GLOW_WIDTH / 2.0 + 1.0),
+                0.0,
+                egui::Stroke::new(
+                    HOTBAR_READY_GLOW_WIDTH,
+                    tinted(style::colors::DUNGEON_GOLD, HOTBAR_READY_GLOW_ALPHA),
+                ),
+            );
         }
 
         // Border: gold while a drag hovers or when the slot is ready to use.
@@ -351,7 +515,12 @@ fn draw_bar(
         let key_fired = i < keys.len()
             && shift_held == require_shift
             && ui.input(|inp| inp.key_pressed(keys[i]));
-        if (response.clicked() || key_fired) && usable {
+        let pressed = response.clicked() || key_fired;
+        if pressed && !usable && entry.is_some() {
+            // Previously silence. The slot now says no.
+            anim.note_denied(addr);
+        }
+        if pressed && usable {
             match entry {
                 Some(HotbarEntry::Item(item)) => {
                     if let Some(idx) = first_index_of(item) {
@@ -382,11 +551,29 @@ fn slot_tint(usable: bool) -> egui::Color32 {
     }
 }
 
-fn paint_icon(ui: &egui::Ui, rect: egui::Rect, tex: egui::TextureId, uv: egui::Rect, tint: egui::Color32) {
-    egui::Image::new(egui::load::SizedTexture::new(tex, egui::vec2(SLOT_SIZE, SLOT_SIZE)))
-        .uv(uv)
-        .tint(tint)
-        .paint_at(ui, rect);
+/// `color` at `alpha`, for the translucent overlays.
+fn tinted(color: egui::Color32, alpha: u8) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
+/// Paint a slot's icon, optionally scaled about the slot centre. The painter
+/// is clipped to the slot so a popped icon grows into its own square rather
+/// than over its neighbours.
+fn paint_icon(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    tex: egui::TextureId,
+    uv: egui::Rect,
+    tint: egui::Color32,
+    scale: f32,
+) {
+    let target = if scale == 1.0 {
+        rect
+    } else {
+        egui::Rect::from_center_size(rect.center(), rect.size() * scale)
+    };
+    let clipped = ui.painter().with_clip_rect(rect);
+    clipped.image(tex, target, uv, tint);
 }
 
 fn draw_count_badge(ui: &egui::Ui, rect: egui::Rect, count: u32) {
@@ -424,5 +611,65 @@ pub fn draw_drag_ghost(ctx: &egui::Context, icons: &UiIcons) {
             ));
             painter.image(tex, rect, uv, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_flash_starts_full_and_decays() {
+        // Nothing to decay.
+        assert_eq!(flash_decay(None, 1.0), 0.0);
+        // Just fired.
+        assert!(flash_decay(Some(Instant::now()), 1.0) > 0.99);
+        // Older than its duration, so spent. (A zero-length flash never
+        // appears: every caller passes a positive constant.)
+        let fired = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert_eq!(flash_decay(Some(fired), 0.001), 0.0);
+    }
+
+    #[test]
+    fn a_slot_flashes_the_frame_its_cooldown_runs_out() {
+        let mut anim = HotbarAnim::new();
+        let slot = (Bar::Main, 0);
+
+        // Still cooling: nothing to say.
+        assert_eq!(anim.note_cooldown(slot, 3.0), 0.0);
+        assert_eq!(anim.note_cooldown(slot, 1.0), 0.0);
+
+        // The frame it reaches zero is the flash.
+        assert!(anim.note_cooldown(slot, 0.0) > 0.9);
+        // Sitting at zero does not re-arm it, but the flash does carry on
+        // across the frames it is alive for.
+        assert!(anim.note_cooldown(slot, 0.0) > 0.0);
+
+        // Used again: the flash is cancelled rather than finishing over a
+        // slot that is no longer ready.
+        assert_eq!(anim.note_cooldown(slot, 2.0), 0.0);
+    }
+
+    #[test]
+    fn slots_flash_independently() {
+        let mut anim = HotbarAnim::new();
+        let (a, b) = ((Bar::Main, 0), (Bar::Qe, 2));
+        anim.note_cooldown(a, 1.0);
+        anim.note_cooldown(b, 1.0);
+        assert!(anim.note_cooldown(a, 0.0) > 0.9);
+        // b is still cooling and must not have borrowed a's flash.
+        assert_eq!(anim.note_cooldown(b, 0.5), 0.0);
+    }
+
+    #[test]
+    fn a_denied_press_flashes_only_its_own_slot() {
+        let mut anim = HotbarAnim::new();
+        let pressed = (Bar::Shift, 3);
+        assert_eq!(anim.denied_flash(pressed), 0.0);
+        anim.note_denied(pressed);
+        assert!(anim.denied_flash(pressed) > 0.9);
+        assert_eq!(anim.denied_flash((Bar::Shift, 4)), 0.0);
+        assert_eq!(anim.denied_flash((Bar::Main, 3)), 0.0);
     }
 }

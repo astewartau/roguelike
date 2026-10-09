@@ -24,10 +24,13 @@ pub fn has_effect(effects: &StatusEffects, effect_type: EffectType) -> bool {
 pub fn add_effect(effects: &mut StatusEffects, effect_type: EffectType, duration: f32) {
     if let Some(existing) = effects.effects.iter_mut().find(|e| e.effect_type == effect_type) {
         existing.remaining_duration = duration;
+        // A refresh restarts the HUD sweep rather than leaving it part-spent.
+        existing.total_duration = duration;
     } else {
         effects.effects.push(ActiveEffect {
             effect_type,
             remaining_duration: duration,
+            total_duration: duration,
             last_damage_tick: 0.0, // First damage tick happens immediately
         });
     }

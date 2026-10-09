@@ -89,16 +89,21 @@ pub fn draw_dialogue_window(
         i.pointer.delta() != egui::Vec2::ZERO
     });
 
-    egui::Window::new(&data.npc_name)
-        .default_pos([
-            data.viewport_width / 2.0 - 200.0,
-            data.viewport_height / 2.0 - 100.0,
-        ])
-        .default_size([400.0, 200.0])
-        .collapsible(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
+    style::dungeon_window(
+        ctx,
+        icons,
+        &data.npc_name,
+        |window| {
+            window
+                .default_pos([
+                    data.viewport_width / 2.0 - 200.0,
+                    data.viewport_height / 2.0 - 100.0,
+                ])
+                .default_size([400.0, 200.0])
+                .collapsible(false)
+                .resizable(false)
+        },
+        |ui| {
             // Pin a stable width so option buttons are uniform and the window
             // doesn't jump between nodes; height auto-fits the content.
             ui.set_min_width(380.0);
@@ -173,7 +178,8 @@ pub fn draw_dialogue_window(
                     .size(11.0)
                     .color(style::colors::TEXT_MUTED),
             );
-        });
+        },
+    );
 
     if confirm {
         actions.dialogue_option_selected = Some(*selected);

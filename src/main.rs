@@ -255,6 +255,7 @@ impl AppState {
                 crate::render::SceneLighting {
                     player_pos: self.engine.player_visual_pos(),
                     player_light_radius: self.engine.player_light_radius(),
+                    player_light_color: self.engine.player_light_color(),
                     light_sources: &light_sources,
                 },
                 self.engine.show_grid_lines(),

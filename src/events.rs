@@ -78,10 +78,12 @@ pub enum GameEvent {
         container_type: Option<crate::components::ContainerType>,
         position: (i32, i32),
     },
-    /// An entity picked up an item
+    /// An entity picked up an item, or a stack of one kind of item
     ItemPickedUp {
         entity: Entity,
         item: crate::components::ItemType,
+        /// How many were picked up at once (a bundle of arrows is one event)
+        count: u32,
     },
     /// An entity picked up gold
     GoldPickedUp {

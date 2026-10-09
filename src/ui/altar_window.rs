@@ -13,7 +13,9 @@ use hecs::World;
 
 /// Data needed to render the altar window
 pub struct AltarWindowData {
-    pub items: Vec<ItemInstance>,
+    /// One row per item, or per stack of a stackable kind:
+    /// (inventory index of the first item, how many, the item)
+    pub items: Vec<(usize, u32, ItemInstance)>,
     pub viewport_width: f32,
     pub viewport_height: f32,
 }
@@ -28,8 +30,12 @@ pub fn get_altar_window_data(
 ) -> Option<AltarWindowData> {
     open_altar?;
     let inventory = world.get::<&Inventory>(player).ok()?;
+    let items = crate::systems::stack_items(&inventory.items)
+        .into_iter()
+        .map(|s| (s.first_index, s.count, inventory.items[s.first_index].clone()))
+        .collect();
     Some(AltarWindowData {
-        items: inventory.items.clone(),
+        items,
         viewport_width,
         viewport_height,
     })
@@ -42,17 +48,22 @@ pub fn draw_altar_window(
     icons: &UiIcons,
     actions: &mut UiActions,
 ) {
-    egui::Window::new("Altar")
-        .default_pos([
-            data.viewport_width / 2.0 - 160.0,
-            data.viewport_height / 2.0 - 120.0,
-        ])
-        .default_size([320.0, 240.0])
-        .collapsible(false)
-        .resizable(false)
-        .frame(style::dungeon_window_frame())
-        .show(ctx, |ui| {
-            ui.heading("Offer a sacrifice");
+    style::dungeon_window(
+        ctx,
+        icons,
+        "Altar",
+        |window| {
+            window
+                .default_pos([
+                    data.viewport_width / 2.0 - 160.0,
+                    data.viewport_height / 2.0 - 120.0,
+                ])
+                .default_size([320.0, 240.0])
+                .collapsible(false)
+                .resizable(false)
+        },
+        |ui| {
+            style::panel_header(ui, "Offer a sacrifice");
             ui.label(
                 egui::RichText::new("The altar hungers. Finer offerings earn finer blessings.")
                     .italics()
@@ -69,7 +80,7 @@ pub fn draw_altar_window(
                 );
             } else {
                 egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                    for (i, instance) in data.items.iter().enumerate() {
+                    for (i, count, instance) in data.items.iter() {
                         let item_type = instance.kind;
                         ui.horizontal(|ui| {
                             let uv = icons.get_item_uv(item_type);
@@ -81,20 +92,27 @@ pub fn draw_altar_window(
                             .tint(UiIcons::item_ui_tint(item_type))
                             .bg_fill(style::colors::PANEL_BG);
 
+                            // A stack is offered one item at a time.
                             let item_name = instance.display_name();
+                            let (item_name, click_hint) = if *count > 1 {
+                                (format!("{} x{}", item_name, count), "Click to sacrifice one")
+                            } else {
+                                (item_name, "Click to sacrifice")
+                            };
                             let odds =
                                 altar_blessing_chance(altar_item_value(instance)) * 100.0;
                             let response = ui.add(egui::ImageButton::new(image).frame(false));
                             if response
                                 .on_hover_text(format!(
-                                    "{} ({})\nChance of blessing: {:.0}%\n\nClick to sacrifice",
+                                    "{} ({})\nChance of blessing: {:.0}%\n\n{}",
                                     item_name,
                                     instance.rarity.label(),
-                                    odds
+                                    odds,
+                                    click_hint
                                 ))
                                 .clicked()
                             {
-                                actions.altar_sacrifice = Some(i);
+                                actions.altar_sacrifice = Some(*i);
                             }
                             ui.label(
                                 egui::RichText::new(item_name)
@@ -110,5 +128,6 @@ pub fn draw_altar_window(
             if ui.button("Cancel").clicked() {
                 actions.close_altar = true;
             }
-        });
+        },
+    );
 }

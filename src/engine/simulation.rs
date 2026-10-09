@@ -326,7 +326,7 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
     let mut shake_requests = Vec::new();
 
     for event in event_list {
-        vfx.handle_event(&event, grid);
+        vfx.handle_event(&event, grid, player_entity);
         ui_state.handle_event(&event);
         ui_state.message_log.record_event(&event, &*world);
 
@@ -462,24 +462,36 @@ pub fn process_ui_actions(
     }
 
     // Chest interactions (also works for ground item piles)
-    if let Some(chest_id) = ui_state.open_chest {
-        if actions.chest_take_all || actions.close_chest {
-            if actions.chest_take_all {
-                systems::take_all_from_container(world, player_entity, chest_id, Some(events));
-                // Clean up empty ground item piles, and stop the container
-                // that was just emptied blocking its tile.
-                systems::cleanup_empty_ground_piles(world);
-                systems::unblock_emptied_containers(world, spatial_cache);
-            }
+    // The window covers every container on the tile (see `loot_sources`), so
+    // each take names the container it came from.
+    if ui_state.open_chest.is_some() {
+        let sources = systems::loot_sources(world, ui_state.open_chest, ui_state.loot_tile);
+        let mut took_something = false;
+        if actions.chest_take_all {
+            systems::take_all_from_sources(world, player_entity, &sources, Some(events));
             result.close_chest = true;
-        } else if actions.chest_take_gold {
-            systems::take_gold_from_container(world, player_entity, chest_id, Some(events));
-            systems::unblock_emptied_containers(world, spatial_cache);
-        } else if let Some(item_index) = actions.chest_item_to_take {
-            systems::take_item_from_container(world, player_entity, chest_id, item_index, Some(events));
-            // Clean up empty ground item piles after taking items
+            took_something = true;
+        } else if actions.close_chest {
+            result.close_chest = true;
+        } else if let Some(container) = actions.chest_take_gold {
+            systems::take_gold_from_container(world, player_entity, container, Some(events));
+            took_something = true;
+        } else if let Some((container, item_index)) = actions.chest_item_to_take {
+            systems::take_item_from_container(world, player_entity, container, item_index, Some(events));
+            took_something = true;
+        }
+        if took_something {
+            // Clean up empty ground item piles, and stop a container that was
+            // just emptied blocking its tile.
             systems::cleanup_empty_ground_piles(world);
             systems::unblock_emptied_containers(world, spatial_cache);
+            // Nothing left anywhere on the tile: the window has done its job.
+            let all_empty = systems::loot_sources(world, ui_state.open_chest, ui_state.loot_tile)
+                .into_iter()
+                .all(|id| world.get::<&crate::components::Container>(id).map(|c| c.is_empty()).unwrap_or(true));
+            if all_empty {
+                result.close_chest = true;
+            }
         }
     }
 
