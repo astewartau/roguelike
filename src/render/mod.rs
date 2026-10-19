@@ -175,6 +175,16 @@ impl RenderContext {
 
         unsafe {
             use glow::HasContext;
+            // egui paints last every frame and leaves its own GL state behind:
+            // premultiplied-alpha blending and the scissor test. Drawing the
+            // scene under that blend adds a translucent sprite onto the
+            // background instead of mixing with it, which is why the
+            // invisible player used to look solid. Opaque sprites look the
+            // same either way, so nothing else gave it away.
+            gl.disable(glow::SCISSOR_TEST);
+            gl.enable(glow::BLEND);
+            gl.blend_equation(glow::FUNC_ADD);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
         }

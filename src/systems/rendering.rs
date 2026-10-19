@@ -1,6 +1,7 @@
 //! Rendering-related systems and data structures.
 
 use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
+use crate::constants::INVISIBLE_PLAYER_ALPHA;
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
 use crate::fov::Fov;
@@ -291,6 +292,12 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     for (id, (pos, vis_pos, sprite)) in
         world.query::<(&Position, &VisualPosition, &Sprite)>().iter()
     {
+        // Anything other than the player that is invisible is simply not
+        // drawn. The player still sees themselves, faded (below).
+        if id != player_entity && super::effects::entity_has_effect(world, id, EffectType::Invisible) {
+            continue;
+        }
+
         let (is_explored, is_visible) = grid
             .get(pos.x, pos.y)
             .map(|tile| (tile.explored, tile.visible))
@@ -319,7 +326,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         if id == player_entity {
             // Check if player is invisible for transparency effect
             let alpha = if super::effects::entity_has_effect(world, id, EffectType::Invisible) {
-                0.4 // Semi-transparent when invisible
+                INVISIBLE_PLAYER_ALPHA
             } else {
                 1.0
             };
@@ -436,6 +443,8 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
 
     // Add fire overlays for burning entities (rendered on top)
     let mut fire_overlays: Vec<RenderEntity> = Vec::new();
+    // Deliberately includes invisible enemies: their flames still show, which
+    // is the one way to spot them.
     for (_, (pos, vis_pos, status)) in
         world.query::<(&Position, &VisualPosition, &StatusEffects)>().iter()
     {

@@ -2,6 +2,10 @@
 
 /// Duration of invisibility effect in game-time seconds
 pub const INVISIBILITY_DURATION: f32 = 60.0;
+/// Opacity the player is drawn at while invisible (1.0 = fully opaque). Lower
+/// makes the effect more obvious but the player harder to pick out on screen;
+/// invisible enemies are not drawn at all.
+pub const INVISIBLE_PLAYER_ALPHA: f32 = 0.4;
 
 /// Duration of speed boost effect in game-time seconds
 pub const SPEED_BOOST_DURATION: f32 = 45.0;

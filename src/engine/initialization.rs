@@ -1076,8 +1076,11 @@ pub fn spawn_floor_entities(
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(world, "spawn_floor_entities");
 
-    // Initialize AI
-    initialize_ai_actors(ctx);
+    // AI is deliberately not scheduled here: the caller has to rebuild the
+    // spatial cache and the active-AI tracker for the new entities first (see
+    // `handle_floor_transition`). Scheduling from here read the tracker while
+    // it still held the previous floor's despawned enemies, so the new floor's
+    // nearby enemies were never scheduled and slept through being attacked.
 }
 
 #[cfg(test)]

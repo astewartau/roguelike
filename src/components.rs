@@ -1484,6 +1484,14 @@ pub enum AIState {
 #[derive(Debug, Clone, Copy)]
 pub struct Asleep;
 
+/// Marker: this actor was just stunned and must drop whatever action it is in
+/// the middle of. Set by `add_effect_to_entity`, which cannot reach the
+/// scheduler; `time_system::apply_stun_interrupts` cancels the action and
+/// removes the marker. Without it a stunned enemy finished its current step or
+/// swing before the stun took hold.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingInterrupt;
+
 /// The most recent thing that hurt the player ("Goblin", "burning",
 /// "starvation", "a spike trap", ...). Kept on the player entity and updated
 /// during event processing; read at death as the best-effort cause of death

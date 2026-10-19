@@ -566,6 +566,39 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
     }
 }
 
+/// Cancel the in-progress action of every actor marked `PendingInterrupt`
+/// (freshly stunned) and have it decide again immediately, which for a stunned
+/// actor means waiting out the stun. Its half-finished move or attack never
+/// resolves, and the stun's whole duration is spent stunned rather than partly
+/// spent finishing that action.
+///
+/// Run after anything that can apply a stun, before the next completion is
+/// popped. Actors with no action in progress (dormant ones) are left
+/// unscheduled; they will see the stun on their next decision anyway.
+pub fn apply_stun_interrupts(ctx: &mut ActorCtx) {
+    let marked: Vec<Entity> = ctx
+        .world
+        .query::<&crate::components::PendingInterrupt>()
+        .iter()
+        .map(|(id, _)| id)
+        .collect();
+
+    for entity in marked {
+        let _ = ctx.world.remove_one::<crate::components::PendingInterrupt>(entity);
+        let was_busy = ctx
+            .world
+            .get::<&mut Actor>(entity)
+            .map(|mut actor| actor.current_action.take().is_some())
+            .unwrap_or(false);
+        if was_busy {
+            ctx.scheduler.cancel_for_entity(entity);
+            // An entry with no action behind it: completing it is a no-op and
+            // the simulation loop then asks the AI for its next action.
+            ctx.scheduler.schedule(entity, ctx.clock.time);
+        }
+    }
+}
+
 /// Process status effect duration ticks, removing expired effects
 pub fn tick_status_effects(world: &mut World, elapsed: f32) {
     if elapsed <= 0.0 {

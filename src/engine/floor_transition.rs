@@ -2,7 +2,7 @@
 
 use crate::components::{
     BlocksMovement, BlocksVision, ChaseAI, Container, ContainerType, Door, GroundItemPile, Health,
-    ItemInstance, Position, Sprite, VisualPosition,
+    ItemInstance, Position, Sprite, SpriteTint, VisualPosition,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -66,8 +66,11 @@ pub enum SavedEntityType {
         /// losing it was what defanged a revisited crypt.
         spawn_chance: f32,
     },
+    /// The whole `Door` component, so its theme (green, grated, shop) and
+    /// open/shut sprites survive, plus any tint (discovered secret doors).
     Door {
-        is_open: bool,
+        door: Door,
+        tint: Option<SpriteTint>,
     },
     Bones {
         gold: u32,
@@ -229,7 +232,8 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
         entities.push(SavedEntity {
             pos: (pos.x, pos.y),
             entity_type: SavedEntityType::Door {
-                is_open: door.is_open,
+                door: *door,
+                tint: world.get::<&SpriteTint>(id).ok().map(|t| *t),
             },
         });
     }
@@ -441,7 +445,7 @@ pub fn load_floor(
                 if let Some(b) = boss {
                     spawning::apply_boss_role(ctx.world, enemy, &b.name, b.ability, b.announced);
                 }
-                crate::systems::ai::decide_action(ctx, enemy);
+                // Scheduled by the caller once the tracker knows about it.
             }
             SavedEntityType::Container {
                 container_type,
@@ -481,25 +485,21 @@ pub fn load_floor(
                     let _ = ctx.world.insert_one(entity, crate::components::Pushable);
                 }
             }
-            SavedEntityType::Door { is_open } => {
-                if *is_open {
-                    let mut door = Door::new();
-                    door.is_open = true;
-                    ctx.world.spawn((
-                        pos,
-                        VisualPosition::from_position(&pos),
-                        Sprite::from_ref(tile_ids::DOOR),
-                        door,
-                    ));
-                } else {
-                    ctx.world.spawn((
-                        pos,
-                        VisualPosition::from_position(&pos),
-                        Sprite::from_ref(tile_ids::DOOR),
-                        Door::new(),
-                        BlocksVision,
-                        BlocksMovement,
-                    ));
+            SavedEntityType::Door { door, tint } => {
+                // Restore with the sprite that matches its state: an open door
+                // used to come back wearing the shut sprite while walkable.
+                let sprite = if door.is_open { door.open_sprite } else { door.closed_sprite };
+                let entity = ctx.world.spawn((
+                    pos,
+                    VisualPosition::from_position(&pos),
+                    Sprite::from_ref(sprite),
+                    *door,
+                ));
+                if !door.is_open {
+                    let _ = ctx.world.insert(entity, (BlocksVision, BlocksMovement));
+                }
+                if let Some(tint) = tint {
+                    let _ = ctx.world.insert_one(entity, *tint);
                 }
             }
             SavedEntityType::Bones { gold, items, name } => {
@@ -642,25 +642,29 @@ pub fn handle_floor_transition(
     clear_floor_entities(ctx.world, player_entity, ctx.scheduler);
 
     // Populate the new floor from the per-floor rng rather than the run rng.
-    {
-        let mut floor_ctx = ActorCtx {
-            rng: &mut floor_rng,
-            ..ctx.reborrow()
-        };
-        match &saved_entities {
-            Some(entities) => load_floor(&mut floor_ctx, entities, spawn_pos),
-            None => spawn_floor_entities(&mut floor_ctx, spawn_pos, target_floor),
-        }
+    let mut floor_ctx = ActorCtx {
+        rng: &mut floor_rng,
+        ..ctx.reborrow()
+    };
+    match &saved_entities {
+        Some(entities) => load_floor(&mut floor_ctx, entities, spawn_pos),
+        None => spawn_floor_entities(&mut floor_ctx, spawn_pos, target_floor),
     }
 
-    // Rebuild caches for the new floor
-    ctx.spatial.rebuild_in_place(ctx.world);
-    let player_pos = ctx
+    // Rebuild caches for the new floor, and only then give the enemies near
+    // the player their first action. The order matters: the tracker still
+    // holds the floor we just left until it is rebuilt, and an enemy the
+    // rebuilt tracker already counts as active is never reported as "newly
+    // active" by `update_on_player_move` — so anything not scheduled here
+    // would never act (an asleep enemy would never even get to wake up).
+    floor_ctx.spatial.rebuild_in_place(floor_ctx.world);
+    let player_pos = floor_ctx
         .world
         .get::<&Position>(player_entity)
         .map(|p| (p.x, p.y))
         .unwrap_or((0, 0));
-    ctx.tracker.initialize_from_world(ctx.world, player_pos);
+    floor_ctx.tracker.initialize_from_world(floor_ctx.world, player_pos);
+    super::initialization::initialize_ai_actors(&mut floor_ctx);
 
     let player_visual_pos = ctx
         .world
@@ -992,5 +996,106 @@ mod tests {
         save_and_reload(&mut world, grid, player);
         assert_eq!(unlit_puddles(&world), vec![(4, 4)]);
         assert_eq!(world.query::<&crate::components::OilPuddle>().iter().count(), 1);
+    }
+
+    #[test]
+    fn test_revisited_floor_restores_door_state_and_theme() {
+        let (mut world, grid, player) = setup();
+
+        let mut open_door = Door::shop();
+        open_door.is_open = true;
+        let open_pos = Position::new(4, 4);
+        world.spawn((
+            open_pos,
+            VisualPosition::from_position(&open_pos),
+            Sprite::from_ref(open_door.open_sprite),
+            open_door,
+        ));
+        let shut_pos = Position::new(6, 4);
+        world.spawn((
+            shut_pos,
+            VisualPosition::from_position(&shut_pos),
+            Sprite::from_ref(tile_ids::DOOR_GREEN),
+            Door::green(),
+            SpriteTint { r: 0.5, g: 0.6, b: 0.7 },
+            BlocksVision,
+            BlocksMovement,
+        ));
+
+        save_and_reload(&mut world, grid, player);
+
+        let door_at = |x: i32, y: i32| {
+            world
+                .query::<(&Position, &Door)>()
+                .iter()
+                .find(|(_, (p, _))| p.x == x && p.y == y)
+                .map(|(id, _)| id)
+                .expect("door restored")
+        };
+
+        // An open door comes back wearing its open sprite, and walkable.
+        let open = door_at(4, 4);
+        let sprite = *world.get::<&Sprite>(open).unwrap();
+        assert_eq!((sprite.sheet, sprite.tile_id), tile_ids::DOOR_SHOP_OPEN);
+        assert!(world.get::<&BlocksMovement>(open).is_err());
+        assert!(world.get::<&BlocksVision>(open).is_err());
+
+        // A shut door keeps its theme, its tint and its blocking.
+        let shut = door_at(6, 4);
+        let sprite = *world.get::<&Sprite>(shut).unwrap();
+        assert_eq!((sprite.sheet, sprite.tile_id), tile_ids::DOOR_GREEN);
+        assert_eq!(world.get::<&Door>(shut).unwrap().open_sprite, tile_ids::DOOR_GREEN_OPEN);
+        assert!(world.get::<&SpriteTint>(shut).is_ok());
+        assert!(world.get::<&BlocksMovement>(shut).is_ok());
+        assert!(world.get::<&BlocksVision>(shut).is_ok());
+    }
+
+    /// Descending to a fresh floor must give every enemy the tracker counts as
+    /// active a scheduled action. They used to be marked active without ever
+    /// being scheduled, so they never acted — a sleeping one never woke, even
+    /// when attacked.
+    #[test]
+    fn test_fresh_floor_schedules_enemies_near_the_stairs() {
+        let mut saw_active_enemy = false;
+        for seed in 0..8u64 {
+            let (mut world, mut grid, player) = setup();
+            let mut clock = GameClock::new();
+            let mut scheduler = ActionScheduler::new();
+            let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+            let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+            let mut events = EventQueue::new();
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut floors = HashMap::new();
+
+            handle_floor_transition(
+                &mut ActorCtx {
+                    world: &mut world,
+                    grid: &mut grid,
+                    player,
+                    clock: &mut clock,
+                    scheduler: &mut scheduler,
+                    tracker: &mut tracker,
+                    spatial: &mut cache,
+                    events: &mut events,
+                    rng: &mut rng,
+                },
+                &mut floors,
+                1,
+                seed,
+                crate::events::StairDirection::Down,
+            );
+
+            let mut scheduled = std::collections::HashSet::new();
+            while let Some((entity, _)) = scheduler.pop_next() {
+                scheduled.insert(entity);
+            }
+            for (id, _) in world.query::<&ChaseAI>().iter() {
+                if tracker.get_active_entities().contains(&id) {
+                    saw_active_enemy = true;
+                    assert!(scheduled.contains(&id), "active enemy {id:?} was never scheduled");
+                }
+            }
+        }
+        assert!(saw_active_enemy, "no seed put an enemy near the stairs; the test checked nothing");
     }
 }

@@ -1111,81 +1111,51 @@ impl Renderer {
             self.gl.uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, projection.as_ref());
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
-            // Group entities by sprite sheet (order matters for layering)
-            // AnimatedTiles first (ground effects like fire), then terrain, characters, monsters, items on top
-            let sheets = [SpriteSheet::AnimatedTiles, SpriteSheet::Tiles, SpriteSheet::Rogues, SpriteSheet::Monsters, SpriteSheet::Items];
+            // Draw in the order `collect_renderables` produced (ground, then
+            // actors, then the player), with each entity's overlay (a held
+            // weapon, say) straight after it. Consecutive sprites on the same
+            // sheet share one instanced draw; a texture switch starts a new
+            // batch. This used to draw sheet-by-sheet in a fixed order with
+            // Items last, so an item dropped on the floor drew over whoever
+            // was standing on it.
+            let mut batch_sheet: Option<SpriteSheet> = None;
+            let mut instance_data: Vec<f32> = Vec::new();
 
-            // First pass: render entity sprites (skip fire overlays, they render last)
-            for sheet in sheets {
-                let mut instance_data = Vec::new();
-
-                for entity in entities {
-                    // Skip fire overlays - they render in a final pass
-                    if entity.effects & crate::systems::rendering::effects::BURNING != 0 {
-                        continue;
-                    }
-                    if entity.sprite.sheet != sheet {
-                        continue;
-                    }
-
-                    let uv = tileset.get_uv(entity.sprite.sheet, entity.sprite.tile_id);
-
-                    instance_data.push(entity.x);
-                    instance_data.push(entity.y);
-                    instance_data.push(uv.u0);
-                    instance_data.push(uv.v0);
-                    instance_data.push(uv.u1);
-                    instance_data.push(uv.v1);
-                    instance_data.push(entity.brightness);
-                    instance_data.push(entity.alpha);
-                    instance_data.push(entity.tint.0); // tint R
-                    instance_data.push(entity.tint.1); // tint G
-                    instance_data.push(entity.tint.2); // tint B
+            for entity in entities {
+                // Fire overlays render in a final pass, below.
+                if entity.effects & crate::systems::rendering::effects::BURNING != 0 {
+                    continue;
                 }
 
-                if !instance_data.is_empty() {
-                    tileset.bind(&self.gl, sheet, 0);
-                    self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-                    self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&instance_data), DYNAMIC_DRAW);
+                let layers = std::iter::once((entity.sprite, entity.tint))
+                    .chain(entity.overlay.map(|o| (o, (1.0, 1.0, 1.0))));
+                for (sprite, tint) in layers {
+                    if batch_sheet != Some(sprite.sheet) {
+                        if let Some(sheet) = batch_sheet {
+                            self.draw_sprite_batch(sheet, &instance_data, tileset);
+                        }
+                        instance_data.clear();
+                        batch_sheet = Some(sprite.sheet);
+                    }
 
-                    let instance_count = instance_data.len() / 11;
-                    self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
+                    let uv = tileset.get_uv(sprite.sheet, sprite.tile_id);
+                    instance_data.extend_from_slice(&[
+                        entity.x,
+                        entity.y,
+                        uv.u0,
+                        uv.v0,
+                        uv.u1,
+                        uv.v1,
+                        entity.brightness,
+                        entity.alpha,
+                        tint.0,
+                        tint.1,
+                        tint.2,
+                    ]);
                 }
             }
-
-            // Second pass: render overlay sprites (weapons, etc.)
-            for sheet in sheets {
-                let mut overlay_data = Vec::new();
-
-                for entity in entities {
-                    if let Some(overlay) = &entity.overlay {
-                        if overlay.sheet != sheet {
-                            continue;
-                        }
-
-                        let uv = tileset.get_uv(overlay.sheet, overlay.tile_id);
-                        overlay_data.push(entity.x);
-                        overlay_data.push(entity.y);
-                        overlay_data.push(uv.u0);
-                        overlay_data.push(uv.v0);
-                        overlay_data.push(uv.u1);
-                        overlay_data.push(uv.v1);
-                        overlay_data.push(entity.brightness);
-                        overlay_data.push(entity.alpha);
-                        overlay_data.push(1.0); // tint R
-                        overlay_data.push(1.0); // tint G
-                        overlay_data.push(1.0); // tint B
-                    }
-                }
-
-                if !overlay_data.is_empty() {
-                    tileset.bind(&self.gl, sheet, 0);
-                    self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-                    self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(&overlay_data), DYNAMIC_DRAW);
-
-                    let overlay_count = overlay_data.len() / 11;
-                    self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, overlay_count as i32);
-                }
+            if let Some(sheet) = batch_sheet {
+                self.draw_sprite_batch(sheet, &instance_data, tileset);
             }
 
             // Third pass: render fire overlays on top of everything
@@ -1226,6 +1196,22 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    /// Upload one batch of sprite instances (11 floats each, as laid out in
+    /// `render_entities`) and draw it from `sheet`. Expects the sprite program
+    /// and VAO to be bound already.
+    fn draw_sprite_batch(&self, sheet: SpriteSheet, instance_data: &[f32], tileset: &MultiTileset) {
+        if instance_data.is_empty() {
+            return;
+        }
+        unsafe {
+            tileset.bind(&self.gl, sheet, 0);
+            self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
+            self.gl.buffer_data_u8_slice(ARRAY_BUFFER, as_u8_slice(instance_data), DYNAMIC_DRAW);
+            let instance_count = instance_data.len() / 11;
+            self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
+        }
     }
 
     /// Render visual effects (slashes, particles, etc.)

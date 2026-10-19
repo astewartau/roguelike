@@ -436,7 +436,7 @@ pub fn run_ui(
         .or_else(|| get_targeting_overlay_data(world, player_entity, targeting_mode, mouse_pos, camera));
     let enemy_status_data = get_enemy_status_data(world, grid);
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
-    let loot_indicator_data = get_loot_indicator_data(world, grid, player_entity);
+    let loot_indicator_data = get_loot_indicator_data(world, grid);
     let attack_telegraph_data = get_attack_telegraph_data(world, grid, game_time);
     // The hovered tile, and the tile the right-click menu is open on: the
     // info panel describes the menu's tile while it is open.

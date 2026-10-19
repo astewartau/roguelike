@@ -2367,6 +2367,116 @@ mod tests {
         engine
     }
 
+    /// Stun interrupts an enemy mid-action. It used to land only at the
+    /// enemy's next decision, so a step already under way still finished (and
+    /// a swing already under way still hit), with the stun ticking down the
+    /// whole time.
+    #[test]
+    fn stun_interrupts_an_enemy_mid_step() {
+        use crate::components::{ActionType, Actor, EffectType, Position, StatusEffects};
+
+        let mut engine = engine_with_run();
+        let mut events = EventQueue::new();
+        let state = engine.state.as_mut().expect("run");
+        let player = state.player_entity;
+        let ppos = state
+            .world
+            .get::<&Position>(player)
+            .map(|p| (p.x, p.y))
+            .expect("player position");
+
+        // A free tile two away from the player with a free neighbour to step
+        // to, both inside the stun radius.
+        let free = |state: &GameState, (x, y): (i32, i32)| {
+            (x, y) != ppos && state.grid.is_walkable(x, y) && !state.spatial_cache.is_blocked((x, y))
+        };
+        let near = |(x, y): (i32, i32)| {
+            (x - ppos.0).abs().max((y - ppos.1).abs()) <= crate::constants::STUN_ABILITY_RADIUS
+        };
+        let mut setup = None;
+        'search: for dy in -2..=2 {
+            for dx in -2..=2 {
+                let from = (ppos.0 + dx, ppos.1 + dy);
+                if dx.abs().max(dy.abs()) != 2 || !free(state, from) {
+                    continue;
+                }
+                for (sx, sy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let to = (from.0 + sx, from.1 + sy);
+                    if near(to) && free(state, to) {
+                        setup = Some((from, (sx, sy)));
+                        break 'search;
+                    }
+                }
+            }
+        }
+        let (from, (sx, sy)) = setup.expect("open floor around the starting position");
+
+        let skeleton = spawning::enemies::SKELETON.spawn(
+            &mut state.world,
+            from.0,
+            from.1,
+            &mut state.rng,
+        );
+        let _ = state.world.remove_one::<crate::components::Asleep>(skeleton);
+        state.spatial_cache.rebuild_in_place(&state.world);
+        state.active_ai_tracker.register_entity(skeleton);
+        state.active_ai_tracker.mark_active(skeleton);
+
+        // The skeleton is mid-step when the player starts the stun.
+        time_system::start_action(
+            &mut state.world,
+            skeleton,
+            ActionType::Move { dx: sx, dy: sy, is_diagonal: false },
+            &state.game_clock,
+            &mut state.action_scheduler,
+        )
+        .expect("skeleton starts its step");
+        let step_ends = state
+            .world
+            .get::<&Actor>(skeleton)
+            .ok()
+            .and_then(|a| a.current_action.map(|c| c.completion_time))
+            .expect("step in progress");
+        let stun_lands = state.game_clock.time + crate::constants::BARKSKIN_ACTIVATION_DURATION;
+        assert!(stun_lands < step_ends, "the stun has to land mid-step for this to test anything");
+
+        time_system::start_action(
+            &mut state.world,
+            player,
+            ActionType::ActivateStun,
+            &state.game_clock,
+            &mut state.action_scheduler,
+        )
+        .expect("player starts the stun");
+        simulation::advance_until_player_ready(&mut state.actor_ctx(&mut events));
+
+        let pos = state.world.get::<&Position>(skeleton).map(|p| (p.x, p.y)).unwrap();
+        assert_eq!(pos, from, "the interrupted step must not complete");
+        let busy_with_move = state
+            .world
+            .get::<&Actor>(skeleton)
+            .ok()
+            .and_then(|a| a.current_action)
+            .is_some_and(|c| matches!(c.action_type, ActionType::Move { .. }));
+        assert!(!busy_with_move, "the step was cancelled, not left pending");
+        let stun_left = state
+            .world
+            .get::<&StatusEffects>(skeleton)
+            .ok()
+            .and_then(|e| {
+                e.effects
+                    .iter()
+                    .find(|e| e.effect_type == EffectType::Stunned)
+                    .map(|e| e.remaining_duration)
+            })
+            .expect("skeleton is stunned");
+        assert!(
+            stun_left > crate::constants::STUN_ABILITY_DURATION - 0.5,
+            "the stun starts counting from when it lands, not after the step: {stun_left}"
+        );
+        assert!(state.world.get::<&crate::components::PendingInterrupt>(skeleton).is_err());
+    }
+
     #[test]
     fn test_sleeping_while_resting_goes_through_stop_rest() {
         // try_sleep used to clear self.resting / self.rest_accumulator directly
@@ -2586,8 +2696,10 @@ mod tests {
         // because no actor ever stalls waiting to afford its next move.
         // Re-recorded for merging the combat branch with the fire/light/noise
         // work; see the note on the scenario above (fire accounts for most of
-        // the rise: kills=14 with fire unable to catch creatures).
-        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=d5323188";
+        // the rise: kills=14 with fire unable to catch creatures). Roster
+        // re-recorded when a fresh floor's enemies near the stairs started
+        // being scheduled on arrival (they used to never act).
+        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=bcef1344";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

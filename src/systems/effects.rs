@@ -114,11 +114,21 @@ pub fn add_effect_to_entity(
     {
         return false;
     }
-    if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-        add_effect(&mut effects, effect_type, duration)
-    } else {
-        false
+    let applied = match world.get::<&mut StatusEffects>(entity) {
+        Ok(mut effects) => add_effect(&mut effects, effect_type, duration),
+        Err(_) => false,
+    };
+    // A stun interrupts what the actor is doing rather than waiting for its
+    // next decision (see `time_system::apply_stun_interrupts`). The player is
+    // left alone: nothing gates player input on being stunned yet, so
+    // cancelling their action would only eat the input.
+    if applied
+        && effect_type == EffectType::Stunned
+        && world.get::<&crate::components::Player>(entity).is_err()
+    {
+        let _ = world.insert_one(entity, crate::components::PendingInterrupt);
     }
+    applied
 }
 
 /// Add or refresh an effect and, if the entity did not already have it, emit

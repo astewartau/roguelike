@@ -98,6 +98,10 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
     world
         .query::<(&VisualPosition, &ChaseAI, &StatusEffects, Option<&Asleep>, Option<&AlarmInProgress>)>()
         .iter()
+        // An invisible enemy is not drawn, so neither are its status icons.
+        .filter(|(_, (_, _, status_effects, _, _))| {
+            !effects::has_effect(status_effects, EffectType::Invisible)
+        })
         .filter(|(_, (pos, _, _, _, _))| {
             // Only show for visible tiles
             grid.get(pos.x as i32, pos.y as i32)
@@ -126,13 +130,9 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
 /// Visible tiles holding something the player could loot: a corpse or item
 /// pile with anything in it, or an opened chest left half-emptied. Closed
 /// chests do not count — what is in them is not known yet. The player's own
-/// tile is skipped (the loot window covers that), and each tile appears once
-/// however many containers share it.
-pub fn get_loot_indicator_data(world: &World, grid: &Grid, player_entity: Entity) -> Vec<(i32, i32)> {
-    let player_tile = world
-        .get::<&crate::components::Position>(player_entity)
-        .map(|p| (p.x, p.y))
-        .ok();
+/// tile is included, so the marker stays put while standing on the loot, and
+/// each tile appears once however many containers share it.
+pub fn get_loot_indicator_data(world: &World, grid: &Grid) -> Vec<(i32, i32)> {
     let mut tiles: Vec<(i32, i32)> = world
         .query::<(&crate::components::Position, &crate::components::Container)>()
         .iter()
@@ -142,7 +142,6 @@ pub fn get_loot_indicator_data(world: &World, grid: &Grid, player_entity: Entity
                     || world.get::<&crate::components::BlocksMovement>(*id).is_err())
         })
         .map(|(_, (pos, _))| (pos.x, pos.y))
-        .filter(|&tile| Some(tile) != player_tile)
         .filter(|&(x, y)| grid.get(x, y).map(|t| t.visible).unwrap_or(false))
         .collect();
     tiles.sort_unstable();
@@ -351,6 +350,8 @@ pub fn get_enemy_health_data(world: &World, grid: &Grid, player_entity: Entity) 
         .query::<(&VisualPosition, &Health, &ChaseAI)>()
         .iter()
         .filter(|(id, _)| *id != player_entity) // Exclude player
+        // An invisible enemy is not drawn, so its health bar would give it away.
+        .filter(|(id, _)| !effects::entity_has_effect(world, *id, EffectType::Invisible))
         .filter(|(_, (pos, health, _))| {
             // Only show for visible tiles and damaged enemies
             let is_visible = grid

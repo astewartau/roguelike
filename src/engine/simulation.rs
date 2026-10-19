@@ -268,6 +268,10 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
             // Non-player entity: let AI decide next action
             systems::ai::decide_action(ctx, next_entity);
         }
+
+        // Either branch can have stunned someone (the player's Stun completing,
+        // a boss's Ground Slam decided); stop what they were doing now.
+        time_system::apply_stun_interrupts(ctx);
     }
 }
 
