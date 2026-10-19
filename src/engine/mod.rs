@@ -2391,8 +2391,10 @@ mod tests {
         // it is much higher than the original 7.5, and the run is shorter
         // because no actor ever stalls waiting to afford its next move.
         // Re-recorded for room lanterns and goblin torches; see the note on
-        // the scenario above about the earlier, fire-inflated kills=23.
-        const EXPECTED: &str = "t=262.1901 floor=1 kills=13 hp=99696/100000 pos=10,13 hunger=87.5008 fatigue=29.8590 n=98 roster=c861109b";
+        // the scenario above about the earlier, fire-inflated kills=23. Then
+        // n +6 when fresh floors below 0 began spawning their water animation
+        // entities (roster only; the simulation itself is unchanged).
+        const EXPECTED: &str = "t=262.1901 floor=1 kills=13 hp=99696/100000 pos=10,13 hunger=87.5008 fatigue=29.8590 n=104 roster=91295221";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

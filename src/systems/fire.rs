@@ -511,12 +511,7 @@ pub fn topple_brazier(
         return false;
     };
 
-    // Snuff the stand: no more light, no more contact burns, static tipped sprite.
-    if let Ok(mut b) = world.get::<&mut Brazier>(brazier) {
-        b.lit = false;
-    }
-    let _ = world.remove::<(LightSource, CausesBurning, AnimatedSprite)>(brazier);
-    let _ = world.insert_one(brazier, Sprite::from_ref(tile_ids::BRAZIER_UNLIT));
+    snuff_brazier(world, brazier);
 
     events.push(GameEvent::BrazierToppled { position: (bx, by) });
 
@@ -564,6 +559,17 @@ pub fn smash_lantern(
     }
     spill_fire_at(world, grid, x, y, events);
     true
+}
+
+/// Put a brazier into its toppled state: no more light, no more contact
+/// burns, static tipped sprite. Only the state change — no event, no spilled
+/// fire — so a revisited floor can restore a brazier that was toppled earlier.
+pub fn snuff_brazier(world: &mut World, brazier: Entity) {
+    if let Ok(mut b) = world.get::<&mut Brazier>(brazier) {
+        b.lit = false;
+    }
+    let _ = world.remove::<(LightSource, CausesBurning, AnimatedSprite)>(brazier);
+    let _ = world.insert_one(brazier, Sprite::from_ref(tile_ids::BRAZIER_UNLIT));
 }
 
 /// Spill fire onto a tile: set the tile alight (`ignite_tile`) and set
