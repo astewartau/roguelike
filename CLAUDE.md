@@ -22,6 +22,17 @@ directory, not the executable.
 
 Tests never open an audio stream (`GameEngine::new()` skips `AudioManager` under
 `cfg(test)`), so they can run in parallel without touching the sound card.
+Setting `ROGUELIKE_NO_AUDIO` does the same for a real run.
+
+### Don't open the game on the user's screen
+
+`cargo run` is for the user. An agent that needs to see the game must not
+launch it on the real display. The user is often working at the same machine,
+and a window that keeps popping up, stealing focus and playing sound
+interrupts them. Check behaviour with a unit test first. If you really need
+pixels, use the headless driver in
+[.claude/skills/run-game](.claude/skills/run-game/SKILL.md), which runs the
+game under Xvfb with audio off and saves screenshots for you to read.
 
 ## Conventions
 
