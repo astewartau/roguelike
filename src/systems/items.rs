@@ -105,7 +105,10 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
         UseEffect::Equip => {
             // Armor and accessories both route through the body/head/ring/
             // amulet slot path; only true weapons go to the weapon slot.
-            if matches!(def.category, ItemCategory::Armor | ItemCategory::Accessory) {
+            if matches!(
+                def.category,
+                ItemCategory::Armor | ItemCategory::Accessory | ItemCategory::OffHand
+            ) {
                 return ItemUseResult::IsArmor { item_type, item_index };
             }
             return ItemUseResult::IsWeapon { item_type, item_index };

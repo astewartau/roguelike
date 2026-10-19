@@ -264,7 +264,8 @@ pub fn apply_close_door(
 }
 
 /// Apply interact in a direction (Ctrl+movement).
-/// Checks for doors (open/close), toppleable braziers, and containers at the
+/// Checks for doors (open/close), a held torch (relight it at a fire, or put
+/// it to grass and oil), toppleable braziers, lanterns, and containers at the
 /// target tile.
 pub fn apply_interact_direction(
     ctx: &mut EffectCtx,
@@ -272,9 +273,9 @@ pub fn apply_interact_direction(
     dx: i32,
     dy: i32,
 ) -> ActionResult {
-    let EffectCtx { world, grid, spatial: _spatial_cache, events, rng } = ctx;
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
     let (world, grid) = (&mut **world, &mut **grid);
-    let (_spatial_cache, events, rng) = (&mut **_spatial_cache, &mut **events, &mut **rng);
+    let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
     // Get entity position
     let pos = match world.get::<&Position>(entity) {
@@ -300,6 +301,13 @@ pub fn apply_interact_direction(
         }
     }
 
+    // A held torch: an unlit one is relit from a fire there; a lit one sets
+    // the tile alight. (Before the brazier, so relighting from a brazier
+    // doesn't knock it over.)
+    if crate::systems::torches::use_held_torch_on(world, grid, entity, target_x, target_y, events) {
+        return ActionResult::Completed;
+    }
+
     // Check for a lit brazier at target — interacting topples it, spilling
     // fire onto its tile and one adjacent tile (see systems::fire).
     let brazier: Option<hecs::Entity> = world
@@ -309,6 +317,19 @@ pub fn apply_interact_direction(
         .map(|(id, _)| id);
     if let Some(brazier_id) = brazier {
         if crate::systems::fire::topple_brazier(world, grid, brazier_id, events, rng) {
+            return ActionResult::Completed;
+        }
+    }
+
+    // A lantern at target — interacting knocks it over and it smashes,
+    // spilling burning oil (see systems::fire::smash_lantern).
+    let lantern: Option<hecs::Entity> = world
+        .query::<(&Position, &crate::components::Lantern)>()
+        .iter()
+        .find(|(_, (p, _))| p.x == target_x && p.y == target_y)
+        .map(|(id, _)| id);
+    if let Some(lantern_id) = lantern {
+        if crate::systems::fire::smash_lantern(world, grid, spatial_cache, lantern_id, events) {
             return ActionResult::Completed;
         }
     }

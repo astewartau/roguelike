@@ -75,6 +75,8 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
     // A burning combatant can set the other alight on a melee hit.
     crate::systems::fire::try_combat_ignite(world, attacker, target, rng);
     crate::systems::fire::try_combat_ignite(world, target, attacker, rng);
+    // Swinging a lit torch at an oiled target sets it alight.
+    crate::systems::torches::torch_strike(world, attacker, target, events);
 
     // Resolve weapon on-hit affixes (ignite/slow/fear/lifesteal/knockback/kill-heal)
     crate::systems::combat::resolve_weapon_on_hit(
@@ -249,6 +251,9 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
         let damage = crate::systems::combat::apply_damage(world, grid, *target, raw, rng);
+
+        // Swinging a lit torch at an oiled target sets it alight.
+        crate::systems::torches::torch_strike(world, attacker, *target, events);
 
         // Resolve weapon on-hit affixes through the shared chokepoint
         crate::systems::combat::resolve_weapon_on_hit(

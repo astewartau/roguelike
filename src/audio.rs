@@ -340,6 +340,11 @@ impl AudioManager {
                     let dist = Self::distance(player_pos, (*x, *y));
                     self.play_at_distance(SoundType::PotionThrow, dist);
                 }
+                GameEvent::LanternSmashed { position } => {
+                    // Breaking glass: the potion shatter is the nearest sound.
+                    let dist = Self::distance(player_pos, *position);
+                    self.play_at_distance(SoundType::PotionThrow, dist);
+                }
                 GameEvent::PotionDrunk { .. } => {
                     self.play(SoundType::PotionDrink);
                 }

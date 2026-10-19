@@ -246,6 +246,24 @@ pub enum GameEvent {
     BarrelExploded {
         position: (i32, i32),
     },
+    /// A lantern was smashed (by interaction or knockback), spilling burning oil.
+    LanternSmashed {
+        position: (i32, i32),
+    },
+    /// A carried torch was put out (its carrier got soaked).
+    TorchDoused {
+        entity: Entity,
+    },
+    /// Something held went back in the pack to free a hand: a torch for a
+    /// two-handed weapon, or a two-handed weapon for a torch.
+    ItemStowed {
+        entity: Entity,
+        item: crate::components::ItemType,
+    },
+    /// A held torch was lit (relit at a fire).
+    TorchLit {
+        entity: Entity,
+    },
     /// A brazier was toppled (by interaction or knockback), spilling fire.
     BrazierToppled {
         position: (i32, i32),

@@ -38,6 +38,7 @@ pub mod player_input;
 pub mod projectile;
 pub mod rendering;
 pub mod survival;
+pub mod torches;
 pub mod webs;
 
 // Re-export commonly used items

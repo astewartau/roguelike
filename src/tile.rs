@@ -231,6 +231,11 @@ pub mod tile_ids {
     pub const TUMBLE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 6, ITEMS_COLS)); // 27.g tumble (custom)
     pub const CRIPPLING_SHOT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 7, ITEMS_COLS)); // 27.h crippling shot (custom)
     pub const STUN: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 8, ITEMS_COLS)); // 27.i stun (custom)
+    /// Torch item icons: the animated sheet's torch frames, copied into
+    /// items.png by tools/make_tiles.py so the inventory (which draws from the
+    /// items sheet) can show them.
+    pub const TORCH_ICON: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 9, ITEMS_COLS)); // 27.j torch, lit (copied from animated-tiles 6)
+    pub const TORCH_UNLIT_ICON: (SpriteSheet, u32) = (SpriteSheet::Items, rc(27, 10, ITEMS_COLS)); // 27.k torch, unlit (copied from animated-tiles 5)
 
     // ===== TILES SHEET - TRAPS =====
 
@@ -268,6 +273,12 @@ pub mod tile_ids {
     pub const BRAZIER_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(1, 0, ANIMATED_TILES_COLS));
     /// Fire pit (lit) - first frame, row 4 in animated-tiles.png
     pub const FIRE_PIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(4, 0, ANIMATED_TILES_COLS));
+    /// Hand torch, lit - first frame, row 6 in animated-tiles.png (6 frames)
+    pub const TORCH: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(6, 0, ANIMATED_TILES_COLS)); // 6. torch (lit)
+    /// Hand torch, unlit (row 5)
+    pub const TORCH_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(5, 0, ANIMATED_TILES_COLS)); // 5. torch (unlit)
+    /// Standing lantern, lit - first frame, row 8 in animated-tiles.png (4 frames)
+    pub const LANTERN: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(8, 0, ANIMATED_TILES_COLS)); // 8. lamp (lit)
     /// Animated water - first frame, row 11 in animated-tiles.png (11 frames)
     pub const WATER_ANIMATED: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(11, 0, ANIMATED_TILES_COLS));
     /// Fire effect - first frame, row 9 in animated-tiles.png (for burning entities)

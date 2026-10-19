@@ -209,6 +209,17 @@ fn try_knockback(
     if !grid.is_walkable(dest.0, dest.1) {
         return;
     }
+    // Shoved into a lantern: the victim stays put, the lantern goes over and
+    // smashes, spilling burning oil where it stood.
+    let lantern_hit: Option<Entity> = world
+        .query::<(&Position, &crate::components::Lantern)>()
+        .iter()
+        .find(|(_, (p, _))| (p.x, p.y) == dest)
+        .map(|(id, _)| id);
+    if let Some(lantern) = lantern_hit {
+        crate::systems::fire::smash_lantern(world, grid, spatial_cache, lantern, events);
+        return;
+    }
     if crate::queries::is_position_blocked(spatial_cache, dest.0, dest.1, Some(target)) {
         return;
     }
@@ -496,6 +507,8 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         let _ = world.remove_one::<Health>(id);
         let _ = world.remove_one::<BlocksMovement>(id); // Bones are walkable
         let _ = world.remove_one::<Stats>(id);
+        // A torch-bearer's torch falls burning beside the body.
+        crate::systems::torches::drop_torch(world, id);
 
         // Clean dead entity from all threat tables
         for (_, ai) in world.query_mut::<&mut ChaseAI>() {

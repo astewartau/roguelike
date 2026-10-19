@@ -2317,9 +2317,13 @@ mod tests {
     /// stayed reproducible, they just took a different path.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        // Re-recorded when noise started travelling round walls (and
-        // reaching idle enemies); see the note on the test above.
-        const EXPECTED: &str = "t=355.5580 floor=0 kills=11 hp=-9/50 pos=12,10 hunger=83.3344 fatigue=38.2366 n=98 roster=84898424";
+        // Re-recorded for room lanterns and goblin torches: n +5 (three
+        // lanterns, plus unlit torches dropped by goblins killed in the run).
+        // An earlier recording had kills=19, which was not noise: dropped
+        // torches then spread fire and burned goblins to death. Torches no
+        // longer start fires by accident, and the kills are back where the
+        // lanterns alone left them.
+        const EXPECTED: &str = "t=355.3580 floor=0 kills=11 hp=-3/50 pos=12,10 hunger=83.3344 fatigue=38.3966 n=103 roster=791c2e07";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2386,9 +2390,9 @@ mod tests {
         // Fatigue is now the integral of effort rather than a second clock, so
         // it is much higher than the original 7.5, and the run is shorter
         // because no actor ever stalls waiting to afford its next move.
-        // Re-recorded again when noise started travelling round walls (and
-        // reaching idle enemies).
-        const EXPECTED: &str = "t=265.5901 floor=1 kills=13 hp=99684/100000 pos=10,13 hunger=87.5008 fatigue=29.7790 n=95 roster=5b078c92";
+        // Re-recorded for room lanterns and goblin torches; see the note on
+        // the scenario above about the earlier, fire-inflated kills=23.
+        const EXPECTED: &str = "t=262.1901 floor=1 kills=13 hp=99696/100000 pos=10,13 hunger=87.5008 fatigue=29.8590 n=98 roster=c861109b";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

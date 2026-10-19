@@ -605,7 +605,7 @@ pub fn process_ui_actions(
             }
             systems::ItemUseResult::IsWeapon { item_type, item_index } => {
                 let result =
-                    systems::actions::apply_equip_weapon(world, player_entity, item_index);
+                    systems::actions::apply_equip_weapon(world, player_entity, item_index, events);
                 if result == systems::actions::ActionResult::Completed {
                     events.push(GameEvent::WeaponEquipped {
                         entity: player_entity,
@@ -614,7 +614,7 @@ pub fn process_ui_actions(
                 }
             }
             systems::ItemUseResult::IsArmor { item_type: _, item_index } => {
-                systems::actions::apply_equip_armor(world, player_entity, item_index);
+                systems::actions::apply_equip_armor(world, player_entity, item_index, events);
             }
             systems::ItemUseResult::Used { item_type } => {
                 // Emit PotionDrunk event for potions (drinking a full water

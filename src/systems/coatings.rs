@@ -25,7 +25,8 @@ use crate::grid::Grid;
 use crate::systems::effects;
 
 /// Soak an entity: Wet for `WET_DURATION`, which also puts out any Burning
-/// and washes off oil. A lit barrel fuse fizzles too. Emits `Soaked` the first
+/// and washes off oil. A lit barrel fuse fizzles too, and so does a carried
+/// torch. Emits `Soaked` the first
 /// time (not on every refresh while it stands in water).
 pub fn soak(world: &mut World, entity: Entity, events: &mut EventQueue) {
     let was_wet = effects::entity_has_effect(world, entity, EffectType::Wet);
@@ -33,6 +34,7 @@ pub fn soak(world: &mut World, entity: Entity, events: &mut EventQueue) {
         return;
     }
     let _ = world.remove_one::<BarrelFuse>(entity);
+    crate::systems::torches::douse_torch(world, entity, events);
     if !was_wet {
         events.push(GameEvent::Soaked { entity });
     }

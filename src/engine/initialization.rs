@@ -397,6 +397,51 @@ fn spawn_shop_decorations(
     }
 }
 
+/// Light themed rooms with lanterns in their own style: warm lamps in the
+/// shop and storerooms, cold corpse-candles in crypts. Lanterns go in the
+/// room's corners (a step in, if a corner is taken or crowds a doorway), so
+/// they light the room without standing in anyone's way. Draws nothing from
+/// the rng, so adding them leaves the rest of the floor's rolls alone.
+fn spawn_room_lanterns(world: &mut World, grid: &Grid, occupancy: &mut TileOccupancy) {
+    use crate::components::LanternStyle;
+    use crate::dungeon_gen::RoomTheme;
+
+    for room in &grid.themed_rooms {
+        let (style, count) = match room.theme {
+            RoomTheme::Shop => (LanternStyle::Warm, LANTERNS_PER_SHOP),
+            RoomTheme::Storage => (LanternStyle::Warm, LANTERNS_PER_STORAGE),
+            RoomTheme::Crypt => (LanternStyle::Ghost, LANTERNS_PER_CRYPT),
+            _ => continue,
+        };
+        let r = room.rect;
+        let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.width - 1, r.y + r.height - 1);
+        // Opposite corners first, so two lanterns light both ends of a room.
+        // Each corner's (dx, dy) points into the room.
+        let corners = [((x0, y0), (1, 1)), ((x1, y1), (-1, -1)), ((x1, y0), (-1, 1)), ((x0, y1), (1, -1))];
+        let usable = |occupancy: &TileOccupancy, (x, y): (i32, i32)| {
+            r.contains(x, y)
+                && grid.get(x, y).map(|t| t.tile_type == crate::tile::TileType::Floor).unwrap_or(false)
+                && occupancy.is_free((x, y))
+                && !grid.blocks_a_doorway(x, y)
+        };
+        let mut placed = 0;
+        for ((cx, cy), (dx, dy)) in corners {
+            if placed == count {
+                break;
+            }
+            let spot = [(cx, cy), (cx + dx, cy), (cx, cy + dy), (cx + dx, cy + dy)]
+                .into_iter()
+                .find(|&p| usable(occupancy, p));
+            if let Some((x, y)) = spot {
+                if occupancy.claim((x, y)) {
+                    spawning::spawn_lantern(world, x, y, style);
+                    placed += 1;
+                }
+            }
+        }
+    }
+}
+
 /// Spawn the vendor in the shop room.
 fn spawn_vendor(world: &mut World, grid: &Grid, occupancy: &mut TileOccupancy, floor_num: u32) {
     if let Some((x, y)) = grid.shop_position {
@@ -784,6 +829,11 @@ pub fn init_world(
 
     // Floor 0 has no boss (see `is_boss_floor`), so there is no boss pass here.
 
+    // Lanterns last, into whatever corners are still free: placed any earlier
+    // they would claim tiles the enemy roster draws from, and move every
+    // enemy on the floor.
+    spawn_room_lanterns(&mut world, grid, &mut occupancy);
+
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(&world, "init_world");
 
@@ -890,9 +940,76 @@ pub fn spawn_floor_entities(
     // Every 3rd floor: a named boss guarding a Rare+ chest in the largest room.
     spawn_boss_encounter(world, grid, floor_num, &mut occupancy, rng);
 
+    // Lanterns last; see the note in `init_world`.
+    spawn_room_lanterns(world, grid, &mut occupancy);
+
     #[cfg(debug_assertions)]
     crate::tile_occupancy::assert_one_blocker_per_tile(world, "spawn_floor_entities");
 
     // Initialize AI
     initialize_ai_actors(ctx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{Lantern, LanternStyle, LightSource};
+    use crate::dungeon_gen::RoomTheme;
+    use rand::SeedableRng;
+
+    /// Over a spread of real floors: every shop, crypt and storeroom gets its
+    /// lanterns in its own style, inside the room, never on a doorway's
+    /// approach and never sharing a tile with another blocker.
+    #[test]
+    fn themed_rooms_get_lanterns_in_their_style() {
+        let mut shops_lit = 0;
+        for seed in 0..20u64 {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let grid = Grid::new_floor(60, 40, 1, &mut rng);
+            let mut world = World::new();
+            let mut occupancy = TileOccupancy::from_world(&world);
+            spawn_room_lanterns(&mut world, &grid, &mut occupancy);
+
+            // A lantern's style shows in its light: ghost-light is cold.
+            let lanterns: Vec<((i32, i32), LanternStyle)> = world
+                .query::<(&Position, &LightSource)>()
+                .with::<&Lantern>()
+                .iter()
+                .map(|(_, (p, l))| {
+                    let style = if l.color == LIGHT_COLOR_GHOST {
+                        LanternStyle::Ghost
+                    } else {
+                        LanternStyle::Warm
+                    };
+                    ((p.x, p.y), style)
+                })
+                .collect();
+            for room in &grid.themed_rooms {
+                let inside: Vec<LanternStyle> = lanterns
+                    .iter()
+                    .filter(|((x, y), _)| room.rect.contains(*x, *y))
+                    .map(|(_, s)| *s)
+                    .collect();
+                match room.theme {
+                    RoomTheme::Shop => {
+                        assert!(inside.iter().all(|s| *s == LanternStyle::Warm));
+                        assert!(inside.len() <= LANTERNS_PER_SHOP);
+                        if inside.len() >= 2 {
+                            shops_lit += 1;
+                        }
+                    }
+                    RoomTheme::Crypt => {
+                        assert!(!inside.is_empty(), "seed {seed}: a crypt has its corpse-candles");
+                        assert!(inside.iter().all(|s| *s == LanternStyle::Ghost));
+                    }
+                    RoomTheme::Storage => assert!(inside.iter().all(|s| *s == LanternStyle::Warm)),
+                    _ => assert!(inside.is_empty(), "seed {seed}: no lanterns in {:?}", room.theme),
+                }
+            }
+            for ((x, y), _) in &lanterns {
+                assert!(!grid.blocks_a_doorway(*x, *y), "seed {seed}: lantern by a door");
+            }
+        }
+        assert!(shops_lit > 0, "shops get lit");
+    }
 }

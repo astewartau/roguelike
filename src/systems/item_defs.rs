@@ -17,6 +17,8 @@ pub enum ItemCategory {
     Armor,
     /// Rings and amulets — pure affix carriers with no base stats
     Accessory,
+    /// Held in the off hand (torches)
+    OffHand,
     Potion,
     Scroll,
     Food,
@@ -106,8 +108,16 @@ pub fn armor_slot(item: ItemType) -> Option<ArmorSlot> {
         ItemType::Helmet => Some(ArmorSlot::Head),
         ItemType::Ring => Some(ArmorSlot::Ring),
         ItemType::Amulet => Some(ArmorSlot::Amulet),
+        ItemType::Torch | ItemType::UnlitTorch => Some(ArmorSlot::OffHand),
         _ => None,
     }
+}
+
+/// Whether a weapon kind takes both hands, leaving none for the off-hand
+/// slot. Bows need both hands to draw; a staff is wielded two-handed. Swords
+/// and daggers leave a hand free for a torch.
+pub fn is_two_handed(kind: ItemType) -> bool {
+    matches!(kind, ItemType::Bow | ItemType::Staff)
 }
 
 /// Equipment slot a worn piece (armor or accessory) occupies.
@@ -117,6 +127,8 @@ pub enum ArmorSlot {
     Head,
     Ring,
     Amulet,
+    /// The off hand (a torch), shared with a two-handed weapon.
+    OffHand,
 }
 
 /// Minimum effective Intelligence required to Study this scroll into a
@@ -481,6 +493,28 @@ pub static ITEM_DEFS: &[ItemDef] = &[
         targeting: None,
         is_throwable: false,
         base_price: WATER_FLASK_EMPTY_PRICE,
+    },
+    ItemDef {
+        item_type: ItemType::Torch,
+        name: "Torch",
+        category: ItemCategory::OffHand,
+        weight: TORCH_WEIGHT,
+        sprite: tile_ids::TORCH_ICON,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+        base_price: TORCH_PRICE,
+    },
+    ItemDef {
+        item_type: ItemType::UnlitTorch,
+        name: "Unlit Torch",
+        category: ItemCategory::OffHand,
+        weight: TORCH_WEIGHT,
+        sprite: tile_ids::TORCH_UNLIT_ICON,
+        use_effect: UseEffect::Equip,
+        targeting: None,
+        is_throwable: false,
+        base_price: UNLIT_TORCH_PRICE,
     },
     ItemDef {
         item_type: ItemType::WaterFlaskFull,
@@ -923,6 +957,8 @@ mod tests {
             ItemType::Amulet,
             ItemType::WaterFlaskEmpty,
             ItemType::WaterFlaskFull,
+            ItemType::Torch,
+            ItemType::UnlitTorch,
         ];
 
         for item in all_items {

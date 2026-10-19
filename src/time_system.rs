@@ -359,7 +359,7 @@ fn apply_action_effects(
             actions::apply_fireball(world, grid, entity, *target_x, *target_y, events, rng)
         }
         ActionType::EquipWeapon { item_index } => {
-            actions::apply_equip_weapon(world, entity, *item_index)
+            actions::apply_equip_weapon(world, entity, *item_index, events)
         }
         ActionType::UnequipWeapon => {
             actions::apply_unequip_weapon(world, entity)

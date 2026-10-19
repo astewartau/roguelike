@@ -564,6 +564,15 @@ SLOTS = {
     'stun': (27, 8),              # 27.i
 }
 
+# Stock sprites copied into items.png rather than drawn: the inventory and HUD
+# draw from the items sheet only, so a sprite that lives on another sheet has
+# to be copied in to be shown there. Slot -> (source sheet, 1-based row,
+# 0-based column), all in the same 32rogues directory as items.png.
+COPIES = {
+    (27, 9): ('animated-tiles.png', 6, 0),   # 27.j torch, lit (first frame)
+    (27, 10): ('animated-tiles.png', 5, 0),  # 27.k torch, unlit
+}
+
 def to_image(g):
     im = Image.new('RGBA', (32, 32), (0, 0, 0, 0))
     for y in range(32):
@@ -586,8 +595,14 @@ def paste_into(sheet_path):
         row, col = SLOTS[name]
         box = (col * 32, (row - 1) * 32, col * 32 + 32, row * 32)
         sheet.paste(to_image(fn()), box)  # plain paste: replaces the slot, alpha and all
+    import os
+    sheet_dir = os.path.dirname(sheet_path)
+    for (row, col), (source, src_row, src_col) in COPIES.items():
+        src = Image.open(os.path.join(sheet_dir, source)).convert('RGBA')
+        tile = src.crop((src_col * 32, (src_row - 1) * 32, src_col * 32 + 32, src_row * 32))
+        sheet.paste(tile, (col * 32, (row - 1) * 32, col * 32 + 32, row * 32))
     sheet.save(sheet_path)
-    print(f'pasted {len(ICONS)} icons into {sheet_path}')
+    print(f'pasted {len(ICONS)} icons and copied {len(COPIES)} sprites into {sheet_path}')
 
 if __name__ == '__main__':
     import os, sys

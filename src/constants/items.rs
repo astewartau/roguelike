@@ -202,3 +202,17 @@ pub const AFFIX_CURSED_FRAGILE_MAX: i32 = 2;
 /// Cursed-heavy slow fraction roll range
 pub const AFFIX_CURSED_HEAVY_MIN: f32 = 0.10;
 pub const AFFIX_CURSED_HEAVY_MAX: f32 = 0.25;
+
+// =============================================================================
+// TORCHES (held in the off hand — see systems/torches.rs)
+// =============================================================================
+
+/// Weight of a torch.
+pub const TORCH_WEIGHT: f32 = 1.0;
+/// What the merchant asks for a torch. Cheap: the cost of carrying one is
+/// being seen, not the gold.
+pub const TORCH_PRICE: u32 = 15;
+/// A doused torch is worth little until it's relit.
+pub const UNLIT_TORCH_PRICE: u32 = 5;
+/// Torches the merchant has in stock.
+pub const MERCHANT_TORCH_STOCK: u32 = 2;

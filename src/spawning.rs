@@ -63,6 +63,10 @@ pub struct EnemyDef {
     /// Doesn't need light to see (undead, bats by sound, spiders): darkness
     /// gives the player no stealth against it. See `systems::light`.
     pub sees_in_dark: bool,
+    /// Carries a lit torch: lights its surroundings (and you, when close),
+    /// sets oil and webs alight, drops it burning on death. See
+    /// `systems::torches`.
+    pub torch: bool,
 }
 
 impl EnemyDef {
@@ -185,6 +189,14 @@ impl EnemyDef {
             let _ = world.insert_one(entity, crate::components::SeesInDark);
         }
 
+        // Torch-bearers carry their own light.
+        if self.torch {
+            let _ = world.insert(
+                entity,
+                (crate::components::CarriedTorch { lit: true }, LightSource::torch()),
+            );
+        }
+
         // Spider-kin ignore webs and periodically lay them.
         if self.spider {
             let _ = world.insert(
@@ -227,6 +239,7 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: true,
+        torch: false,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -248,6 +261,7 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: false,
+        torch: false,
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -273,12 +287,13 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: true,
+        torch: false,
     };
 
     pub const GOBLIN: EnemyDef = EnemyDef {
         name: "Goblin",
         sprite: tile_ids::GOBLIN,
-        overlay_sprite: None,
+        overlay_sprite: Some(tile_ids::TORCH), // carried, lit
         health: GOBLIN_HEALTH,
         speed: GOBLIN_SPEED,
         sight_radius: GOBLIN_SIGHT_RADIUS,
@@ -294,6 +309,7 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: false,
+        torch: true,
     };
 
     pub const ORC: EnemyDef = EnemyDef {
@@ -315,6 +331,7 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: false,
+        torch: false,
     };
 
     pub const ZOMBIE: EnemyDef = EnemyDef {
@@ -336,6 +353,7 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: true,
+        torch: false,
     };
 
     pub const BAT: EnemyDef = EnemyDef {
@@ -357,6 +375,7 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: true,
+        torch: false,
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -378,12 +397,13 @@ pub mod enemies {
         support: false,
         spider: false,
         sees_in_dark: false,
+        torch: false,
     };
 
     pub const GOBLIN_SHAMAN: EnemyDef = EnemyDef {
         name: "Goblin Shaman",
         sprite: tile_ids::GOBLIN_SHAMAN,
-        overlay_sprite: None,
+        overlay_sprite: Some(tile_ids::TORCH), // carried, lit
         health: GOBLIN_SHAMAN_HEALTH,
         speed: GOBLIN_SHAMAN_SPEED,
         sight_radius: GOBLIN_SHAMAN_SIGHT_RADIUS,
@@ -399,6 +419,7 @@ pub mod enemies {
         support: true,
         spider: false,
         sees_in_dark: false,
+        torch: true,
     };
 
     pub const LESSER_GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -420,6 +441,7 @@ pub mod enemies {
         support: false,
         spider: true,
         sees_in_dark: true,
+        torch: false,
     };
 
     pub const GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -441,6 +463,7 @@ pub mod enemies {
         support: false,
         spider: true,
         sees_in_dark: true,
+        torch: false,
     };
 }
 
@@ -836,6 +859,7 @@ pub mod vendors {
                 (ItemType::Arrow, 10),
                 (ItemType::FireArrow, crate::constants::FIRE_ARROW_BUNDLE_COUNT),
                 (ItemType::WaterFlaskFull, 1),
+                (ItemType::Torch, crate::constants::MERCHANT_TORCH_STOCK),
                 (ItemType::WaterFlaskEmpty, 1),
             ],
             2..=3 => vec![
@@ -849,6 +873,7 @@ pub mod vendors {
                 (ItemType::Arrow, 15),
                 (ItemType::FireArrow, crate::constants::FIRE_ARROW_BUNDLE_COUNT),
                 (ItemType::WaterFlaskFull, 1),
+                (ItemType::Torch, crate::constants::MERCHANT_TORCH_STOCK),
                 (ItemType::WaterFlaskEmpty, 1),
             ],
             _ => vec![
@@ -863,6 +888,7 @@ pub mod vendors {
                 (ItemType::Arrow, 20),
                 (ItemType::FireArrow, crate::constants::FIRE_ARROW_BUNDLE_COUNT * 2),
                 (ItemType::WaterFlaskFull, 2),
+                (ItemType::Torch, crate::constants::MERCHANT_TORCH_STOCK),
             ],
         }
     }
@@ -997,6 +1023,55 @@ pub fn spawn_oil_drip(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     let drip = spawn_oil_puddle(world, x, y);
     let _ = world.insert_one(drip, crate::components::Fuel::oil_drip());
     drip
+}
+
+/// Spawn a standing lantern of the given style: lit, blocks movement, and
+/// smashes into burning oil if knocked over (see `systems::fire::smash_lantern`).
+pub fn spawn_lantern(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    style: crate::components::LanternStyle,
+) -> hecs::Entity {
+    use crate::components::{AnimatedSprite, Lantern, LanternStyle, Name, SpriteTint};
+
+    let pos = Position::new(x, y);
+    let lantern = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        AnimatedSprite::lantern(),
+        LightSource::lantern(style),
+        Lantern,
+        Name::new("Lantern"),
+        BlocksMovement,
+    ));
+    if style == LanternStyle::Ghost {
+        let (r, g, b) = crate::constants::GHOST_LANTERN_TINT;
+        let _ = world.insert_one(lantern, SpriteTint { r, g, b });
+    }
+    lantern
+}
+
+/// Spawn a torch lying burning on the floor, dropped by a dying torch-bearer:
+/// a ground item (a lit `Torch`, yours if you pick it up), a light, and a fire
+/// that can catch grass beside it until it gutters out (`Fuel::dropped_torch`).
+pub fn spawn_dropped_torch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{
+        AnimatedSprite, Container, Fuel, GroundItemPile, ItemInstance, ItemType, OnFire,
+    };
+    use crate::constants::DROPPED_TORCH_BURN_DURATION;
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        AnimatedSprite::torch(),
+        LightSource::torch(),
+        Fuel::dropped_torch(),
+        OnFire { remaining: DROPPED_TORCH_BURN_DURATION },
+        Container::ground_pile(vec![ItemInstance::plain(ItemType::Torch)]),
+        GroundItemPile,
+    ))
 }
 
 /// Spawn a hidden dungeon floor trap. No sprite: it is invisible until the

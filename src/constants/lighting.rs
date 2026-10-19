@@ -205,6 +205,43 @@ pub const LIGHT_PLAYER_FLICKER_PHASE: f32 = 1.3;
 pub const LIGHT_AMBIENT_TINT: f32 = 0.25;
 
 // =============================================================================
+// CARRIED AND ROOM LIGHTS (torches, lanterns)
+// =============================================================================
+
+/// Radius (tiles) of a carried or dropped torch. Bigger means torch-bearers
+/// are seen from further off, and light you up from further off too.
+pub const TORCH_LIGHT_RADIUS: f32 = 4.5;
+/// Intensity of a torch.
+pub const TORCH_LIGHT_INTENSITY: f32 = 0.85;
+/// How long (game seconds) a dropped torch burns on the floor.
+pub const DROPPED_TORCH_BURN_DURATION: f32 = 20.0;
+
+/// Warm lantern (shops, storerooms): a steady, wide pool.
+pub const LANTERN_LIGHT_RADIUS: f32 = 5.0;
+pub const LANTERN_LIGHT_INTENSITY: f32 = 0.8;
+/// Lantern flame is behind glass, so it barely wavers.
+pub const LIGHT_FLICKER_SCALE_LANTERN: f32 = 0.3;
+/// Lamplight: a softer, yellower warmth than open fire.
+pub const LIGHT_COLOR_LANTERN: (f32, f32, f32) = (1.0, 0.82, 0.5);
+
+/// Crypt corpse-candle: small, dim and cold, enough to show the coffins and
+/// little else.
+pub const GHOST_LANTERN_LIGHT_RADIUS: f32 = 4.0;
+pub const GHOST_LANTERN_LIGHT_INTENSITY: f32 = 0.55;
+/// Ghost-light wavers more than a lamp, less than a fire.
+pub const LIGHT_FLICKER_SCALE_GHOST: f32 = 0.6;
+/// Pale, cold blue-green.
+pub const LIGHT_COLOR_GHOST: (f32, f32, f32) = (0.55, 0.95, 0.85);
+/// Sprite tint that turns the stock lantern into a green corpse-candle.
+pub const GHOST_LANTERN_TINT: (f32, f32, f32) = (0.6, 1.0, 0.8);
+
+/// Lanterns per themed room. They go in the room's corners, so 4 is the most
+/// a room can take.
+pub const LANTERNS_PER_SHOP: usize = 4;
+pub const LANTERNS_PER_CRYPT: usize = 2;
+pub const LANTERNS_PER_STORAGE: usize = 1;
+
+// =============================================================================
 // LIGHT AS GAMEPLAY (see systems/light.rs)
 // =============================================================================
 

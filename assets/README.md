@@ -53,13 +53,17 @@ where **`row` is 1-based** and `col` is 0-based:
   `star` (XP), `drumstick` (hunger), `sun` (light)
 - row 27, columns a–i — `tame`, `rest`, `sleep`, `barkskin`, `sprint`,
   `disengage`, `tumble`, `crippling shot`, `stun`
+- row 27, columns j–k — the torch item, lit and unlit: not drawn but
+  **copied** from `animated-tiles.png` (rows 6 and 5), because the inventory
+  only draws from the items sheet
 
 [`tools/make_tiles.py`](../tools/make_tiles.py) draws these fifteen icons in the
 32rogues palette. It is **tracked in the repository** — unlike everything else
 under `assets/` — and needs nothing but Pillow, so the icons are reproducible
 from a fresh clone rather than something you have to obtain from the author.
 
-With `--paste` it writes every icon into its slot in `items.png` itself,
+With `--paste` it writes every icon into its slot in `items.png` itself
+(and copies in the stock sprites listed in its `COPIES` table),
 growing a stock 26-row sheet to 27 rows. Re-running it is harmless: each slot
 is overwritten with the same pixels. Without `--paste` it writes individual
 32×32 PNGs to `$OUTDIR` (default `/tmp`) plus a magnified `contact.png`

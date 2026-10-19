@@ -309,6 +309,23 @@ impl MessageLog {
             GameEvent::BarrelExploded { .. } => {
                 self.push("An oil barrel explodes!".to_string(), log_colors::HARM);
             }
+            GameEvent::ItemStowed { entity, item } if *entity == me => {
+                let name = crate::systems::items::item_name(*item);
+                self.push(format!("You stow the {name} to free a hand."), log_colors::INFO);
+            }
+            GameEvent::TorchLit { entity } if *entity == me => {
+                self.push("Your torch catches.".to_string(), log_colors::INFO);
+            }
+            GameEvent::LanternSmashed { .. } => {
+                self.push(
+                    "A lantern shatters, spilling burning oil!".to_string(),
+                    log_colors::HARM,
+                );
+            }
+            GameEvent::TorchDoused { entity } => {
+                let who = self.subject(world, *entity);
+                self.push(format!("{who}'s torch sputters out."), log_colors::INFO);
+            }
             GameEvent::BrazierToppled { .. } => {
                 self.push(
                     "The brazier topples, spilling burning coals!".to_string(),

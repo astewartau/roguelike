@@ -85,6 +85,10 @@ pub fn tick_fire(
         }
     }
     for (id, (x, y), burnout) in spent {
+        if let Burnout::LeavesItem(kind) = burnout {
+            crate::systems::torches::put_out_dropped_torch(world, id, Some(kind));
+            continue;
+        }
         let _ = world.despawn(id);
         if burnout == Burnout::ScorchGrass {
             if let Some(tile) = grid.get_mut(x, y) {
@@ -96,6 +100,9 @@ pub fn tick_fire(
             }
         }
     }
+
+    // 1b. A floor torch whose torch was picked up stops burning.
+    crate::systems::torches::tick_dropped_torches(world);
 
     // 2. Soaked tiles dry out.
     let mut dried: Vec<Entity> = Vec::new();
@@ -205,9 +212,10 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
     //  - burning creatures readily light grass they stand IN, but only rarely
     //    grass they're merely next to.
     let fuel_sources: Vec<(i32, i32)> = world
-        .query::<(&Position, &OnFire)>()
+        .query::<(&Position, &Fuel, &OnFire)>()
         .iter()
-        .map(|(_, (p, _))| (p.x, p.y))
+        .filter(|(_, (_, fuel, _))| fuel.spreads)
+        .map(|(_, (p, _, _))| (p.x, p.y))
         .collect();
     let creature_sources: Vec<(i32, i32)> = world
         .query::<(&Position, &StatusEffects)>()
@@ -375,6 +383,9 @@ fn douse_fuel(world: &mut World, id: Entity) {
         Doused::Despawn => {
             let _ = world.despawn(id);
         }
+        Doused::LeavesItem(kind) => {
+            crate::systems::torches::put_out_dropped_torch(world, id, Some(kind));
+        }
     }
 }
 
@@ -388,7 +399,6 @@ pub fn ignite_tile(world: &mut World, grid: &Grid, x: i32, y: i32) {
         return;
     }
     let wet = wet_positions(world).contains(&(x, y));
-
     let flammable = grid
         .get(x, y)
         .map(|t| t.tile_type.is_flammable())
@@ -397,6 +407,17 @@ pub fn ignite_tile(world: &mut World, grid: &Grid, x: i32, y: i32) {
         crate::spawning::spawn_fire_patch(world, x, y);
     }
 
+    ignite_fuel_at(world, grid, x, y);
+}
+
+/// Ignite every unlit fuel lying on (x, y) — oil, webs, fungus — but not the
+/// terrain. Damp-sensitive fuel stays unlit on a soaked tile, and nothing on a
+/// water tile catches. Used by `ignite_tile` and by carried torches.
+pub fn ignite_fuel_at(world: &mut World, grid: &Grid, x: i32, y: i32) {
+    if grid.water_positions.contains(&(x, y)) {
+        return;
+    }
+    let wet = wet_positions(world).contains(&(x, y));
     let fuel: Vec<Entity> = world
         .query::<(&Position, &Fuel)>()
         .without::<&OnFire>()
@@ -512,6 +533,36 @@ pub fn topple_brazier(
     for (x, y) in spill_tiles {
         spill_fire_at(world, grid, x, y, events);
     }
+    true
+}
+
+/// Smash a lantern: it's gone, and its oil spills burning across its tile
+/// (and whoever is there is set alight). Returns false if the entity isn't a
+/// lantern.
+pub fn smash_lantern(
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut SpatialCache,
+    lantern: Entity,
+    events: &mut EventQueue,
+) -> bool {
+    if world.get::<&crate::components::Lantern>(lantern).is_err() {
+        return false;
+    }
+    let Some((x, y)) = crate::queries::get_entity_position(world, lantern) else {
+        return false;
+    };
+    // It carried BlocksMovement: out of the cache in the same breath as the
+    // despawn, or its tile stays blocked for pathfinding.
+    spatial_cache.remove_entity(lantern);
+    let _ = world.despawn(lantern);
+    events.push(GameEvent::LanternSmashed { position: (x, y) });
+
+    if !grid.water_positions.contains(&(x, y)) {
+        let oil = crate::spawning::spawn_oil_puddle(world, x, y);
+        ignite_fuel(world, oil);
+    }
+    spill_fire_at(world, grid, x, y, events);
     true
 }
 
@@ -1131,6 +1182,29 @@ mod tests {
         let burning = |e| crate::systems::effects::entity_has_effect(&world, e, EffectType::Burning);
         assert!(!burning(wet), "soaked through, it stands in the flames unharmed");
         assert!(burning(oily), "oil-soaked, it goes up");
+    }
+
+    #[test]
+    fn test_smashed_lantern_spills_burning_oil_and_frees_its_tile() {
+        let mut world = World::new();
+        let grid = make_grid(7, 7, TileType::Floor);
+        let lantern = crate::spawning::spawn_lantern(
+            &mut world,
+            3,
+            3,
+            crate::components::LanternStyle::Warm,
+        );
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        assert!(cache.is_blocked((3, 3)));
+
+        assert!(smash_lantern(&mut world, &grid, &mut cache, lantern, &mut EventQueue::new()));
+        assert!(!world.contains(lantern), "the lantern is gone");
+        let burning_oil = world
+            .query::<(&Position, &OilPuddle, &OnFire)>()
+            .iter()
+            .any(|(_, (p, _, _))| (p.x, p.y) == (3, 3));
+        assert!(burning_oil, "its oil burns where it stood");
+        cache.assert_coherent_with_world(&world, "after smashing a lantern");
     }
 
     #[test]

@@ -306,6 +306,7 @@ fn draw_stats_column(
                 ("Head:", ArmorSlot::Head, &equipment.head),
                 ("Ring:", ArmorSlot::Ring, &equipment.ring),
                 ("Amulet:", ArmorSlot::Amulet, &equipment.amulet),
+                ("Off-hand:", ArmorSlot::OffHand, &equipment.off_hand),
             ] {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -323,9 +324,14 @@ fn draw_stats_column(
 
                             let response = response.on_hover_ui(|ui| {
                                 ui.label(egui::RichText::new(instance.display_name()).strong());
-                                // Accessories are pure affix carriers: no defense line.
+                                // Only armor has a defense line: accessories are
+                                // pure affix carriers and torches are torches.
                                 // Unidentified armor only shows its known base defense.
-                                if !is_accessory_kind(instance.kind) {
+                                if instance.kind == crate::components::ItemType::Torch {
+                                    ui.label("Lights your way, and you.\nCtrl+direction: set grass or oil alight.");
+                                } else if instance.kind == crate::components::ItemType::UnlitTorch {
+                                    ui.label("Doused.\nCtrl+direction at a fire to relight it.");
+                                } else if !is_accessory_kind(instance.kind) {
                                     let defense = armor_base_defense(instance.kind)
                                         + if instance.identified {
                                             instance.defense_bonus()

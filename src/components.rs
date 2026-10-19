@@ -493,6 +493,32 @@ impl AnimatedSprite {
         }
     }
 
+    /// A burning hand torch dropped on the floor, with random phase
+    pub fn torch() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            sheet: SpriteSheet::AnimatedTiles,
+            base_tile_id: tile_ids::TORCH.1,
+            frame_count: 6,
+            frame_duration: 0.12,
+            phase_offset: rand::random(),
+            z_order: 1,
+        }
+    }
+
+    /// A standing lantern: a slow, small flame behind glass, random phase
+    pub fn lantern() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            sheet: SpriteSheet::AnimatedTiles,
+            base_tile_id: tile_ids::LANTERN.1,
+            frame_count: 4,
+            frame_duration: 0.25,
+            phase_offset: rand::random(),
+            z_order: 1,
+        }
+    }
+
     /// Create an animated water tile with random phase
     pub fn water() -> Self {
         use crate::tile::tile_ids;
@@ -755,6 +781,11 @@ pub enum ItemType {
     /// Filled water flask: drink to douse yourself, or throw to splash-douse
     /// fires and wet grass (see systems::fire)
     WaterFlaskFull,
+    /// A torch, held in the off hand: burns while held, lighting your way —
+    /// and you, for anyone looking (see systems::torches)
+    Torch,
+    /// A torch that has been put out (soaked). Relight it at a fire.
+    UnlitTorch,
 }
 
 impl ItemType {
@@ -1695,6 +1726,9 @@ pub struct Equipment {
     pub ring: Option<ItemInstance>,
     /// Amulet accessory slot (pure affix carrier)
     pub amulet: Option<ItemInstance>,
+    /// Off-hand slot (a torch). Shares hands with the weapon: a two-handed
+    /// weapon and an off-hand item can't both be held.
+    pub off_hand: Option<ItemInstance>,
 }
 
 impl Equipment {
@@ -1727,6 +1761,7 @@ impl Equipment {
             head: None,
             ring: None,
             amulet: None,
+            off_hand: None,
         }
     }
 
@@ -1740,6 +1775,7 @@ impl Equipment {
             self.head.as_ref(),
             self.ring.as_ref(),
             self.amulet.as_ref(),
+            self.off_hand.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -1753,6 +1789,7 @@ impl Equipment {
             self.head.as_mut(),
             self.ring.as_mut(),
             self.amulet.as_mut(),
+            self.off_hand.as_mut(),
         ]
         .into_iter()
         .flatten()
@@ -2088,6 +2125,37 @@ impl LightSource {
         }
     }
 
+    /// A torch carried in hand (goblins) or dropped on the floor.
+    pub fn torch() -> Self {
+        Self {
+            radius: crate::constants::TORCH_LIGHT_RADIUS,
+            intensity: crate::constants::TORCH_LIGHT_INTENSITY,
+            color: crate::constants::LIGHT_COLOR_FIRE,
+            flicker: crate::constants::LIGHT_FLICKER_SCALE_FIRE,
+            phase: random_light_phase(),
+        }
+    }
+
+    /// A lantern of the given style (see `LanternStyle`).
+    pub fn lantern(style: LanternStyle) -> Self {
+        use crate::constants::*;
+        let (radius, intensity, color, flicker) = match style {
+            LanternStyle::Warm => (
+                LANTERN_LIGHT_RADIUS,
+                LANTERN_LIGHT_INTENSITY,
+                LIGHT_COLOR_LANTERN,
+                LIGHT_FLICKER_SCALE_LANTERN,
+            ),
+            LanternStyle::Ghost => (
+                GHOST_LANTERN_LIGHT_RADIUS,
+                GHOST_LANTERN_LIGHT_INTENSITY,
+                LIGHT_COLOR_GHOST,
+                LIGHT_FLICKER_SCALE_GHOST,
+            ),
+        };
+        Self { radius, intensity, color, flicker, phase: random_light_phase() }
+    }
+
     /// Create a brazier light (smaller than campfire)
     pub fn brazier() -> Self {
         Self {
@@ -2200,6 +2268,10 @@ pub struct Fuel {
     pub doused: Doused,
     /// What is left once it has burnt for `burn_time`.
     pub burnout: Burnout,
+    /// Whether, while it burns, fire spreads from it to grass, fuel and
+    /// creatures around it. Almost everything that burns does; a dropped torch
+    /// doesn't — it's a light and a thing to pick up, not a hazard.
+    pub spreads: bool,
 }
 
 /// How a fuel entity takes fire.
@@ -2221,6 +2293,9 @@ pub enum Doused {
     /// The entity is only the fire, so dousing removes it (grass fires: the
     /// grass itself is terrain and survives).
     Despawn,
+    /// The fire is gone and this item is left lying on its tile (a dropped
+    /// torch leaves an unlit torch).
+    LeavesItem(ItemType),
 }
 
 /// What a fuel entity leaves behind once it has burnt out.
@@ -2230,6 +2305,8 @@ pub enum Burnout {
     Despawn,
     /// The entity is gone and the tall grass under it is burnt to floor.
     ScorchGrass,
+    /// The entity is gone and this item is left lying on its tile.
+    LeavesItem(ItemType),
 }
 
 impl Fuel {
@@ -2243,6 +2320,7 @@ impl Fuel {
             ignition: Ignition::InPlace,
             doused: Doused::Despawn,
             burnout: Burnout::ScorchGrass,
+            spreads: true,
         }
     }
 
@@ -2262,6 +2340,7 @@ impl Fuel {
             ignition: Ignition::InPlace,
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
+            spreads: true,
         }
     }
 
@@ -2275,6 +2354,25 @@ impl Fuel {
             ignition: Ignition::InPlace,
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
+            spreads: true,
+        }
+    }
+
+    /// A torch dropped by a dying goblin: already alight when it lands, burns
+    /// for a while on the floor as a light, then goes out, leaving an unlit
+    /// torch. It doesn't spread fire: a torch lights things only when someone
+    /// deliberately puts it to them (see `systems::torches`). Water puts it out the same way. Pick it up
+    /// while it burns and you have a lit torch.
+    pub fn dropped_torch() -> Self {
+        Self {
+            catch_chance: 0.0, // spawned burning; never relit
+            burn_time: crate::constants::DROPPED_TORCH_BURN_DURATION,
+            dampable: false,
+            stand_ignite_chance: 0.0,
+            ignition: Ignition::InPlace,
+            doused: Doused::LeavesItem(ItemType::UnlitTorch),
+            burnout: Burnout::LeavesItem(ItemType::UnlitTorch),
+            spreads: false,
         }
     }
 
@@ -2288,6 +2386,7 @@ impl Fuel {
             ignition: Ignition::Replace,
             doused: Doused::Despawn,
             burnout: Burnout::Despawn,
+            spreads: true,
         }
     }
 }
@@ -2326,6 +2425,32 @@ pub struct BarrelFuse {
 #[derive(Debug, Clone, Copy)]
 pub struct WetTile {
     pub remaining: f32,
+}
+
+/// How a room's lanterns burn. Each themed room gets its own style of light
+/// (see `spawn_room_lanterns` in engine/initialization.rs), so you can read
+/// a room by its glow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanternStyle {
+    /// Warm, steady lamplight: shops and storerooms.
+    Warm,
+    /// A dim, cold green corpse-candle glow: crypts.
+    Ghost,
+}
+
+/// A standing lantern: glass and oil. Blocks movement like any furniture.
+/// Interacting with one, or shoving something into it, smashes it into a
+/// puddle of burning oil (see `systems::fire::smash_lantern`).
+#[derive(Debug, Clone, Copy)]
+pub struct Lantern;
+
+/// A torch carried by a creature (goblins). While `lit` the carrier has a
+/// `LightSource` and sets alight oil and webs it walks into; a soaking puts it
+/// out for good. Dropped, still burning, when the carrier dies (see
+/// `systems::torches`).
+#[derive(Debug, Clone, Copy)]
+pub struct CarriedTorch {
+    pub lit: bool,
 }
 
 /// A standing brazier (dungeon light source). Toppling it (interaction or a

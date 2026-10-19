@@ -51,6 +51,8 @@ pub struct UiIcons {
     pub panel_rivet_uv: egui::Rect,
     pub arrow_uv: egui::Rect,
     pub water_flask_uv: egui::Rect,
+    pub torch_uv: egui::Rect,
+    pub unlit_torch_uv: egui::Rect,
     // Ability icons
     pub cleave_uv: egui::Rect,
     pub sprint_uv: egui::Rect,
@@ -110,6 +112,8 @@ impl UiIcons {
             panel_rivet_uv: tileset.get_egui_uv(tile_ids::PANEL_RIVET.0, tile_ids::PANEL_RIVET.1),
             arrow_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
             water_flask_uv: tileset.get_egui_uv(tile_ids::BOTTLE_WATER.0, tile_ids::BOTTLE_WATER.1),
+            torch_uv: tileset.get_egui_uv(tile_ids::TORCH_ICON.0, tile_ids::TORCH_ICON.1),
+            unlit_torch_uv: tileset.get_egui_uv(tile_ids::TORCH_UNLIT_ICON.0, tile_ids::TORCH_UNLIT_ICON.1),
             // Ability icons: AXE for Cleave; the rest are custom-drawn
             // (items sheet rows 26-27, see assets/custom/make_tiles.py)
             cleave_uv: tileset.get_egui_uv(tile_ids::AXE.0, tile_ids::AXE.1),
@@ -175,6 +179,8 @@ impl UiIcons {
             // Both flask states share the bottle sprite; the empty one is
             // grayed out via item_ui_tint
             ItemType::WaterFlaskEmpty | ItemType::WaterFlaskFull => self.water_flask_uv,
+            ItemType::Torch => self.torch_uv,
+            ItemType::UnlitTorch => self.unlit_torch_uv,
         }
     }
 
