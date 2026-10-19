@@ -6,10 +6,18 @@ use crate::ease;
 use crate::events::GameEvent;
 use hecs::{Entity, World};
 
-/// Smoothly interpolate visual positions toward logical positions
-pub fn visual_lerp(world: &mut World, dt: f32) {
+/// Smoothly interpolate visual positions toward logical positions.
+///
+/// A hostile winding up a melee attack is aimed slightly off its tile, toward
+/// its target, by an amount that grows with the wind-up's progress at game
+/// time `game_time` (see `systems::telegraph::lean_offsets`). The lean is
+/// approached through the same lerp, so the jump in progress after each
+/// player action reads as a smooth lean rather than a snap.
+pub fn visual_lerp(world: &mut World, dt: f32, game_time: f32) {
     let lerp_speed = dt * VISUAL_LERP_SPEED;
-    for (_id, (pos, vis_pos, lunge)) in
+    let leans: std::collections::HashMap<Entity, (f32, f32)> =
+        crate::systems::telegraph::lean_offsets(world, game_time).into_iter().collect();
+    for (id, (pos, vis_pos, lunge)) in
         world.query_mut::<(&Position, &mut VisualPosition, Option<&LungeAnimation>)>()
     {
         // If lunging, offset visual position toward target
@@ -38,9 +46,10 @@ pub fn visual_lerp(world: &mut World, dt: f32) {
             vis_pos.x = base_x + dir_x * lunge_distance;
             vis_pos.y = base_y + dir_y * lunge_distance;
         } else {
-            // Normal interpolation
-            let tx = pos.x as f32;
-            let ty = pos.y as f32;
+            // Normal interpolation (toward the wind-up lean, if any)
+            let (lean_x, lean_y) = leans.get(&id).copied().unwrap_or((0.0, 0.0));
+            let tx = pos.x as f32 + lean_x;
+            let ty = pos.y as f32 + lean_y;
             let dx = tx - vis_pos.x;
             let dy = ty - vis_pos.y;
             let dist = (dx * dx + dy * dy).sqrt();
@@ -95,6 +104,7 @@ pub fn flash_on_damage(world: &mut World, event: &GameEvent) {
         GameEvent::AttackHit { target, damage, .. } if *damage > 0 => *target,
         GameEvent::ProjectileHit { target: Some(target), damage, .. } if *damage > 0 => *target,
         GameEvent::BurnDamage { entity, .. } => *entity,
+        GameEvent::DotDamage { entity, .. } => *entity,
         GameEvent::StarvationDamage { entity, .. } => *entity,
         GameEvent::DungeonTrapTriggered { victim, damage, .. } if *damage > 0 => *victim,
         _ => return,
@@ -186,6 +196,8 @@ mod tests {
                 damage: 3,
                 kind: DamageKind::Melee,
                 crit: false,
+                flanked: false,
+                killed: false,
             },
         );
         assert!(world.get::<&HitFlash>(victim).is_ok(), "no flash was armed");
@@ -215,6 +227,8 @@ mod tests {
                 damage: 0,
                 kind: DamageKind::Melee,
                 crit: false,
+                flanked: false,
+                killed: false,
             },
         );
 

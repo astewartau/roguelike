@@ -90,7 +90,29 @@ pub fn get_ability_targeting_overlay_data(
                 }
             }
         }
-        AbilityType::RaiseDead => {
+        AbilityType::Sacrifice => {
+            // Your own raised skeletons in range.
+            for (e, (pos, _)) in world
+                .query::<(&Position, &crate::components::RaisedUndead)>()
+                .iter()
+            {
+                if crate::systems::actions::is_valid_sacrifice_target(world, player_entity, e) {
+                    tameable_positions.push((pos.x, pos.y));
+                }
+            }
+        }
+        AbilityType::ShieldBash => {
+            // Adjacent creatures and pushable objects.
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let t = (player_pos.x + dx, player_pos.y + dy);
+                    if crate::systems::actions::can_shield_bash(world, player_entity, t) {
+                        tameable_positions.push(t);
+                    }
+                }
+            }
+        }
+        AbilityType::RaiseDead | AbilityType::CorpseExplosion => {
             use crate::components::{Container, ContainerType};
             for (_, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
                 if !matches!(container.container_type, ContainerType::Corpse) {
@@ -106,14 +128,17 @@ pub fn get_ability_targeting_overlay_data(
     }
 
     // Learned Fireball shows the same AoE preview as the scroll.
-    let radius = if targeting.ability_type == AbilityType::LearnedFireball {
-        crate::constants::FIREBALL_RADIUS
-    } else {
-        0
+    let radius = match targeting.ability_type {
+        AbilityType::LearnedFireball => crate::constants::FIREBALL_RADIUS,
+        AbilityType::CorpseExplosion => crate::constants::CORPSE_EXPLOSION_RADIUS,
+        AbilityType::Entangle => crate::constants::ENTANGLE_RADIUS,
+        AbilityType::CallRain => crate::constants::CALL_RAIN_RADIUS,
+        _ => 0,
     };
 
     // Calculate FOV for abilities that require line of sight (CripplingShot)
-    let requires_los = matches!(targeting.ability_type, AbilityType::CripplingShot);
+    let requires_los =
+        matches!(targeting.ability_type, AbilityType::CripplingShot | AbilityType::GraveBolt);
     let visible_tiles = if requires_los {
         grid.map(|g| {
             use crate::components::BlocksVision;
@@ -189,9 +214,18 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
     };
 
     // Check if this is ability targeting (Tame / Raise Dead)
-    let is_tame = matches!(data.ability_type, Some(AbilityType::Tame));
-    let is_raise = matches!(data.ability_type, Some(AbilityType::RaiseDead));
-    let is_crippling_shot = matches!(data.ability_type, Some(AbilityType::CripplingShot));
+    // Shield Bash also picks a specific target (an adjacent creature or
+    // barrel), so it shares the tame-style target highlight.
+    let is_tame = matches!(data.ability_type, Some(AbilityType::Tame | AbilityType::ShieldBash));
+    // Raise Dead, Corpse Explosion and Sacrifice all pick a specific
+    // necromantic target (bones / your skeleton): same purple target styling.
+    let is_raise = matches!(
+        data.ability_type,
+        Some(AbilityType::RaiseDead | AbilityType::CorpseExplosion | AbilityType::Sacrifice)
+    );
+    // Grave Bolt needs line of sight like a bow shot: same styling.
+    let is_crippling_shot =
+        matches!(data.ability_type, Some(AbilityType::CripplingShot | AbilityType::GraveBolt));
 
     // Draw tiles in range with a subtle highlight
     let range_color = if is_tame {
@@ -331,9 +365,24 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
         if !in_range {
             "Out of range"
         } else if cursor_on_tameable {
-            if is_raise { "Click to raise" } else { "Click to tame" }
+            match data.ability_type {
+                Some(AbilityType::CorpseExplosion) => "Click to detonate",
+                Some(AbilityType::Sacrifice) => "Click to swap places",
+                Some(AbilityType::ShieldBash) => "Click to bash",
+                _ if is_raise => "Click to raise",
+                _ => "Click to tame",
+            }
         } else if data.tameable_positions.is_empty() {
-            if is_raise { "No bones in range" } else { "No animals in range" }
+            match data.ability_type {
+                Some(AbilityType::Sacrifice) => "No skeleton in range",
+                Some(AbilityType::ShieldBash) => "Nothing to bash",
+                _ if is_raise => "No bones in range",
+                _ => "No animals in range",
+            }
+        } else if matches!(data.ability_type, Some(AbilityType::Sacrifice)) {
+            "Select your skeleton"
+        } else if matches!(data.ability_type, Some(AbilityType::ShieldBash)) {
+            "Select an adjacent target"
         } else if is_raise {
             "Select a bones pile"
         } else {
@@ -344,6 +393,8 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
             "Out of range"
         } else if !has_los {
             "No line of sight"
+        } else if matches!(data.ability_type, Some(AbilityType::GraveBolt)) {
+            "Click to cast"
         } else {
             "Click to shoot"
         }
@@ -361,6 +412,10 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
                     "Click to teleport"
                 } else if matches!(data.ability_type, Some(AbilityType::LearnedFireball)) {
                     "Click to cast fireball"
+                } else if matches!(data.ability_type, Some(AbilityType::Entangle)) {
+                    "Click to entangle"
+                } else if matches!(data.ability_type, Some(AbilityType::CallRain)) {
+                    "Click to call rain"
                 } else {
                     "Click to use"
                 }

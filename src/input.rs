@@ -76,8 +76,12 @@ pub struct InputState {
     pub targeting_mode: Option<TargetingMode>,
     /// Targeting mode for abilities that require click-to-target (Tame)
     pub ability_targeting_mode: Option<AbilityTargetingMode>,
-    /// Pending right-click to process (for ranged shooting)
+    /// Pending quick-shot to process: a plain right-click fires the equipped
+    /// bow at the cursor tile (Shift+right-click opens the context menu).
     pub pending_right_click: bool,
+    /// An intent picked from the Shift+right-click context menu, executed on the
+    /// next frame exactly as a key press would be (see `process_frame`).
+    pub pending_intent: Option<PlayerIntent>,
     /// Pending left-click to process (for targeting confirmation)
     pub pending_left_click: bool,
 }
@@ -97,6 +101,7 @@ impl InputState {
             targeting_mode: None,
             ability_targeting_mode: None,
             pending_right_click: false,
+            pending_intent: None,
             pending_left_click: false,
         }
     }
@@ -313,6 +318,12 @@ pub fn identify_click_target(
     ClickTarget::Ground { x: tile_x, y: tile_y }
 }
 
+/// The tile under a screen position (physical pixels).
+pub fn cursor_tile(camera: &Camera, mouse_pos: (f32, f32)) -> (i32, i32) {
+    let world_pos = camera.screen_to_world(mouse_pos.0, mouse_pos.1);
+    (world_pos.x.floor() as i32, world_pos.y.floor() as i32)
+}
+
 /// Handle click-to-move: calculate path to clicked tile based on what was clicked.
 /// Does NOT execute movement - just calculates and stores the path.
 pub fn handle_click_to_move(
@@ -322,13 +333,20 @@ pub fn handle_click_to_move(
     grid: &Grid,
     player_entity: Entity,
 ) {
-    // Convert screen position to world position
-    let world_pos = camera.screen_to_world(input.mouse_pos.0, input.mouse_pos.1);
+    let tile = cursor_tile(camera, input.mouse_pos);
+    click_to_move_tile(input, world, grid, player_entity, tile);
+}
 
-    // Convert to tile coordinates
-    let tile_x = world_pos.x.floor() as i32;
-    let tile_y = world_pos.y.floor() as i32;
-
+/// What a left-click on `tile` does (walk there, pursue the enemy on it, or
+/// walk up to a door/chest and bump it). Shared by the mouse and the context
+/// menu's walk/attack/open entries.
+pub fn click_to_move_tile(
+    input: &mut InputState,
+    world: &World,
+    grid: &Grid,
+    player_entity: Entity,
+    (tile_x, tile_y): (i32, i32),
+) {
     // Get player position
     let player_pos = match world.get::<&Position>(player_entity) {
         Ok(p) => (p.x, p.y),
@@ -368,17 +386,7 @@ pub fn handle_click_to_move(
         }
 
         ClickTarget::Door { x, y, .. } | ClickTarget::Chest { x, y, .. } => {
-            // Path to adjacent tile, then bump into target to open
-            input.pursuit_target = None;
-            input.pursuit_origin = None;
-
-            if let Some(mut path) = path_to_adjacent(grid, world, player_entity, player_pos, (x, y))
-            {
-                // Append the target tile - walking "into" it triggers the open action
-                path.push((x, y));
-                input.player_path = VecDeque::from(path);
-                input.player_path_destination = Some((x, y));
-            }
+            approach_and_bump(input, world, grid, player_entity, (x, y));
         }
 
         ClickTarget::WalkableContainer { x, y, .. } | ClickTarget::Ground { x, y } => {
@@ -397,6 +405,33 @@ pub fn handle_click_to_move(
         ClickTarget::Blocked => {
             // Can't interact - do nothing
         }
+    }
+}
+
+/// Path to a tile next to `target`, then step "into" it: walking into a door
+/// or chest opens it, walking into an NPC talks to them. Returns whether a
+/// path was found.
+pub fn approach_and_bump(
+    input: &mut InputState,
+    world: &World,
+    grid: &Grid,
+    player_entity: Entity,
+    target: (i32, i32),
+) -> bool {
+    input.pursuit_target = None;
+    input.pursuit_origin = None;
+    let Some(player_pos) = queries::get_entity_position(world, player_entity) else {
+        return false;
+    };
+    match path_to_adjacent(grid, world, player_entity, player_pos, target) {
+        Some(mut path) => {
+            // Append the target tile - walking "into" it triggers the interaction
+            path.push(target);
+            input.player_path = VecDeque::from(path);
+            input.player_path_destination = Some(target);
+            true
+        }
+        None => false,
     }
 }
 
@@ -577,10 +612,7 @@ pub fn get_shoot_target(
     input: &InputState,
     camera: &Camera,
 ) -> (i32, i32) {
-    let world_pos = camera.screen_to_world(input.mouse_pos.0, input.mouse_pos.1);
-    let tile_x = world_pos.x.floor() as i32;
-    let tile_y = world_pos.y.floor() as i32;
-    (tile_x, tile_y)
+    cursor_tile(camera, input.mouse_pos)
 }
 
 /// Result of processing all input for a frame.
@@ -642,10 +674,20 @@ pub fn process_frame(
         input.clear_path();
         input.pending_left_click = false;
         input.pending_right_click = false;
+        input.pending_intent = None;
         return result;
     }
 
-    // Handle pending right-click (ranged shooting)
+    // An intent chosen from the Shift+right-click context menu: executed like a
+    // key press (it replaces any click-to-move path in progress).
+    if let Some(intent) = input.pending_intent.take() {
+        input.clear_path();
+        result.player_intent = Some(intent);
+        result.from_keyboard = true;
+        return result;
+    }
+
+    // Handle pending right-click (quick bow shot at the cursor)
     if input.pending_right_click {
         input.pending_right_click = false;
 
@@ -845,6 +887,96 @@ pub fn process_frame(
                                 input.cancel_targeting();
                                 result.player_intent =
                                     Some(PlayerIntent::StartRaiseDead { target: target_entity });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::Sacrifice => {
+                            // One of your own raised skeletons, in range.
+                            let skeleton = world
+                                .query::<(&Position, &crate::components::RaisedUndead)>()
+                                .iter()
+                                .find(|(e, (p, _))| {
+                                    p.x == target_x
+                                        && p.y == target_y
+                                        && crate::systems::actions::is_valid_sacrifice_target(
+                                            world,
+                                            player_entity,
+                                            *e,
+                                        )
+                                })
+                                .map(|(e, _)| e);
+                            if let Some(skeleton) = skeleton {
+                                input.cancel_targeting();
+                                result.player_intent = Some(PlayerIntent::Sacrifice { skeleton });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::CorpseExplosion => {
+                            // A corpse (bones container) on that tile.
+                            let corpse = world
+                                .query::<(&Position, &Container)>()
+                                .iter()
+                                .find(|(_, (p, c))| {
+                                    p.x == target_x
+                                        && p.y == target_y
+                                        && matches!(c.container_type, ContainerType::Corpse)
+                                })
+                                .map(|(e, _)| e);
+                            if let Some(corpse) = corpse {
+                                input.cancel_targeting();
+                                result.player_intent = Some(PlayerIntent::CorpseExplosion { corpse });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::Entangle => {
+                            // Any tile in range; the vines take whoever is there.
+                            input.cancel_targeting();
+                            result.player_intent = Some(PlayerIntent::Entangle { target_x, target_y });
+                            result.from_keyboard = false;
+                            return result;
+                        }
+                        AbilityType::CallRain => {
+                            // Any tile in range; the rain falls on whoever is there.
+                            input.cancel_targeting();
+                            result.player_intent = Some(PlayerIntent::CallRain { target_x, target_y });
+                            result.from_keyboard = false;
+                            return result;
+                        }
+                        AbilityType::ShieldBash => {
+                            // An adjacent creature or pushable object.
+                            if crate::systems::actions::can_shield_bash(
+                                world,
+                                player_entity,
+                                (target_x, target_y),
+                            ) {
+                                input.cancel_targeting();
+                                result.player_intent =
+                                    Some(PlayerIntent::ShieldBash { target_x, target_y });
+                                result.from_keyboard = false;
+                                return result;
+                            }
+                        }
+                        AbilityType::GraveBolt => {
+                            // In range and line of sight, on an explored tile
+                            // (like a bow shot).
+                            let explored = grid
+                                .get(target_x, target_y)
+                                .map(|tile| tile.explored)
+                                .unwrap_or(false);
+                            if explored
+                                && crate::systems::actions::can_grave_bolt(
+                                    world,
+                                    grid,
+                                    player_entity,
+                                    (target_x, target_y),
+                                )
+                            {
+                                input.cancel_targeting();
+                                result.player_intent =
+                                    Some(PlayerIntent::GraveBolt { target_x, target_y });
                                 result.from_keyboard = false;
                                 return result;
                             }

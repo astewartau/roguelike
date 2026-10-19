@@ -4,8 +4,8 @@
 //!
 //! - **Creatures** (and oil barrels) burn through the `Burning` status, and
 //!   catch at a rate scaled by their flammability: `Combustible`, adjusted by
-//!   what they are coated in (`coatings::effective_flammability` — Wet things
-//!   can't catch, Oily things catch readily).
+//!   what they are coated in (`ignition_profile` — Wet things can't catch,
+//!   Oiled things catch readily, even if they wouldn't burn on their own).
 //! - **Fuel** — anything that sits on a tile and burns: grass fires, oil
 //!   puddles, webs, glowing fungus. Each carries a `Fuel` component that says
 //!   as data how readily it catches, how long it burns, what water does to it
@@ -29,9 +29,9 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    AnimatedSprite, BarrelFuse, Brazier, Burnout, CausesBurning, Doused, EffectType,
-    Fuel, Health, Ignition, LightSource, OilBarrel, OilPuddle, OnFire, Position, Sprite,
-    StatusEffects, WetTile,
+    AnimatedSprite, BarrelFuse, Brazier, Burnout, CausesBurning, Combustible, Doused, EffectType,
+    Fuel, FuseCause, Health, Ignition, LightSource, OilBarrel, OilPuddle, OnFire, Position,
+    Sprite, StatusEffects, WetTile,
 };
 use crate::constants::*;
 use crate::engine::EffectCtx;
@@ -58,22 +58,21 @@ pub fn tick_fire(
     let (world, grid) = (&mut **world, &mut **grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
+    // A barrel hit while its fuse was running was marked to blow at once (see
+    // `on_barrel_damaged`). That does not wait on elapsed game time: it goes
+    // off this frame even if the clock did not move.
+    detonate_ready_barrels(world, grid, spatial_cache, events, rng);
+
     if game_dt <= 0.0 {
         return;
     }
 
-    // 0. Water soaks whatever stands in it (which also puts out fire and
-    //    washes off oil), and anything wet near a fire dries off faster.
-    let in_water: Vec<Entity> = world
-        .query::<(&Position, &StatusEffects)>()
-        .iter()
-        .filter(|(_, (p, _))| grid.water_positions.contains(&(p.x, p.y)))
-        .map(|(id, _)| id)
-        .collect();
-    for id in in_water {
-        crate::systems::coatings::soak(world, id, events);
-    }
+    // 0. Surface statuses: anything standing in water stays Wet (so it can't
+    //    stay alight), anything standing in unlit oil stays Oiled. Anything
+    //    wet beside a fire dries off faster, and a soaked torch goes out.
+    crate::systems::tile_effects::refresh_standing_effects(world, grid, events);
     crate::systems::coatings::dry_near_fire(world, game_dt);
+    crate::systems::torches::douse_wet_torches(world, events);
 
     // 1. Burnout: every burning fuel counts down, then leaves what its
     //    `Burnout` says it leaves.
@@ -116,8 +115,11 @@ pub fn tick_fire(
         let _ = world.despawn(id);
     }
 
-    // 3. Oil barrels: a burning barrel lights its fuse; destroyed barrels
-    //    (health <= 0) skip the fuse and detonate immediately.
+    // 3. Oil barrels: a burning barrel lights its (fire) fuse. A barrel at
+    //    0 HP without a fuse was broken by something that bypassed
+    //    `apply_damage` (burn ticks subtract health directly): it gets its
+    //    break fuse here. Then every fuse burns down in game time, and the
+    //    ones that run out blow (chain reactions resolve in the same pass).
     let to_fuse: Vec<Entity> = world
         .query::<(&OilBarrel, &StatusEffects)>()
         .without::<&BarrelFuse>()
@@ -126,24 +128,23 @@ pub fn tick_fire(
         .map(|(id, _)| id)
         .collect();
     for id in to_fuse {
-        let _ = world.insert_one(id, BarrelFuse { remaining: OIL_BARREL_FUSE_SECONDS });
+        let _ = world.insert_one(id, BarrelFuse::new(OIL_BARREL_FUSE_SECONDS, FuseCause::Fire));
+    }
+    let broken: Vec<Entity> = world
+        .query::<(&OilBarrel, &Health)>()
+        .without::<&BarrelFuse>()
+        .iter()
+        .filter(|(_, (_, h))| h.current <= 0)
+        .map(|(id, _)| id)
+        .collect();
+    for id in broken {
+        start_break_fuse(world, id, events);
     }
 
-    let mut to_explode: Vec<Entity> = Vec::new();
-    for (id, (_, fuse)) in world.query_mut::<(&OilBarrel, &mut BarrelFuse)>() {
+    for (_, (_, fuse)) in world.query_mut::<(&OilBarrel, &mut BarrelFuse)>() {
         fuse.remaining -= game_dt;
-        if fuse.remaining <= 0.0 {
-            to_explode.push(id);
-        }
     }
-    for (id, (_, health)) in world.query::<(&OilBarrel, &Health)>().iter() {
-        if health.current <= 0 && !to_explode.contains(&id) {
-            to_explode.push(id);
-        }
-    }
-    for id in to_explode {
-        explode_barrel(world, grid, spatial_cache, id, events, rng);
-    }
+    detonate_ready_barrels(world, grid, spatial_cache, events, rng);
 
     // 4. Spread in fixed game-time steps so behaviour is frame-rate independent.
     *accumulator += game_dt;
@@ -153,10 +154,41 @@ pub fn tick_fire(
     }
 }
 
+/// Effective flammability of a creature for ignition rolls, or `None` if it
+/// cannot catch fire right now.
+///
+/// - Already Burning, or Wet: `None`.
+/// - `Combustible`: its flammability.
+/// - Oiled: the oil burns even if the creature would not, so at least
+///   `OILED_MIN_FLAMMABILITY` — this is what lets an oiled skeleton or slime
+///   burn.
+///
+/// The second value is the chance multiplier: `OILED_IGNITE_MULT` while Oiled,
+/// else 1.
+fn ignition_profile(comb: Option<&Combustible>, status: &StatusEffects) -> Option<(f64, f64)> {
+    let has = |t: EffectType| status.effects.iter().any(|e| e.effect_type == t);
+    if has(EffectType::Burning) || has(EffectType::Wet) {
+        return None;
+    }
+    let base = comb.map(|c| c.flammability).unwrap_or(0.0);
+    if has(EffectType::Oiled) {
+        Some((base.max(OILED_MIN_FLAMMABILITY) as f64, OILED_IGNITE_MULT))
+    } else if comb.is_some() && base > 0.0 {
+        Some((base as f64, 1.0))
+    } else {
+        None
+    }
+}
+
+/// Per-roll chance that a creature with this ignition profile catches from a
+/// source with `base` chance.
+fn ignite_chance(base: f64, (flammability, mult): (f64, f64)) -> f64 {
+    (base * flammability * mult).clamp(0.0, 1.0)
+}
+
 /// On a melee hit, a burning combatant may set the other alight (medium chance
-/// scaled by the target's effective flammability — see
-/// `coatings::effective_flammability`). No-op unless `from` is burning and
-/// `to` can burn and isn't already.
+/// scaled by the target's flammability, much higher if the target is Oiled).
+/// No-op unless `from` is burning and `to` can ignite (see `ignition_profile`).
 pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut impl Rng) {
     let from_burning = world
         .get::<&StatusEffects>(from)
@@ -165,19 +197,17 @@ pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut 
     if !from_burning {
         return;
     }
-    let flammability = crate::systems::coatings::effective_flammability(world, to);
-    if flammability <= 0.0 {
+    let profile = {
+        let Ok(status) = world.get::<&StatusEffects>(to) else {
+            return;
+        };
+        let comb = world.get::<&Combustible>(to).ok();
+        ignition_profile(comb.as_deref(), &status)
+    };
+    let Some(profile) = profile else {
         return;
-    }
-    let already = world
-        .get::<&StatusEffects>(to)
-        .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
-        .unwrap_or(false);
-    if already {
-        return;
-    }
-    let chance = (FIRE_COMBAT_IGNITE_CHANCE * flammability as f64).clamp(0.0, 1.0);
-    if rng.gen_bool(chance) {
+    };
+    if rng.gen_bool(ignite_chance(FIRE_COMBAT_IGNITE_CHANCE, profile)) {
         crate::systems::effects::add_effect_to_entity(world, to, EffectType::Burning, BURNING_DURATION);
     }
 }
@@ -280,40 +310,46 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
 
     // Fire -> creatures. Standing IN burning fuel that says so (oil) is a
     // high chance; being merely next to any fire is a small one. Both scale
-    // by effective flammability (wet things can't catch, oily things catch
-    // readily). Creatures in water can't be ignited; already-burning ones
-    // are skipped.
+    // by the creature's ignition profile: Oiled creatures catch far more
+    // readily, Wet or already-burning ones not at all (see
+    // `ignition_profile`). A flyer hovers above whatever burns on its own
+    // tile (and isn't standing in the water either): only neighbouring fire
+    // reaches it.
     let mut stand_chance: HashMap<(i32, i32), f64> = HashMap::new();
     for (_, (pos, fuel, _)) in world.query::<(&Position, &Fuel, &OnFire)>().iter() {
-        if fuel.stand_ignite_chance > 0.0 {
+        if fuel.spreads && fuel.stand_ignite_chance > 0.0 {
             let c = stand_chance.entry((pos.x, pos.y)).or_insert(0.0);
             *c = c.max(fuel.stand_ignite_chance);
         }
     }
     let mut creatures_to_ignite: Vec<(Entity, (i32, i32))> = Vec::new();
-    for (id, (pos, status)) in world.query::<(&Position, &StatusEffects)>().iter() {
-        if grid.water_positions.contains(&(pos.x, pos.y)) {
+    for (id, (pos, status, comb)) in
+        world.query::<(&Position, &StatusEffects, Option<&Combustible>)>().iter()
+    {
+        let grounded = crate::systems::tile_effects::touches_ground(world, id);
+        if grounded && grid.water_positions.contains(&(pos.x, pos.y)) {
             continue;
         }
-        if status.effects.iter().any(|e| e.effect_type == EffectType::Burning) {
+        let Some(profile) = ignition_profile(comb, status) else {
             continue;
-        }
-        let flammability = crate::systems::coatings::effective_flammability(world, id) as f64;
-        if flammability <= 0.0 {
-            continue;
-        }
+        };
 
-        if let Some(&base) = stand_chance.get(&(pos.x, pos.y)) {
-            if rng.gen_bool((base * flammability).clamp(0.0, 1.0)) {
-                creatures_to_ignite.push((id, (pos.x, pos.y)));
-                continue;
+        if grounded {
+            if let Some(&base) = stand_chance.get(&(pos.x, pos.y)) {
+                if rng.gen_bool(ignite_chance(base, profile)) {
+                    creatures_to_ignite.push((id, (pos.x, pos.y)));
+                    continue;
+                }
             }
         }
 
-        if !near_fire((pos.x, pos.y)) {
+        let near = all_sources.iter().any(|&(sx, sy)| {
+            adjacent_or_on((pos.x, pos.y), (sx, sy)) && (grounded || (sx, sy) != (pos.x, pos.y))
+        });
+        if !near {
             continue;
         }
-        if rng.gen_bool((FIRE_SPREAD_ENTITY_CHANCE * flammability).clamp(0.0, 1.0)) {
+        if rng.gen_bool(ignite_chance(FIRE_SPREAD_ENTITY_CHANCE, profile)) {
             creatures_to_ignite.push((id, (pos.x, pos.y)));
         }
     }
@@ -431,11 +467,15 @@ pub fn ignite_fuel_at(world: &mut World, grid: &Grid, x: i32, y: i32) {
 }
 
 /// Splash of water centered at (cx, cy) with the given Chebyshev radius:
-/// soaks every entity in it (Wet: puts out Burning, washes off oil, and keeps
-/// them from catching for a while), douses every burning fuel (each as its
+/// soaks every creature (Wet — which puts out Burning and washes off Oiled),
+/// washes away unlit oil, douses every burning fuel (each as its
 /// `Fuel::doused` says — grass fires go out and leave the grass, oil and webs
-/// stay to be relit), and soaks the walkable tiles so damp-sensitive fuel
-/// can't catch for a while.
+/// stay to be relit), soaks oil barrels so they can't catch fire for
+/// `BARREL_SOAK_DURATION` (putting out a burning barrel's fuse), and soaks the
+/// walkable tiles so damp-sensitive fuel can't catch for a while. Used by
+/// thrown water flasks and the Druid's Call Rain.
+///
+/// Returns how many fires were put out (burning creatures, fuel and barrels).
 pub fn splash_water(
     world: &mut World,
     grid: &Grid,
@@ -443,30 +483,80 @@ pub fn splash_water(
     cy: i32,
     radius: i32,
     events: &mut EventQueue,
-) {
+) -> u32 {
     let in_radius =
         |x: i32, y: i32| (x - cx).abs() <= radius && (y - cy).abs() <= radius;
+    let mut doused: u32 = 0;
 
-    // Soak everything caught in the splash (puts out Burning, washes off oil).
-    let soaked: Vec<Entity> = world
+    // Soak every creature in the splash (Wet extinguishes Burning). Oil
+    // barrels are soaked separately below, for longer.
+    let soaked: Vec<(Entity, bool)> = world
         .query::<(&Position, &StatusEffects)>()
+        .without::<&OilBarrel>()
+        .iter()
+        .filter(|(_, (p, _))| in_radius(p.x, p.y))
+        .map(|(id, (_, s))| (id, s.effects.iter().any(|e| e.effect_type == EffectType::Burning)))
+        .collect();
+    for (id, was_burning) in soaked {
+        crate::systems::effects::add_effect_announced(world, events, id, EffectType::Wet, WET_DURATION);
+        if was_burning {
+            doused += 1;
+        }
+    }
+
+    // Wash away unlit oil: water neutralises a spill before anyone lights it.
+    // Collected before the dousing below, so a puddle put out by this same
+    // splash survives as a re-ignitable puddle.
+    let washed_oil: Vec<Entity> = world
+        .query::<(&Position, &OilPuddle)>()
+        .without::<&OnFire>()
         .iter()
         .filter(|(_, (p, _))| in_radius(p.x, p.y))
         .map(|(id, _)| id)
         .collect();
-    for id in soaked {
-        crate::systems::coatings::soak(world, id, events);
+    for id in washed_oil {
+        let _ = world.despawn(id);
+    }
+
+    // Soak oil barrels: Wet for BARREL_SOAK_DURATION, so fire cannot take
+    // hold of them (Wet refuses Burning in `effects::add_effect`). A barrel
+    // already burning has its fire fuse put out with the flames; a barrel
+    // that was broken open keeps its break fuse (damage still works on a
+    // soaked barrel, and a broken one still blows).
+    let barrels: Vec<(Entity, (i32, i32))> = world
+        .query::<(&Position, &OilBarrel)>()
+        .iter()
+        .filter(|(_, (p, _))| in_radius(p.x, p.y))
+        .map(|(id, (p, _))| (id, (p.x, p.y)))
+        .collect();
+    for (id, position) in barrels {
+        let fire_fuse = world
+            .get::<&BarrelFuse>(id)
+            .map(|f| f.cause == FuseCause::Fire)
+            .unwrap_or(false);
+        let was_burning =
+            crate::systems::effects::entity_has_effect(world, id, EffectType::Burning);
+        if fire_fuse {
+            let _ = world.remove_one::<BarrelFuse>(id);
+        }
+        crate::systems::effects::add_effect_to_entity(world, id, EffectType::Wet, BARREL_SOAK_DURATION);
+        let defused = fire_fuse || was_burning;
+        if defused {
+            doused += 1;
+        }
+        events.push(GameEvent::BarrelSoaked { barrel: id, position, defused });
     }
 
     // Douse burning fuel.
-    let doused: Vec<Entity> = world
+    let burning: Vec<Entity> = world
         .query::<(&Position, &OnFire)>()
         .iter()
         .filter(|(_, (p, _))| in_radius(p.x, p.y))
         .map(|(id, _)| id)
         .collect();
-    for id in doused {
+    for id in burning {
         douse_fuel(world, id);
+        doused += 1;
     }
 
     // Soak the tiles in the radius: refresh existing timers, spawn new ones.
@@ -489,6 +579,7 @@ pub fn splash_water(
             world.spawn((Position::new(x, y), WetTile { remaining: WET_TILE_DURATION }));
         }
     }
+    doused
 }
 
 /// Topple a lit brazier: snuff its stand (light + hazard removed, sprite goes
@@ -580,7 +671,7 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
     }
     ignite_tile(world, grid, x, y);
 
-    // Anything standing there catches fire.
+    // Anything standing there catches fire (a flyer hovers above it).
     let victims: Vec<Entity> = world
         .query::<(&Position, &StatusEffects)>()
         .iter()
@@ -588,8 +679,87 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
         .map(|(id, _)| id)
         .collect();
     for id in victims {
-        if crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION) {
+        if !crate::systems::tile_effects::touches_ground(world, id) {
+            continue;
+        }
+        // Announce only a fresh ignition: a Wet victim refuses the fire, and
+        // one already alight has already been told.
+        let was_burning = crate::systems::effects::entity_has_effect(world, id, EffectType::Burning);
+        if crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION)
+            && !was_burning
+        {
             events.push(GameEvent::CaughtFire { entity: id, position: (x, y) });
+        }
+    }
+}
+
+/// An oil barrel just took a hit (called from the `apply_damage` chokepoint,
+/// so melee, arrows, Grave Bolt, explosions, fireballs and Shield Bash all
+/// land here).
+///
+/// - Fuse already running (it is burning, or was broken open earlier): the
+///   hit sets it off. The fuse is zeroed, and the barrel blows on this frame's
+///   fire tick (`detonate_ready_barrels`), which is the next point at which
+///   the grid and spatial cache are to hand.
+/// - No fuse, and the hit took it to 0 HP: it cracks open and its break fuse
+///   (`OIL_BARREL_BREAK_FUSE_SECONDS`) starts.
+///
+/// No-op for anything that is not an oil barrel.
+pub fn on_barrel_damaged(world: &mut World, barrel: Entity, events: &mut EventQueue) {
+    if world.get::<&OilBarrel>(barrel).is_err() {
+        return;
+    }
+    if let Ok(mut fuse) = world.get::<&mut BarrelFuse>(barrel) {
+        fuse.remaining = 0.0;
+        return;
+    }
+    let broken = world.get::<&Health>(barrel).map(|h| h.current <= 0).unwrap_or(false);
+    if broken {
+        start_break_fuse(world, barrel, events);
+    }
+}
+
+/// Light a broken barrel's fuse and announce it ("The barrel cracks and
+/// starts to hiss!"). No-op if a fuse is already running.
+fn start_break_fuse(world: &mut World, barrel: Entity, events: &mut EventQueue) {
+    if world.get::<&BarrelFuse>(barrel).is_ok() {
+        return;
+    }
+    let _ = world.insert_one(
+        barrel,
+        BarrelFuse::new(OIL_BARREL_BREAK_FUSE_SECONDS, FuseCause::Broken),
+    );
+    if let Some(position) = crate::queries::get_entity_position(world, barrel) {
+        events.push(GameEvent::BarrelCracked { barrel, position });
+    }
+}
+
+/// Explode every oil barrel whose fuse has run out, repeating until none is
+/// left, so a blast that hits another fusing barrel sets it off in the same
+/// pass (any damage to a fusing barrel detonates it).
+pub fn detonate_ready_barrels(
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut SpatialCache,
+    events: &mut EventQueue,
+    rng: &mut impl Rng,
+) {
+    loop {
+        let mut ready: Vec<Entity> = world
+            .query::<(&OilBarrel, &BarrelFuse)>()
+            .iter()
+            .filter(|(_, (_, f))| f.remaining <= 0.0)
+            .map(|(id, _)| id)
+            .collect();
+        if ready.is_empty() {
+            return;
+        }
+        // Query order is archetype order; sort so a seed replays identically.
+        ready.sort_unstable_by_key(|e| e.to_bits());
+        for id in ready {
+            if world.contains(id) {
+                explode_barrel(world, grid, spatial_cache, id, events, rng);
+            }
         }
     }
 }
@@ -639,7 +809,7 @@ fn explode_barrel(
         .collect();
     for (id, (x, y)) in victims {
         let dealt =
-            crate::systems::combat::apply_damage(world, grid, id, OIL_BARREL_EXPLOSION_DAMAGE, rng);
+            crate::systems::combat::apply_damage(world, grid, id, OIL_BARREL_EXPLOSION_DAMAGE, rng, events);
         if dealt > 0 {
             events.push(GameEvent::BurnDamage {
                 entity: id,
@@ -674,7 +844,7 @@ fn explode_barrel(
         .map(|(id, _)| id)
         .collect();
     for id in sprayed {
-        crate::systems::coatings::coat_in_oil(world, id, events);
+        crate::systems::effects::add_effect_announced(world, events, id, EffectType::Oiled, OILED_DURATION);
     }
 
     // Spray burning oil over the surrounding tiles (partial coverage). Skips
@@ -948,8 +1118,11 @@ mod tests {
         );
     }
 
+    /// A barrel brought to 0 HP outside `apply_damage` (burn ticks subtract
+    /// health directly) still cracks and runs the break fuse, rather than
+    /// blowing at once or lingering forever.
     #[test]
-    fn test_destroyed_barrel_explodes_without_fuse() {
+    fn test_broken_barrel_runs_the_break_fuse() {
         let mut world = World::new();
         let mut grid = make_grid(7, 7, TileType::Floor);
 
@@ -959,7 +1132,316 @@ mod tests {
         }
 
         run_fire(&mut world, &mut grid, 0.1);
-        assert!(!world.contains(barrel), "a destroyed barrel detonates immediately");
+        assert!(world.contains(barrel), "a broken barrel does not blow at once");
+        let fuse = *world.get::<&BarrelFuse>(barrel).expect("break fuse lit");
+        assert_eq!(fuse.cause, FuseCause::Broken);
+        assert!((fuse.total - OIL_BARREL_BREAK_FUSE_SECONDS).abs() < 1e-5);
+
+        run_fire(&mut world, &mut grid, OIL_BARREL_BREAK_FUSE_SECONDS);
+        assert!(!world.contains(barrel), "the break fuse runs out and it explodes");
+    }
+
+    /// One seeded fire tick of `dt` game seconds; returns the events.
+    fn tick(world: &mut World, grid: &mut Grid, cache: &mut SpatialCache, dt: f32) -> Vec<GameEvent> {
+        use rand::SeedableRng;
+        let mut events = EventQueue::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        let (mut acc, mut fov_dirty) = (0.0, false);
+        tick_fire(
+            &mut EffectCtx { world, grid, spatial: cache, events: &mut events, rng: &mut rng },
+            dt,
+            &mut acc,
+            &mut fov_dirty,
+        );
+        events.drain().collect()
+    }
+
+    fn hit(world: &mut World, target: Entity, raw: i32) -> Vec<GameEvent> {
+        use rand::SeedableRng;
+        let mut events = EventQueue::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        let grid = Grid::filled(16, 16, TileType::Floor);
+        crate::systems::combat::apply_damage(world, &grid, target, raw, &mut rng, &mut events);
+        events.drain().collect()
+    }
+
+    /// Breaking a barrel starts its 2s fuse (announced, telegraphed); a second
+    /// hit while it hisses sets it off at once, long before the fuse is out.
+    #[test]
+    fn a_broken_barrel_hisses_and_the_next_hit_detonates_it() {
+        let mut world = World::new();
+        let mut grid = make_grid(9, 9, TileType::Floor);
+        let barrel = crate::spawning::spawn_oil_barrel(&mut world, 4, 4);
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+
+        let seen = hit(&mut world, barrel, OIL_BARREL_HEALTH + 5);
+        assert!(seen.iter().any(|e| matches!(e, GameEvent::BarrelCracked { barrel: b, .. } if *b == barrel)));
+        let mut log = crate::ui::MessageLog::new(Entity::DANGLING);
+        for ev in &seen {
+            log.record_event(ev, &world);
+        }
+        assert!(log.lines().iter().any(|l| l == "The barrel cracks and starts to hiss!"), "{:?}", log.lines());
+
+        // Half a second in: still standing, telegraphed, still a melee target.
+        let events = tick(&mut world, &mut grid, &mut cache, 0.5);
+        assert!(world.contains(barrel));
+        assert!(!events.iter().any(|e| matches!(e, GameEvent::BarrelExploded { .. })));
+        let t = crate::systems::telegraph::barrel_fuse_telegraphs(&world);
+        assert_eq!(t.len(), 1);
+        assert_eq!(
+            t[0].shape,
+            crate::systems::telegraph::TelegraphShape::Area {
+                center: (4, 4),
+                radius: OIL_BARREL_EXPLOSION_RADIUS
+            }
+        );
+        let expected = 0.5 / OIL_BARREL_BREAK_FUSE_SECONDS;
+        assert!((t[0].progress - expected).abs() < 1e-4, "progress {}", t[0].progress);
+        assert!((t[0].remaining - (OIL_BARREL_BREAK_FUSE_SECONDS - 0.5)).abs() < 1e-4);
+        let attacker = world.spawn((Position::new(4, 5),));
+        assert!(crate::systems::actions::melee_reach_check(&world, attacker, barrel).is_ok());
+
+        // The second hit: it goes off on the very next fire tick, even a
+        // zero-length one.
+        hit(&mut world, barrel, 1);
+        let events = tick(&mut world, &mut grid, &mut cache, 0.0);
+        assert!(!world.contains(barrel), "the second hit detonates it immediately");
+        assert!(events.iter().any(|e| matches!(e, GameEvent::BarrelExploded { position: (4, 4) })));
+        assert!(!cache.is_blocked((4, 4)));
+    }
+
+    /// The dead-entity sweep leaves a broken barrel standing (it must stay
+    /// targetable while its fuse runs).
+    #[test]
+    fn the_dead_sweep_leaves_a_broken_barrel_alone() {
+        let mut arena = crate::systems::actions::TestArena::new((2, 2));
+        let barrel = crate::spawning::spawn_oil_barrel(&mut arena.world, 6, 6);
+        hit(&mut arena.world, barrel, 50);
+        crate::systems::combat::remove_dead_entities(&mut arena.ctx(), 0);
+        assert!(arena.world.contains(barrel));
+        assert!(arena.world.get::<&crate::components::Attackable>(barrel).is_ok());
+        assert!(arena.world.get::<&BarrelFuse>(barrel).is_ok());
+    }
+
+    /// A burning barrel's fire fuse is also cut short by any hit.
+    #[test]
+    fn a_hit_on_a_burning_barrel_detonates_it() {
+        let mut world = World::new();
+        let mut grid = make_grid(9, 9, TileType::Floor);
+        let barrel = crate::spawning::spawn_oil_barrel(&mut world, 4, 4);
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        crate::systems::effects::add_effect_to_entity(&mut world, barrel, EffectType::Burning, BURNING_DURATION);
+        tick(&mut world, &mut grid, &mut cache, 0.1);
+        let fuse = *world.get::<&BarrelFuse>(barrel).expect("fire fuse lit");
+        assert_eq!(fuse.cause, FuseCause::Fire);
+        assert!(fuse.remaining > 2.0);
+
+        let seen = hit(&mut world, barrel, 1);
+        assert!(!seen.iter().any(|e| matches!(e, GameEvent::BarrelCracked { .. })));
+        tick(&mut world, &mut grid, &mut cache, 0.0);
+        assert!(!world.contains(barrel), "the hit set the burning barrel off");
+    }
+
+    /// A blast that catches a fusing barrel sets it off in the same pass; one
+    /// that catches an intact barrel breaks it (2s fuse) instead.
+    #[test]
+    fn an_explosion_detonates_fusing_neighbours_and_cracks_intact_ones() {
+        let mut world = World::new();
+        let mut grid = make_grid(12, 9, TileType::Floor);
+        let a = crate::spawning::spawn_oil_barrel(&mut world, 3, 4);
+        let fusing = crate::spawning::spawn_oil_barrel(&mut world, 4, 4);
+        let intact = crate::spawning::spawn_oil_barrel(&mut world, 2, 4);
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        let _ = world.insert_one(fusing, BarrelFuse::new(OIL_BARREL_FUSE_SECONDS, FuseCause::Fire));
+
+        hit(&mut world, a, OIL_BARREL_HEALTH);
+        hit(&mut world, a, 1);
+        tick(&mut world, &mut grid, &mut cache, 0.0);
+        assert!(!world.contains(a));
+        assert!(!world.contains(fusing), "the fusing neighbour went up with it");
+        assert!(world.contains(intact), "the intact neighbour was only broken");
+        assert_eq!(world.get::<&BarrelFuse>(intact).map(|f| f.cause).ok(), Some(FuseCause::Broken));
+    }
+
+    /// Water washes away unlit oil (lit oil is doused and stays), and soaks
+    /// barrels so fire cannot take them; a burning barrel's fuse goes out.
+    #[test]
+    fn splash_washes_unlit_oil_and_soaks_barrels() {
+        let mut world = World::new();
+        let mut grid = make_grid(12, 9, TileType::Floor);
+        let mut events = EventQueue::new();
+        let unlit = crate::spawning::spawn_oil_puddle(&mut world, 3, 3);
+        let lit = crate::spawning::spawn_oil_puddle(&mut world, 4, 3);
+        ignite_fuel(&mut world, lit);
+        let outside = crate::spawning::spawn_oil_puddle(&mut world, 9, 3);
+        let cold = crate::spawning::spawn_oil_barrel(&mut world, 3, 4);
+        let burning = crate::spawning::spawn_oil_barrel(&mut world, 4, 4);
+        crate::systems::effects::add_effect_to_entity(&mut world, burning, EffectType::Burning, BURNING_DURATION);
+        let _ = world.insert_one(burning, BarrelFuse::new(OIL_BARREL_FUSE_SECONDS, FuseCause::Fire));
+
+        let doused = splash_water(&mut world, &grid, 3, 3, 1, &mut events);
+        assert!(!world.contains(unlit), "unlit oil is washed away");
+        assert!(world.contains(lit) && world.get::<&OnFire>(lit).is_err(), "lit oil is doused, kept");
+        assert!(world.contains(outside));
+        assert!(world.get::<&BarrelFuse>(burning).is_err(), "the fire fuse is out");
+        assert!(doused >= 2, "the lit puddle and the burning barrel count, got {doused}");
+        let seen: Vec<GameEvent> = events.drain().collect();
+        assert!(seen.iter().any(|e| matches!(e, GameEvent::BarrelSoaked { barrel, defused: true, .. } if *barrel == burning)));
+        assert!(seen.iter().any(|e| matches!(e, GameEvent::BarrelSoaked { barrel, defused: false, .. } if *barrel == cold)));
+
+        // Fire right next to both barrels, for a long while: neither catches.
+        let fire = crate::spawning::spawn_oil_puddle(&mut world, 3, 5);
+        ignite_fuel(&mut world, fire);
+        spill_fire_at(&mut world, &grid, 3, 4, &mut events);
+        run_fire_seeded(&mut world, &mut grid, 5.0, 9);
+        for b in [cold, burning] {
+            assert!(world.contains(b));
+            assert!(world.get::<&BarrelFuse>(b).is_err(), "a soaked barrel does not light");
+            assert!(!crate::systems::effects::entity_has_effect(&world, b, EffectType::Burning));
+        }
+
+        // Damage still works on a soaked barrel, and its break fuse still blows.
+        hit(&mut world, cold, OIL_BARREL_HEALTH);
+        assert_eq!(world.get::<&BarrelFuse>(cold).map(|f| f.cause).ok(), Some(FuseCause::Broken));
+        run_fire(&mut world, &mut grid, OIL_BARREL_BREAK_FUSE_SECONDS + 0.2);
+        assert!(!world.contains(cold), "a soaked barrel still explodes once broken");
+    }
+
+    /// How many of `n` seeded runs set a creature standing in burning oil
+    /// alight within `seconds`, for a creature built by `make`.
+    fn ignitions_in_burning_oil(n: u64, seconds: f32, make: impl Fn(&mut World) -> Entity) -> u64 {
+        (0..n)
+            .filter(|&seed| {
+                let mut world = World::new();
+                let mut grid = make_grid(7, 7, TileType::Floor);
+                let puddle = crate::spawning::spawn_oil_puddle(&mut world, 3, 3);
+                ignite_fuel(&mut world, puddle);
+                let victim = make(&mut world);
+                run_fire_seeded(&mut world, &mut grid, seconds, seed);
+                crate::systems::effects::entity_has_effect(&world, victim, EffectType::Burning)
+            })
+            .count() as u64
+    }
+
+    /// A Wet creature standing in burning oil never catches, however long it
+    /// stands there.
+    #[test]
+    fn wet_creatures_never_ignite() {
+        let caught = ignitions_in_burning_oil(20, 3.0, |w| {
+            let mut s = StatusEffects::new();
+            crate::systems::effects::add_effect(&mut s, EffectType::Wet, 60.0);
+            w.spawn((Position::new(3, 3), s, Combustible { flammability: 1.0 }))
+        });
+        assert_eq!(caught, 0);
+    }
+
+    /// A flyer hovering over burning oil is above the flames: it never
+    /// catches from the puddle under it (a walker in the same spot does).
+    #[test]
+    fn flyers_over_burning_oil_never_ignite() {
+        let make = |flying: bool| {
+            move |w: &mut World| {
+                let e = w.spawn((Position::new(3, 3), StatusEffects::new(), Combustible { flammability: 1.0 }));
+                if flying {
+                    let _ = w.insert_one(e, crate::components::Flying);
+                }
+                e
+            }
+        };
+        assert_eq!(ignitions_in_burning_oil(20, 3.0, make(true)), 0);
+        assert!(ignitions_in_burning_oil(20, 3.0, make(false)) > 0, "control: walkers burn");
+    }
+
+    /// Oil makes anything burn: a non-`Combustible` creature (a skeleton, a
+    /// slime) never ignites in burning oil, but the same creature Oiled does,
+    /// and a barely flammable one catches far more often once Oiled.
+    #[test]
+    fn oiled_creatures_ignite_far_more_readily() {
+        let fireproof = |oiled: bool| {
+            move |w: &mut World| {
+                let mut s = StatusEffects::new();
+                if oiled {
+                    crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+                }
+                w.spawn((Position::new(3, 3), s))
+            }
+        };
+        assert_eq!(ignitions_in_burning_oil(20, 1.0, fireproof(false)), 0);
+        assert!(ignitions_in_burning_oil(20, 1.0, fireproof(true)) >= 15);
+
+        // One spread step (0.5s) at low flammability: 0.6*0.1 = 6% dry,
+        // 0.6*0.5*3 = 90% oiled.
+        let barely = |oiled: bool| {
+            move |w: &mut World| {
+                let mut s = StatusEffects::new();
+                if oiled {
+                    crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+                }
+                w.spawn((Position::new(3, 3), s, Combustible { flammability: 0.1 }))
+            }
+        };
+        let dry = ignitions_in_burning_oil(40, FIRE_STEP_INTERVAL, barely(false));
+        let oily = ignitions_in_burning_oil(40, FIRE_STEP_INTERVAL, barely(true));
+        assert!(oily > dry + 20, "oiled {oily}/40 vs dry {dry}/40");
+    }
+
+    /// Burning while Oiled hurts more per tick.
+    #[test]
+    fn oiled_burning_takes_extra_damage() {
+        let mut world = World::new();
+        let mut events = EventQueue::new();
+        let spawn = |w: &mut World, oiled: bool| {
+            let mut s = StatusEffects::new();
+            if oiled {
+                crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+            }
+            crate::systems::effects::add_effect(&mut s, EffectType::Burning, 60.0);
+            w.spawn((Position::new(1, 1), Health::new(100), s))
+        };
+        let dry = spawn(&mut world, false);
+        let oily = spawn(&mut world, true);
+        crate::time_system::tick_burn_damage(&mut world, 5.0, &mut events);
+        let lost = |e| 100 - world.get::<&Health>(e).unwrap().current;
+        assert_eq!(lost(dry), BURNING_DAMAGE_PER_SECOND);
+        assert_eq!(
+            lost(oily),
+            (BURNING_DAMAGE_PER_SECOND as f32 * OILED_BURN_DAMAGE_MULT).round() as i32
+        );
+    }
+
+    /// Standing in water keeps a creature Wet; standing in unlit oil keeps it
+    /// Oiled — both refreshed by the fire tick, on game time.
+    #[test]
+    fn standing_in_water_or_oil_keeps_the_status_up() {
+        let mut world = World::new();
+        let mut grid = make_grid(7, 7, TileType::Floor);
+        grid.water_positions.push((1, 1));
+        crate::spawning::spawn_oil_puddle(&mut world, 5, 5);
+        let swimmer = world.spawn((Position::new(1, 1), StatusEffects::new()));
+        let slick = world.spawn((Position::new(5, 5), StatusEffects::new()));
+
+        // Long past both durations: the statuses tick down between fire
+        // ticks, the standing refresh tops them back up.
+        for _ in 0..40 {
+            crate::time_system::tick_status_effects(&mut world, 1.0);
+            run_fire_seeded(&mut world, &mut grid, 1.0, 1);
+        }
+        assert!(crate::systems::effects::entity_has_effect(&world, swimmer, EffectType::Wet));
+        assert!(crate::systems::effects::entity_has_effect(&world, slick, EffectType::Oiled));
+    }
+
+    /// A water splash soaks creatures as well as putting them out.
+    #[test]
+    fn splash_soaks_creatures_and_washes_off_oil() {
+        let mut world = World::new();
+        let grid = make_grid(7, 7, TileType::Floor);
+        let mut s = StatusEffects::new();
+        crate::systems::effects::add_effect(&mut s, EffectType::Oiled, 60.0);
+        let victim = world.spawn((Position::new(3, 3), s));
+        let mut events = EventQueue::new();
+        splash_water(&mut world, &grid, 3, 3, WATER_SPLASH_RADIUS, &mut events);
+        assert!(crate::systems::effects::entity_has_effect(&world, victim, EffectType::Wet));
+        assert!(!crate::systems::effects::entity_has_effect(&world, victim, EffectType::Oiled));
     }
 
     #[test]
@@ -1169,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wet_creature_in_burning_oil_never_catches_but_oily_one_does() {
+    fn test_wet_creature_in_burning_oil_never_catches_but_oiled_one_does() {
         let mut world = World::new();
         let mut grid = make_grid(9, 9, TileType::Floor);
         let spawn = |world: &mut World, x: i32| {
@@ -1178,7 +1660,7 @@ mod tests {
         let wet = spawn(&mut world, 2);
         let oily = spawn(&mut world, 6);
         crate::systems::effects::add_effect_to_entity(&mut world, wet, EffectType::Wet, 1000.0);
-        crate::systems::effects::add_effect_to_entity(&mut world, oily, EffectType::Oily, 1000.0);
+        crate::systems::effects::add_effect_to_entity(&mut world, oily, EffectType::Oiled, 1000.0);
         for x in [2, 6] {
             let oil = crate::spawning::spawn_oil_puddle(&mut world, x, 4);
             ignite_fuel(&mut world, oil);

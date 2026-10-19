@@ -21,7 +21,9 @@ use crate::tile::tile_ids;
 
 use super::{calculate_arrow_path, ActionResult};
 
-/// Apply blink (teleport) action
+/// Apply blink (teleport) action. The landing tile's effects (water, oil,
+/// fire, traps) apply as for a step — see `tile_effects::on_enter_tile`.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_blink(
     world: &mut World,
     grid: &Grid,
@@ -71,7 +73,15 @@ pub fn apply_blink(
         from: current_pos,
         to: (target_x, target_y),
     });
-    super::enter_tile(world, grid, entity, target_x, target_y, events, rng);
+
+    crate::systems::tile_effects::on_enter_tile(
+        world,
+        grid,
+        entity,
+        (target_x, target_y),
+        events,
+        rng,
+    );
 
     ActionResult::Completed
 }
@@ -130,7 +140,7 @@ pub fn apply_fireball(
     // Apply damage to all
     for (entity, x, y) in damaged {
         // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, grid, entity, damage, rng);
+        crate::systems::combat::apply_damage(world, grid, entity, damage, rng, events);
         // Interrupt life drain if entity was channeling
         interrupt_life_drain_on_damage(world, entity, events);
         // Generate threat on fireball targets
@@ -143,6 +153,8 @@ pub fn apply_fireball(
             damage,
             kind: crate::events::DamageKind::Fireball,
             crit: false,
+            flanked: false,
+            killed: crate::systems::combat::is_dead(world, entity),
         });
     }
 
@@ -554,12 +566,23 @@ fn complete_raise_dead(
         return;
     };
 
+    consume_corpse(world, target, (x, y));
+
+    events.push(GameEvent::SkeletonRaised { owner: caster, position: (x, y) });
+}
+
+/// Consume a corpse (bones container) at `pos`: despawn it, and drop anything
+/// it held to a ground pile on the same tile so no loot is destroyed. Shared
+/// by Raise Dead and Corpse Explosion. Corpses never block movement, so there
+/// is nothing to release in the spatial cache.
+pub(super) fn consume_corpse(world: &mut World, corpse: Entity, pos: (i32, i32)) {
+    let (x, y) = pos;
     // Take the loot out of the bones, then consume them.
     let (items, gold) = world
-        .get::<&Container>(target)
+        .get::<&Container>(corpse)
         .map(|c| (c.items.clone(), c.gold))
         .unwrap_or((Vec::new(), 0));
-    let _ = world.despawn(target);
+    let _ = world.despawn(corpse);
 
     // Anything the corpse held drops to a ground pile on the same tile.
     if !items.is_empty() || gold > 0 {
@@ -578,8 +601,6 @@ fn complete_raise_dead(
             crate::components::GroundItemPile,
         ));
     }
-
-    events.push(GameEvent::SkeletonRaised { owner: caster, position: (x, y) });
 }
 
 /// Tick life drain channeling - applies damage and healing
@@ -630,7 +651,7 @@ fn tick_life_drain(
             .max(1);
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, grid, target, damage, rng);
+        crate::systems::combat::apply_damage(world, grid, target, damage, rng, events);
         let target_died = world
             .get::<&Health>(target)
             .map(|h| h.current <= 0)
@@ -788,7 +809,8 @@ pub fn apply_start_taming(
     ActionResult::Completed
 }
 
-/// Ranger ability: Disengage - leap away from the nearest enemy
+/// Ranger ability: Disengage - leap away from the nearest enemy. The landing
+/// tile's effects apply (see `tile_effects::on_enter_tile`).
 pub fn apply_disengage(
     world: &mut World,
     grid: &Grid,
@@ -876,7 +898,19 @@ pub fn apply_disengage(
                     vpos.x = target_x as f32;
                     vpos.y = target_y as f32;
                 }
-                super::enter_tile(world, grid, entity, target_x, target_y, events, rng);
+                events.push(GameEvent::EntityMoved {
+                    entity,
+                    from: pos,
+                    to: (target_x, target_y),
+                });
+                crate::systems::tile_effects::on_enter_tile(
+                    world,
+                    grid,
+                    entity,
+                    (target_x, target_y),
+                    events,
+                    rng,
+                );
                 return ActionResult::Completed;
             }
         }
@@ -886,7 +920,10 @@ pub fn apply_disengage(
     ActionResult::Completed
 }
 
-/// Ranger ability: Tumble - roll to target position with brief invulnerability
+/// Ranger ability: Tumble - roll to target position with brief invulnerability.
+/// The landing tile's effects apply (see `tile_effects::on_enter_tile`); the
+/// tiles rolled over on the way do not.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_tumble(
     world: &mut World,
     grid: &Grid,
@@ -928,7 +965,16 @@ pub fn apply_tumble(
     // Apply invulnerability effect (before landing: the roll protects from
     // damage, not from what the tile itself does to you)
     effects::add_effect_to_entity(world, entity, EffectType::Invulnerable, TUMBLE_INVULN_DURATION);
-    super::enter_tile(world, grid, entity, target_x, target_y, events, rng);
+
+    events.push(GameEvent::EntityMoved { entity, from, to: (target_x, target_y) });
+    crate::systems::tile_effects::on_enter_tile(
+        world,
+        grid,
+        entity,
+        (target_x, target_y),
+        events,
+        rng,
+    );
 
     ActionResult::Completed
 }
@@ -1006,6 +1052,7 @@ pub fn apply_shoot_crippling_shot(
             on_hit_effect: Some((EffectType::Slowed, CRIPPLING_SHOT_SLOW_DURATION)),
             hit_enemy: false,
             incendiary: false,
+            kind: crate::components::ProjectileKind::Missile,
         },
         ProjectileMarker,
     ));

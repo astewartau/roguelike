@@ -53,6 +53,24 @@ pub enum PlayerIntent {
     },
     /// Necromancer: start channeling Raise Dead on a bones container
     StartRaiseDead { target: Entity },
+    /// Necromancer: swap places with one of your raised skeletons
+    Sacrifice { skeleton: Entity },
+    /// Necromancer: detonate a corpse
+    CorpseExplosion { corpse: Entity },
+    /// Druid: root hostiles around a tile
+    Entangle { target_x: i32, target_y: i32 },
+    CallRain { target_x: i32, target_y: i32 },
+    /// Push the pushable object on the adjacent tile (dx, dy) one tile on.
+    /// Ctrl+direction resolves to this on its own (see
+    /// `actions::resolve_interact_direction`); the explicit intent is for the
+    /// context menu.
+    Push { dx: i32, dy: i32 },
+    /// Close an open door (context menu; Ctrl+direction also resolves to it).
+    CloseDoor { door: Entity },
+    /// Fighter: Shield Bash the creature or pushable on an adjacent tile.
+    ShieldBash { target_x: i32, target_y: i32 },
+    /// Necromancer: Grave Bolt at a tile in range and line of sight.
+    GraveBolt { target_x: i32, target_y: i32 },
 }
 
 /// Result of validating a targeting action
@@ -149,8 +167,25 @@ pub fn validate_targeting(
 /// Convert a PlayerIntent to an ActionType.
 ///
 /// Returns `None` if the intent doesn't map to an action (e.g., `PlayerIntent::None`)
-/// or if required validation fails.
+/// or if required validation fails. A kit ability still on cooldown is
+/// refused here, whatever route its intent took (hotbar click, context menu):
+/// abilities are gated by their cooldown alone, so this gate must hold.
 pub fn intent_to_action(
+    world: &World,
+    grid: &Grid,
+    player_entity: Entity,
+    intent: &PlayerIntent,
+) -> Option<ActionType> {
+    let action = intent_to_action_unchecked(world, grid, player_entity, intent)?;
+    if let Some(ability) = crate::systems::actions::kit_ability_for_action(&action) {
+        if !crate::systems::actions::kit_ability_ready(world, player_entity, ability) {
+            return None;
+        }
+    }
+    Some(action)
+}
+
+fn intent_to_action_unchecked(
     world: &World,
     grid: &Grid,
     player_entity: Entity,
@@ -177,9 +212,9 @@ pub fn intent_to_action(
             Some(ActionType::AttackDirection { dx: *dx, dy: *dy })
         }
 
-        PlayerIntent::InteractDirection { dx, dy } => {
-            Some(ActionType::InteractDirection { dx: *dx, dy: *dy })
-        }
+        PlayerIntent::InteractDirection { dx, dy } => Some(
+            crate::systems::actions::resolve_interact_direction(world, player_entity, *dx, *dy),
+        ),
 
         PlayerIntent::ShootRanged { target_x, target_y } => {
             // Check if player has a bow equipped
@@ -259,6 +294,58 @@ pub fn intent_to_action(
 
         PlayerIntent::StartRaiseDead { target } => {
             Some(ActionType::StartRaiseDead { target: *target })
+        }
+
+        PlayerIntent::Sacrifice { skeleton } => {
+            Some(ActionType::Sacrifice { skeleton: *skeleton })
+        }
+
+        PlayerIntent::CorpseExplosion { corpse } => {
+            Some(ActionType::CorpseExplosion { corpse: *corpse })
+        }
+
+        PlayerIntent::Entangle { target_x, target_y } => Some(ActionType::Entangle {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
+
+        PlayerIntent::CallRain { target_x, target_y } => Some(ActionType::CallRain {
+            target_x: *target_x,
+            target_y: *target_y,
+        }),
+
+        PlayerIntent::Push { dx, dy } => Some(ActionType::Push { dx: *dx, dy: *dy }),
+
+        // An open door next to the player. Something standing in the doorway
+        // is reported by the action itself ("the door won't close").
+        PlayerIntent::CloseDoor { door } => {
+            let open = world
+                .get::<&crate::components::Door>(*door)
+                .map(|d| d.is_open)
+                .unwrap_or(false);
+            let adjacent = match (
+                crate::queries::get_entity_position(world, player_entity),
+                crate::queries::get_entity_position(world, *door),
+            ) {
+                (Some(a), Some(b)) => (a.0 - b.0).abs().max((a.1 - b.1).abs()) == 1,
+                _ => false,
+            };
+            (open && adjacent).then_some(ActionType::CloseDoor { door: *door })
+        }
+
+        PlayerIntent::ShieldBash { target_x, target_y } => {
+            crate::systems::actions::can_shield_bash(world, player_entity, (*target_x, *target_y))
+                .then_some(ActionType::ShieldBash { target_x: *target_x, target_y: *target_y })
+        }
+
+        PlayerIntent::GraveBolt { target_x, target_y } => {
+            crate::systems::actions::can_grave_bolt(
+                world,
+                grid,
+                player_entity,
+                (*target_x, *target_y),
+            )
+            .then_some(ActionType::GraveBolt { target_x: *target_x, target_y: *target_y })
         }
     }
 }

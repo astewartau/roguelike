@@ -28,6 +28,9 @@ pub struct SceneLighting<'a> {
     pub player_light_color: (f32, f32, f32),
     /// Light from the world, per tile, already flickered and occluded.
     pub light_map: &'a crate::systems::light::LightMap,
+    /// Tile to lighten slightly (the one under the mouse cursor), if any.
+    /// See `HOVER_TILE_BRIGHTEN`.
+    pub highlight_tile: Option<(i32, i32)>,
 }
 
 /// The flicker signal for one light at one instant, in `[-scale, scale]`.

@@ -57,6 +57,59 @@ pub const BURNING_DAMAGE_PER_SECOND: i32 = 2;
 pub const BURNING_DAMAGE_INTERVAL: f32 = 1.0;
 
 // =============================================================================
+// WET / OILED (surface statuses — see systems::tile_effects and systems::effects)
+// =============================================================================
+
+/// How long (game seconds) a creature stays Wet after leaving water, being
+/// splashed, or being rained on. Standing in water keeps refreshing it. While
+/// Wet a creature cannot catch fire, and gaining Wet puts out Burning and
+/// washes off Oiled. Longer makes water a stronger fire-proofing.
+pub const WET_DURATION: f32 = 8.0;
+/// How long (game seconds) a creature stays Oiled after stepping in an unlit
+/// oil puddle. Standing in the puddle keeps refreshing it. Longer leaves more
+/// time to set the oiled creature alight.
+pub const OILED_DURATION: f32 = 15.0;
+/// Multiplier on every per-step chance (spread, burning oil, combat) that an
+/// Oiled creature catches fire. Higher makes oiled targets near-certain to
+/// ignite near any flame.
+pub const OILED_IGNITE_MULT: f64 = 3.0;
+/// Flammability floor for an Oiled creature. The oil burns even when the
+/// creature underneath does not, so a non-`Combustible` (or barely flammable)
+/// creature that is Oiled ignites as if it had at least this flammability.
+pub const OILED_MIN_FLAMMABILITY: f32 = 0.5;
+/// Burn damage multiplier while a creature is both Oiled and Burning. The oil
+/// burns off with the fire: catching fire caps the Oiled timer at the burn's
+/// duration (see `systems::effects::add_effect`).
+pub const OILED_BURN_DAMAGE_MULT: f32 = 2.0;
+/// Sprite tint multiplied into a Wet creature (cool, bluish). `(1,1,1)` is
+/// untinted; lower red/green pushes it bluer.
+pub const WET_SPRITE_TINT: (f32, f32, f32) = (0.7, 0.85, 1.0);
+/// Sprite tint multiplied into an Oiled creature (dark and greasy brown).
+pub const OILED_SPRITE_TINT: (f32, f32, f32) = (0.65, 0.55, 0.4);
+
+// =============================================================================
+// DAMAGE OVER TIME (Poisoned, Bleeding — see time_system::tick_dot_damage)
+// =============================================================================
+// DoT ticks go through `combat::apply_damage_dot`, which skips armor: venom and
+// open wounds are not stopped by a breastplate. Protection/Barkskin and
+// invulnerability still apply.
+
+/// Damage per Poisoned tick.
+pub const POISON_DAMAGE: i32 = 1;
+/// Game seconds between Poisoned ticks. Lower makes poison bite harder.
+pub const POISON_TICK_INTERVAL: f32 = 1.0;
+/// Poisoned duration (game seconds) from a full-strength venomous bite (the
+/// Giant Spider). Re-poisoning keeps the longer timer rather than stacking.
+pub const POISON_DURATION: f32 = 6.0;
+/// Damage per Bleeding tick.
+pub const BLEED_DAMAGE: i32 = 1;
+/// Game seconds between Bleeding ticks.
+pub const BLEED_TICK_INTERVAL: f32 = 1.5;
+/// Bleeding duration (game seconds) per wound. Re-bleeding keeps the longer
+/// of the two timers rather than stacking.
+pub const BLEED_DURATION: f32 = 6.0;
+
+// =============================================================================
 // FIRE SPREAD
 // =============================================================================
 
@@ -100,6 +153,19 @@ pub const OIL_PUDDLE_TINT: (f32, f32, f32) = (0.35, 0.25, 0.2);
 
 /// Seconds between an oil barrel catching fire and its explosion.
 pub const OIL_BARREL_FUSE_SECONDS: f32 = 3.0;
+/// Seconds between an oil barrel being broken open (reduced to 0 HP) and its
+/// explosion. The cracked barrel hisses and its blast radius is telegraphed
+/// for this long; any further damage while the fuse runs detonates it at once.
+/// Up gives more time to back off (or to line up a second hit); down makes a
+/// broken barrel nearly as instant as the old behaviour. Keep it shorter than
+/// [`OIL_BARREL_FUSE_SECONDS`]: a split barrel is the more urgent hazard.
+pub const OIL_BARREL_BREAK_FUSE_SECONDS: f32 = 2.0;
+/// How long a water splash (thrown flask, Call Rain) keeps an oil barrel
+/// soaked, in game seconds. A soaked barrel is Wet, so fire cannot take hold
+/// of it (it can still be broken by damage, and a broken one still blows). A
+/// burning barrel that is soaked has its fire fuse put out. Up makes water a
+/// longer-lasting way to defuse a room; down makes it a brief window.
+pub const BARREL_SOAK_DURATION: f32 = 20.0;
 /// Raw damage dealt by an oil barrel explosion (through `apply_damage`).
 pub const OIL_BARREL_EXPLOSION_DAMAGE: i32 = 15;
 /// Chebyshev radius of the explosion's damage.
@@ -129,28 +195,16 @@ pub const OIL_BARRELS_CORRIDOR_MAX: usize = 2;
 /// (grass, fungus) to ignite.
 pub const WET_TILE_DURATION: f32 = 30.0;
 // =============================================================================
-// COATINGS: WET AND OILY (what creatures carry on them — see systems/coatings.rs)
+// COATINGS: WET AND OILED (see systems/coatings.rs; durations and fire
+// interactions are with the other surface statuses above)
 // =============================================================================
 
-/// How long (game seconds) a soaking lasts once you are out of the water.
-/// Longer makes water a more durable fire shield; standing in water keeps
-/// refreshing it.
-pub const WET_DURATION: f32 = 30.0;
 /// How many times faster you dry off standing on or next to a fire. Higher
 /// makes "dry off by the brazier" quicker and a wet shield thinner in a blaze.
 pub const WET_DRY_NEAR_FIRE_MULT: f32 = 4.0;
-/// How long (game seconds) an oil coating lasts. Longer means a longer drip
-/// trail and a longer window to set the victim alight.
-pub const OILY_DURATION: f32 = 40.0;
-/// Flammability multiplier while Oily (result capped at 1.0). Higher makes
-/// an oily creature catch from fire nearby almost every step.
-pub const OILY_FLAMMABILITY_MULT: f32 = 3.0;
-/// Minimum flammability while Oily, so things that never burn on their own
-/// (bone, slime) will burn once coated.
-pub const OILY_MIN_FLAMMABILITY: f32 = 0.6;
-/// Chance per step that an oily walker drips oil on the tile it leaves.
+/// Chance per step that an Oiled walker drips oil on the tile it leaves.
 /// Higher makes an unbroken fuse trail; lower leaves gaps fire has to jump.
-pub const OILY_DRIP_CHANCE: f64 = 0.5;
+pub const OILED_DRIP_CHANCE: f64 = 0.5;
 /// How long a drip of oil burns: shorter than a full puddle
 /// (`OIL_BURN_DURATION`), since there is less fuel in it.
 pub const OIL_DRIP_BURN_DURATION: f32 = 4.0;

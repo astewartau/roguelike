@@ -16,3 +16,7 @@ pub const DIAGONAL_MOVEMENT_MULTIPLIER: f32 = 1.414;
 pub const ACTION_SHOOT_DURATION: f32 = 1.2;
 /// Duration for recovery after shooting (allows arrow to fly)
 pub const ACTION_RECOVER_DURATION: f32 = 0.25;
+/// Base duration for pushing a piece of furniture (a barrel) one tile. A
+/// little quicker than a step, slower than opening a door. Up makes shoving
+/// barrels into a fight a bigger commitment.
+pub const ACTION_PUSH_DURATION: f32 = 0.8;

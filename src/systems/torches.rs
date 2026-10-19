@@ -9,7 +9,7 @@
 //! through oil, not by lying on the floor, not by a fight going on beside it.
 //! It lights things only when someone puts it to them on purpose — a swing at
 //! a creature, or holding it to a tile — and a creature only catches if it is
-//! covered in oil (`Oily`).
+//! covered in oil (`Oiled`).
 //!
 //! The player's torch is an item (`ItemType::Torch`) in the off-hand slot;
 //! `sync_held_torch` keeps the carried light in step with that slot. A
@@ -94,10 +94,27 @@ pub fn douse_torch(world: &mut World, entity: Entity, events: &mut EventQueue) {
     events.push(GameEvent::TorchDoused { entity });
 }
 
+/// Put out every carried torch whose carrier is Wet, however it got that way
+/// (wading, a splash, rain, a flask over the head). Run from the fire tick, so
+/// no source of Wet has to remember to do it.
+pub fn douse_wet_torches(world: &mut World, events: &mut EventQueue) {
+    let soaked: Vec<Entity> = world
+        .query::<(&CarriedTorch, &crate::components::StatusEffects)>()
+        .iter()
+        .filter(|(_, (t, s))| {
+            t.lit && s.effects.iter().any(|e| e.effect_type == crate::components::EffectType::Wet)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for id in soaked {
+        douse_torch(world, id, events);
+    }
+}
+
 /// Whether a torch can set this entity alight: only if it's oiled. A torch
 /// held to a dry creature, or swung at one, doesn't catch it.
 fn torch_can_light(world: &World, entity: Entity) -> bool {
-    crate::systems::effects::entity_has_effect(world, entity, crate::components::EffectType::Oily)
+    crate::systems::effects::entity_has_effect(world, entity, crate::components::EffectType::Oiled)
 }
 
 /// Set `target` alight with a torch, if it's oiled. Returns whether it caught.
@@ -277,7 +294,8 @@ mod tests {
         assert!(crate::systems::light::light_at(&world, &grid, (6, 4)) > 0.0, "its torch lights the floor");
 
         let mut events = EventQueue::new();
-        crate::systems::coatings::soak(&mut world, g, &mut events);
+        crate::systems::effects::add_effect_to_entity(&mut world, g, EffectType::Wet, crate::constants::WET_DURATION);
+        douse_wet_torches(&mut world, &mut events);
         assert!(!lit_torch(&world, g));
         assert_eq!(crate::systems::light::light_at(&world, &grid, (6, 4)), 0.0, "and now it's dark");
         assert!(events.drain().any(|e| matches!(e, GameEvent::TorchDoused { .. })));
@@ -293,7 +311,7 @@ mod tests {
 
         let mut events = EventQueue::new();
         let mut rng = StdRng::seed_from_u64(1);
-        crate::systems::actions::enter_tile(&mut world, &grid, g, 4, 4, &mut events, &mut rng);
+        crate::systems::tile_effects::on_enter_tile(&mut world, &grid, g, (4, 4), &mut events, &mut rng);
         assert!(world.get::<&OnFire>(oil).is_err(), "walking a torch through oil doesn't light it");
         assert!(!crate::systems::effects::entity_has_effect(&world, g, EffectType::Burning));
     }
@@ -311,7 +329,7 @@ mod tests {
             "a dry target just takes the hit"
         );
 
-        crate::systems::coatings::coat_in_oil(&mut world, target, &mut events);
+        crate::systems::effects::add_effect_to_entity(&mut world, target, EffectType::Oiled, crate::constants::OILED_DURATION);
         torch_strike(&mut world, g, target, &mut events);
         assert!(
             crate::systems::effects::entity_has_effect(&world, target, EffectType::Burning),
@@ -432,7 +450,8 @@ mod tests {
         let mut events = EventQueue::new();
         equip(&mut world, p, ItemType::Torch, &mut events);
 
-        crate::systems::coatings::soak(&mut world, p, &mut events);
+        crate::systems::effects::add_effect_to_entity(&mut world, p, crate::components::EffectType::Wet, crate::constants::WET_DURATION);
+        douse_wet_torches(&mut world, &mut events);
         let held = world.get::<&Equipment>(p).unwrap().off_hand.as_ref().map(|i| i.kind);
         assert_eq!(held, Some(ItemType::UnlitTorch), "the torch is out");
         assert!(!lit_torch(&world, p));

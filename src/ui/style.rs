@@ -94,6 +94,8 @@ pub mod colors {
     pub const HUNGER_BAR_BG: Color32 = Color32::from_rgb(45, 32, 16);
     pub const FATIGUE_BAR: Color32 = Color32::from_rgb(110, 100, 185);
     pub const FATIGUE_BAR_BG: Color32 = Color32::from_rgb(28, 25, 48);
+    /// "Asleep" in the hover panel: the fatigue bar's violet, lightened.
+    pub const ASLEEP: Color32 = Color32::from_rgb(150, 140, 210);
     /// Light bar: warm firelight fill over a near-black background, so an
     /// empty bar reads as darkness.
     pub const LIGHT_BAR: Color32 = Color32::from_rgb(235, 185, 70);
@@ -136,8 +138,18 @@ pub mod colors {
     /// on you is never confused with a hit you landed.
     pub const DAMAGE_TAKEN: Color32 = Color32::from_rgb(255, 64, 56);
     pub const HEAL_NUMBER: Color32 = Color32::from_rgb(105, 255, 105);
+    /// Floating "miss" when a swing finds its target out of reach. A cool
+    /// grey-blue so it reads as "nothing happened" next to the warm hit colours.
+    pub const MISS_TEXT: Color32 = Color32::from_rgb(175, 190, 215);
     /// Outline behind a floating number, so it survives a light floor.
     pub const NUMBER_OUTLINE: Color32 = Color32::BLACK;
+
+    // How a creature in the tile info panel stands toward the player. Muted
+    // enough to sit in a panel next to TEXT_PRIMARY; the hostile red is
+    // deliberately softer than DAMAGE_TAKEN so it reads as a label, not a hit.
+    pub const RELATION_HOSTILE: Color32 = Color32::from_rgb(220, 110, 95);
+    pub const RELATION_COMPANION: Color32 = Color32::from_rgb(120, 190, 120);
+    pub const RELATION_FRIENDLY: Color32 = Color32::from_rgb(210, 180, 100);
 
     // Selection/Highlight
     pub const SELECTED: Color32 = Color32::from_rgb(70, 90, 110);
@@ -168,8 +180,15 @@ pub mod colors {
     pub const EFFECT_ROOTED: Color32 = Color32::from_rgb(139, 90, 43);
     pub const EFFECT_INVULNERABLE: Color32 = Color32::from_rgb(255, 215, 0);
     pub const EFFECT_STUNNED: Color32 = Color32::from_rgb(255, 230, 120);
-    pub const EFFECT_WET: Color32 = Color32::from_rgb(110, 170, 255);
-    pub const EFFECT_OILY: Color32 = Color32::from_rgb(150, 105, 60);
+    pub const EFFECT_GUARDING: Color32 = Color32::from_rgb(200, 210, 230);
+    pub const EFFECT_THORNS: Color32 = Color32::from_rgb(120, 200, 80);
+    pub const EFFECT_BONE_WARD: Color32 = Color32::from_rgb(225, 225, 205);
+    pub const EFFECT_WET: Color32 = Color32::from_rgb(90, 160, 230);
+    pub const EFFECT_OILED: Color32 = Color32::from_rgb(150, 115, 70);
+    pub const EFFECT_POISONED: Color32 = Color32::from_rgb(120, 200, 60);
+    pub const EFFECT_BLEEDING: Color32 = Color32::from_rgb(200, 40, 40);
+    /// Sickly zombie-flesh green.
+    pub const EFFECT_GRABBED: Color32 = Color32::from_rgb(150, 170, 110);
 }
 
 /// Color for a status effect, used by both the HUD pips and the text fallback
@@ -190,8 +209,14 @@ pub fn effect_color(effect: crate::components::EffectType) -> Color32 {
         E::Rooted => colors::EFFECT_ROOTED,
         E::Invulnerable => colors::EFFECT_INVULNERABLE,
         E::Stunned => colors::EFFECT_STUNNED,
+        E::Guarding => colors::EFFECT_GUARDING,
+        E::Thorns => colors::EFFECT_THORNS,
+        E::BoneWard => colors::EFFECT_BONE_WARD,
         E::Wet => colors::EFFECT_WET,
-        E::Oily => colors::EFFECT_OILY,
+        E::Oiled => colors::EFFECT_OILED,
+        E::Poisoned => colors::EFFECT_POISONED,
+        E::Bleeding => colors::EFFECT_BLEEDING,
+        E::Grabbed => colors::EFFECT_GRABBED,
     }
 }
 
