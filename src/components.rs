@@ -2162,6 +2162,26 @@ impl Default for LightSource {
 #[derive(Debug, Clone, Copy)]
 pub struct GlowMushroom;
 
+/// Marker for a cave crystal cluster: a walkable, inert light source. Exists
+/// so a floor save can find the cluster again.
+#[derive(Debug, Clone, Copy)]
+pub struct CrystalCluster;
+
+/// Marker for a stalagmite cluster: cover that blocks movement but not
+/// vision. Exists so a floor save can find it again.
+#[derive(Debug, Clone, Copy)]
+pub struct Stalagmite;
+
+/// Marker for the starting-room campfire. Without it a campfire is
+/// indistinguishable from a burning fire patch minus its `Fuel`.
+#[derive(Debug, Clone, Copy)]
+pub struct Campfire;
+
+/// Marker for purely decorative blocking props (shop jars, sacks). The prop's
+/// look lives in its `Sprite`; the marker lets a floor save find it.
+#[derive(Debug, Clone, Copy)]
+pub struct Decoration;
+
 /// Marker component for entities that cause burning when stepped on
 #[derive(Debug, Clone, Copy)]
 pub struct CausesBurning;

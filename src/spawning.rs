@@ -878,7 +878,7 @@ pub mod vendors {
 
 /// Spawn a campfire entity with light source and animated fire sprite
 pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, CausesBurning};
+    use crate::components::{AnimatedSprite, Campfire, CausesBurning};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -887,6 +887,7 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         AnimatedSprite::fire_pit(),
         LightSource::campfire(),
         CausesBurning,
+        Campfire,
     ))
 }
 
@@ -925,12 +926,31 @@ pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     ))
 }
 
+/// Spawn a decorative blocking prop (shop jar, sack) wearing `sprite`.
+pub fn spawn_decoration(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    sprite: Sprite,
+) -> hecs::Entity {
+    use crate::components::{BlocksMovement, Decoration};
+
+    let pos = Position::new(x, y);
+    world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        sprite,
+        Decoration,
+        BlocksMovement,
+    ))
+}
+
 /// Spawn a stalagmite cluster: blocks movement but NOT vision, so it is cover
 /// you can shoot over and cast past but not walk through. Inert otherwise --
 /// nothing destroys one, so it never needs clearing out of the SpatialCache
 /// (which is rebuilt from the world after every floor is populated anyway).
 pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{BlocksMovement, Name};
+    use crate::components::{BlocksMovement, Name, Stalagmite};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -938,6 +958,7 @@ pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::CAVE_STALAGMITES),
         Name::new("Stalagmites"),
+        Stalagmite,
         BlocksMovement,
     ))
 }
@@ -961,7 +982,7 @@ pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 
 /// Spawn a crystal cluster: walkable, sheds a cold light, inert.
 pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::Name;
+    use crate::components::{CrystalCluster, Name};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -970,6 +991,7 @@ pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity 
         Sprite::from_ref(tile_ids::CAVE_CRYSTAL_CLUSTER),
         Name::new("Crystal Cluster"),
         LightSource::crystal(),
+        CrystalCluster,
     ))
 }
 

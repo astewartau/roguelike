@@ -2387,8 +2387,10 @@ mod tests {
         // it is much higher than the original 7.5, and the run is shorter
         // because no actor ever stalls waiting to afford its next move.
         // Re-recorded again when noise started travelling round walls (and
-        // reaching idle enemies).
-        const EXPECTED: &str = "t=265.5901 floor=1 kills=13 hp=99684/100000 pos=10,13 hunger=87.5008 fatigue=29.7790 n=95 roster=5b078c92";
+        // reaching idle enemies). Re-recorded when fresh floors below 0 began
+        // spawning their water animation entities (n 95 -> 101, roster only;
+        // the simulation itself is unchanged).
+        const EXPECTED: &str = "t=265.5901 floor=1 kills=13 hp=99684/100000 pos=10,13 hunger=87.5008 fatigue=29.7790 n=101 roster=2204e214";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

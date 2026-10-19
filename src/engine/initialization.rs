@@ -353,8 +353,9 @@ fn spawn_barrels(
     }
 }
 
-/// Spawn animated water entities at water positions.
-fn spawn_water_entities(world: &mut World, grid: &Grid) {
+/// Spawn animated water entities at water positions. They carry no state, so
+/// a revisited floor respawns them from the grid rather than saving them.
+pub(crate) fn spawn_water_entities(world: &mut World, grid: &Grid) {
     for (x, y) in &grid.water_positions {
         let pos = Position::new(*x, *y);
         world.spawn((
@@ -383,17 +384,11 @@ fn spawn_shop_decorations(
         if !occupancy.claim((*x, *y)) {
             continue;
         }
-        let pos = Position::new(*x, *y);
         // Skip decoration if the sprite pool is somehow empty
         let Some(sprite) = decor_sprites.choose(rng) else {
             continue;
         };
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::from_ref(*sprite),
-            BlocksMovement,
-        ));
+        spawning::spawn_decoration(world, *x, *y, Sprite::from_ref(*sprite));
     }
 }
 
@@ -860,6 +855,7 @@ pub fn spawn_floor_entities(
     spawn_coffins(world, grid, floor_num, &mut occupancy, rng);
     spawn_oil_barrels(world, grid, &mut occupancy, rng);
     spawn_barrels(world, grid, &mut occupancy, rng);
+    spawn_water_entities(world, grid);
     spawn_shop_decorations(world, grid, &mut occupancy, rng);
     spawn_dungeon_traps(world, grid, rng);
     spawn_furniture_pieces(world, grid, &mut occupancy, rng);

@@ -88,6 +88,39 @@ pub enum SavedEntityType {
         kind: crate::components::FurnitureKind,
         used: bool,
     },
+    /// A brazier, standing (`lit`) or toppled.
+    Brazier {
+        lit: bool,
+    },
+    /// The starting-room campfire.
+    Campfire,
+    /// An oil barrel that has not gone off yet. Exploded barrels are
+    /// despawned, so they are simply never saved.
+    OilBarrel {
+        health_current: i32,
+        health_max: i32,
+        /// Seconds left on a lit fuse, if the barrel was burning when the
+        /// player left. It keeps counting down on return.
+        fuse: Option<f32>,
+    },
+    /// A patch of glowing fungus. Burnt patches are consumed by the fire, so
+    /// they are never saved.
+    GlowMushroom,
+    CrystalCluster,
+    Stalagmites,
+    /// A decorative blocking prop (shop jar, sack) and the sprite it wore.
+    Decoration {
+        sprite: Sprite,
+    },
+    /// An unlit oil puddle. Its `Fuel` is kept so a short-lived drip stays a
+    /// drip. Burning puddles are mid-way to burning out and are not saved,
+    /// like every other fire.
+    OilPuddle {
+        fuel: crate::components::Fuel,
+    },
+    /// An unlit spider web. The spinner link is dropped: enemies come back as
+    /// new entities, so the old one would point at nothing.
+    Web,
 }
 
 /// Result of a floor transition. The new grid is written straight into the
@@ -234,7 +267,76 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
         });
     }
 
+    save_scenery(world, &mut entities);
+
     SavedFloor { grid, entities }
+}
+
+/// Save the floor's static scenery: light sources, oil barrels, cave dressing,
+/// shop props and loose fuel on the floor. Each is saved in the state it is in
+/// now, and anything already destroyed is gone from the world and so is not
+/// saved — re-running the spawn passes on a revisit would resurrect it.
+///
+/// Water animation entities are deliberately absent: they carry no state, and
+/// `load_floor` respawns them from `grid.water_positions`.
+fn save_scenery(world: &World, entities: &mut Vec<SavedEntity>) {
+    use crate::components::{
+        BarrelFuse, Brazier, Campfire, CrystalCluster, Decoration, Fuel, GlowMushroom, OilBarrel,
+        OilPuddle, OnFire, Stalagmite, Web,
+    };
+
+    let mut push = |pos: &Position, entity_type| {
+        entities.push(SavedEntity {
+            pos: (pos.x, pos.y),
+            entity_type,
+        });
+    };
+
+    for (_, (pos, brazier)) in world.query::<(&Position, &Brazier)>().iter() {
+        push(pos, SavedEntityType::Brazier { lit: brazier.lit });
+    }
+    for (_, (pos, _)) in world.query::<(&Position, &Campfire)>().iter() {
+        push(pos, SavedEntityType::Campfire);
+    }
+    for (_, (pos, health, fuse)) in world
+        .query::<(&Position, &Health, Option<&BarrelFuse>)>()
+        .with::<&OilBarrel>()
+        .iter()
+    {
+        // A barrel at zero health detonates on the next fire tick; the player
+        // left before it did, so let it go off on return rather than lose it.
+        push(
+            pos,
+            SavedEntityType::OilBarrel {
+                health_current: health.current,
+                health_max: health.max,
+                fuse: fuse.map(|f| f.remaining),
+            },
+        );
+    }
+    for (_, (pos, _)) in world.query::<(&Position, &GlowMushroom)>().iter() {
+        push(pos, SavedEntityType::GlowMushroom);
+    }
+    for (_, (pos, _)) in world.query::<(&Position, &CrystalCluster)>().iter() {
+        push(pos, SavedEntityType::CrystalCluster);
+    }
+    for (_, (pos, _)) in world.query::<(&Position, &Stalagmite)>().iter() {
+        push(pos, SavedEntityType::Stalagmites);
+    }
+    for (_, (pos, sprite)) in world.query::<(&Position, &Sprite)>().with::<&Decoration>().iter() {
+        push(pos, SavedEntityType::Decoration { sprite: *sprite });
+    }
+    for (_, (pos, fuel)) in world
+        .query::<(&Position, &Fuel)>()
+        .with::<&OilPuddle>()
+        .without::<&OnFire>()
+        .iter()
+    {
+        push(pos, SavedEntityType::OilPuddle { fuel: *fuel });
+    }
+    for (_, (pos, _)) in world.query::<(&Position, &Web)>().without::<&OnFire>().iter() {
+        push(pos, SavedEntityType::Web);
+    }
 }
 
 /// Clear all non-player entities from the world.
@@ -307,6 +409,9 @@ pub fn load_floor(
         vis_pos.x = player_spawn_pos.0 as f32;
         vis_pos.y = player_spawn_pos.1 as f32;
     }
+
+    // Stateless, so rebuilt from the grid rather than saved.
+    super::initialization::spawn_water_entities(ctx.world, ctx.grid);
 
     for saved_entity in saved_entities {
         let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
@@ -415,6 +520,47 @@ pub fn load_floor(
                 if *used {
                     crate::systems::furniture::mark_spent(ctx.world, piece);
                 }
+            }
+            SavedEntityType::Brazier { lit } => {
+                let brazier = spawning::spawn_brazier(ctx.world, pos.x, pos.y);
+                if !*lit {
+                    crate::systems::fire::snuff_brazier(ctx.world, brazier);
+                }
+            }
+            SavedEntityType::Campfire => {
+                spawning::spawn_campfire(ctx.world, pos.x, pos.y);
+            }
+            SavedEntityType::OilBarrel { health_current, health_max, fuse } => {
+                let barrel = spawning::spawn_oil_barrel(ctx.world, pos.x, pos.y);
+                if let Ok(mut health) = ctx.world.get::<&mut Health>(barrel) {
+                    health.current = *health_current;
+                    health.max = *health_max;
+                }
+                if let Some(remaining) = fuse {
+                    let _ = ctx.world.insert_one(
+                        barrel,
+                        crate::components::BarrelFuse { remaining: *remaining },
+                    );
+                }
+            }
+            SavedEntityType::GlowMushroom => {
+                spawning::spawn_glow_mushrooms(ctx.world, pos.x, pos.y);
+            }
+            SavedEntityType::CrystalCluster => {
+                spawning::spawn_crystal_cluster(ctx.world, pos.x, pos.y);
+            }
+            SavedEntityType::Stalagmites => {
+                spawning::spawn_stalagmites(ctx.world, pos.x, pos.y);
+            }
+            SavedEntityType::Decoration { sprite } => {
+                spawning::spawn_decoration(ctx.world, pos.x, pos.y, *sprite);
+            }
+            SavedEntityType::OilPuddle { fuel } => {
+                let puddle = spawning::spawn_oil_puddle(ctx.world, pos.x, pos.y);
+                let _ = ctx.world.insert_one(puddle, *fuel);
+            }
+            SavedEntityType::Web => {
+                spawning::spawn_web(ctx.world, pos.x, pos.y, None);
             }
         }
     }
@@ -632,6 +778,99 @@ mod tests {
         assert!(world.get::<&Asleep>(boss).is_err(), "bosses never sleep");
         let health = world.get::<&Health>(boss).map(|h| (h.current, h.max)).unwrap();
         assert_eq!(health, (scaled_max - 7, scaled_max), "scaled boss HP survives");
+    }
+
+    #[test]
+    fn test_revisited_floor_keeps_scenery_in_its_left_state() {
+        use crate::components::{
+            Brazier, CausesBurning, GlowMushroom, LightSource, OilBarrel,
+        };
+
+        let (mut world, grid, player) = setup();
+        let mut events = EventQueue::new();
+        let mut rng = StdRng::seed_from_u64(3);
+
+        // One brazier toppled through the real topple path, one left standing.
+        let toppled = spawning::spawn_brazier(&mut world, 5, 5);
+        assert!(crate::systems::fire::topple_brazier(
+            &mut world, &grid, toppled, &mut events, &mut rng
+        ));
+        spawning::spawn_brazier(&mut world, 9, 9);
+
+        // An intact but scuffed oil barrel, and a mushroom patch.
+        let barrel = spawning::spawn_oil_barrel(&mut world, 12, 5);
+        world.get::<&mut Health>(barrel).unwrap().current -= 1;
+        let barrel_health = *world.get::<&Health>(barrel).unwrap();
+        spawning::spawn_glow_mushrooms(&mut world, 14, 5);
+
+        // The topple spilled fire patches; those are transient and are not
+        // part of what a revisit restores.
+        save_and_reload(&mut world, grid, player);
+
+        let braziers: Vec<(Entity, (i32, i32), bool)> = world
+            .query::<(&Position, &Brazier)>()
+            .iter()
+            .map(|(id, (p, b))| (id, (p.x, p.y), b.lit))
+            .collect();
+        assert_eq!(braziers.len(), 2, "both braziers come back");
+        let (toppled, _, lit) = braziers
+            .iter()
+            .copied()
+            .find(|(_, pos, _)| *pos == (5, 5))
+            .expect("toppled brazier restored at its tile");
+        assert!(!lit, "a toppled brazier stays toppled");
+        assert!(world.get::<&LightSource>(toppled).is_err(), "and stays dark");
+        assert!(world.get::<&CausesBurning>(toppled).is_err(), "and stays cold");
+        let (standing, _, lit) = braziers
+            .iter()
+            .copied()
+            .find(|(_, pos, _)| *pos == (9, 9))
+            .expect("standing brazier restored at its tile");
+        assert!(lit, "a standing brazier stays lit");
+        assert!(world.get::<&LightSource>(standing).is_ok());
+
+        let barrels: Vec<(Entity, (i32, i32))> = world
+            .query::<&Position>()
+            .with::<&OilBarrel>()
+            .iter()
+            .map(|(id, p)| (id, (p.x, p.y)))
+            .collect();
+        assert_eq!(barrels.len(), 1, "the oil barrel comes back");
+        assert_eq!(barrels[0].1, (12, 5));
+        let health = *world.get::<&Health>(barrels[0].0).unwrap();
+        assert_eq!(
+            (health.current, health.max),
+            (barrel_health.current, barrel_health.max),
+            "barrel damage survives the round trip"
+        );
+
+        let mushrooms: Vec<(i32, i32)> = world
+            .query::<&Position>()
+            .with::<&GlowMushroom>()
+            .iter()
+            .map(|(_, p)| (p.x, p.y))
+            .collect();
+        assert_eq!(mushrooms, vec![(14, 5)], "the mushroom patch comes back");
+    }
+
+    #[test]
+    fn test_destroyed_scenery_stays_destroyed() {
+        use crate::components::{GlowMushroom, OilBarrel};
+
+        let (mut world, grid, player) = setup();
+
+        // Spawn then destroy: an exploded barrel and burnt fungus are simply
+        // gone from the world, and must not be resurrected by a revisit.
+        let barrel = spawning::spawn_oil_barrel(&mut world, 12, 5);
+        let mushroom = spawning::spawn_glow_mushrooms(&mut world, 14, 5);
+        world.despawn(barrel).unwrap();
+        crate::systems::fire::ignite_fuel(&mut world, mushroom);
+        assert!(!world.contains(mushroom), "fungus is consumed when it catches");
+
+        save_and_reload(&mut world, grid, player);
+
+        assert_eq!(world.query::<&OilBarrel>().iter().count(), 0);
+        assert_eq!(world.query::<&GlowMushroom>().iter().count(), 0);
     }
 
     #[test]
