@@ -260,6 +260,15 @@ pub const SNEAK_ALERTNESS_MULT: f32 = 0.35;
 /// player — lets you slip past awake-but-unalerted wanderers.
 pub const SNEAK_SIGHT_MULT: f32 = 0.5;
 
+// --- Light (see systems/light.rs) ---
+/// Multiplier on how fast unaware enemies notice a player standing in total
+/// darkness. Below 1 makes shadows a hiding place; most of the dungeon is
+/// unlit, so this is also an overall stealth knob.
+pub const DARK_ALERTNESS_MULT: f32 = 0.75;
+/// Multiplier on how fast they notice a fully lit player (exposure at
+/// `LIGHT_LIT_LEVEL` or above). Between the two it scales linearly.
+pub const LIT_ALERTNESS_MULT: f32 = 1.75;
+
 /// Effective detection radius (tiles) when the target is standing in concealing
 /// terrain (tall grass). At 1, only an adjacent enemy can pick you out of the
 /// grass — everyone else loses your exact position (a ranged enemy will still
@@ -269,10 +278,22 @@ pub const CONCEAL_SIGHT_RADIUS: i32 = 1;
 /// Damage multiplier for hitting an unaware enemy (sneak attack).
 pub const SNEAK_ATTACK_MULT: f32 = 2.0;
 
-/// Noise radii (tiles) for combat actions — louder actions wake sleepers farther.
+/// Noise loudness, in tiles of travel (see systems/noise.rs: sound goes round
+/// walls, not through them, and pays extra to pass a closed door). Louder
+/// actions are heard farther. Combat actions:
 pub const MELEE_NOISE_RADIUS: i32 = 4;
 pub const RANGED_NOISE_RADIUS: i32 = 6;
 pub const EXPLOSION_NOISE_RADIUS: i32 = 10;
+/// A thrown potion or flask shattering where it lands. The lure: loud enough
+/// to pull a room's guards over to look, quieter than a fight.
+pub const THROWN_IMPACT_NOISE_RADIUS: i32 = 5;
+/// An arrow clattering off whatever it lands on — a quieter lure than a
+/// thrown bottle (the bow's own twang is `RANGED_NOISE_RADIUS`, at the archer).
+pub const ARROW_IMPACT_NOISE_RADIUS: i32 = 3;
+/// Extra tiles of travel a noise pays to get through a closed door. At 3 a
+/// fight (4) behind a shut door is only heard right outside it; an explosion
+/// (10) still carries.
+pub const NOISE_DOOR_PENALTY: i32 = 3;
 
 /// Alarm shout: channel duration (seconds), wake radius (tiles), cooldown (seconds).
 pub const SHOUT_DURATION: f32 = 1.5;

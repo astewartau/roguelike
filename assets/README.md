@@ -44,27 +44,31 @@ why the sheets are not committed here.
 ### `items.png` must be extended past stock
 
 This is the one file a fresh clone gets wrong. The sheet must be **27 rows
-tall (864 px)**, because the ability icons live in rows the stock pack does not
-have. [src/tile.rs](../src/tile.rs) addresses them through `rc(row, col, cols)`,
+tall (864 px)**, because the ability and HUD icons live in slots the stock
+pack does not have. [src/tile.rs](../src/tile.rs) addresses them through `rc(row, col, cols)`,
 where **`row` is 1-based** and `col` is 0-based:
 
 - row 26, columns f–g — `raise dead`, `life drain`
+- row 26, columns h–k — the status panel's bar icons: `heart` (health),
+  `star` (XP), `drumstick` (hunger), `sun` (light)
 - row 27, columns a–i — `tame`, `rest`, `sleep`, `barkskin`, `sprint`,
   `disengage`, `tumble`, `crippling shot`, `stun`
 
-[`tools/make_tiles.py`](../tools/make_tiles.py) draws these eleven icons in the
+[`tools/make_tiles.py`](../tools/make_tiles.py) draws these fifteen icons in the
 32rogues palette. It is **tracked in the repository** — unlike everything else
 under `assets/` — and needs nothing but Pillow, so the icons are reproducible
 from a fresh clone rather than something you have to obtain from the author.
 
-It writes individual 32×32 PNGs to `$OUTDIR` (default `/tmp`) plus a magnified
-contact sheet at `/tmp/contact.png`. It does **not** patch `items.png` for you:
-run it, then paste the icons into the sheet at the positions above, growing the
-canvas to 27 rows.
+With `--paste` it writes every icon into its slot in `items.png` itself,
+growing a stock 26-row sheet to 27 rows. Re-running it is harmless: each slot
+is overwritten with the same pixels. Without `--paste` it writes individual
+32×32 PNGs to `$OUTDIR` (default `/tmp`) plus a magnified `contact.png`
+preview, for looking at the art without touching the sheet.
 
 ```bash
 pip install pillow
-OUTDIR=assets/custom python3 tools/make_tiles.py
+python3 tools/make_tiles.py --paste assets/32rogues/items.png
+OUTDIR=assets/custom python3 tools/make_tiles.py   # previews only
 ```
 
 If you skip this, the UV lookup runs off the bottom of the texture. Because the

@@ -671,6 +671,10 @@ impl GameEngine {
                 &mut state.fov_dirty,
             );
 
+            // How lit the player is, for the AI's noticing and the HUD. After
+            // the fire tick, so flames that just caught or burnt out count.
+            systems::light::update_light_exposure(&mut state.world, &state.grid, state.player_entity);
+
             // Passive identification of carried/equipped items, paced by the
             // same game-time delta (frozen while paused/idle).
             systems::identify::tick_identification(
@@ -916,53 +920,33 @@ impl GameEngine {
         crate::constants::LIGHT_COLOR_PLAYER
     }
 
-    /// Collect light sources for rendering, sorted by distance to player.
-    ///
-    /// Each light arrives already coloured and already flickered: the two-sine
-    /// modulation is evaluated here, once per light per frame, rather than per
-    /// fragment in the shader. See [`crate::render::SceneLight`] for why.
-    pub fn light_sources(&self) -> Vec<crate::render::SceneLight> {
+    /// This frame's light map for the renderer: every light, with its
+    /// flicker applied, traced through walls, doors and objects (see
+    /// `systems::light`). The flicker is evaluated here, once per light per
+    /// frame, rather than per fragment in the shader.
+    pub fn render_light_map(&self) -> crate::systems::light::LightMap {
         use crate::constants::*;
+        use crate::systems::light::{light_emitters, LightMap, LightOcclusion};
 
         let Some(ref state) = self.state else {
-            return Vec::new();
+            return LightMap { width: 0, height: 0, rgb: Vec::new() };
         };
-
-        // Get player position for sorting
-        let player_pos = state.world
-            .get::<&crate::components::VisualPosition>(state.player_entity)
-            .map(|vp| (vp.x, vp.y))
-            .unwrap_or((0.0, 0.0));
-
         let time = self.light_flicker_time;
-        let mut sources: Vec<crate::render::SceneLight> = state.world
-            .query::<(&crate::components::Position, &crate::components::LightSource)>()
-            .iter()
-            .map(|(_, (pos, light))| {
+        let lights: Vec<_> = light_emitters(&state.world)
+            .into_iter()
+            .map(|(pos, mut light)| {
                 let flicker = crate::render::flicker_offset(time, light.phase, light.flicker);
-                crate::render::SceneLight {
-                    pos: (pos.x as f32 + 0.5, pos.y as f32 + 0.5),
-                    // Clamped at zero so a hand-authored amplitude over 1.0
-                    // cannot invert a light into a pool of darkness.
-                    radius: (light.radius * (1.0 + flicker * LIGHT_FLICKER_RADIUS_AMPLITUDE))
-                        .max(0.0),
-                    intensity: (light.intensity
-                        * (1.0 + flicker * LIGHT_FLICKER_INTENSITY_AMPLITUDE))
-                        .max(0.0),
-                    color: light.color_or_default(),
-                }
+                // Clamped at zero so a hand-authored amplitude over 1.0
+                // cannot invert a light into a pool of darkness.
+                light.radius =
+                    (light.radius * (1.0 + flicker * LIGHT_FLICKER_RADIUS_AMPLITUDE)).max(0.0);
+                light.intensity = (light.intensity
+                    * (1.0 + flicker * LIGHT_FLICKER_INTENSITY_AMPLITUDE))
+                    .max(0.0);
+                (pos, light)
             })
             .collect();
-
-        // Sort by distance to player so nearby lights are prioritized
-        // (MAX_SCENE_LIGHTS limit)
-        sources.sort_by(|a, b| {
-            let dist_a = (a.pos.0 - player_pos.0).powi(2) + (a.pos.1 - player_pos.1).powi(2);
-            let dist_b = (b.pos.0 - player_pos.0).powi(2) + (b.pos.1 - player_pos.1).powi(2);
-            dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        sources
+        LightMap::build(&LightOcclusion::build(&state.world, &state.grid), &lights)
     }
 
     /// Run the UI and return actions. This handles the borrowing internally.
@@ -2329,8 +2313,9 @@ mod tests {
     /// stayed reproducible, they just took a different path.
     #[test]
     fn test_fixed_seed_replays_identically_under_pressure() {
-        // Updated for the energy removal; see the note on the test above.
-        const EXPECTED: &str = "t=354.1439 floor=0 kills=14 hp=-9/50 pos=9,10 hunger=83.3344 fatigue=39.0035 n=92 roster=571df8a0";
+        // Re-recorded when noise started travelling round walls (and
+        // reaching idle enemies); see the note on the test above.
+        const EXPECTED: &str = "t=355.5580 floor=0 kills=11 hp=-9/50 pos=12,10 hunger=83.3344 fatigue=38.2366 n=98 roster=84898424";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2397,7 +2382,9 @@ mod tests {
         // Fatigue is now the integral of effort rather than a second clock, so
         // it is much higher than the original 7.5, and the run is shorter
         // because no actor ever stalls waiting to afford its next move.
-        const EXPECTED: &str = "t=262.4901 floor=1 kills=16 hp=99733/100000 pos=10,13 hunger=87.5008 fatigue=30.0590 n=95 roster=86f0c6b7";
+        // Re-recorded again when noise started travelling round walls (and
+        // reaching idle enemies).
+        const EXPECTED: &str = "t=265.5901 floor=1 kills=13 hp=99684/100000 pos=10,13 hunger=87.5008 fatigue=29.7790 n=95 roster=5b078c92";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

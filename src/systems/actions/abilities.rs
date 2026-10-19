@@ -26,10 +26,10 @@ pub fn apply_blink(
     world: &mut World,
     grid: &Grid,
     entity: Entity,
-    target_x: i32,
-    target_y: i32,
+    (target_x, target_y): (i32, i32),
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     // Get current position
     let current_pos = match queries::get_entity_position(world, entity) {
@@ -71,6 +71,7 @@ pub fn apply_blink(
         from: current_pos,
         to: (target_x, target_y),
     });
+    super::enter_tile(world, grid, entity, target_x, target_y, events, rng);
 
     ActionResult::Completed
 }
@@ -85,6 +86,7 @@ pub fn scaled_blink_range(world: &World, caster: Entity) -> i32 {
 /// Apply fireball action - AoE damage at target location
 pub fn apply_fireball(
     world: &mut World,
+    grid: &Grid,
     caster: Entity,
     target_x: i32,
     target_y: i32,
@@ -113,7 +115,7 @@ pub fn apply_fireball(
     });
 
     // A fireball is very loud — wake sleeping enemies over a wide area.
-    crate::systems::ai::wake_enemies_in_radius(world, (target_x, target_y), EXPLOSION_NOISE_RADIUS);
+    crate::systems::noise::make_noise(world, grid, (target_x, target_y), EXPLOSION_NOISE_RADIUS);
 
     // Collect all attackable entities in radius
     let mut damaged: Vec<(Entity, i32, i32)> = Vec::new();
@@ -128,7 +130,7 @@ pub fn apply_fireball(
     // Apply damage to all
     for (entity, x, y) in damaged {
         // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, entity, damage, rng);
+        crate::systems::combat::apply_damage(world, grid, entity, damage, rng);
         // Interrupt life drain if entity was channeling
         interrupt_life_drain_on_damage(world, entity, events);
         // Generate threat on fireball targets
@@ -287,8 +289,8 @@ pub fn apply_activate_fear(
 /// Takes the full effect context because completing a tame drops the target's
 /// `BlocksMovement`, which has to be mirrored into the `SpatialCache`.
 pub fn apply_wait(ctx: &mut EffectCtx, entity: Entity) -> ActionResult {
-    let EffectCtx { world, grid: _grid, spatial: spatial_cache, events, rng } = ctx;
-    let world = &mut **world;
+    let EffectCtx { world, grid, spatial: spatial_cache, events, rng } = ctx;
+    let (world, grid) = (&mut **world, &**grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
     // Check if entity is taming something
@@ -379,7 +381,7 @@ pub fn apply_wait(ctx: &mut EffectCtx, entity: Entity) -> ActionResult {
         .map(|d| (d.target, d.tick_timer));
 
     if let Some((target, tick_timer)) = drain_info {
-        tick_life_drain(world, entity, target, tick_timer, events, rng);
+        tick_life_drain(world, grid, entity, target, tick_timer, events, rng);
     }
 
     ActionResult::Completed
@@ -411,10 +413,10 @@ pub fn apply_cast_learned_spell(
 
     let result = match ability {
         AbilityType::LearnedBlink => {
-            apply_blink(world, grid, caster, target_x, target_y, spatial_cache, events)
+            apply_blink(world, grid, caster, (target_x, target_y), spatial_cache, events, rng)
         }
         AbilityType::LearnedFireball => {
-            apply_fireball(world, caster, target_x, target_y, events, rng)
+            apply_fireball(world, grid, caster, target_x, target_y, events, rng)
         }
         AbilityType::LearnedFear => match queries::get_entity_position(world, caster) {
             Some(pos) => {
@@ -583,6 +585,7 @@ fn complete_raise_dead(
 /// Tick life drain channeling - applies damage and healing
 fn tick_life_drain(
     world: &mut World,
+    grid: &Grid,
     caster: Entity,
     target: Entity,
     tick_timer: f32,
@@ -627,7 +630,7 @@ fn tick_life_drain(
             .max(1);
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        crate::systems::combat::apply_damage(world, target, damage, rng);
+        crate::systems::combat::apply_damage(world, grid, target, damage, rng);
         let target_died = world
             .get::<&Health>(target)
             .map(|h| h.current <= 0)
@@ -792,6 +795,7 @@ pub fn apply_disengage(
     entity: Entity,
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     use crate::fov::Fov;
     use crate::constants::{DISENGAGE_DISTANCE, FOV_RADIUS};
@@ -872,6 +876,7 @@ pub fn apply_disengage(
                     vpos.x = target_x as f32;
                     vpos.y = target_y as f32;
                 }
+                super::enter_tile(world, grid, entity, target_x, target_y, events, rng);
                 return ActionResult::Completed;
             }
         }
@@ -886,10 +891,10 @@ pub fn apply_tumble(
     world: &mut World,
     grid: &Grid,
     entity: Entity,
-    target_x: i32,
-    target_y: i32,
+    (target_x, target_y): (i32, i32),
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
+    rng: &mut impl Rng,
 ) -> ActionResult {
     use crate::constants::TUMBLE_INVULN_DURATION;
 
@@ -920,8 +925,10 @@ pub fn apply_tumble(
         vpos.y = target_y as f32;
     }
 
-    // Apply invulnerability effect
+    // Apply invulnerability effect (before landing: the roll protects from
+    // damage, not from what the tile itself does to you)
     effects::add_effect_to_entity(world, entity, EffectType::Invulnerable, TUMBLE_INVULN_DURATION);
+    super::enter_tile(world, grid, entity, target_x, target_y, events, rng);
 
     ActionResult::Completed
 }
@@ -1016,6 +1023,27 @@ mod tests {
     use super::*;
     use crate::components::{RaisedUndead, Stats};
     use crate::events::GameEvent;
+
+    /// Blinking onto a web roots you, the same as walking into it would.
+    #[test]
+    fn test_blink_landing_triggers_the_tile() {
+        use rand::SeedableRng;
+        let mut world = World::new();
+        let grid = Grid::filled(12, 12, crate::tile::TileType::Floor);
+        let caster = spawn_caster(&mut world, 10);
+        world.insert_one(caster, crate::components::StatusEffects::new()).unwrap();
+        crate::spawning::spawn_web(&mut world, 7, 5, None);
+        let mut cache = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+
+        let result = apply_blink(&mut world, &grid, caster, (7, 5), &mut cache, &mut events, &mut rng);
+        assert_eq!(result, ActionResult::Completed);
+        assert!(
+            effects::entity_has_effect(&world, caster, EffectType::Rooted),
+            "blinking into a web still gets you stuck"
+        );
+    }
 
     fn spawn_caster(world: &mut World, int: i32) -> Entity {
         let pos = Position::new(5, 5);

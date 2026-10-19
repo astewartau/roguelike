@@ -125,7 +125,35 @@ pub const OIL_BARRELS_CORRIDOR_MIN: usize = 1;
 /// Corridor oil barrels placed when the floor roll succeeds (max).
 pub const OIL_BARRELS_CORRIDOR_MAX: usize = 2;
 
-/// How long a water splash keeps grass tiles too wet to ignite.
-pub const WET_GRASS_DURATION: f32 = 30.0;
+/// How long a water splash keeps tiles too wet for damp-sensitive fuel
+/// (grass, fungus) to ignite.
+pub const WET_TILE_DURATION: f32 = 30.0;
+// =============================================================================
+// COATINGS: WET AND OILY (what creatures carry on them — see systems/coatings.rs)
+// =============================================================================
+
+/// How long (game seconds) a soaking lasts once you are out of the water.
+/// Longer makes water a more durable fire shield; standing in water keeps
+/// refreshing it.
+pub const WET_DURATION: f32 = 30.0;
+/// How many times faster you dry off standing on or next to a fire. Higher
+/// makes "dry off by the brazier" quicker and a wet shield thinner in a blaze.
+pub const WET_DRY_NEAR_FIRE_MULT: f32 = 4.0;
+/// How long (game seconds) an oil coating lasts. Longer means a longer drip
+/// trail and a longer window to set the victim alight.
+pub const OILY_DURATION: f32 = 40.0;
+/// Flammability multiplier while Oily (result capped at 1.0). Higher makes
+/// an oily creature catch from fire nearby almost every step.
+pub const OILY_FLAMMABILITY_MULT: f32 = 3.0;
+/// Minimum flammability while Oily, so things that never burn on their own
+/// (bone, slime) will burn once coated.
+pub const OILY_MIN_FLAMMABILITY: f32 = 0.6;
+/// Chance per step that an oily walker drips oil on the tile it leaves.
+/// Higher makes an unbroken fuse trail; lower leaves gaps fire has to jump.
+pub const OILY_DRIP_CHANCE: f64 = 0.5;
+/// How long a drip of oil burns: shorter than a full puddle
+/// (`OIL_BURN_DURATION`), since there is less fuel in it.
+pub const OIL_DRIP_BURN_DURATION: f32 = 4.0;
+
 /// Splash radius (Chebyshev) of a thrown water flask.
 pub const WATER_SPLASH_RADIUS: i32 = 1;

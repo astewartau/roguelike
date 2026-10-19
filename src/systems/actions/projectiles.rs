@@ -124,7 +124,7 @@ pub fn apply_shoot_bow(
     // Firing a bow is loud — wake nearby sleeping enemies (doubled radius if
     // the shooter wears CursedLoud gear).
     let noise = crate::systems::combat::attack_noise_radius(world, shooter, RANGED_NOISE_RADIUS);
-    crate::systems::ai::wake_enemies_in_radius(world, (start_x, start_y), noise);
+    crate::systems::noise::make_noise(world, grid, (start_x, start_y), noise);
 
     // Calculate normalized direction
     let dx = target_x - start_x;
@@ -338,11 +338,13 @@ pub fn apply_potion_splash(
     potion_type: ItemType,
     center_x: i32,
     center_y: i32,
+    events: &mut EventQueue,
 ) {
-    // Water flasks don't buff anyone: the splash extinguishes fires (entities,
-    // grass, oil) and soaks grass tiles. Handled wholesale by the fire system.
+    // Water flasks don't buff anyone: the splash soaks everyone in it,
+    // extinguishes fires (entities, grass, oil) and soaks the tiles. Handled
+    // wholesale by the fire system.
     if potion_type == ItemType::WaterFlaskFull {
-        crate::systems::fire::splash_water(world, grid, center_x, center_y, WATER_SPLASH_RADIUS);
+        crate::systems::fire::splash_water(world, grid, center_x, center_y, WATER_SPLASH_RADIUS, events);
         return;
     }
     // INT-scaled confusion when the player throws it (magic-adjacent trick);

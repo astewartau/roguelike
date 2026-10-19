@@ -1,38 +1,41 @@
-//! Lighting constants: light colours, flicker shaping, and the size of the
-//! per-frame light array the tile shader reads.
+//! Lighting constants: light colours, flicker shaping, falloff and occlusion.
 //!
-//! These drive `Engine::light_sources` (src/engine/mod.rs), the `SceneLight`
-//! packing in [`crate::render`], and the tile fragment shader in
-//! src/renderer.rs. Colours live here rather than in the shader source so a
+//! These drive the per-frame light map built in `systems::light` (which the
+//! tile shader in src/renderer.rs samples as a texture) and the gameplay light
+//! the AI reads. Colours live here rather than in the shader source so a
 //! retune is a recompile of this file, not a rewrite of GLSL.
 
-/// How many light sources the tile shader can take in one frame.
-///
-/// # Why this number
-///
-/// The shader uploads two parallel uniform arrays - `vec4 uLights[N]` for
-/// `(x, y, radius, intensity)` and `vec3 uLightColors[N]` - which the driver
-/// counts as `8 * N` fragment uniform components. GL 3.3 core only
-/// *guarantees* `GL_MAX_FRAGMENT_UNIFORM_COMPONENTS >= 1024`; real desktop
-/// drivers give far more, but 64 keeps us at 512 components, half the
-/// guaranteed floor, with room left for the handful of scalar uniforms beside
-/// it. The previous `vec4[256]` was already 1024 components on its own and
-/// would have failed to link on a conservative driver the moment a second
-/// array was added.
-///
-/// 64 is also comfortably above what a floor actually produces. Measured over
-/// 200 generated 40x40 floors, braziers average 3.2 and peak at 9; add the
-/// starting campfire, 2-4 glowing fungus patches, 1-3 crystal clusters, a few
-/// burning oil puddles, and the [`crate::constants::WEB_TOTAL_CAP`] of 24
-/// webs all alight at once, and the plausible worst case is still under 45 -
-/// spread over a whole floor, of which the camera shows a fraction.
-/// `light_sources` sorts by distance to the player before truncating, so even
-/// past the cap the lights that get dropped are the far ones.
-///
-/// Raising it costs 8 uniform components per light and a longer per-fragment
-/// loop; lowering it makes distant lights pop in as the player walks toward
-/// them.
-pub const MAX_SCENE_LIGHTS: usize = 64;
+// =============================================================================
+// FALLOFF AND OCCLUSION (see systems/light.rs)
+// =============================================================================
+
+/// The player's own light: what you see by in the dark, not a lamp (enemies
+/// don't count it, see systems/light.rs). Brightness at the edge of your
+/// sight, and everywhere you can see. Lower makes unlit areas darker, which
+/// is what gives lights their contrast.
+pub const LIGHT_PLAYER_AMBIENT: f32 = 0.12;
+/// Extra brightness of the pool around the player, falling off as `t^2` over
+/// the sight radius (full at your feet, nothing at the edge).
+pub const LIGHT_PLAYER_FOCUSED: f32 = 0.2;
+/// Brightness of remembered tiles: explored but out of sight. Keep it below
+/// `LIGHT_PLAYER_AMBIENT`, or the remembered dungeon reads brighter than the
+/// dark at the edge of your view. It must also stay below 0.25, which is how
+/// the tile shader tells a remembered tile from a visible one.
+pub const LIGHT_FOG_BRIGHTNESS: f32 = 0.08;
+
+/// Weight of a light's focused falloff (`t^2`, `t = 1 - d/r`): the bright pool
+/// close to the source.
+pub const LIGHT_FOCUSED_WEIGHT: f32 = 0.7;
+/// Weight of a light's spread falloff (`t`): the gentle wash that carries it
+/// out to its radius. Raising it (and lowering FOCUSED) flattens lights into
+/// wide even pools; lowering it makes tight bright spots.
+pub const LIGHT_SPREAD_WEIGHT: f32 = 0.3;
+/// Fraction of light a tall-grass tile lets through. Lower makes grass a
+/// deeper shade to hide in behind a fire; 0 would make it a wall.
+pub const LIGHT_TALL_GRASS_TRANSMITTANCE: f32 = 0.5;
+/// Fraction of light a solid object (barrel, chest, coffin, stalagmite...)
+/// lets through, so it casts a soft shadow rather than a hard one.
+pub const LIGHT_OBJECT_TRANSMITTANCE: f32 = 0.6;
 
 // =============================================================================
 // LIGHT COLOURS
@@ -200,3 +203,21 @@ pub const LIGHT_PLAYER_FLICKER_PHASE: f32 = 1.3;
 /// `0.25` keeps a trace of warmth in the air around a brazier while leaving
 /// the walls reading as stone. Past about `0.4` the khaki comes back.
 pub const LIGHT_AMBIENT_TINT: f32 = 0.25;
+
+// =============================================================================
+// LIGHT AS GAMEPLAY (see systems/light.rs)
+// =============================================================================
+
+/// Radius (tiles) of the glow a burning creature or barrel sheds. Bigger makes
+/// anyone on fire a beacon from further off, and lights up its neighbours.
+pub const BURNING_LIGHT_RADIUS: f32 = 4.0;
+/// Intensity of that glow (same scale as `LightSource::intensity`).
+pub const BURNING_LIGHT_INTENSITY: f32 = 0.85;
+
+/// Light exposure at which you count as fully lit: the HUD light bar is full
+/// and unaware enemies notice you at `LIT_ALERTNESS_MULT`. Below it both scale
+/// down linearly to darkness. On open floor that puts a campfire's pool at
+/// full within 3 tiles, ~80% at 4, ~50% at 5, gone by 8; a brazier's at full
+/// within 2, ~75% at 3, ~40% at 4; one tile off glowing fungus ~75%. Lower
+/// makes lights count for more, further out.
+pub const LIGHT_LIT_LEVEL: f32 = 0.4;

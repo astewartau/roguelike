@@ -1,0 +1,8 @@
+# Gitignored files Claude Code copies into each new worktree it creates
+# (.gitignore syntax; only paths that are also gitignored get copied).
+#
+# The licensed art and audio under assets/ can't be committed (see
+# assets/README.md), so without this a fresh worktree has only the README and
+# the game panics on launch. Same pattern as .gitignore, so exactly the
+# ignored files match and the tracked README is left alone.
+assets/*

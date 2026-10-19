@@ -353,10 +353,10 @@ fn apply_action_effects(
             actions::apply_throw_potion(world, entity, *potion_type, *target_x, *target_y, events, current_time)
         }
         ActionType::Blink { target_x, target_y } => {
-            actions::apply_blink(world, grid, entity, *target_x, *target_y, spatial_cache, events)
+            actions::apply_blink(world, grid, entity, (*target_x, *target_y), spatial_cache, events, rng)
         }
         ActionType::CastFireball { target_x, target_y } => {
-            actions::apply_fireball(world, entity, *target_x, *target_y, events, rng)
+            actions::apply_fireball(world, grid, entity, *target_x, *target_y, events, rng)
         }
         ActionType::EquipWeapon { item_index } => {
             actions::apply_equip_weapon(world, entity, *item_index)
@@ -395,10 +395,10 @@ fn apply_action_effects(
             actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
         }
         ActionType::Disengage => {
-            actions::apply_disengage(world, grid, entity, spatial_cache, events)
+            actions::apply_disengage(world, grid, entity, spatial_cache, events, rng)
         }
         ActionType::Tumble { target_x, target_y } => {
-            actions::apply_tumble(world, grid, entity, *target_x, *target_y, spatial_cache, events)
+            actions::apply_tumble(world, grid, entity, (*target_x, *target_y), spatial_cache, events, rng)
         }
         ActionType::PlaceSnareTrap { target_x, target_y } => {
             actions::apply_place_snare_trap(world, entity, *target_x, *target_y, events)

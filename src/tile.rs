@@ -253,8 +253,12 @@ pub mod tile_ids {
     /// icon size reads as a domed metal rivet. Brass-tinted (see
     /// `style::colors::PANEL_RIVET_TINT`) to pull it into the panel palette.
     pub const PANEL_RIVET: (SpriteSheet, u32) = (SpriteSheet::Items, rc(12, 5, ITEMS_COLS)); // 12.f buckler 2
-    pub const HEART: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 0, ITEMS_COLS)); // 17.a red pendant
-    pub const DIAMOND: (SpriteSheet, u32) = (SpriteSheet::Items, rc(17, 2, ITEMS_COLS)); // 17.c crystal pendant
+    /// HUD bar icons. The sheets have no heart, star, drumstick or sun, so these are
+    /// custom (tools/make_tiles.py, `--paste` writes them into items.png).
+    pub const HUD_HEALTH: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 7, ITEMS_COLS)); // 26.h heart (custom)
+    pub const HUD_XP: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 8, ITEMS_COLS)); // 26.i star (custom)
+    pub const HUD_HUNGER: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 9, ITEMS_COLS)); // 26.j drumstick (custom)
+    pub const HUD_LIGHT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(26, 10, ITEMS_COLS)); // 26.k sun (custom)
 
     // ===== ANIMATED TILES SHEET (light sources, environmental effects) =====
 

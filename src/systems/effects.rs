@@ -53,29 +53,40 @@ pub fn entity_has_effect(world: &World, entity: Entity, effect_type: EffectType)
         .unwrap_or(false)
 }
 
-/// Add or refresh an effect on an entity.
-/// Fear never sticks to `FearImmune` entities (bosses).
+/// Add or refresh an effect on an entity. Returns whether it took.
+///
+/// This is the chokepoint every status goes through, so the rules about which
+/// effects exclude each other live here rather than at each source:
+///
+/// - Fear never sticks to `FearImmune` entities (bosses).
+/// - Nothing Wet can catch fire.
+/// - Becoming Wet puts out Burning and washes off Oily; becoming Oily dries
+///   you off. Whichever coating came last wins.
 pub fn add_effect_to_entity(
     world: &mut World,
     entity: Entity,
     effect_type: EffectType,
     duration: f32,
-) {
+) -> bool {
     if effect_type == EffectType::Feared
         && world.get::<&crate::components::FearImmune>(entity).is_ok()
     {
-        return;
+        return false;
     }
-    if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-        add_effect(&mut effects, effect_type, duration);
+    let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) else {
+        return false;
+    };
+    match effect_type {
+        EffectType::Burning if has_effect(&effects, EffectType::Wet) => return false,
+        EffectType::Wet => {
+            remove_effect(&mut effects, EffectType::Burning);
+            remove_effect(&mut effects, EffectType::Oily);
+        }
+        EffectType::Oily => remove_effect(&mut effects, EffectType::Wet),
+        _ => {}
     }
-}
-
-/// Remove an effect from an entity
-pub fn remove_effect_from_entity(world: &mut World, entity: Entity, effect_type: EffectType) {
-    if let Ok(mut effects) = world.get::<&mut StatusEffects>(entity) {
-        remove_effect(&mut effects, effect_type);
-    }
+    add_effect(&mut effects, effect_type, duration);
+    true
 }
 
 // =============================================================================
@@ -135,5 +146,29 @@ mod tests {
             entity_has_effect(&world, boss, EffectType::Slowed),
             "other effects still apply to FearImmune entities"
         );
+    }
+
+    #[test]
+    fn test_wet_blocks_burning_and_coatings_replace_each_other() {
+        let mut world = World::new();
+        let e = world.spawn((StatusEffects::new(),));
+
+        // Burning, then soaked: the water puts the fire out.
+        assert!(add_effect_to_entity(&mut world, e, EffectType::Burning, 5.0));
+        assert!(add_effect_to_entity(&mut world, e, EffectType::Wet, 5.0));
+        assert!(!entity_has_effect(&world, e, EffectType::Burning), "water douses");
+
+        // While wet, fire doesn't take.
+        assert!(!add_effect_to_entity(&mut world, e, EffectType::Burning, 5.0));
+        assert!(!entity_has_effect(&world, e, EffectType::Burning), "wet things don't burn");
+
+        // Oil over water: the newer coating wins, and then fire takes again.
+        add_effect_to_entity(&mut world, e, EffectType::Oily, 5.0);
+        assert!(!entity_has_effect(&world, e, EffectType::Wet));
+        assert!(add_effect_to_entity(&mut world, e, EffectType::Burning, 5.0));
+
+        // And water over oil washes it off.
+        add_effect_to_entity(&mut world, e, EffectType::Wet, 5.0);
+        assert!(!entity_has_effect(&world, e, EffectType::Oily));
     }
 }

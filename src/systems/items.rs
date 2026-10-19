@@ -71,16 +71,19 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
 
     // Water flasks are stateful (empty <-> full) and are handled specially
     // rather than through the def table:
-    //  - drinking a full flask douses any Burning on the drinker and leaves
+    //  - drinking a full flask soaks the drinker (Wet: douses any Burning,
+    //    washes off oil, and keeps them from catching for a while) and leaves
     //    the empty flask behind (the kind swaps in place; same weight);
     //  - an empty flask needs grid access to find water, so the caller
     //    resolves the returned FillWaterFlask via `fill_water_flask`.
     match item_type {
         ItemType::WaterFlaskFull => {
-            super::effects::remove_effect_from_entity(
+            // Tipped over your head as much as drunk: you come out Wet.
+            super::effects::add_effect_to_entity(
                 world,
                 entity,
-                crate::components::EffectType::Burning,
+                crate::components::EffectType::Wet,
+                crate::constants::WET_DURATION,
             );
             if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
                 if let Some(item) = inv.items.get_mut(item_index) {

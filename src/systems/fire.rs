@@ -1,25 +1,37 @@
 //! Spreading fire system.
 //!
-//! Fire is carried by entities: burning creatures (the `Burning` status),
-//! burning-grass hazard entities (`BurningGrass` + `CausesBurning`), and
-//! burning oil puddles (`OilPuddle` + `BurningOil`). This system advances
-//! burnouts (grass reverts to floor, spent oil burns away), ticks oil-barrel
-//! fuses (and detonates them), dries wet grass, and — in discrete game-time
-//! steps — spreads fire to adjacent flammable tiles, oil, and creatures.
+//! Fire is carried by entities, in two forms:
+//!
+//! - **Creatures** (and oil barrels) burn through the `Burning` status, and
+//!   catch at a rate scaled by their flammability: `Combustible`, adjusted by
+//!   what they are coated in (`coatings::effective_flammability` — Wet things
+//!   can't catch, Oily things catch readily).
+//! - **Fuel** — anything that sits on a tile and burns: grass fires, oil
+//!   puddles, webs, glowing fungus. Each carries a `Fuel` component that says
+//!   as data how readily it catches, how long it burns, what water does to it
+//!   and what it leaves behind; it gains `OnFire` while alight. Every kind of
+//!   fuel goes through the same ignite / spread / douse / burnout code here,
+//!   so a new burnable object needs a `Fuel` constructor and nothing else.
+//!
+//! Tall grass is terrain rather than an entity: when it catches, a grass-fire
+//! patch (`Fuel::grass_fire`) is spawned on the tile, and that patch's
+//! `Burnout::ScorchGrass` burns the tile down to floor when it is spent.
+//!
+//! This system also ticks oil-barrel fuses (and detonates them) and dries
+//! soaked tiles. Spread happens in discrete game-time steps.
 //!
 //! It runs from the engine tick (not the deep sim) so it can take `&mut Grid`,
 //! and is paced by the game-clock delta this frame (so it freezes when paused).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    AnimatedSprite, BarrelFuse, Brazier, BurningGrass, BurningOil, BurningWeb, CausesBurning,
-    Combustible, EffectType, GlowMushroom, Health, LightSource, OilBarrel, OilPuddle, Position,
-    Sprite,
-    StatusEffects, Web, WetGrass,
+    AnimatedSprite, BarrelFuse, Brazier, Burnout, CausesBurning, Doused, EffectType,
+    Fuel, Health, Ignition, LightSource, OilBarrel, OilPuddle, OnFire, Position, Sprite,
+    StatusEffects, WetTile,
 };
 use crate::constants::*;
 use crate::engine::EffectCtx;
@@ -33,9 +45,9 @@ const NEIGHBORS: [(i32, i32); 8] = [
     (-1, -1), (-1, 1), (1, -1), (1, 1),
 ];
 
-/// Advance burning grass/oil, barrel fuses, and fire spread. `game_dt` is
-/// elapsed game-time this frame; `accumulator` carries fractional game-time
-/// between discrete spread steps.
+/// Advance burning fuel, barrel fuses, drying tiles, and fire spread.
+/// `game_dt` is elapsed game-time this frame; `accumulator` carries
+/// fractional game-time between discrete spread steps.
 pub fn tick_fire(
     ctx: &mut EffectCtx,
     game_dt: f32,
@@ -50,66 +62,44 @@ pub fn tick_fire(
         return;
     }
 
-    // 0. Water douses fire: anything standing on a water tile can't stay alight.
-    let to_douse: Vec<Entity> = world
+    // 0. Water soaks whatever stands in it (which also puts out fire and
+    //    washes off oil), and anything wet near a fire dries off faster.
+    let in_water: Vec<Entity> = world
         .query::<(&Position, &StatusEffects)>()
         .iter()
-        .filter(|(_, (p, s))| {
-            grid.water_positions.contains(&(p.x, p.y))
-                && s.effects.iter().any(|e| e.effect_type == EffectType::Burning)
-        })
+        .filter(|(_, (p, _))| grid.water_positions.contains(&(p.x, p.y)))
         .map(|(id, _)| id)
         .collect();
-    for id in to_douse {
-        crate::systems::effects::remove_effect_from_entity(world, id, EffectType::Burning);
+    for id in in_water {
+        crate::systems::coatings::soak(world, id, events);
     }
+    crate::systems::coatings::dry_near_fire(world, game_dt);
 
-    // 1. Burnout: advance each burning-grass timer; revert tile on expiry.
-    let mut burned_out: Vec<(Entity, (i32, i32))> = Vec::new();
-    for (id, (pos, bg)) in world.query_mut::<(&Position, &mut BurningGrass)>() {
-        bg.remaining -= game_dt;
-        if bg.remaining <= 0.0 {
-            burned_out.push((id, (pos.x, pos.y)));
+    // 1. Burnout: every burning fuel counts down, then leaves what its
+    //    `Burnout` says it leaves.
+    let mut spent: Vec<(Entity, (i32, i32), Burnout)> = Vec::new();
+    for (id, (pos, fuel, fire)) in world.query_mut::<(&Position, &Fuel, &mut OnFire)>() {
+        fire.remaining -= game_dt;
+        if fire.remaining <= 0.0 {
+            spent.push((id, (pos.x, pos.y), fuel.burnout));
         }
     }
-    for (id, (x, y)) in burned_out {
+    for (id, (x, y), burnout) in spent {
         let _ = world.despawn(id);
-        if let Some(tile) = grid.get_mut(x, y) {
-            if tile.tile_type == TileType::TallGrass {
-                tile.tile_type = TileType::Floor;
-                tile.sprite_override = None;
-                *fov_dirty = true; // grass blocked vision; floor doesn't
+        if burnout == Burnout::ScorchGrass {
+            if let Some(tile) = grid.get_mut(x, y) {
+                if tile.tile_type == TileType::TallGrass {
+                    tile.tile_type = TileType::Floor;
+                    tile.sprite_override = None;
+                    *fov_dirty = true; // grass blocked vision; floor doesn't
+                }
             }
         }
     }
 
-    // 2. Oil burnout: spent puddles burn away entirely.
-    let mut oil_spent: Vec<Entity> = Vec::new();
-    for (id, oil) in world.query_mut::<&mut BurningOil>() {
-        oil.remaining -= game_dt;
-        if oil.remaining <= 0.0 {
-            oil_spent.push(id);
-        }
-    }
-    for id in oil_spent {
-        let _ = world.despawn(id);
-    }
-
-    // 2b. Web burnout: an ignited web is consumed in seconds.
-    let mut web_spent: Vec<Entity> = Vec::new();
-    for (id, web) in world.query_mut::<&mut BurningWeb>() {
-        web.remaining -= game_dt;
-        if web.remaining <= 0.0 {
-            web_spent.push(id);
-        }
-    }
-    for id in web_spent {
-        let _ = world.despawn(id);
-    }
-
-    // 3. Wet grass dries out.
+    // 2. Soaked tiles dry out.
     let mut dried: Vec<Entity> = Vec::new();
-    for (id, wet) in world.query_mut::<&mut WetGrass>() {
+    for (id, wet) in world.query_mut::<&mut WetTile>() {
         wet.remaining -= game_dt;
         if wet.remaining <= 0.0 {
             dried.push(id);
@@ -119,7 +109,7 @@ pub fn tick_fire(
         let _ = world.despawn(id);
     }
 
-    // 4. Oil barrels: a burning barrel lights its fuse; destroyed barrels
+    // 3. Oil barrels: a burning barrel lights its fuse; destroyed barrels
     //    (health <= 0) skip the fuse and detonate immediately.
     let to_fuse: Vec<Entity> = world
         .query::<(&OilBarrel, &StatusEffects)>()
@@ -148,7 +138,7 @@ pub fn tick_fire(
         explode_barrel(world, grid, spatial_cache, id, events, rng);
     }
 
-    // 5. Spread in fixed game-time steps so behaviour is frame-rate independent.
+    // 4. Spread in fixed game-time steps so behaviour is frame-rate independent.
     *accumulator += game_dt;
     while *accumulator >= FIRE_STEP_INTERVAL {
         *accumulator -= FIRE_STEP_INTERVAL;
@@ -157,8 +147,9 @@ pub fn tick_fire(
 }
 
 /// On a melee hit, a burning combatant may set the other alight (medium chance
-/// scaled by the target's flammability). No-op unless `from` is burning and `to`
-/// is combustible and not already burning.
+/// scaled by the target's effective flammability — see
+/// `coatings::effective_flammability`). No-op unless `from` is burning and
+/// `to` can burn and isn't already.
 pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut impl Rng) {
     let from_burning = world
         .get::<&StatusEffects>(from)
@@ -167,10 +158,10 @@ pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut 
     if !from_burning {
         return;
     }
-    let flammability = match world.get::<&Combustible>(to) {
-        Ok(c) => c.flammability,
-        Err(_) => return,
-    };
+    let flammability = crate::systems::coatings::effective_flammability(world, to);
+    if flammability <= 0.0 {
+        return;
+    }
     let already = world
         .get::<&StatusEffects>(to)
         .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
@@ -184,29 +175,37 @@ pub fn try_combat_ignite(world: &mut World, from: Entity, to: Entity, rng: &mut 
     }
 }
 
-/// Positions of all wet-grass timer entities (unignitable tiles).
+/// Positions of all soaked tiles.
 fn wet_positions(world: &World) -> HashSet<(i32, i32)> {
     world
-        .query::<(&Position, &WetGrass)>()
+        .query::<(&Position, &WetTile)>()
         .iter()
         .map(|(_, (p, _))| (p.x, p.y))
         .collect()
 }
 
+/// Tiles whose tall grass is already burning (a grass-fire patch sits on them).
+fn grass_fire_tiles(world: &World) -> HashSet<(i32, i32)> {
+    world
+        .query::<(&Position, &Fuel, &OnFire)>()
+        .iter()
+        .filter(|(_, (_, fuel, _))| fuel.burnout == Burnout::ScorchGrass)
+        .map(|(_, (p, _, _))| (p.x, p.y))
+        .collect()
+}
+
+fn adjacent_or_on(a: (i32, i32), b: (i32, i32)) -> bool {
+    (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1
+}
+
 fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng: &mut impl Rng) {
-    // Three source kinds:
-    //  - burning grass tiles spread to adjacent grass (the wildfire front);
-    //  - burning oil puddles burn hot: they spread to grass like a grass fire,
-    //    leap to adjacent oil, and readily ignite anything standing in them;
+    // Two kinds of source:
+    //  - burning fuel (grass fires, oil, webs) spreads to adjacent grass (the
+    //    wildfire front), to adjacent fuel, and to creatures beside it;
     //  - burning creatures readily light grass they stand IN, but only rarely
     //    grass they're merely next to.
-    let grass_sources: Vec<(i32, i32)> = world
-        .query::<(&Position, &BurningGrass)>()
-        .iter()
-        .map(|(_, (p, _))| (p.x, p.y))
-        .collect();
-    let oil_sources: Vec<(i32, i32)> = world
-        .query::<(&Position, &BurningOil)>()
+    let fuel_sources: Vec<(i32, i32)> = world
+        .query::<(&Position, &OnFire)>()
         .iter()
         .map(|(_, (p, _))| (p.x, p.y))
         .collect();
@@ -216,24 +215,14 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         .filter(|(_, (_, s))| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
         .map(|(_, (p, _))| (p.x, p.y))
         .collect();
-    let web_sources: Vec<(i32, i32)> = world
-        .query::<(&Position, &BurningWeb)>()
-        .iter()
-        .map(|(_, (p, _))| (p.x, p.y))
-        .collect();
-    if grass_sources.is_empty()
-        && oil_sources.is_empty()
-        && creature_sources.is_empty()
-        && web_sources.is_empty()
-    {
+    if fuel_sources.is_empty() && creature_sources.is_empty() {
         return;
     }
 
     let wet = wet_positions(world);
-    let burning_tiles: HashSet<(i32, i32)> =
-        grass_sources.iter().chain(oil_sources.iter()).copied().collect();
+    let grass_burning = grass_fire_tiles(world);
     let flammable_free = |x: i32, y: i32, pending: &HashSet<(i32, i32)>| {
-        !burning_tiles.contains(&(x, y))
+        !grass_burning.contains(&(x, y))
             && !pending.contains(&(x, y))
             && !wet.contains(&(x, y))
             && grid.get(x, y).map(|t| t.tile_type.is_flammable()).unwrap_or(false)
@@ -241,8 +230,8 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
 
     let mut grass_to_ignite: HashSet<(i32, i32)> = HashSet::new();
 
-    // Grass/oil/web fire -> adjacent grass (slow front).
-    for &(sx, sy) in grass_sources.iter().chain(oil_sources.iter()).chain(web_sources.iter()) {
+    // Burning fuel -> adjacent grass (slow front).
+    for &(sx, sy) in &fuel_sources {
         for (dx, dy) in NEIGHBORS {
             let (nx, ny) = (sx + dx, sy + dy);
             if flammable_free(nx, ny, &grass_to_ignite) && rng.gen_bool(FIRE_GRASS_TO_GRASS_CHANCE) {
@@ -266,255 +255,217 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         }
     }
 
-    let all_sources: HashSet<(i32, i32)> = grass_sources
-        .iter()
-        .chain(oil_sources.iter())
-        .chain(creature_sources.iter())
-        .chain(web_sources.iter())
-        .copied()
-        .collect();
+    let all_sources: HashSet<(i32, i32)> =
+        fuel_sources.iter().chain(creature_sources.iter()).copied().collect();
+    let near_fire = |p: (i32, i32)| all_sources.iter().any(|&s| adjacent_or_on(p, s));
 
-    // Fire -> webs it is on or next to. Webs are tinder: they catch at a very
-    // high per-step chance and the blaze leaps web-to-web through a lair.
-    let mut webs_to_ignite: Vec<Entity> = Vec::new();
-    for (id, (pos, _)) in world
-        .query::<(&Position, &Web)>()
-        .without::<&BurningWeb>()
-        .iter()
-    {
-        let near = all_sources
-            .iter()
-            .any(|&(sx, sy)| (pos.x - sx).abs() <= 1 && (pos.y - sy).abs() <= 1);
-        if near && rng.gen_bool(WEB_IGNITE_CHANCE) {
-            webs_to_ignite.push(id);
-        }
-    }
-
-    // Fire -> glowing fungus it is on or next to. Fungus is damp and catches
-    // less readily than a web, but a cave strung with it carries the blaze.
-    let mut mushrooms_to_ignite: Vec<Entity> = Vec::new();
-    for (id, (pos, _)) in world.query::<(&Position, &GlowMushroom)>().iter() {
-        if wet.contains(&(pos.x, pos.y)) {
+    // Fire -> unlit fuel on or next to it, each at its own catch chance.
+    let mut fuel_to_ignite: Vec<Entity> = Vec::new();
+    for (id, (pos, fuel)) in world.query::<(&Position, &Fuel)>().without::<&OnFire>().iter() {
+        if fuel.catch_chance <= 0.0 || (fuel.dampable && wet.contains(&(pos.x, pos.y))) {
             continue;
         }
-        let near = all_sources
-            .iter()
-            .any(|&(sx, sy)| (pos.x - sx).abs() <= 1 && (pos.y - sy).abs() <= 1);
-        if near && rng.gen_bool(MUSHROOM_IGNITE_CHANCE) {
-            mushrooms_to_ignite.push(id);
+        if near_fire((pos.x, pos.y)) && rng.gen_bool(fuel.catch_chance.clamp(0.0, 1.0)) {
+            fuel_to_ignite.push(id);
         }
     }
 
-    // Fire -> oil puddles it is on or next to (oil catches almost instantly).
-    let mut oil_to_ignite: Vec<Entity> = Vec::new();
-    for (id, (pos, _)) in world
-        .query::<(&Position, &OilPuddle)>()
-        .without::<&BurningOil>()
-        .iter()
-    {
-        let near = all_sources
-            .iter()
-            .any(|&(sx, sy)| (pos.x - sx).abs() <= 1 && (pos.y - sy).abs() <= 1);
-        if near && rng.gen_bool(FIRE_TO_OIL_IGNITE_CHANCE) {
-            oil_to_ignite.push(id);
+    // Fire -> creatures. Standing IN burning fuel that says so (oil) is a
+    // high chance; being merely next to any fire is a small one. Both scale
+    // by effective flammability (wet things can't catch, oily things catch
+    // readily). Creatures in water can't be ignited; already-burning ones
+    // are skipped.
+    let mut stand_chance: HashMap<(i32, i32), f64> = HashMap::new();
+    for (_, (pos, fuel, _)) in world.query::<(&Position, &Fuel, &OnFire)>().iter() {
+        if fuel.stand_ignite_chance > 0.0 {
+            let c = stand_chance.entry((pos.x, pos.y)).or_insert(0.0);
+            *c = c.max(fuel.stand_ignite_chance);
         }
     }
-
-    // Fire -> adjacent creatures (small, scaled by flammability), and burning
-    // oil -> creatures standing IN it (high, scaled by flammability).
-    // Creatures in water can't be ignited; already-burning ones are skipped.
-    let burning_oil_tiles: HashSet<(i32, i32)> = oil_sources.iter().copied().collect();
     let mut creatures_to_ignite: Vec<(Entity, (i32, i32))> = Vec::new();
-    for (id, (pos, comb, status)) in
-        world.query::<(&Position, &Combustible, Option<&StatusEffects>)>().iter()
-    {
+    for (id, (pos, status)) in world.query::<(&Position, &StatusEffects)>().iter() {
         if grid.water_positions.contains(&(pos.x, pos.y)) {
             continue;
         }
-        let already_burning = status
-            .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
-            .unwrap_or(false);
-        if already_burning {
+        if status.effects.iter().any(|e| e.effect_type == EffectType::Burning) {
+            continue;
+        }
+        let flammability = crate::systems::coatings::effective_flammability(world, id) as f64;
+        if flammability <= 0.0 {
             continue;
         }
 
-        // Standing in burning oil: high per-step ignite chance.
-        if burning_oil_tiles.contains(&(pos.x, pos.y)) {
-            let chance =
-                (BURNING_OIL_STAND_IGNITE_CHANCE * comb.flammability as f64).clamp(0.0, 1.0);
-            if rng.gen_bool(chance) {
+        if let Some(&base) = stand_chance.get(&(pos.x, pos.y)) {
+            if rng.gen_bool((base * flammability).clamp(0.0, 1.0)) {
                 creatures_to_ignite.push((id, (pos.x, pos.y)));
                 continue;
             }
         }
 
-        let near = all_sources
-            .iter()
-            .any(|&(sx, sy)| (pos.x - sx).abs() <= 1 && (pos.y - sy).abs() <= 1);
-        if !near {
+        if !near_fire((pos.x, pos.y)) {
             continue;
         }
-        let chance = (FIRE_SPREAD_ENTITY_CHANCE * comb.flammability as f64).clamp(0.0, 1.0);
-        if rng.gen_bool(chance) {
+        if rng.gen_bool((FIRE_SPREAD_ENTITY_CHANCE * flammability).clamp(0.0, 1.0)) {
             creatures_to_ignite.push((id, (pos.x, pos.y)));
         }
     }
 
     // Apply (after queries are dropped).
     for (x, y) in grass_to_ignite {
-        crate::spawning::spawn_burning_grass(world, x, y);
+        crate::spawning::spawn_fire_patch(world, x, y);
     }
-    for id in oil_to_ignite {
-        ignite_oil_puddle(world, id);
-    }
-    for id in webs_to_ignite {
-        ignite_web(world, id);
-    }
-    for id in mushrooms_to_ignite {
-        ignite_glow_mushrooms(world, id);
+    for id in fuel_to_ignite {
+        ignite_fuel(world, id);
     }
     for (id, pos) in creatures_to_ignite {
-        crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire { entity: id, position: pos });
+        if crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION) {
+            events.push(GameEvent::CaughtFire { entity: id, position: pos });
+        }
     }
 }
 
-/// Set an oil puddle alight: adds `BurningOil`, a fire sprite, a light, and
-/// `CausesBurning` (so stepping into it ignites). No-op if already burning
-/// or not an oil puddle.
-pub fn ignite_oil_puddle(world: &mut World, puddle: Entity) {
-    if world.get::<&OilPuddle>(puddle).is_err() || world.get::<&BurningOil>(puddle).is_ok() {
-        return;
-    }
-    let _ = world.insert(
-        puddle,
-        (
-            BurningOil { remaining: OIL_BURN_DURATION },
-            CausesBurning,
-            AnimatedSprite::fire_pit(),
-            LightSource::brazier(),
-        ),
-    );
-}
-
-/// Put out a burning oil puddle, leaving the (re-ignitable) puddle behind.
-fn extinguish_oil_puddle(world: &mut World, puddle: Entity) {
-    let _ = world.remove::<(BurningOil, CausesBurning, AnimatedSprite, LightSource)>(puddle);
-}
-
-/// Set a web alight: it burns fast (`WEB_BURN_DURATION`), sheds light, and
-/// ignites anything on/entering its tile (`CausesBurning`) until it is
-/// consumed. No-op if not a web or already burning.
-pub fn ignite_web(world: &mut World, web: Entity) {
-    if world.get::<&Web>(web).is_err() || world.get::<&BurningWeb>(web).is_ok() {
-        return;
-    }
-    let _ = world.insert(
-        web,
-        (
-            BurningWeb { remaining: WEB_BURN_DURATION },
-            CausesBurning,
-            AnimatedSprite::fire_pit(),
-            LightSource::brazier(),
-        ),
-    );
-}
-
-/// Burn away a patch of glowing cave fungus, leaving a fire on its tile.
+/// Set a fuel entity alight, the way its `Fuel::ignition` says. No-op if the
+/// entity isn't fuel or is already burning.
 ///
-/// Unlike a web or an oil puddle, a mushroom patch has nothing left once it
-/// catches -- so instead of gaining a burning-state component it is consumed
-/// outright and replaced by the standard grass fire, which sheds light,
-/// ignites what walks into it, spreads, and burns itself out. A cave strung
-/// with fungus carries a fire the way a field of grass does.
-pub fn ignite_glow_mushrooms(world: &mut World, mushrooms: Entity) {
-    let Ok(pos) = world.get::<&Position>(mushrooms).map(|p| (p.x, p.y)) else {
+/// `InPlace` fuel gains `OnFire`, `CausesBurning` (stepping in ignites), a
+/// fire sprite and a light. `Replace` fuel is consumed and a fire patch takes
+/// its tile.
+pub fn ignite_fuel(world: &mut World, id: Entity) {
+    let Ok(fuel) = world.get::<&Fuel>(id).map(|f| *f) else {
         return;
     };
-    if world.get::<&GlowMushroom>(mushrooms).is_err() {
+    if world.get::<&OnFire>(id).is_ok() {
         return;
     }
-    let _ = world.despawn(mushrooms);
-    crate::spawning::spawn_burning_grass(world, pos.0, pos.1);
+    match fuel.ignition {
+        Ignition::InPlace => {
+            let _ = world.insert(
+                id,
+                (
+                    OnFire { remaining: fuel.burn_time },
+                    CausesBurning,
+                    AnimatedSprite::fire_pit(),
+                    LightSource::brazier(),
+                ),
+            );
+        }
+        Ignition::Replace => {
+            let Some((x, y)) = crate::queries::get_entity_position(world, id) else {
+                return;
+            };
+            let _ = world.despawn(id);
+            crate::spawning::spawn_fire_patch(world, x, y);
+        }
+    }
+}
+
+/// Put out a burning fuel entity, the way its `Fuel::doused` says. No-op if
+/// it isn't burning.
+fn douse_fuel(world: &mut World, id: Entity) {
+    let Ok(fuel) = world.get::<&Fuel>(id).map(|f| *f) else {
+        return;
+    };
+    if world.get::<&OnFire>(id).is_err() {
+        return;
+    }
+    match fuel.doused {
+        Doused::Extinguish => {
+            let _ = world.remove::<(OnFire, CausesBurning, AnimatedSprite, LightSource)>(id);
+        }
+        Doused::Despawn => {
+            let _ = world.despawn(id);
+        }
+    }
+}
+
+/// Set a tile alight without touching what stands on it: dry tall grass
+/// catches (unless it is already burning), and every unlit fuel on the tile
+/// ignites (damp-sensitive fuel only if the tile is dry). Water tiles never
+/// catch. Used by incendiary projectiles and, through `spill_fire_at`, by
+/// brazier topples and fire traps.
+pub fn ignite_tile(world: &mut World, grid: &Grid, x: i32, y: i32) {
+    if grid.water_positions.contains(&(x, y)) {
+        return;
+    }
+    let wet = wet_positions(world).contains(&(x, y));
+
+    let flammable = grid
+        .get(x, y)
+        .map(|t| t.tile_type.is_flammable())
+        .unwrap_or(false);
+    if flammable && !wet && !grass_fire_tiles(world).contains(&(x, y)) {
+        crate::spawning::spawn_fire_patch(world, x, y);
+    }
+
+    let fuel: Vec<Entity> = world
+        .query::<(&Position, &Fuel)>()
+        .without::<&OnFire>()
+        .iter()
+        .filter(|(_, (p, f))| p.x == x && p.y == y && !(f.dampable && wet))
+        .map(|(id, _)| id)
+        .collect();
+    for id in fuel {
+        ignite_fuel(world, id);
+    }
 }
 
 /// Splash of water centered at (cx, cy) with the given Chebyshev radius:
-/// extinguishes Burning on entities, stops burning grass (tile stays as
-/// unburnt grass), douses burning oil (puddle stays), and soaks grass tiles
-/// so they can't ignite for a while.
-pub fn splash_water(world: &mut World, grid: &Grid, cx: i32, cy: i32, radius: i32) {
+/// soaks every entity in it (Wet: puts out Burning, washes off oil, and keeps
+/// them from catching for a while), douses every burning fuel (each as its
+/// `Fuel::doused` says — grass fires go out and leave the grass, oil and webs
+/// stay to be relit), and soaks the walkable tiles so damp-sensitive fuel
+/// can't catch for a while.
+pub fn splash_water(
+    world: &mut World,
+    grid: &Grid,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    events: &mut EventQueue,
+) {
     let in_radius =
         |x: i32, y: i32| (x - cx).abs() <= radius && (y - cy).abs() <= radius;
 
-    // Douse burning entities.
-    let burning: Vec<Entity> = world
+    // Soak everything caught in the splash (puts out Burning, washes off oil).
+    let soaked: Vec<Entity> = world
         .query::<(&Position, &StatusEffects)>()
         .iter()
-        .filter(|(_, (p, s))| {
-            in_radius(p.x, p.y)
-                && s.effects.iter().any(|e| e.effect_type == EffectType::Burning)
-        })
+        .filter(|(_, (p, _))| in_radius(p.x, p.y))
         .map(|(id, _)| id)
         .collect();
-    for id in burning {
-        crate::systems::effects::remove_effect_from_entity(world, id, EffectType::Burning);
+    for id in soaked {
+        crate::systems::coatings::soak(world, id, events);
     }
 
-    // Stop burning grass without consuming the grass (tile stays TallGrass).
-    let doused_grass: Vec<Entity> = world
-        .query::<(&Position, &BurningGrass)>()
+    // Douse burning fuel.
+    let doused: Vec<Entity> = world
+        .query::<(&Position, &OnFire)>()
         .iter()
         .filter(|(_, (p, _))| in_radius(p.x, p.y))
         .map(|(id, _)| id)
         .collect();
-    for id in doused_grass {
-        let _ = world.despawn(id);
+    for id in doused {
+        douse_fuel(world, id);
     }
 
-    // Douse burning oil; the puddle remains and can be re-lit.
-    let doused_oil: Vec<Entity> = world
-        .query::<(&Position, &BurningOil)>()
-        .iter()
-        .filter(|(_, (p, _))| in_radius(p.x, p.y))
-        .map(|(id, _)| id)
-        .collect();
-    for id in doused_oil {
-        extinguish_oil_puddle(world, id);
-    }
-
-    // Douse burning webs; the (soggy) web survives and can be re-lit later.
-    let doused_webs: Vec<Entity> = world
-        .query::<(&Position, &BurningWeb)>()
-        .iter()
-        .filter(|(_, (p, _))| in_radius(p.x, p.y))
-        .map(|(id, _)| id)
-        .collect();
-    for id in doused_webs {
-        let _ = world.remove::<(BurningWeb, CausesBurning, AnimatedSprite, LightSource)>(id);
-    }
-
-    // Soak grass tiles in the radius: refresh existing timers, spawn new ones.
+    // Soak the tiles in the radius: refresh existing timers, spawn new ones.
     let mut refreshed: HashSet<(i32, i32)> = HashSet::new();
-    for (_, (pos, wet)) in world.query_mut::<(&Position, &mut WetGrass)>() {
+    for (_, (pos, wet)) in world.query_mut::<(&Position, &mut WetTile)>() {
         if in_radius(pos.x, pos.y) {
-            wet.remaining = WET_GRASS_DURATION;
+            wet.remaining = WET_TILE_DURATION;
             refreshed.insert((pos.x, pos.y));
         }
     }
     for dy in -radius..=radius {
         for dx in -radius..=radius {
             let (x, y) = (cx + dx, cy + dy);
-            if refreshed.contains(&(x, y)) {
+            if refreshed.contains(&(x, y))
+                || !grid.is_walkable(x, y)
+                || grid.water_positions.contains(&(x, y))
+            {
                 continue;
             }
-            let is_grass = grid
-                .get(x, y)
-                .map(|t| t.tile_type.is_flammable())
-                .unwrap_or(false);
-            if is_grass {
-                let pos = Position::new(x, y);
-                world.spawn((pos, WetGrass { remaining: WET_GRASS_DURATION }));
-            }
+            world.spawn((Position::new(x, y), WetTile { remaining: WET_TILE_DURATION }));
         }
     }
 }
@@ -564,60 +515,13 @@ pub fn topple_brazier(
     true
 }
 
-/// Spill fire onto a tile: ignite grass (if dry), ignite any oil puddle, and
-/// set entities standing there burning. Used by brazier topples and fire traps.
+/// Spill fire onto a tile: set the tile alight (`ignite_tile`) and set
+/// anything standing there burning. Used by brazier topples and fire traps.
 pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mut EventQueue) {
     if grid.water_positions.contains(&(x, y)) {
         return;
     }
-
-    // Grass catches (unless wet or already burning).
-    let flammable = grid
-        .get(x, y)
-        .map(|t| t.tile_type.is_flammable())
-        .unwrap_or(false);
-    if flammable && !wet_positions(world).contains(&(x, y)) {
-        let already = world
-            .query::<(&Position, &BurningGrass)>()
-            .iter()
-            .any(|(_, (p, _))| p.x == x && p.y == y);
-        if !already {
-            crate::spawning::spawn_burning_grass(world, x, y);
-        }
-    }
-
-    // Oil catches.
-    let puddles: Vec<Entity> = world
-        .query::<(&Position, &OilPuddle)>()
-        .iter()
-        .filter(|(_, (p, _))| p.x == x && p.y == y)
-        .map(|(id, _)| id)
-        .collect();
-    for id in puddles {
-        ignite_oil_puddle(world, id);
-    }
-
-    // Webs catch.
-    let webs: Vec<Entity> = world
-        .query::<(&Position, &Web)>()
-        .iter()
-        .filter(|(_, (p, _))| p.x == x && p.y == y)
-        .map(|(id, _)| id)
-        .collect();
-    for id in webs {
-        ignite_web(world, id);
-    }
-
-    // Glowing fungus catches.
-    let mushrooms: Vec<Entity> = world
-        .query::<(&Position, &GlowMushroom)>()
-        .iter()
-        .filter(|(_, (p, _))| p.x == x && p.y == y)
-        .map(|(id, _)| id)
-        .collect();
-    for id in mushrooms {
-        ignite_glow_mushrooms(world, id);
-    }
+    ignite_tile(world, grid, x, y);
 
     // Anything standing there catches fire.
     let victims: Vec<Entity> = world
@@ -627,8 +531,9 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
         .map(|(id, _)| id)
         .collect();
     for id in victims {
-        crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire { entity: id, position: (x, y) });
+        if crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION) {
+            events.push(GameEvent::CaughtFire { entity: id, position: (x, y) });
+        }
     }
 }
 
@@ -663,7 +568,7 @@ fn explode_barrel(
     });
 
     // The blast is deafening — wake enemies over a wide area.
-    crate::systems::ai::wake_enemies_in_radius(world, (bx, by), EXPLOSION_NOISE_RADIUS);
+    crate::systems::noise::make_noise(world, grid, (bx, by), EXPLOSION_NOISE_RADIUS);
 
     // Damage everything attackable in the blast radius.
     let victims: Vec<(Entity, (i32, i32))> = world
@@ -677,7 +582,7 @@ fn explode_barrel(
         .collect();
     for (id, (x, y)) in victims {
         let dealt =
-            crate::systems::combat::apply_damage(world, id, OIL_BARREL_EXPLOSION_DAMAGE, rng);
+            crate::systems::combat::apply_damage(world, grid, id, OIL_BARREL_EXPLOSION_DAMAGE, rng);
         if dealt > 0 {
             events.push(GameEvent::BurnDamage {
                 entity: id,
@@ -699,6 +604,20 @@ fn explode_barrel(
         .collect();
     for id in chained {
         crate::systems::effects::add_effect_to_entity(world, id, EffectType::Burning, BURNING_DURATION);
+    }
+
+    // The spray coats everything nearby in oil before it lights.
+    let sprayed: Vec<Entity> = world
+        .query::<(&Position, &StatusEffects)>()
+        .iter()
+        .filter(|(_, (p, _))| {
+            (p.x - bx).abs() <= OIL_BARREL_PUDDLE_RADIUS
+                && (p.y - by).abs() <= OIL_BARREL_PUDDLE_RADIUS
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for id in sprayed {
+        crate::systems::coatings::coat_in_oil(world, id, events);
     }
 
     // Spray burning oil over the surrounding tiles (partial coverage). Skips
@@ -737,13 +656,13 @@ fn explode_barrel(
     }
     for (x, y) in new_puddles {
         let puddle = crate::spawning::spawn_oil_puddle(world, x, y);
-        ignite_oil_puddle(world, puddle);
+        ignite_fuel(world, puddle);
     }
 
     // Existing puddles caught in the spray radius ignite too.
     let caught: Vec<Entity> = world
         .query::<(&Position, &OilPuddle)>()
-        .without::<&BurningOil>()
+        .without::<&OnFire>()
         .iter()
         .filter(|(_, (p, _))| {
             (p.x - bx).abs() <= OIL_BARREL_PUDDLE_RADIUS
@@ -752,23 +671,14 @@ fn explode_barrel(
         .map(|(id, _)| id)
         .collect();
     for id in caught {
-        ignite_oil_puddle(world, id);
+        ignite_fuel(world, id);
     }
-}
-
-/// Is there an oil puddle currently burning at this tile? (test helper /
-/// query for AI or UI use)
-#[allow(dead_code)]
-pub fn burning_oil_at(world: &World, x: i32, y: i32) -> bool {
-    world
-        .query::<(&Position, &BurningOil)>()
-        .iter()
-        .any(|(_, (p, _))| p.x == x && p.y == y)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Combustible;
     use crate::tile::Tile;
 
     fn make_grid(width: usize, height: usize, tile: TileType) -> Grid {
@@ -926,7 +836,7 @@ mod tests {
         let barrel_a = crate::spawning::spawn_oil_barrel(&mut world, 6, 6);
         crate::spawning::spawn_oil_barrel(&mut world, 8, 6);
         // Non-blocking fire furniture that also gets despawned during the tick.
-        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        crate::spawning::spawn_fire_patch(&mut world, 2, 2);
         crate::spawning::spawn_oil_puddle(&mut world, 3, 9);
         crate::spawning::spawn_web(&mut world, 10, 10, None);
 
@@ -974,7 +884,7 @@ mod tests {
         run_fire(&mut world, &mut grid, OIL_BARREL_FUSE_SECONDS);
         assert!(!world.contains(barrel), "barrel should have exploded");
 
-        let burning_puddles = world.query::<(&OilPuddle, &BurningOil)>().iter().count();
+        let burning_puddles = world.query::<(&OilPuddle, &OnFire)>().iter().count();
         assert!(
             burning_puddles > 0,
             "explosion should spray at least one ignited oil puddle"
@@ -1003,18 +913,15 @@ mod tests {
         if let Some(t) = grid.get_mut(2, 3) {
             t.tile_type = TileType::TallGrass;
         }
-        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        crate::spawning::spawn_fire_patch(&mut world, 2, 2);
         // Soak the grass tile.
-        world.spawn((Position::new(2, 3), WetGrass { remaining: 1000.0 }));
+        world.spawn((Position::new(2, 3), WetTile { remaining: 1000.0 }));
 
         // Many spread steps: at 22%/step dry grass would all but certainly
         // catch; wet grass must never.
         run_fire(&mut world, &mut grid, GRASS_BURN_DURATION - 1.0);
 
-        let caught = world
-            .query::<(&Position, &BurningGrass)>()
-            .iter()
-            .any(|(_, (p, _))| p.x == 2 && p.y == 3);
+        let caught = grass_fire_tiles(&world).contains(&(2, 3));
         assert!(!caught, "wet grass must not ignite");
     }
 
@@ -1026,14 +933,14 @@ mod tests {
         if let Some(t) = grid.get_mut(2, 2) {
             t.tile_type = TileType::TallGrass;
         }
-        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        crate::spawning::spawn_fire_patch(&mut world, 2, 2);
         let puddle = crate::spawning::spawn_oil_puddle(&mut world, 3, 2);
 
         // 90% per step over many steps: failure odds are astronomically small.
         run_fire(&mut world, &mut grid, 5.0);
 
         assert!(
-            world.get::<&BurningOil>(puddle).is_ok(),
+            world.get::<&OnFire>(puddle).is_ok(),
             "oil adjacent to fire should ignite"
         );
     }
@@ -1048,20 +955,20 @@ mod tests {
 
         // Burning oil puddle at (3,3), burning grass at (3,4), burning victim at (4,3).
         let puddle = crate::spawning::spawn_oil_puddle(&mut world, 3, 3);
-        ignite_oil_puddle(&mut world, puddle);
-        crate::spawning::spawn_burning_grass(&mut world, 3, 4);
+        ignite_fuel(&mut world, puddle);
+        crate::spawning::spawn_fire_patch(&mut world, 3, 4);
         let victim = world.spawn((Position::new(4, 3), {
             let mut s = StatusEffects::new();
             crate::systems::effects::add_effect(&mut s, EffectType::Burning, BURNING_DURATION);
             s
         }));
 
-        splash_water(&mut world, &grid, 3, 3, WATER_SPLASH_RADIUS);
+        splash_water(&mut world, &grid, 3, 3, WATER_SPLASH_RADIUS, &mut EventQueue::new());
 
         // Fires are out ...
-        assert!(world.get::<&BurningOil>(puddle).is_err(), "oil fire doused");
+        assert!(world.get::<&OnFire>(puddle).is_err(), "oil fire doused");
         assert_eq!(
-            world.query::<&BurningGrass>().iter().count(),
+            grass_fire_tiles(&world).len(),
             0,
             "grass fire doused"
         );
@@ -1078,10 +985,7 @@ mod tests {
             Some(TileType::TallGrass),
             "doused grass stays as grass"
         );
-        let wet = world
-            .query::<(&Position, &WetGrass)>()
-            .iter()
-            .any(|(_, (p, _))| p.x == 3 && p.y == 4);
+        let wet = wet_positions(&world).contains(&(3, 4));
         assert!(wet, "splashed grass is wet");
     }
 
@@ -1094,7 +998,7 @@ mod tests {
         if let Some(t) = grid.get_mut(2, 2) {
             t.tile_type = TileType::TallGrass;
         }
-        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        crate::spawning::spawn_fire_patch(&mut world, 2, 2);
         let patch_a = crate::spawning::spawn_glow_mushrooms(&mut world, 3, 2);
         let patch_b = crate::spawning::spawn_glow_mushrooms(&mut world, 4, 2);
 
@@ -1109,17 +1013,13 @@ mod tests {
         );
         // Each patch leaves a fire behind on its own tile, so the blaze keeps
         // going -- and the light the fungus was shedding goes with it.
-        let fires: Vec<(i32, i32)> = world
-            .query::<(&Position, &BurningGrass)>()
-            .iter()
-            .map(|(_, (p, _))| (p.x, p.y))
-            .collect();
+        let fires = grass_fire_tiles(&world);
         assert!(
             fires.contains(&(3, 2)) || fires.contains(&(4, 2)),
             "a burnt patch leaves fire on its tile, got {fires:?}"
         );
         assert_eq!(
-            world.query::<&GlowMushroom>().iter().count(),
+            world.query::<&crate::components::GlowMushroom>().iter().count(),
             0,
             "no fungus survives the fire"
         );
@@ -1134,7 +1034,7 @@ mod tests {
         if let Some(t) = grid.get_mut(2, 2) {
             t.tile_type = TileType::TallGrass;
         }
-        crate::spawning::spawn_burning_grass(&mut world, 2, 2);
+        crate::spawning::spawn_fire_patch(&mut world, 2, 2);
         let web_a = crate::spawning::spawn_web(&mut world, 3, 2, None);
         let web_b = crate::spawning::spawn_web(&mut world, 4, 2, None);
 
@@ -1142,7 +1042,7 @@ mod tests {
         // (web B via web A acting as a source).
         run_fire(&mut world, &mut grid, 3.0);
         assert!(
-            world.get::<&BurningWeb>(web_a).is_ok() || !world.contains(web_a),
+            world.get::<&OnFire>(web_a).is_ok() || !world.contains(web_a),
             "web adjacent to fire must ignite (or have already burnt away)"
         );
 
@@ -1164,7 +1064,7 @@ mod tests {
         if let Some(t) = grid.get_mut(2, 5) {
             t.tile_type = TileType::TallGrass;
         }
-        crate::spawning::spawn_burning_grass(&mut world, 2, 5);
+        crate::spawning::spawn_fire_patch(&mut world, 2, 5);
         let web = crate::spawning::spawn_web(&mut world, 3, 5, None);
         let puddle = crate::spawning::spawn_oil_puddle(&mut world, 4, 5);
         let barrel = crate::spawning::spawn_oil_barrel(&mut world, 5, 5);
@@ -1172,16 +1072,16 @@ mod tests {
         // Step until fire crosses the web into the oil (80% then 90% per
         // step): the bound exists only as a hard failure stop.
         let mut steps = 0;
-        while world.get::<&BurningOil>(puddle).is_err() && steps < 60 {
+        while world.get::<&OnFire>(puddle).is_err() && steps < 60 {
             run_fire(&mut world, &mut grid, FIRE_STEP_INTERVAL);
             steps += 1;
         }
         assert!(
-            world.get::<&BurningOil>(puddle).is_ok(),
+            world.get::<&OnFire>(puddle).is_ok(),
             "fire must reach the oil via the web"
         );
         // The web caught along the way (or already burnt away entirely).
-        assert!(world.get::<&BurningWeb>(web).is_ok() || !world.contains(web));
+        assert!(world.get::<&OnFire>(web).is_ok() || !world.contains(web));
 
         // Adjacent blaze lights the barrel at FIRE_SPREAD_ENTITY_CHANCE per
         // step; keep the heat on (re-lighting a fresh puddle when one burns
@@ -1189,12 +1089,12 @@ mod tests {
         let mut steps = 0;
         while world.contains(barrel) && world.get::<&BarrelFuse>(barrel).is_err() && steps < 400 {
             let oil_burning = world
-                .query::<(&Position, &BurningOil)>()
+                .query::<(&Position, &OilPuddle, &OnFire)>()
                 .iter()
-                .any(|(_, (p, _))| p.x == 4 && p.y == 5);
+                .any(|(_, (p, _, _))| p.x == 4 && p.y == 5);
             if !oil_burning {
                 let fresh = crate::spawning::spawn_oil_puddle(&mut world, 4, 5);
-                ignite_oil_puddle(&mut world, fresh);
+                ignite_fuel(&mut world, fresh);
             }
             run_fire(&mut world, &mut grid, FIRE_STEP_INTERVAL);
             steps += 1;
@@ -1207,8 +1107,30 @@ mod tests {
         // Fuse burns down: the barrel detonates and sprays ignited oil.
         run_fire(&mut world, &mut grid, OIL_BARREL_FUSE_SECONDS + 0.5);
         assert!(!world.contains(barrel), "barrel explodes at the end of the chain");
-        let burning_puddles = world.query::<(&OilPuddle, &BurningOil)>().iter().count();
+        let burning_puddles = world.query::<(&OilPuddle, &OnFire)>().iter().count();
         assert!(burning_puddles > 0, "explosion sprays ignited oil puddles");
+    }
+
+    #[test]
+    fn test_wet_creature_in_burning_oil_never_catches_but_oily_one_does() {
+        let mut world = World::new();
+        let mut grid = make_grid(9, 9, TileType::Floor);
+        let spawn = |world: &mut World, x: i32| {
+            world.spawn((Position::new(x, 4), StatusEffects::new(), Combustible { flammability: 0.35 }))
+        };
+        let wet = spawn(&mut world, 2);
+        let oily = spawn(&mut world, 6);
+        crate::systems::effects::add_effect_to_entity(&mut world, wet, EffectType::Wet, 1000.0);
+        crate::systems::effects::add_effect_to_entity(&mut world, oily, EffectType::Oily, 1000.0);
+        for x in [2, 6] {
+            let oil = crate::spawning::spawn_oil_puddle(&mut world, x, 4);
+            ignite_fuel(&mut world, oil);
+        }
+
+        run_fire_seeded(&mut world, &mut grid, 3.0, 5);
+        let burning = |e| crate::systems::effects::entity_has_effect(&world, e, EffectType::Burning);
+        assert!(!burning(wet), "soaked through, it stands in the flames unharmed");
+        assert!(burning(oily), "oil-soaked, it goes up");
     }
 
     #[test]

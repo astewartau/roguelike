@@ -60,6 +60,9 @@ pub struct EnemyDef {
     pub support: bool,
     /// Spider-kin: ignores webs and periodically lays them
     pub spider: bool,
+    /// Doesn't need light to see (undead, bats by sound, spiders): darkness
+    /// gives the player no stealth against it. See `systems::light`.
+    pub sees_in_dark: bool,
 }
 
 impl EnemyDef {
@@ -178,6 +181,10 @@ impl EnemyDef {
             );
         }
 
+        if self.sees_in_dark {
+            let _ = world.insert_one(entity, crate::components::SeesInDark);
+        }
+
         // Spider-kin ignore webs and periodically lay them.
         if self.spider {
             let _ = world.insert(
@@ -219,6 +226,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: true,
     };
 
     pub const RAT: EnemyDef = EnemyDef {
@@ -239,6 +247,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: false,
     };
 
     pub const SKELETON_ARCHER: EnemyDef = EnemyDef {
@@ -263,6 +272,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: true,
     };
 
     pub const GOBLIN: EnemyDef = EnemyDef {
@@ -283,6 +293,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: false,
     };
 
     pub const ORC: EnemyDef = EnemyDef {
@@ -303,6 +314,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: false,
     };
 
     pub const ZOMBIE: EnemyDef = EnemyDef {
@@ -323,6 +335,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: true,
     };
 
     pub const BAT: EnemyDef = EnemyDef {
@@ -343,6 +356,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: true,
     };
 
     pub const SLIME: EnemyDef = EnemyDef {
@@ -363,6 +377,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: false,
+        sees_in_dark: false,
     };
 
     pub const GOBLIN_SHAMAN: EnemyDef = EnemyDef {
@@ -383,6 +398,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: true,
         spider: false,
+        sees_in_dark: false,
     };
 
     pub const LESSER_GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -403,6 +419,7 @@ pub mod enemies {
         venom_slow: 0.0,
         support: false,
         spider: true,
+        sees_in_dark: true,
     };
 
     pub const GIANT_SPIDER: EnemyDef = EnemyDef {
@@ -423,6 +440,7 @@ pub mod enemies {
         venom_slow: SPIDER_VENOM_SLOW_DURATION,
         support: false,
         spider: true,
+        sees_in_dark: true,
     };
 }
 
@@ -872,11 +890,12 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     ))
 }
 
-/// Spawn a burning-grass fire at a tile: a short-lived hazard entity that shows
+/// Spawn a fire patch at a tile — what burning tall grass (or consumed fungus)
+/// looks like: a short-lived, already-lit `Fuel::grass_fire` entity that shows
 /// flames, ignites things stepping on it (CausesBurning), and is avoided by AI.
-/// When it burns out (see `tick_fire`) its tile reverts to floor.
-pub fn spawn_burning_grass(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, BurningGrass, CausesBurning};
+/// When it burns out (see `tick_fire`) tall grass under it reverts to floor.
+pub fn spawn_fire_patch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    use crate::components::{AnimatedSprite, CausesBurning, Fuel, OnFire};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -885,7 +904,8 @@ pub fn spawn_burning_grass(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         AnimatedSprite::fire_pit(),
         LightSource::brazier(),
         CausesBurning,
-        BurningGrass { remaining: crate::constants::GRASS_BURN_DURATION },
+        Fuel::grass_fire(),
+        OnFire { remaining: crate::constants::GRASS_BURN_DURATION },
     ))
 }
 
@@ -923,9 +943,9 @@ pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 }
 
 /// Spawn a patch of glowing cave fungus: walkable, sheds a small soft light,
-/// and catches fire (see `systems::fire::ignite_glow_mushrooms`).
+/// and catches fire (`Fuel::fungus`).
 pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{GlowMushroom, Name};
+    use crate::components::{Fuel, GlowMushroom, Name};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -935,6 +955,7 @@ pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         Name::new("Glowing Mushrooms"),
         LightSource::mushroom(),
         GlowMushroom,
+        Fuel::fungus(),
     ))
 }
 
@@ -955,7 +976,7 @@ pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity 
 /// Spawn an (unlit) oil puddle on a floor tile: walkable, doesn't block
 /// vision, and harmless until fire reaches it (see `systems::fire`).
 pub fn spawn_oil_puddle(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{OilPuddle, Sprite, SpriteTint};
+    use crate::components::{Fuel, OilPuddle, Sprite, SpriteTint};
     use crate::constants::OIL_PUDDLE_TINT;
 
     let pos = Position::new(x, y);
@@ -966,7 +987,16 @@ pub fn spawn_oil_puddle(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         Sprite::from_ref(tile_ids::OIL_PUDDLE),
         SpriteTint { r, g, b },
         OilPuddle,
+        Fuel::oil(),
     ))
+}
+
+/// Spawn a drip of oil left by an oily walker: an ordinary oil puddle that
+/// burns out sooner (`Fuel::oil_drip`). See `systems::coatings::drip_oil`.
+pub fn spawn_oil_drip(world: &mut World, x: i32, y: i32) -> hecs::Entity {
+    let drip = spawn_oil_puddle(world, x, y);
+    let _ = world.insert_one(drip, crate::components::Fuel::oil_drip());
+    drip
 }
 
 /// Spawn a hidden dungeon floor trap. No sprite: it is invisible until the
@@ -1049,7 +1079,7 @@ pub fn spawn_web(
     y: i32,
     spinner: Option<hecs::Entity>,
 ) -> hecs::Entity {
-    use crate::components::{SpriteTint, Web};
+    use crate::components::{Fuel, SpriteTint, Web};
     use crate::constants::WEB_TINT;
 
     let pos = Position::new(x, y);
@@ -1060,6 +1090,7 @@ pub fn spawn_web(
         Sprite::from_ref(tile_ids::WEB),
         SpriteTint { r, g, b },
         Web { spinner },
+        Fuel::web(),
     ))
 }
 

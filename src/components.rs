@@ -1030,6 +1030,16 @@ pub enum EffectType {
     Invulnerable,
     /// Cannot act at all (from Fighter's Stun ability)
     Stunned,
+    /// Soaked through: can't catch fire. From wading, a water splash or
+    /// drinking from a flask; dries off over time, faster beside a fire.
+    /// Becoming Wet puts out Burning and washes off Oily
+    /// (see `systems::coatings`).
+    Wet,
+    /// Coated in oil: far more flammable (even things that don't normally
+    /// burn), and leaves a trail of oil drips behind as it walks. From walking
+    /// through a puddle or being caught in a barrel's spray. Becoming Oily
+    /// cancels Wet (see `systems::coatings`).
+    Oily,
 }
 
 /// An active status effect with remaining duration
@@ -1581,6 +1591,21 @@ impl Door {
     }
 }
 
+/// How lit the tile an entity stands on is, from light in the world — braziers,
+/// fires, fungus, crystals, and anything burning (including itself). The
+/// player's own sight radius is not counted: it's what you see by, not a lamp
+/// enemies can spot. Refreshed each frame for the player by
+/// `systems::light::update_light_exposure`; the AI reads it when deciding how
+/// fast it notices you.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LightExposure(pub f32);
+
+/// Marks an enemy that doesn't need light to see — undead, bats hunting by
+/// sound, spiders. Darkness gives no stealth against it, and being lit up
+/// gives it nothing extra either.
+#[derive(Debug, Clone, Copy)]
+pub struct SeesInDark;
+
 /// Marker component for entities that block vision when present
 #[derive(Debug, Clone, Copy)]
 pub struct BlocksVision;
@@ -2004,7 +2029,7 @@ impl Vendor {
 ///
 /// `color` and `flicker`/`phase` exist so the dungeon reads as *lit by
 /// something* rather than evenly lit: see `src/constants/lighting.rs` for the
-/// palette and the flicker shaping, and `Engine::light_sources` for where the
+/// palette and the flicker shaping, and `Engine::render_light_map` for where the
 /// flicker is actually evaluated.
 #[derive(Debug, Clone, Copy)]
 pub struct LightSource {
@@ -2045,6 +2070,21 @@ impl LightSource {
             color: crate::constants::LIGHT_COLOR_FIRE,
             flicker: crate::constants::LIGHT_FLICKER_SCALE_FIRE,
             phase: random_light_phase(),
+        }
+    }
+
+    /// The glow of something on fire — a creature, an oil barrel. These have
+    /// no `LightSource` component of their own (it would have to be added and
+    /// removed as `Burning` comes and goes); `systems::light::light_emitters`
+    /// synthesises one for them. `phase` is passed in so the same burning
+    /// entity keeps a steady flicker from frame to frame.
+    pub fn burning(phase: f32) -> Self {
+        Self {
+            radius: crate::constants::BURNING_LIGHT_RADIUS,
+            intensity: crate::constants::BURNING_LIGHT_INTENSITY,
+            color: crate::constants::LIGHT_COLOR_FIRE,
+            flicker: crate::constants::LIGHT_FLICKER_SCALE_FIRE,
+            phase,
         }
     }
 
@@ -2117,8 +2157,8 @@ impl Default for LightSource {
 }
 
 /// Marker for a patch of glowing cave fungus. Walkable, sheds light, and
-/// burns: `systems::fire` consumes a patch the fire reaches and leaves a
-/// grass fire in its place.
+/// burns (`Fuel::fungus`): a patch the fire reaches is consumed and leaves a
+/// grass-style fire in its place.
 #[derive(Debug, Clone, Copy)]
 pub struct GlowMushroom;
 
@@ -2133,28 +2173,138 @@ pub struct Combustible {
     pub flammability: f32,
 }
 
-/// A patch of tall grass that is currently on fire. Lives as a short fire entity
-/// (with `CausesBurning` + a fire sprite); when `remaining` hits zero it burns
-/// out and its tile reverts to floor.
+/// Something lying on a tile that can burn: a grass fire, an oil puddle, a
+/// web, a patch of fungus. Creatures and oil barrels burn through the
+/// `Burning` status instead (see `Combustible`); this is for everything that
+/// sits still.
+///
+/// All the per-thing differences live here as data, so `systems::fire`
+/// ignites, spreads, douses and burns out every kind of fuel through one code
+/// path. A new burnable object needs a constructor below, not new fire code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fuel {
+    /// Per fire-step chance this catches when a fire is on or next to it.
+    pub catch_chance: f64,
+    /// Game-time seconds it burns once lit.
+    pub burn_time: f32,
+    /// Whether a soaked tile (`WetTile`) stops it catching. Grass and fungus
+    /// are damp-sensitive; oil burns on regardless.
+    pub dampable: bool,
+    /// Per-step base chance, scaled by flammability, that something standing
+    /// IN it while it burns catches fire. 0 leaves that to adjacency and to
+    /// `CausesBurning` on entry.
+    pub stand_ignite_chance: f64,
+    /// What lighting it does to the entity.
+    pub ignition: Ignition,
+    /// What water does to it while it burns.
+    pub doused: Doused,
+    /// What is left once it has burnt for `burn_time`.
+    pub burnout: Burnout,
+}
+
+/// How a fuel entity takes fire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ignition {
+    /// The entity itself burns (gains `OnFire`, flames and a light) and keeps
+    /// its identity, so it can be doused and relit: oil, webs, grass fires.
+    InPlace,
+    /// The entity is consumed and a grass-style fire patch takes its tile:
+    /// fungus, which has nothing left once it catches.
+    Replace,
+}
+
+/// What a water splash does to a burning fuel entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Doused {
+    /// The flames go out and the fuel stays, ready to be relit (oil, webs).
+    Extinguish,
+    /// The entity is only the fire, so dousing removes it (grass fires: the
+    /// grass itself is terrain and survives).
+    Despawn,
+}
+
+/// What a fuel entity leaves behind once it has burnt out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Burnout {
+    /// Nothing: the entity is gone (spent oil, a web).
+    Despawn,
+    /// The entity is gone and the tall grass under it is burnt to floor.
+    ScorchGrass,
+}
+
+impl Fuel {
+    /// A grass fire patch: the fire entity sitting on a burning grass tile.
+    pub fn grass_fire() -> Self {
+        Self {
+            catch_chance: 0.0, // already alight when spawned
+            burn_time: crate::constants::GRASS_BURN_DURATION,
+            dampable: true,
+            stand_ignite_chance: 0.0,
+            ignition: Ignition::InPlace,
+            doused: Doused::Despawn,
+            burnout: Burnout::ScorchGrass,
+        }
+    }
+
+    /// Drips left by an oily creature: oil, but only a little of it, so it
+    /// burns out sooner. Still enough to carry a flame along the trail.
+    pub fn oil_drip() -> Self {
+        Self { burn_time: crate::constants::OIL_DRIP_BURN_DURATION, ..Self::oil() }
+    }
+
+    /// Spilled oil: catches almost at once, burns hot, and survives a dousing.
+    pub fn oil() -> Self {
+        Self {
+            catch_chance: crate::constants::FIRE_TO_OIL_IGNITE_CHANCE,
+            burn_time: crate::constants::OIL_BURN_DURATION,
+            dampable: false,
+            stand_ignite_chance: crate::constants::BURNING_OIL_STAND_IGNITE_CHANCE,
+            ignition: Ignition::InPlace,
+            doused: Doused::Extinguish,
+            burnout: Burnout::Despawn,
+        }
+    }
+
+    /// A spider web: tinder that flares and is gone in seconds.
+    pub fn web() -> Self {
+        Self {
+            catch_chance: crate::constants::WEB_IGNITE_CHANCE,
+            burn_time: crate::constants::WEB_BURN_DURATION,
+            dampable: false,
+            stand_ignite_chance: 0.0,
+            ignition: Ignition::InPlace,
+            doused: Doused::Extinguish,
+            burnout: Burnout::Despawn,
+        }
+    }
+
+    /// Glowing cave fungus: damp, slow to catch, consumed when it does.
+    pub fn fungus() -> Self {
+        Self {
+            catch_chance: crate::constants::MUSHROOM_IGNITE_CHANCE,
+            burn_time: crate::constants::GRASS_BURN_DURATION,
+            dampable: true,
+            stand_ignite_chance: 0.0,
+            ignition: Ignition::Replace,
+            doused: Doused::Despawn,
+            burnout: Burnout::Despawn,
+        }
+    }
+}
+
+/// A `Fuel` entity that is currently alight. Paired with `CausesBurning`, a
+/// fire sprite and a light while it burns; `systems::fire` counts it down and
+/// applies the fuel's `Burnout` when it reaches zero.
 #[derive(Debug, Clone, Copy)]
-pub struct BurningGrass {
+pub struct OnFire {
     pub remaining: f32,
 }
 
 /// A puddle of spilled oil on the floor. Walkable, doesn't block vision, and
-/// harmless until fire reaches it — then it ignites readily (see
-/// `systems::fire`). Water splashes douse the flames but the puddle remains,
-/// re-ignitable.
+/// harmless until fire reaches it — then it ignites readily (`Fuel::oil`).
+/// Water splashes douse the flames but the puddle remains, re-ignitable.
 #[derive(Debug, Clone, Copy)]
 pub struct OilPuddle;
-
-/// An oil puddle that is currently burning. Paired with `CausesBurning`, a
-/// fire sprite, and a light source while alight; when `remaining` hits zero
-/// the fuel is spent and the puddle burns away entirely.
-#[derive(Debug, Clone, Copy)]
-pub struct BurningOil {
-    pub remaining: f32,
-}
 
 /// Marker for explosive oil barrels. Blocks movement and is highly
 /// combustible: once Burning, a short fuse (`BarrelFuse`) starts, then the
@@ -2170,10 +2320,11 @@ pub struct BarrelFuse {
     pub remaining: f32,
 }
 
-/// Grass tile soaked by a water splash: unignitable until it dries out.
-/// Lives as an invisible timer entity on the tile, checked by fire spread.
+/// A tile soaked by a water splash: damp-sensitive fuel on it (grass, fungus)
+/// can't catch until it dries out. Lives as an invisible timer entity on the
+/// tile, checked by fire spread.
 #[derive(Debug, Clone, Copy)]
-pub struct WetGrass {
+pub struct WetTile {
     pub remaining: f32,
 }
 
@@ -2445,12 +2596,6 @@ pub struct Web {
     /// The spider that laid it (None for dev-spawned webs); used for the
     /// per-spider live-web cap.
     pub spinner: Option<Entity>,
-}
-
-/// Timer on an ignited web: when it expires the web has burnt away.
-#[derive(Debug, Clone, Copy)]
-pub struct BurningWeb {
-    pub remaining: f32,
 }
 
 /// The unique ability a boss cycles on its cooldown.

@@ -232,6 +232,15 @@ pub enum GameEvent {
         entity: Entity,
         position: (i32, i32),
     },
+    /// An entity became Wet (it was dry a moment ago — refreshes while it
+    /// stands in water don't re-fire this).
+    Soaked {
+        entity: Entity,
+    },
+    /// An entity became Oily (not fired again on refreshes).
+    CoatedInOil {
+        entity: Entity,
+    },
     /// An oil barrel exploded (damage + burning oil spray). VFX/audio reuse
     /// the FireballExplosion event emitted alongside this one.
     BarrelExploded {

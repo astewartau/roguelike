@@ -12,7 +12,6 @@
 
 use crate::components::{Attackable, EffectType, ItemType, Position, Projectile, ProjectileMarker, VisualPosition};
 use crate::events::GameEvent;
-use crate::grid::Grid;
 use crate::systems::actions::apply_potion_splash;
 use crate::systems::effects;
 use crate::engine::EffectCtx;
@@ -159,7 +158,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
 
             // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
             actual_damage =
-                crate::systems::combat::apply_damage(world, target_entity, actual_damage, rng);
+                crate::systems::combat::apply_damage(world, grid, target_entity, actual_damage, rng);
 
             if actual_damage > 0 {
                 // Interrupt life drain if target was channeling
@@ -220,16 +219,26 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
             pos.y = final_y;
         }
 
+        // Whatever lands makes a noise there: a bottle shattering, an arrow
+        // clattering. Enemies who hear it go to look at the landing spot, not
+        // at the thrower — which is what makes a throw a lure.
+        let impact_noise = if potion_type.is_some() {
+            crate::constants::THROWN_IMPACT_NOISE_RADIUS
+        } else {
+            crate::constants::ARROW_IMPACT_NOISE_RADIUS
+        };
+        crate::systems::noise::make_noise(world, grid, (final_x, final_y), impact_noise);
+
         // Fire arrows ignite the tile they land on (grass catches; the fire
         // system then handles spread and burnout).
         if incendiary {
-            ignite_tile(world, grid, final_x, final_y);
+            crate::systems::fire::ignite_tile(world, grid, final_x, final_y);
         }
 
         // If this is a potion projectile, apply splash effect and emit event
         if let Some(ptype) = potion_type {
             let thrower = world.get::<&Projectile>(entity).map(|p| p.source).ok();
-            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y);
+            apply_potion_splash(world, grid, thrower, ptype, final_x, final_y, events);
             events.push(GameEvent::PotionSplash {
                 x: final_x,
                 y: final_y,
@@ -237,50 +246,6 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
             });
         }
     }
-}
-
-/// Ignite a tile hit by an incendiary projectile: flammable tiles (tall grass)
-/// catch fire via the same burning-grass entities the fire-spread system uses,
-/// and any oil puddle on the tile lights up. No-op for wet grass or tiles
-/// already burning.
-fn ignite_tile(world: &mut World, grid: &Grid, x: i32, y: i32) {
-    // Oil on the tile catches regardless of the terrain underneath.
-    let puddles: Vec<hecs::Entity> = world
-        .query::<(&Position, &crate::components::OilPuddle)>()
-        .iter()
-        .filter(|(_, (pos, _))| pos.x == x && pos.y == y)
-        .map(|(id, _)| id)
-        .collect();
-    for id in puddles {
-        crate::systems::fire::ignite_oil_puddle(world, id);
-    }
-
-    let flammable = grid
-        .get(x, y)
-        .map(|t| t.tile_type.is_flammable())
-        .unwrap_or(false);
-    if !flammable {
-        return;
-    }
-
-    // Soaked grass can't catch.
-    let wet = world
-        .query::<(&Position, &crate::components::WetGrass)>()
-        .iter()
-        .any(|(_, (pos, _))| pos.x == x && pos.y == y);
-    if wet {
-        return;
-    }
-
-    let already_burning = world
-        .query::<(&Position, &crate::components::BurningGrass)>()
-        .iter()
-        .any(|(_, (pos, _))| pos.x == x && pos.y == y);
-    if already_burning {
-        return;
-    }
-
-    crate::spawning::spawn_burning_grass(world, x, y);
 }
 
 /// Update visual positions of projectiles for smooth interpolation.

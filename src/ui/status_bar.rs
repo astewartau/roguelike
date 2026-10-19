@@ -39,6 +39,8 @@ pub struct StatusBarData {
     pub is_concealed: bool,
     /// Whether the player is currently sneaking (crouch toggle)
     pub is_sneaking: bool,
+    /// How lit the player's tile is (`LightExposure`), for the light bar
+    pub light_exposure: f32,
     /// Hunger meter value (0 = starving, HUNGER_MAX = fully fed)
     pub hunger: f32,
     /// Coarse hunger state for the warning label
@@ -87,6 +89,10 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
 
     // Sneaking is a derived state from the crouch toggle (Sneaking marker).
     let is_sneaking = world.get::<&crate::components::Sneaking>(player_entity).is_ok();
+    let light_exposure = world
+        .get::<&crate::components::LightExposure>(player_entity)
+        .map(|l| l.0)
+        .unwrap_or(0.0);
 
     // Survival meters (player-only; default to "fine" if missing).
     let (hunger, hunger_state) = world
@@ -128,6 +134,7 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
         defense,
         is_concealed,
         is_sneaking,
+        light_exposure,
         hunger,
         hunger_state,
         fatigue,
@@ -203,14 +210,8 @@ impl StatusBarAnim {
     }
 }
 
-/// What sits in a bar row's icon gutter.
-enum BarIcon {
-    /// A sprite from one of the sheets.
-    Sprite(egui::TextureId, egui::Rect),
-    /// A text glyph, for state with no sprite to its name (CLAUDE.md's
-    /// last-resort option for transient state).
-    Glyph(&'static str, egui::Color32),
-}
+/// What sits in a bar row's icon gutter: a sprite from one of the sheets.
+type BarIcon = (egui::TextureId, egui::Rect);
 
 /// Everything needed to hand-paint one resource bar.
 struct BarSpec {
@@ -351,20 +352,8 @@ fn bar_row(ui: &mut egui::Ui, icon: BarIcon, spec: &BarSpec) {
         egui::pos2(rect.left() + HUD_BAR_ICON_SIZE / 2.0, rect.center().y),
         egui::Vec2::splat(HUD_BAR_ICON_SIZE),
     );
-    match icon {
-        BarIcon::Sprite(tex, uv) => {
-            ui.painter().image(tex, icon_rect, uv, egui::Color32::WHITE);
-        }
-        BarIcon::Glyph(text, color) => {
-            ui.painter().text(
-                icon_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                egui::FontId::proportional(HUD_BAR_FONT_SIZE),
-                color,
-            );
-        }
-    }
+    let (tex, uv) = icon;
+    ui.painter().image(tex, icon_rect, uv, egui::Color32::WHITE);
     let bar_rect = egui::Rect::from_min_max(
         egui::pos2(icon_rect.right() + HUD_BAR_ICON_GAP, rect.top()),
         rect.right_bottom(),
@@ -473,6 +462,19 @@ fn effect_pip(
     ));
 }
 
+/// A word for how lit you are, to go with the light bar's percentage.
+fn light_word(lit: f32) -> &'static str {
+    if lit >= 1.0 {
+        "Lit"
+    } else if lit >= 0.5 {
+        "Bright"
+    } else if lit > 0.0 {
+        "Dim"
+    } else {
+        "Dark"
+    }
+}
+
 /// Short name for a status effect, for the text fallback.
 fn effect_label(effect: StatusEffectType) -> &'static str {
     match effect {
@@ -489,6 +491,8 @@ fn effect_label(effect: StatusEffectType) -> &'static str {
         StatusEffectType::Rooted => "Rooted",
         StatusEffectType::Invulnerable => "Invuln",
         StatusEffectType::Stunned => "Stunned",
+        StatusEffectType::Wet => "Wet",
+        StatusEffectType::Oily => "Oily",
     }
 }
 
@@ -556,13 +560,13 @@ pub fn draw_status_bar(
             hp.glow = hp_glow;
             bar_row(
                 ui,
-                BarIcon::Sprite(icons.items_texture_id, icons.heart_uv),
+                (icons.items_texture_id, icons.health_uv),
                 &hp,
             );
 
             bar_row(
                 ui,
-                BarIcon::Sprite(icons.items_texture_id, icons.diamond_uv),
+                (icons.items_texture_id, icons.xp_uv),
                 &BarSpec::new(
                     data.xp_progress,
                     colors::XP_BAR,
@@ -574,7 +578,7 @@ pub fn draw_status_bar(
             // Hunger drains over time; food refills it.
             bar_row(
                 ui,
-                BarIcon::Sprite(icons.items_texture_id, icons.cheese_uv),
+                (icons.items_texture_id, icons.hunger_uv),
                 &BarSpec::new(
                     (data.hunger / HUNGER_MAX).clamp(0.0, 1.0),
                     colors::HUNGER_BAR,
@@ -586,12 +590,26 @@ pub fn draw_status_bar(
             // Fatigue fills up as the player gets more tired.
             bar_row(
                 ui,
-                BarIcon::Glyph("Zz", colors::FATIGUE_ICON),
+                (icons.items_texture_id, icons.sleep_uv),
                 &BarSpec::new(
                     (data.fatigue / FATIGUE_MAX).clamp(0.0, 1.0),
                     colors::FATIGUE_BAR,
                     colors::FATIGUE_BAR_BG,
                     format!("{:.0}/{:.0}", data.fatigue, FATIGUE_MAX),
+                ),
+            );
+
+            // How lit you are, from shadow to fully lit: the same fraction
+            // unaware enemies scale how fast they notice you by.
+            let lit = crate::systems::light::lit_fraction(data.light_exposure);
+            bar_row(
+                ui,
+                (icons.items_texture_id, icons.light_uv),
+                &BarSpec::new(
+                    lit,
+                    colors::LIGHT_BAR,
+                    colors::LIGHT_BAR_BG,
+                    format!("{} {:.0}%", light_word(lit), lit * 100.0),
                 ),
             );
 

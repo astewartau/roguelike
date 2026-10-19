@@ -124,13 +124,13 @@ pub fn resolve_weapon_on_hit(
             // fire::try_combat_ignite); the fire system then handles
             // spread, grass ignition, and dousing.
             Affix::OnHitIgnite(chance) if !target_died && rng.gen::<f32>() < *chance => {
-                crate::systems::effects::add_effect_to_entity(
+                let caught = crate::systems::effects::add_effect_to_entity(
                     world,
                     target,
                     EffectType::Burning,
                     BURNING_DURATION,
                 );
-                if let Some(pos) = crate::queries::get_entity_position(world, target) {
+                if let Some(pos) = crate::queries::get_entity_position(world, target).filter(|_| caught) {
                     events.push(GameEvent::CaughtFire { entity: target, position: pos });
                 }
             }
@@ -241,6 +241,10 @@ fn try_knockback(
     if let Some(brazier) = brazier_hit {
         crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
     }
+
+    // Landing counts as entering the tile: shoved into burning oil, a web or
+    // a trap, the victim gets what walking in would have given it.
+    crate::systems::actions::enter_tile(world, grid, target, dest.0, dest.1, events, rng);
 }
 
 /// Apply `raw` incoming damage to `target`, accounting for invulnerability,
@@ -253,6 +257,7 @@ fn try_knockback(
 /// passing `raw` in.
 pub fn apply_damage(
     world: &mut World,
+    grid: &Grid,
     target: Entity,
     raw: i32,
     rng: &mut impl Rng,
@@ -322,7 +327,7 @@ pub fn apply_damage(
 
     // Combat is loud: wake nearby sleeping enemies that "hear" the impact.
     if let Some(pos) = pos {
-        crate::systems::ai::wake_enemies_in_radius(world, pos, MELEE_NOISE_RADIUS);
+        crate::systems::noise::make_noise(world, grid, pos, MELEE_NOISE_RADIUS);
     }
 
     dmg
@@ -632,6 +637,45 @@ mod tests {
         // Despawning the corpse (Raise Dead) must not resurrect a stale id.
         let _ = world.despawn(rat);
         assert!(!tracker.is_tracked(rat), "still untracked after the corpse is consumed");
+    }
+
+    /// A shove lands like a step: knocked into a web, the victim is rooted;
+    /// knocked into burning oil, it catches fire.
+    #[test]
+    fn test_knockback_landing_triggers_the_tile() {
+        use crate::components::StatusEffects;
+        use crate::tile::TileType;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(3);
+        let grid = crate::grid::Grid::filled(9, 9, TileType::Floor);
+        let mut events = EventQueue::new();
+
+        // Attacker at (2,4) shoves east: victim at (3,4) lands on (4,4).
+        let mut world = World::new();
+        let attacker = world.spawn((Position::new(2, 4),));
+        let victim = world.spawn((Position::new(3, 4), StatusEffects::new()));
+        crate::spawning::spawn_web(&mut world, 4, 4, None);
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+
+        try_knockback(&mut world, &grid, &mut cache, attacker, victim, &mut events, &mut rng);
+        assert_eq!(crate::queries::get_entity_position(&world, victim), Some((4, 4)));
+        assert!(
+            crate::systems::effects::entity_has_effect(&world, victim, EffectType::Rooted),
+            "shoved into a web, the victim is stuck in it"
+        );
+
+        // Second shove from (3,4) lands it on burning oil at (5,4).
+        world.get::<&mut Position>(attacker).unwrap().x = 3;
+        let oil = crate::spawning::spawn_oil_puddle(&mut world, 5, 4);
+        crate::systems::fire::ignite_fuel(&mut world, oil);
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        try_knockback(&mut world, &grid, &mut cache, attacker, victim, &mut events, &mut rng);
+        assert_eq!(crate::queries::get_entity_position(&world, victim), Some((5, 4)));
+        assert!(
+            crate::systems::effects::entity_has_effect(&world, victim, EffectType::Burning),
+            "shoved into burning oil, the victim catches fire"
+        );
     }
 
     #[test]

@@ -26,6 +26,8 @@ pub struct EnemyStatusData {
     pub is_confused: bool,
     pub is_stunned: bool,
     pub is_rooted: bool,
+    pub is_wet: bool,
+    pub is_oily: bool,
     pub is_asleep: bool,
     pub is_shouting: bool,
     pub is_stirring: bool,
@@ -97,6 +99,8 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
                 is_confused: effects::has_effect(status_effects, EffectType::Confused),
                 is_stunned: effects::has_effect(status_effects, EffectType::Stunned),
                 is_rooted: effects::has_effect(status_effects, EffectType::Rooted),
+                is_wet: effects::has_effect(status_effects, EffectType::Wet),
+                is_oily: effects::has_effect(status_effects, EffectType::Oily),
                 // Show "stirring" instead of "asleep" once the meter starts rising.
                 is_asleep: asleep.is_some() && !stirring,
                 is_shouting: alarm.is_some(),
@@ -532,6 +536,8 @@ pub fn draw_enemy_status_indicators(
             && !enemy.is_confused
             && !enemy.is_stunned
             && !enemy.is_rooted
+            && !enemy.is_wet
+            && !enemy.is_oily
             && !enemy.is_asleep
             && !enemy.is_shouting
             && !enemy.is_stirring
@@ -564,6 +570,14 @@ pub fn draw_enemy_status_indicators(
         }
         if enemy.is_confused {
             symbols.push(("?", egui::Color32::from_rgb(200, 100, 200))); // Purple for confusion
+        }
+        // Coatings matter to the player's plans (soaked won't burn; oily
+        // will, and is leaving a trail), so they get a marker too.
+        if enemy.is_oily {
+            symbols.push(("●", egui::Color32::from_rgb(150, 105, 60))); // Brown blob for oil
+        }
+        if enemy.is_wet {
+            symbols.push(("💧", egui::Color32::from_rgb(110, 170, 255))); // Blue drop for soaked
         }
 
         // Subtle pulsing animation

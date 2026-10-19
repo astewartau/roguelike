@@ -94,8 +94,10 @@ pub mod colors {
     pub const HUNGER_BAR_BG: Color32 = Color32::from_rgb(45, 32, 16);
     pub const FATIGUE_BAR: Color32 = Color32::from_rgb(110, 100, 185);
     pub const FATIGUE_BAR_BG: Color32 = Color32::from_rgb(28, 25, 48);
-    /// The "Zz" glyph standing in for a fatigue icon.
-    pub const FATIGUE_ICON: Color32 = Color32::from_rgb(150, 140, 210);
+    /// Light bar: warm firelight fill over a near-black background, so an
+    /// empty bar reads as darkness.
+    pub const LIGHT_BAR: Color32 = Color32::from_rgb(235, 185, 70);
+    pub const LIGHT_BAR_BG: Color32 = Color32::from_rgb(30, 26, 20);
 
     // Bar frame. The recess is drawn with a 1px bevel: dark along the top and
     // left, light along the bottom and right, which is what makes it read as
@@ -166,6 +168,8 @@ pub mod colors {
     pub const EFFECT_ROOTED: Color32 = Color32::from_rgb(139, 90, 43);
     pub const EFFECT_INVULNERABLE: Color32 = Color32::from_rgb(255, 215, 0);
     pub const EFFECT_STUNNED: Color32 = Color32::from_rgb(255, 230, 120);
+    pub const EFFECT_WET: Color32 = Color32::from_rgb(110, 170, 255);
+    pub const EFFECT_OILY: Color32 = Color32::from_rgb(150, 105, 60);
 }
 
 /// Color for a status effect, used by both the HUD pips and the text fallback
@@ -186,6 +190,8 @@ pub fn effect_color(effect: crate::components::EffectType) -> Color32 {
         E::Rooted => colors::EFFECT_ROOTED,
         E::Invulnerable => colors::EFFECT_INVULNERABLE,
         E::Stunned => colors::EFFECT_STUNNED,
+        E::Wet => colors::EFFECT_WET,
+        E::Oily => colors::EFFECT_OILY,
     }
 }
 

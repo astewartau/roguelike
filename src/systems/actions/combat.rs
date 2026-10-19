@@ -62,14 +62,14 @@ pub fn apply_attack(ctx: &mut EffectCtx, attacker: Entity, target: Entity) -> Ac
         as i32;
 
     // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-    let damage = crate::systems::combat::apply_damage(world, target, raw, rng);
+    let damage = crate::systems::combat::apply_damage(world, grid, target, raw, rng);
 
     // CursedLoud gear rings out: wake enemies in a doubled radius on top of
     // the standard melee-noise wake inside apply_damage.
     let noise = crate::systems::combat::attack_noise_radius(world, attacker, MELEE_NOISE_RADIUS);
     if noise > MELEE_NOISE_RADIUS {
         let pos = (target_pos.0 as i32, target_pos.1 as i32);
-        crate::systems::ai::wake_enemies_in_radius(world, pos, noise);
+        crate::systems::noise::make_noise(world, grid, pos, noise);
     }
 
     // A burning combatant can set the other alight on a melee hit.
@@ -248,7 +248,7 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
             as i32;
 
         // Apply damage to target (handles invulnerability, armor defense, Protected/Barkskin)
-        let damage = crate::systems::combat::apply_damage(world, *target, raw, rng);
+        let damage = crate::systems::combat::apply_damage(world, grid, *target, raw, rng);
 
         // Resolve weapon on-hit affixes through the shared chokepoint
         crate::systems::combat::resolve_weapon_on_hit(
@@ -281,7 +281,7 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
     // cleave (on top of the per-hit melee-noise wake inside apply_damage).
     let noise = crate::systems::combat::attack_noise_radius(world, attacker, MELEE_NOISE_RADIUS);
     if noise > MELEE_NOISE_RADIUS && !targets.is_empty() {
-        crate::systems::ai::wake_enemies_in_radius(world, attacker_pos, noise);
+        crate::systems::noise::make_noise(world, grid, attacker_pos, noise);
     }
 
     // Add a small lunge animation (to center, since we're hitting all around)

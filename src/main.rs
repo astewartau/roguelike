@@ -243,7 +243,7 @@ impl AppState {
         // Render game world (only when playing)
         if let Some(grid) = self.engine.grid() {
             profile_scope!("render_frame");
-            let light_sources = self.engine.light_sources();
+            let light_map = self.engine.render_light_map();
             self.render_ctx.render_frame(
                 &self.gl,
                 crate::render::SceneContents {
@@ -256,7 +256,7 @@ impl AppState {
                     player_pos: self.engine.player_visual_pos(),
                     player_light_radius: self.engine.player_light_radius(),
                     player_light_color: self.engine.player_light_color(),
-                    light_sources: &light_sources,
+                    light_map: &light_map,
                 },
                 self.engine.show_grid_lines(),
             );

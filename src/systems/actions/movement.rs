@@ -123,39 +123,10 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         });
     }
 
-    // Check if entity stepped into water (extinguishes fire)
-    if grid.water_positions.contains(&(target_x, target_y)) {
-        effects::remove_effect_from_entity(world, entity, EffectType::Burning);
-    }
+    enter_tile(world, grid, entity, target_x, target_y, events, rng);
 
-    // Check if entity stepped into a fire source (brazier, campfire) and catches fire
-    let stepped_on_fire = world
-        .query::<(&Position, &crate::components::CausesBurning)>()
-        .iter()
-        .any(|(_, (pos, _))| pos.x == target_x && pos.y == target_y);
-
-    if stepped_on_fire {
-        use crate::constants::BURNING_DURATION;
-        effects::add_effect_to_entity(world, entity, EffectType::Burning, BURNING_DURATION);
-        events.push(GameEvent::CaughtFire {
-            entity,
-            position: (target_x, target_y),
-        });
-    }
-
-    // Check if entity blundered into a spider web (non-spiders are rooted,
-    // web consumed)
-    crate::systems::webs::trigger_web_at(world, entity, target_x, target_y, events);
-
-    // Check if entity stepped on a fire trap
-    check_fire_trap_trigger(world, entity, target_x, target_y, events, rng);
-
-    // Check if entity stepped on a snare trap
-    check_snare_trap_trigger(world, entity, target_x, target_y, events);
-
-    // Check if entity stepped on a dungeon-generated floor trap (no owner
-    // exemption — enemies set these off too)
-    check_dungeon_trap_trigger(world, grid, entity, target_x, target_y, events, rng);
+    // An oily walker may leave a drip of oil on the tile it just left.
+    crate::systems::coatings::drip_oil(world, grid, entity, current_pos, rng);
 
     // After a player step: roll passive detection for hidden traps and secret
     // doors within one tile (Agility-scaled).
@@ -164,6 +135,59 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
     }
 
     ActionResult::Completed
+}
+
+/// Everything that happens to an entity for arriving on a tile, however it
+/// got there: a step, a shove, a blink, a tumble.
+///
+/// Water soaks it (`Wet`: flames out, oil washed off); an oil puddle coats it
+/// (`Oily`); standing fire (braziers, campfires, burning fuel) sets it alight; webs root it; placed traps and dungeon floor traps go off.
+/// Anything that moves an entity onto a tile calls this after updating its
+/// position, so a tile effect added here applies to every kind of movement.
+/// Passive trap discovery is not in here: that is the reward for walking.
+pub fn enter_tile(
+    world: &mut World,
+    grid: &crate::grid::Grid,
+    entity: Entity,
+    x: i32,
+    y: i32,
+    events: &mut EventQueue,
+    rng: &mut impl rand::Rng,
+) {
+    // Water soaks you (putting out fire and washing off oil); oil coats you.
+    if grid.water_positions.contains(&(x, y)) {
+        crate::systems::coatings::soak(world, entity, events);
+    }
+    let oil_here = world
+        .query::<(&Position, &crate::components::OilPuddle)>()
+        .iter()
+        .any(|(_, (pos, _))| pos.x == x && pos.y == y);
+    if oil_here {
+        crate::systems::coatings::coat_in_oil(world, entity, events);
+    }
+
+    // A fire source on the tile (brazier, campfire, burning fuel) sets it alight.
+    let on_fire_tile = world
+        .query::<(&Position, &crate::components::CausesBurning)>()
+        .iter()
+        .any(|(_, (pos, _))| pos.x == x && pos.y == y);
+    if on_fire_tile {
+        use crate::constants::BURNING_DURATION;
+        if effects::add_effect_to_entity(world, entity, EffectType::Burning, BURNING_DURATION) {
+            events.push(GameEvent::CaughtFire { entity, position: (x, y) });
+        }
+    }
+
+    // Spider webs root non-spiders (and are consumed).
+    crate::systems::webs::trigger_web_at(world, entity, x, y, events);
+
+    // Placed traps (fire, snare).
+    check_fire_trap_trigger(world, grid, entity, x, y, events, rng);
+    check_snare_trap_trigger(world, entity, x, y, events);
+
+    // Dungeon-generated floor traps (no owner exemption — enemies set these
+    // off too).
+    check_dungeon_trap_trigger(world, grid, entity, x, y, events, rng);
 }
 
 /// Apply open door effect

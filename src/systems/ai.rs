@@ -139,8 +139,11 @@ fn unaware_ally_near(world: &World, center: (i32, i32), radius: i32, exclude: En
     })
 }
 
-/// Wake a single unaware enemy, sending it to investigate `toward`.
-fn wake_one(world: &mut World, entity: Entity, player: Entity, toward: (i32, i32)) {
+/// Send an enemy that heard something to investigate `toward`: wakes it if
+/// asleep, takes it out of Unaware, and points its search for the player at
+/// the noise. The state machine turns that into Investigating on its next
+/// decision. Used by `systems::noise::make_noise` and by being attacked.
+pub(crate) fn investigate_noise(world: &mut World, entity: Entity, player: Entity, toward: (i32, i32)) {
     let _ = world.remove_one::<Asleep>(entity);
     if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
         if ai.state == AIState::Unaware {
@@ -151,28 +154,10 @@ fn wake_one(world: &mut World, entity: Entity, player: Entity, toward: (i32, i32
     }
 }
 
-/// Wake every unaware enemy within `radius` of `center` (noise / shout). Woken
-/// enemies head toward `center` to investigate the disturbance.
-pub fn wake_enemies_in_radius(world: &mut World, center: (i32, i32), radius: i32) {
-    let Some(player) = find_player(world) else { return };
-    let to_wake: Vec<Entity> = world
-        .query::<(&Position, &ChaseAI)>()
-        .iter()
-        .filter(|(_, (pos, ai))| {
-            ai.state == AIState::Unaware
-                && (pos.x - center.0).abs().max((pos.y - center.1).abs()) <= radius
-        })
-        .map(|(id, _)| id)
-        .collect();
-    for e in to_wake {
-        wake_one(world, e, player, center);
-    }
-}
-
 /// Advance alarm-shout channels and shout cooldowns each frame. When a shout
 /// finishes it wakes nearby unaware allies; an interrupted shout (component
 /// removed on damage) simply never completes.
-pub fn tick_alarms(world: &mut World, elapsed: f32) {
+pub fn tick_alarms(world: &mut World, grid: &Grid, elapsed: f32) {
     // Decrement shout cooldowns.
     for (_, ai) in world.query_mut::<&mut ChaseAI>() {
         if ai.shout_cooldown > 0.0 {
@@ -189,7 +174,7 @@ pub fn tick_alarms(world: &mut World, elapsed: f32) {
     }
     for (id, pos) in completed {
         let _ = world.remove_one::<AlarmInProgress>(id);
-        wake_enemies_in_radius(world, pos, SHOUT_WAKE_RADIUS);
+        crate::systems::noise::make_noise(world, grid, pos, SHOUT_WAKE_RADIUS);
     }
 }
 
@@ -256,7 +241,7 @@ pub fn wake_on_attacked(world: &mut World, entity: Entity) {
     let toward = queries::get_entity_position(world, player).unwrap_or_else(|| {
         queries::get_entity_position(world, entity).unwrap_or((0, 0))
     });
-    wake_one(world, entity, player, toward);
+    investigate_noise(world, entity, player, toward);
 }
 
 // =============================================================================
@@ -435,6 +420,15 @@ fn determine_action(
             let mut gain = ALERTNESS_BASE_GAIN * proximity / stealth;
             if asleep {
                 gain *= ASLEEP_ALERT_MULT;
+            }
+            // Light: a player standing in shadow is noticed slower, one in
+            // light (or on fire) faster — unless this enemy sees in the dark.
+            // No exposure recorded (tests, a player the engine hasn't ticked)
+            // leaves the gain alone.
+            if world.get::<&crate::components::SeesInDark>(entity).is_err() {
+                if let Ok(exposure) = world.get::<&crate::components::LightExposure>(player_entity) {
+                    gain *= crate::systems::light::alertness_mult(exposure.0);
+                }
             }
             // Tired players are noticed faster (+25% alertness gain).
             if player_tired {
@@ -792,7 +786,7 @@ fn try_boss_ability(
                 .collect();
             for (victim, vpos) in victims {
                 let damage =
-                    crate::systems::combat::apply_damage(world, victim, BOSS_SLAM_DAMAGE, rng);
+                    crate::systems::combat::apply_damage(world, grid, victim, BOSS_SLAM_DAMAGE, rng);
                 crate::systems::effects::add_effect_to_entity(
                     world, victim, EffectType::Stunned, BOSS_SLAM_STUN_DURATION,
                 );
@@ -1422,6 +1416,42 @@ fn flee_from_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One noticing step by an awake-but-unaware `def` six tiles from a player
+    /// at the given light exposure; returns the alertness it built.
+    fn alertness_after_one_look(def: &crate::spawning::EnemyDef, exposure: f32) -> f32 {
+        use rand::SeedableRng;
+        let mut world = World::new();
+        let grid = Grid::filled(16, 5, crate::tile::TileType::Floor);
+        let player = world.spawn((
+            Position::new(2, 2),
+            crate::components::Player,
+            Stats::new(10, 10, 10),
+            crate::components::LightExposure(exposure),
+        ));
+        let mut rng = rand::rngs::StdRng::seed_from_u64(4);
+        let enemy = def.spawn(&mut world, 8, 2, &mut rng);
+        let _ = world.remove_one::<Asleep>(enemy);
+        world.get::<&mut ChaseAI>(enemy).unwrap().state = AIState::Unaware;
+        let cache = SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+        determine_action(&mut world, &grid, enemy, player, &cache, &mut events, &mut rng);
+        let alertness = world.get::<&ChaseAI>(enemy).unwrap().alertness;
+        alertness
+    }
+
+    #[test]
+    fn test_light_speeds_noticing_unless_the_enemy_sees_in_the_dark() {
+        use crate::spawning::enemies::{GOBLIN, SKELETON};
+        let goblin_dark = alertness_after_one_look(&GOBLIN, 0.0);
+        let goblin_lit = alertness_after_one_look(&GOBLIN, 1.0);
+        assert!(goblin_dark > 0.0, "it does see the player");
+        assert!(goblin_lit > goblin_dark, "a lit player is noticed faster");
+
+        let bones_dark = alertness_after_one_look(&SKELETON, 0.0);
+        let bones_lit = alertness_after_one_look(&SKELETON, 1.0);
+        assert_eq!(bones_dark, bones_lit, "the undead don't care about light");
+    }
 
     /// An open floor grid with a wall column at `wall_x` (0 = none), so a test
     /// can put a target out of line of sight.

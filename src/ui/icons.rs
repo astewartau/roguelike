@@ -35,8 +35,14 @@ pub struct UiIcons {
     pub blue_potion_uv: egui::Rect,
     pub scroll_uv: egui::Rect,
     pub coins_uv: egui::Rect,
-    pub heart_uv: egui::Rect,
-    pub diamond_uv: egui::Rect,
+    /// HUD bar icons: heart (health), star (XP), drumstick (hunger), sun
+    /// (light). Fatigue
+    /// reuses `sleep_uv`, the crescent moon of the Sleep ability.
+    pub health_uv: egui::Rect,
+    pub xp_uv: egui::Rect,
+    pub hunger_uv: egui::Rect,
+    /// Sun for the light bar.
+    pub light_uv: egui::Rect,
     pub cheese_uv: egui::Rect,
     pub bread_uv: egui::Rect,
     pub apple_uv: egui::Rect,
@@ -93,8 +99,10 @@ impl UiIcons {
             blue_potion_uv: tileset.get_egui_uv(tile_ids::BLUE_POTION.0, tile_ids::BLUE_POTION.1),
             scroll_uv: tileset.get_egui_uv(tile_ids::SCROLL.0, tile_ids::SCROLL.1),
             coins_uv: tileset.get_egui_uv(tile_ids::COINS.0, tile_ids::COINS.1),
-            heart_uv: tileset.get_egui_uv(tile_ids::HEART.0, tile_ids::HEART.1),
-            diamond_uv: tileset.get_egui_uv(tile_ids::DIAMOND.0, tile_ids::DIAMOND.1),
+            health_uv: tileset.get_egui_uv(tile_ids::HUD_HEALTH.0, tile_ids::HUD_HEALTH.1),
+            xp_uv: tileset.get_egui_uv(tile_ids::HUD_XP.0, tile_ids::HUD_XP.1),
+            hunger_uv: tileset.get_egui_uv(tile_ids::HUD_HUNGER.0, tile_ids::HUD_HUNGER.1),
+            light_uv: tileset.get_egui_uv(tile_ids::HUD_LIGHT.0, tile_ids::HUD_LIGHT.1),
             cheese_uv: tileset.get_egui_uv(tile_ids::CHEESE.0, tile_ids::CHEESE.1),
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
@@ -174,7 +182,7 @@ impl UiIcons {
     /// reads as that effect.
     ///
     /// Not every `EffectType` gets one — there is no sprite that says
-    /// "invisible", "slowed" or "invulnerable" without inventing custom art,
+    /// "invisible", "slowed", "invulnerable" or "oily" without inventing custom art,
     /// which CLAUDE.md asks us to exhaust the other options before doing. The
     /// HUD falls back to the coloured text label for those.
     pub fn effect_uv(&self, effect: crate::components::EffectType) -> Option<(egui::TextureId, egui::Rect)> {
@@ -190,7 +198,10 @@ impl UiIcons {
             E::Burning => (self.items_texture_id, self.fire_trap_uv),
             E::Rooted => (self.tiles_texture_id, self.snare_trap_uv),
             E::Stunned => (self.items_texture_id, self.stun_uv),
-            E::Invisible | E::Slowed | E::Invulnerable => return None,
+            E::Wet => (self.items_texture_id, self.water_flask_uv),
+            // The oil puddle sprite only reads as oil once tinted, and pips
+            // draw untinted, so it would pass for water. Text label instead.
+            E::Invisible | E::Slowed | E::Invulnerable | E::Oily => return None,
         };
         Some((tex, uv))
     }

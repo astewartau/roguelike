@@ -14,28 +14,8 @@ use post::PostProcess;
 
 use std::sync::Arc;
 
-/// One light source as the tile shader wants it: already flickered, already
-/// coloured, ready to pack straight into the uniform arrays.
-///
-/// The flicker is evaluated on the CPU, in [`flicker_offset`], rather than in
-/// the fragment shader. Both give pixel-identical results, because the light
-/// array is uploaded once per frame and the sine is per *light*, not per
-/// pixel - but on the CPU it costs two `sin` calls per light per frame instead
-/// of two per light per fragment, and it leaves the per-light-type flicker
-/// scale free rather than needing a uniform channel of its own.
-#[derive(Debug, Clone, Copy)]
-pub struct SceneLight {
-    /// Tile-space centre of the light.
-    pub pos: (f32, f32),
-    /// Reach in tiles, with flicker already applied.
-    pub radius: f32,
-    /// Brightness multiplier, with flicker already applied.
-    pub intensity: f32,
-    /// Linear RGB tint of the light.
-    pub color: (f32, f32, f32),
-}
-
-/// How a frame is lit: the player's own light and every other light source.
+/// How a frame is lit: the player's own light, and the light map of every
+/// other source (see `systems::light::LightMap`).
 ///
 /// Shared by `RenderContext::render_frame` and `Renderer::render`, which both
 /// need the whole set.
@@ -46,7 +26,8 @@ pub struct SceneLighting<'a> {
     /// Tint of the player's own light. Multiplies the ambient floor as well as
     /// the falloff, so it colours everything the player can see.
     pub player_light_color: (f32, f32, f32),
-    pub light_sources: &'a [SceneLight],
+    /// Light from the world, per tile, already flickered and occluded.
+    pub light_map: &'a crate::systems::light::LightMap,
 }
 
 /// The flicker signal for one light at one instant, in `[-scale, scale]`.

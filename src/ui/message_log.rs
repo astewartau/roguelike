@@ -298,6 +298,14 @@ impl MessageLog {
                     self.push(format!("{who} catches fire!"), log_colors::INFO);
                 }
             }
+            // Coatings are worth knowing about on yourself; on every rat
+            // that wades through a flooded room they would be noise.
+            GameEvent::Soaked { entity } if *entity == me => {
+                self.push("You are soaked through.".to_string(), log_colors::INFO);
+            }
+            GameEvent::CoatedInOil { entity } if *entity == me => {
+                self.push("You are covered in oil.".to_string(), log_colors::HARM);
+            }
             GameEvent::BarrelExploded { .. } => {
                 self.push("An oil barrel explodes!".to_string(), log_colors::HARM);
             }

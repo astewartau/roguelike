@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, LightSource, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::fov::Fov;
 use crate::grid::Grid;
@@ -9,9 +9,9 @@ use std::collections::HashSet;
 
 /// Ambient brightness at the edge of FOV (base illumination in visible area)
 const AMBIENT_BRIGHTNESS: f32 = 0.3;
-/// Brightness for explored but not visible tiles (fog of war)
-/// Must be less than AMBIENT_BRIGHTNESS to avoid jarring edge at FOV boundary
-const FOG_BRIGHTNESS: f32 = 0.2;
+/// Brightness for explored but not visible tiles (fog of war); see the
+/// constant's own docs for the limits on it.
+const FOG_BRIGHTNESS: f32 = crate::constants::LIGHT_FOG_BRIGHTNESS;
 
 /// Visual effect flags (bitfield)
 pub mod effects {
@@ -92,13 +92,14 @@ pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius:
     }
 
     // 2. External light sources - tiles are visible if:
-    //    a) Light can reach the tile (light has LOS to tile)
+    //    a) Some of the light reaches the tile (through open ground; walls and
+    //       closed doors stop it, see systems::light::LightOcclusion)
     //    b) Player can see the tile (player has LOS to tile)
     //    This allows seeing lit areas even when the light source itself is hidden.
-    let light_sources: Vec<(i32, i32, f32)> = world
-        .query::<(&Position, &LightSource)>()
-        .iter()
-        .map(|(_, (pos, light))| (pos.x, pos.y, light.radius))
+    let occlusion = crate::systems::light::LightOcclusion::build(world, grid);
+    let light_sources: Vec<(i32, i32, f32)> = crate::systems::light::light_emitters(world)
+        .into_iter()
+        .map(|((x, y), light)| (x, y, light.radius))
         .collect();
 
     for (light_x, light_y, light_radius) in light_sources {
@@ -127,7 +128,7 @@ pub fn update_fov(world: &World, grid: &mut Grid, player_entity: Entity, radius:
                 }
 
                 // Check if light can reach this tile (light propagation)
-                if !has_line_of_sight(grid, &blocking_positions, light_x, light_y, x, y) {
+                if occlusion.between((light_x, light_y), (x, y)) <= 0.0 {
                     continue;
                 }
 
@@ -195,7 +196,8 @@ fn has_line_of_sight(
 }
 
 /// Calculate per-tile illumination from player and light sources.
-/// Light sources contribute if they have LOS to the tile (light propagation).
+/// Light sources contribute what reaches the tile through walls, doors and
+/// objects (`systems::light::light_reaching`).
 /// Must be called after update_fov (requires visible flags to be set).
 pub fn calculate_illumination(
     world: &World,
@@ -219,19 +221,10 @@ pub fn calculate_illumination(
     let player_y = player_pos.y;
     let player_light_radius = fov_radius as f32;
 
-    // Collect all light sources (we'll check LOS per-tile)
-    let light_sources: Vec<(i32, i32, f32, f32)> = world
-        .query::<(&Position, &LightSource)>()
-        .iter()
-        .map(|(_, (pos, light))| (pos.x, pos.y, light.radius, light.intensity))
-        .collect();
-
-    // Collect positions of entities that block vision (for light LOS checks)
-    let blocking_positions: HashSet<(i32, i32)> = world
-        .query::<(&Position, &BlocksVision)>()
-        .iter()
-        .map(|(_, (pos, _))| (pos.x, pos.y))
-        .collect();
+    // Collect all light sources, and what the floor lets through between them
+    // and each tile.
+    let light_sources = crate::systems::light::light_emitters(world);
+    let occlusion = crate::systems::light::LightOcclusion::build(world, grid);
 
     // Calculate illumination for each tile
     for y in 0..height as i32 {
@@ -260,25 +253,10 @@ pub fn calculate_illumination(
             let player_contrib = AMBIENT_BRIGHTNESS + (1.0 - AMBIENT_BRIGHTNESS) * t * t;
             let mut total_illumination = player_contrib;
 
-            // Add contributions from light sources that can reach this tile
-            for &(light_x, light_y, radius, intensity) in &light_sources {
-                let ldx = (x - light_x) as f32;
-                let ldy = (y - light_y) as f32;
-                let light_dist = (ldx * ldx + ldy * ldy).sqrt();
-
-                // Check if within light radius
-                if light_dist > radius {
-                    continue;
-                }
-
-                // Check if light can reach this tile (LOS from light to tile)
-                if !has_line_of_sight(grid, &blocking_positions, light_x, light_y, x, y) {
-                    continue;
-                }
-
-                let lt = 1.0 - (light_dist / radius);
-                let contribution = intensity * lt * lt;
-                total_illumination += contribution;
+            // Add what each light source gets through to this tile
+            for (src, light) in &light_sources {
+                total_illumination +=
+                    crate::systems::light::light_reaching(&occlusion, *src, light, (x, y));
             }
 
             // Clamp to reasonable range (allow slight overbrightness for bloom-like effect)

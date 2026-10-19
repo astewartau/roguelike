@@ -38,6 +38,11 @@ PAL = {
     'v': '#5c855b',  # green mid
     'V': '#244b3a',  # green dark
     '8': '#812611',  # dark red-brown
+    # HUD bar icons
+    'k': '#c8743a',  # cooked meat
+    'K': '#7e3a1c',  # meat shadow
+    'j': '#e8a060',  # meat highlight
+    'u': '#e0a526',  # gold shade
 }
 
 def hex2rgba(s):
@@ -413,6 +418,112 @@ def stun():
         px(g, sx, sy-1, c); px(g, sx, sy+1, c)
     return g
 
+
+# ================= HUD BAR ICONS (status panel) =================
+# Drawn big and bold: the HUD shows them at about half size, so fine detail
+# turns to mush.
+
+def _in_poly(x, y, pts):
+    inside = False
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]; xj, yj = pts[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+# ---------------- HEALTH (heart) ----------------
+def health_heart():
+    g = new_grid()
+    heart = set()
+    for y in range(32):
+        for x in range(32):
+            # classic implicit heart, centred, ~26px wide
+            u = (x + 0.5 - 16) / 12.5
+            v = (15.5 - (y + 0.5)) / 12.5 + 0.12
+            if (u*u + v*v - 1) ** 3 - u*u * v**3 <= 0:
+                heart.add((x, y))
+    def fill(x, y):
+        # light from the upper left: bright -> mid -> dark in diagonal bands
+        d = (x - 6) + (y - 6) * 1.2
+        if d < 9: return 'R'
+        if d < 27: return 'r'
+        return 'x'
+    blob(g, heart, fill, 'o')
+    # small square gleam on the left lobe
+    rect(g, 8, 9, 9, 10, 'h'); px(g, 10, 9, 'h')
+    return g
+
+# ---------------- EXPERIENCE (star) ----------------
+def xp_star():
+    import math
+    g = new_grid()
+    cx, cy, ro, ri = 16, 16.8, 14.5, 6.8
+    pts = []
+    for k in range(10):
+        a = -math.pi / 2 + k * math.pi / 5
+        r = ro if k % 2 == 0 else ri
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    star = {(x, y) for y in range(32) for x in range(32) if _in_poly(x + 0.5, y + 0.5, pts)}
+    def fill(x, y):
+        if (x - 13.5) ** 2 + (y - 13.5) ** 2 <= 4: return 'c'  # glint
+        if (x - cx) + (y - cy) > 2: return 'u'                  # shaded lower-right
+        return 'Y'
+    blob(g, star, fill, 'A')
+    return g
+
+# ---------------- HUNGER (meat drumstick) ----------------
+def hunger_drumstick():
+    g = new_grid()
+    # bone shaft running down-right from the meat, ending in two knobs
+    bone = set()
+    for t in range(0, 8):
+        b0 = 17 + t
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 1), (1, 2), (2, 2)]:
+            bone.add((b0 + dx, b0 + dy))
+    bone |= ellipse_set(27.0, 24.0, 2.8, 2.8) | ellipse_set(24.0, 27.0, 2.8, 2.8)
+    blob(g, bone, lambda x, y: 'B' if x + y < 52 else 'b', 'd')
+    # meat: a fat oval tipped toward the bone
+    meat = set()
+    for y in range(32):
+        for x in range(32):
+            u, v = x + 0.5 - 12.5, y + 0.5 - 12.5
+            a, b = (u + v) / 1.414, (v - u) / 1.414
+            if (a / 11.0) ** 2 + (b / 8.2) ** 2 <= 1:
+                meat.add((x, y))
+    def fill(x, y):
+        if (x - 8.5) ** 2 + (y - 8.5) ** 2 <= 6: return 'j'   # glossy highlight
+        if x + y >= 29: return 'K'                             # underside shadow
+        return 'k'
+    blob(g, meat, fill, '8')
+    return g
+
+# ---------------- LIGHT (sun) ----------------
+def light_sun():
+    import math
+    g = new_grid()
+    cx, cy = 15.5, 15.5
+    # eight tapered rays, drawn first so the disc sits over their roots
+    rays = set()
+    for k in range(8):
+        a = k * math.pi / 4
+        for step in range(10, 15):
+            w = 1.6 if step < 13 else 0.9
+            px_, py_ = cx + step * math.cos(a), cy + step * math.sin(a)
+            for y in range(32):
+                for x in range(32):
+                    if (x + 0.5 - px_) ** 2 + (y + 0.5 - py_) ** 2 <= w * w:
+                        rays.add((x, y))
+    blob(g, rays, 'Y', 'A')
+    disc = ellipse_set(cx, cy, 8.6, 8.6)
+    def fill(x, y):
+        if (x - 12.5) ** 2 + (y - 12.5) ** 2 <= 6: return 'c'   # glint
+        if (x - cx) + (y - cy) > 4: return 'u'                   # shaded lower-right
+        return 'Y'
+    blob(g, disc, fill, 'A')
+    return g
+
 ICONS = [
     ('raise_dead', raise_dead),
     ('life_drain', life_drain),
@@ -425,10 +536,66 @@ ICONS = [
     ('tumble', tumble),
     ('crippling_shot', crippling_shot),
     ('stun', stun),
+    ('health_heart', health_heart),
+    ('xp_star', xp_star),
+    ('hunger_drumstick', hunger_drumstick),
+    ('light_sun', light_sun),
 ]
 
+# Where each icon lives in assets/32rogues/items.png, as (1-based row, 0-based
+# column): the same convention as `rc()` in src/tile.rs, and items.txt's
+# "row.letter" notation (26.h is row 26, column 7). Stock items.png is 26 rows;
+# these fill the free end of row 26 and a 27th row added for them.
+SLOTS = {
+    'raise_dead': (26, 5),        # 26.f
+    'life_drain': (26, 6),        # 26.g
+    'health_heart': (26, 7),      # 26.h
+    'xp_star': (26, 8),           # 26.i
+    'hunger_drumstick': (26, 9),  # 26.j
+    'light_sun': (26, 10),        # 26.k
+    'tame': (27, 0),              # 27.a
+    'rest': (27, 1),              # 27.b
+    'sleep': (27, 2),             # 27.c
+    'barkskin': (27, 3),          # 27.d
+    'sprint': (27, 4),            # 27.e
+    'disengage': (27, 5),         # 27.f
+    'tumble': (27, 6),            # 27.g
+    'crippling_shot': (27, 7),    # 27.h
+    'stun': (27, 8),              # 27.i
+}
+
+def to_image(g):
+    im = Image.new('RGBA', (32, 32), (0, 0, 0, 0))
+    for y in range(32):
+        for x in range(32):
+            if g[y][x] != '.':
+                im.putpixel((x, y), hex2rgba(PAL[g[y][x]]))
+    return im
+
+def paste_into(sheet_path):
+    """Write every icon into its slot in items.png, growing a stock 26-row
+    sheet to 27 rows. Each slot is cleared first, so re-running is harmless
+    and a redrawn icon replaces the old one."""
+    sheet = Image.open(sheet_path).convert('RGBA')
+    rows = max(r for r, _ in SLOTS.values())
+    if sheet.height < rows * 32:
+        grown = Image.new('RGBA', (sheet.width, rows * 32), (0, 0, 0, 0))
+        grown.paste(sheet, (0, 0))
+        sheet = grown
+    for name, fn in ICONS:
+        row, col = SLOTS[name]
+        box = (col * 32, (row - 1) * 32, col * 32 + 32, row * 32)
+        sheet.paste(to_image(fn()), box)  # plain paste: replaces the slot, alpha and all
+    sheet.save(sheet_path)
+    print(f'pasted {len(ICONS)} icons into {sheet_path}')
+
 if __name__ == '__main__':
-    import os
+    import os, sys
+    # `make_tiles.py --paste assets/32rogues/items.png` writes every icon into
+    # the sheet; with no arguments it renders previews into $OUTDIR instead.
+    if len(sys.argv) == 3 and sys.argv[1] == '--paste':
+        paste_into(sys.argv[2])
+        sys.exit(0)
     outdir = os.environ.get('OUTDIR', '/tmp')
     z = 6
     cols = 6
@@ -439,5 +606,5 @@ if __name__ == '__main__':
         big = im.resize((32*z, 32*z), Image.NEAREST)
         cx, cy = i % cols, i // cols
         sheet.paste(big, (12+cx*(32*z+12), 12+cy*(32*z+12)), big)
-    sheet.save('/tmp/contact.png')
+    sheet.save(f'{outdir}/contact.png')
     print('done')

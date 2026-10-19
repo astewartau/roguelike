@@ -106,6 +106,38 @@ impl Grid {
         Some(&mut self.tiles[y as usize * self.width + x as usize])
     }
 
+    /// A blank `width` x `height` floor of one tile type with nothing placed on
+    /// it, for tests that need terrain but not a generated dungeon.
+    #[cfg(test)]
+    pub fn filled(width: usize, height: usize, tile_type: crate::tile::TileType) -> Self {
+        Self {
+            width,
+            height,
+            tiles: vec![Tile::new(tile_type); width * height],
+            chest_positions: vec![],
+            door_positions: vec![],
+            brazier_positions: vec![],
+            decals: vec![],
+            stairs_up_pos: None,
+            stairs_down_pos: None,
+            starting_room: None,
+            illumination: vec![0.0; width * height],
+            themed_rooms: vec![],
+            water_positions: vec![],
+            coffin_positions: vec![],
+            barrel_positions: vec![],
+            shop_position: None,
+            shop_decor_positions: vec![],
+            trap_positions: vec![],
+            furniture_positions: vec![],
+            secret_room: None,
+            secret_door_pos: None,
+            stalagmite_positions: vec![],
+            mushroom_positions: vec![],
+            crystal_positions: vec![],
+        }
+    }
+
     /// Check if a tile is walkable (exists and has a walkable tile type)
     pub fn is_walkable(&self, x: i32, y: i32) -> bool {
         self.get(x, y).map(|t| t.tile_type.is_walkable()).unwrap_or(false)
