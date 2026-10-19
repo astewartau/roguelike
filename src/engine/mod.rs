@@ -2360,6 +2360,204 @@ mod tests {
     use super::*;
 
     /// Start a real run so the rest/sleep paths have live state and ui_state.
+    /// Where the time goes between moves. Not a regression test: run it by
+    /// hand in release to see per-call costs on real generated floors.
+    ///
+    ///     cargo test --release bench_frame_costs -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_frame_costs() {
+        use crate::systems::player_input::PlayerIntent;
+        use std::time::Instant;
+
+        fn time<R>(label: &str, n: u32, mut f: impl FnMut() -> R) {
+            let start = Instant::now();
+            for _ in 0..n {
+                std::hint::black_box(f());
+            }
+            let per = start.elapsed().as_secs_f64() * 1000.0 / n as f64;
+            println!("  {label:<28} {per:>8.3} ms/call");
+        }
+
+        let mut engine = engine_with_run();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        // A direction the player can step in right now (open floor, nobody
+        // there), preferring to keep going the same way so it explores.
+        fn open_dir(engine: &GameEngine, prefer: (i32, i32)) -> (i32, i32) {
+            let st = engine.state.as_ref().expect("run");
+            let Ok((px, py)) = st.world.get::<&crate::components::Position>(st.player_entity).map(|p| (p.x, p.y)) else {
+                return prefer;
+            };
+            let dirs = [prefer, (1, 0), (0, 1), (-1, 0), (0, -1)];
+            dirs.into_iter()
+                .find(|&(dx, dy)| {
+                    st.grid.is_walkable(px + dx, py + dy) && !st.spatial_cache.is_blocked((px + dx, py + dy))
+                })
+                .unwrap_or(prefer)
+        }
+        for floor in 0..3 {
+            if let Some(st) = engine.state.as_mut() {
+                if let Ok(mut h) = st.world.get::<&mut Health>(st.player_entity) {
+                    h.max = 1_000_000;
+                    h.current = 1_000_000;
+                }
+            }
+            if floor > 0 {
+                engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+            }
+            let (w, h, n_ent, n_lights) = {
+                let state = engine.state.as_ref().expect("run");
+                (
+                    state.grid.width,
+                    state.grid.height,
+                    state.world.iter().count(),
+                    crate::systems::light::light_emitters(&state.world).len(),
+                )
+            };
+            println!("floor {floor}: {w}x{h}, {n_ent} entities, {n_lights} lights");
+
+            // Per move: the simulation advance (every actor that acts before the
+            // player's next turn), then the visibility + illumination redo that a
+            // move triggers.
+            let mut samples: Vec<f64> = Vec::new();
+            // Wake every hostile onto the player, as a fight in progress would.
+            if std::env::var("BENCH_AWAKE").is_ok() {
+                let st = engine.state.as_mut().expect("run");
+                let player = st.player_entity;
+                let ppos = st.world.get::<&crate::components::Position>(player).map(|p| (p.x, p.y)).unwrap_or((0, 0));
+                let hostiles: Vec<Entity> =
+                    st.world.query::<&crate::components::ChaseAI>().iter().map(|(id, _)| id).collect();
+                for id in hostiles {
+                    let _ = st.world.remove_one::<crate::components::Asleep>(id);
+                    if let Ok(mut ai) = st.world.get::<&mut crate::components::ChaseAI>(id) {
+                        ai.state = crate::components::AIState::Chasing;
+                        ai.add_threat(player, crate::constants::WAKE_THREAT);
+                        ai.update_target_pos(player, ppos);
+                    }
+                }
+                println!("  (all hostiles awake and chasing)");
+            }
+            let mut dir = (1, 0);
+            for _ in 0..120 {
+                dir = open_dir(&engine, dir);
+                let Some(mut ctx) = engine.sim_ctx() else { break };
+                let start = Instant::now();
+                let _ = execute_player_intent(&mut ctx, PlayerIntent::Move { dx: dir.0, dy: dir.1 });
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let pick = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize];
+            println!(
+                "  player move (sim advance)   median {:.2}  p95 {:.2}  max {:.2} ms",
+                pick(0.5),
+                pick(0.95),
+                pick(1.0)
+            );
+            let state = engine.state.as_mut().expect("run");
+            let player = state.player_entity;
+            time("update_fov", 60, || {
+                crate::systems::update_fov(&state.world, &mut state.grid, player, crate::constants::FOV_RADIUS, state.game_clock.time)
+            });
+            time("calculate_illumination", 60, || {
+                crate::systems::calculate_illumination(&state.world, &mut state.grid, player, crate::constants::FOV_RADIUS)
+            });
+            // Per frame.
+            time("LightOcclusion::build", 60, || {
+                crate::systems::light::LightOcclusion::build(&state.world, &state.grid).between((0, 0), (1, 1))
+            });
+            time("update_light_exposure", 60, || {
+                crate::systems::light::update_light_exposure(&mut state.world, &state.grid, player)
+            });
+            time("collect_renderables", 60, || {
+                crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0).len()
+            });
+            {
+                // How many GPU batches render_entities issues for this frame:
+                // a new one at every sprite-sheet change, in draw order.
+                let ents = crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0);
+                let mut batches = 0;
+                let mut last = None;
+                for e in &ents {
+                    for sheet in std::iter::once(e.sprite.sheet).chain(e.overlay.map(|o| o.sheet)) {
+                        if last != Some(sheet) {
+                            batches += 1;
+                            last = Some(sheet);
+                        }
+                    }
+                }
+                println!("  entities drawn {}, sprite batches {}", ents.len(), batches);
+            }
+            let mut events = EventQueue::new();
+            let mut acc = 0.0;
+            let mut dirty = false;
+            time("tick_fire (1/60 s)", 60, || {
+                crate::systems::fire::tick_fire(
+                    &mut crate::engine::EffectCtx {
+                        world: &mut state.world,
+                        grid: &mut state.grid,
+                        spatial: &mut state.spatial_cache,
+                        events: &mut events,
+                        rng: &mut state.rng,
+                    },
+                    1.0 / 60.0,
+                    &mut acc,
+                    &mut dirty,
+                )
+            });
+            time("render_light_map", 60, || engine.render_light_map().rgb.len());
+            let hover = engine
+                .state
+                .as_ref()
+                .and_then(|st| st.world.get::<&crate::components::Position>(st.player_entity).ok().map(|p| (p.x + 1, p.y)))
+                .unwrap_or((1, 1));
+            time("describe_tile (hover)", 60, || {
+                let st = engine.state.as_ref().expect("run");
+                crate::systems::tile_context::describe_tile(&st.world, &st.grid, st.player_entity, hover).creatures.len()
+            });
+
+            // Whole engine ticks at 60 fps while walking: a step key every
+            // 6th frame, as a held key would deliver.
+            let mut frames: Vec<f64> = Vec::new();
+            let mut moved = 0;
+            let pos_of = |e: &GameEngine| {
+                e.state.as_ref().and_then(|st| {
+                    st.world.get::<&crate::components::Position>(st.player_entity).ok().map(|p| (p.x, p.y))
+                })
+            };
+            println!("  game_mode {:?}", engine.game_mode);
+            for frame in 0..600 {
+                let before = pos_of(&engine);
+                if frame % 6 == 0 {
+                    use winit::keyboard::KeyCode;
+                    dir = open_dir(&engine, dir);
+                    let key = match dir {
+                        (1, 0) => KeyCode::KeyD,
+                        (-1, 0) => KeyCode::KeyA,
+                        (0, 1) => KeyCode::KeyS,
+                        _ => KeyCode::KeyW,
+                    };
+                    engine.input.keys_pressed.insert(key);
+                }
+                let start = Instant::now();
+                let _ = engine.tick(1.0 / 60.0, &mut camera);
+                frames.push(start.elapsed().as_secs_f64() * 1000.0);
+                if pos_of(&engine) != before {
+                    moved += 1;
+                }
+            }
+            println!("  steps taken while walking: {moved}");
+            frames.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let pick = |q: f64| frames[((frames.len() - 1) as f64 * q) as usize];
+            println!(
+                "  engine.tick while walking   median {:.2}  p95 {:.2}  p99 {:.2}  max {:.2} ms",
+                pick(0.5),
+                pick(0.95),
+                pick(0.99),
+                pick(1.0)
+            );
+        }
+    }
+
     fn engine_with_run() -> GameEngine {
         let mut engine = GameEngine::new();
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
