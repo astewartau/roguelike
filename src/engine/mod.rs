@@ -12,7 +12,6 @@
 //! - Rendering what the engine returns
 
 mod context;
-mod dev_spawning;
 pub mod floor_transition;
 mod game_state;
 pub mod initialization;
@@ -39,7 +38,7 @@ use crate::input::{self, InputState, TargetingMode};
 use crate::spawning;
 use crate::systems;
 use crate::time_system;
-use crate::ui::{DevMenu, GameUiState, UiActions};
+use crate::ui::{GameUiState, UiActions};
 use crate::vfx::{FireEffect, VfxManager, VisualEffect};
 
 use hecs::Entity;
@@ -107,7 +106,8 @@ pub struct GameEngine {
     ui_state: Option<GameUiState>,
 
     /// Developer menu state
-    pub dev_menu: DevMenu,
+    /// The developer tools panel (backquote) and what it has armed.
+    pub dev: crate::devtools::DevTools,
 
     /// Accumulated real time (for animations)
     pub real_time: f32,
@@ -186,7 +186,7 @@ impl GameEngine {
             events: EventQueue::new(),
             input: InputState::new(),
             ui_state: None,
-            dev_menu: DevMenu::new(),
+            dev: crate::devtools::DevTools::new(),
             real_time: 0.0,
             light_flicker_time: 0.0,
             pause_selected: 0,
@@ -378,9 +378,13 @@ impl GameEngine {
                         return None;
                     }
                 }
-                // 3. Close the dev menu.
-                if self.dev_menu.visible {
-                    self.dev_menu.visible = false;
+                // 3. Drop the armed dev tool, then close the dev panel.
+                if self.dev.tool.is_some() {
+                    self.dev.disarm();
+                    return None;
+                }
+                if self.dev.visible {
+                    self.dev.toggle();
                     return None;
                 }
                 // 4. Close any open game UI window (inventory, dialogue, shop, loot).
@@ -419,7 +423,7 @@ impl GameEngine {
                                 return self.handle_escape();
                             }
                             if key == KeyCode::Backquote {
-                                self.dev_menu.toggle();
+                                self.dev.toggle();
                             }
                             self.input.keys_pressed.insert(key);
                         }
@@ -449,6 +453,22 @@ impl GameEngine {
                         return None;
                     }
                 }
+                // An armed dev tool takes the left button: it applies where
+                // the button goes down (and, for painting, wherever it's
+                // dragged), and the map doesn't pan meanwhile.
+                if !egui_consumed && *button == MouseButton::Left && self.is_playing() {
+                    if *btn_state == ElementState::Pressed && self.dev.has_active_tool() {
+                        let at = input::cursor_tile(camera, self.input.mouse_pos);
+                        if let Some(state) = self.state.as_mut() {
+                            self.dev.press(state, &mut self.events, &mut self.vfx, at);
+                        }
+                        return None;
+                    }
+                    if *btn_state == ElementState::Released && self.dev.is_held() {
+                        self.dev.release();
+                        return None;
+                    }
+                }
                 if !egui_consumed && *button == MouseButton::Left {
                     let was_down = self.input.mouse_down;
                     self.input.mouse_down = *btn_state == ElementState::Pressed;
@@ -467,8 +487,6 @@ impl GameEngine {
                         if !was_drag && self.is_playing() {
                             if self.input.is_targeting() {
                                 self.input.pending_left_click = true;
-                            } else if self.dev_menu.has_active_tool() {
-                                self.handle_dev_spawn(camera);
                             } else if let Some(ref state) = self.state {
                                 input::handle_click_to_move(
                                     &mut self.input,
@@ -490,6 +508,8 @@ impl GameEngine {
                             || self.input.keys_pressed.contains(&KeyCode::ShiftRight);
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
+                        } else if self.dev.has_active_tool() {
+                            self.dev.disarm();
                         } else if shift {
                             if self.game_mode == GameMode::Playing {
                                 self.open_tile_menu(camera);
@@ -695,7 +715,17 @@ impl GameEngine {
         // — which is exactly when the player is looking at it — so please do
         // not "fix" this to game time. Hit flashes ride on `dt` for the same
         // reason; see `systems::animation::update_hit_flashes`.
+        // The dev panel covers the right of the window: centre the map in
+        // what's left.
+        camera.set_right_inset(self.dev.panel_px);
         camera.update(dt, self.input.mouse_down);
+
+        // A dev tool held down and dragged (painting) applies on each new
+        // tile under the cursor.
+        if self.dev.is_held() {
+            let at = input::cursor_tile(camera, self.input.mouse_pos);
+            self.dev.drag(state, &mut self.events, &mut self.vfx, at);
+        }
 
         // Advance spreading fire (burnout + grass/creature ignition), paced by
         // the game-time elapsed this frame. May revert burnt grass to floor and
@@ -850,9 +880,12 @@ impl GameEngine {
     /// Does nothing if not playing.
     pub fn process_ui_actions(&mut self, actions: &UiActions) {
         let ui_result = {
-            let Some((mut ctx, dev_menu)) = self.sim_ctx_and_dev_menu() else { return };
-            process_ui_actions(&mut ctx, actions, dev_menu)
+            let Some(mut ctx) = self.sim_ctx() else { return };
+            process_ui_actions(&mut ctx, actions)
         };
+        if let Some(state) = self.state.as_mut() {
+            self.dev.apply_commands(state, &mut self.vfx);
+        }
 
         // Handle ability activation from a hotbar slot
         if let Some(ability_type) = actions.ability_to_use {
@@ -1129,7 +1162,7 @@ impl GameEngine {
                     egui_glow,
                     window,
                     ui_state,
-                    &mut self.dev_menu,
+                    &mut self.dev,
                     crate::ui::UiFrame {
                         game: crate::ui::UiWorld {
                             world: &state.world,
@@ -1164,7 +1197,23 @@ impl GameEngine {
     /// context borrows all of `self`, so build it in the narrowest scope that
     /// covers the simulation call and let it drop before touching `self` again.
     fn sim_ctx(&mut self) -> Option<SimCtx<'_>> {
-        self.sim_ctx_and_dev_menu().map(|(ctx, _)| ctx)
+        let state = self.state.as_mut()?;
+        let ui = self.ui_state.as_mut()?;
+        Some(SimCtx {
+            world: &mut state.world,
+            grid: &mut state.grid,
+            player: state.player_entity,
+            clock: &mut state.game_clock,
+            scheduler: &mut state.action_scheduler,
+            tracker: &mut state.active_ai_tracker,
+            spatial: &mut state.spatial_cache,
+            events: &mut self.events,
+            rng: &mut state.rng,
+            vfx: &mut self.vfx,
+            ui,
+            input: &mut self.input,
+            audio: self.audio.as_ref(),
+        })
     }
 
     /// Apply the spawns an event pass deferred to the engine: skeletons from
@@ -1200,30 +1249,6 @@ impl GameEngine {
         for &(boss, (x, y)) in &result.boss_minion_spawns {
             spawn_boss_minion(&mut ctx.actors(), boss, x, y);
         }
-    }
-
-    /// [`Self::sim_ctx`] paired with the dev menu. The dev menu is engine-owned
-    /// but isn't simulation state, so it stays out of `SimCtx`; this hands out
-    /// both halves of the split borrow at once.
-    fn sim_ctx_and_dev_menu(&mut self) -> Option<(SimCtx<'_>, &mut DevMenu)> {
-        let state = self.state.as_mut()?;
-        let ui = self.ui_state.as_mut()?;
-        let ctx = SimCtx {
-            world: &mut state.world,
-            grid: &mut state.grid,
-            player: state.player_entity,
-            clock: &mut state.game_clock,
-            scheduler: &mut state.action_scheduler,
-            tracker: &mut state.active_ai_tracker,
-            spatial: &mut state.spatial_cache,
-            events: &mut self.events,
-            rng: &mut state.rng,
-            vfx: &mut self.vfx,
-            ui,
-            input: &mut self.input,
-            audio: self.audio.as_ref(),
-        };
-        Some((ctx, &mut self.dev_menu))
     }
 
     /// Process input. Only called when playing (state must exist).
@@ -1485,30 +1510,6 @@ impl GameEngine {
                 let info = systems::tile_context::describe_tile(&state.world, &state.grid, player, (*x, *y));
                 ui.message_log.system(info.summary());
             }
-        }
-    }
-
-    fn handle_dev_spawn(&mut self, camera: &Camera) {
-        let Some(tool) = self.dev_menu.selected_tool else {
-            return;
-        };
-        let Some(ref mut state) = self.state else {
-            return;
-        };
-
-        let mouse_pos = self.input.mouse_pos;
-        let needs_vfx = dev_spawning::spawn_at_cursor(
-            &mut state.actor_ctx(&mut self.events),
-            tool,
-            mouse_pos,
-            camera,
-        );
-
-        if needs_vfx {
-            let world_pos = camera.screen_to_world(self.input.mouse_pos.0, self.input.mouse_pos.1);
-            let tile_x = world_pos.x.round() as i32;
-            let tile_y = world_pos.y.round() as i32;
-            dev_spawning::spawn_vfx_for_tool(tool, tile_x, tile_y, &mut self.vfx);
         }
     }
 

@@ -250,3 +250,10 @@ pub const CONTEXT_MENU_MIN_WIDTH: f32 = 150.0;
 /// Offset of the right-click menu from the cursor, in points, so the cursor
 /// does not sit on top of the first entry's label.
 pub const CONTEXT_MENU_CURSOR_OFFSET: f32 = 4.0;
+
+/// Width of the developer tools panel docked on the right, in egui points.
+/// The camera centres the map in what's left beside it.
+pub const DEVTOOLS_PANEL_WIDTH: f32 = 340.0;
+/// Opacity of the cursor's ghost preview of what a dev tool will place
+/// (0-255). Enough to see where it lands, little enough to see under it.
+pub const DEVTOOLS_GHOST_ALPHA: u8 = 150;

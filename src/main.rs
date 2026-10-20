@@ -7,6 +7,7 @@ mod audio;
 mod camera;
 mod components;
 mod constants;
+mod devtools;
 mod dungeon_gen;
 mod ease;
 mod engine;

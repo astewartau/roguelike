@@ -659,7 +659,7 @@ fn spawn_boss_encounter(
 }
 
 /// Generate randomized chest contents.
-fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
+pub(crate) fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
     // Common items (higher weight)
     let common_items = [
         ItemType::HealthPotion,

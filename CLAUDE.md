@@ -180,6 +180,7 @@ between a fresh clone and a panic on launch.
 | `src/events.rs` | `GameEvent` definitions |
 | `src/constants/` | all tuning numbers, by domain |
 | `src/ui/` | egui panels |
+| `src/devtools/`, `src/ui/devtools.rs` | developer tools (backquote): engine-side tools and commands, and the docked panel |
 | `src/render/`, `src/renderer.rs`, `src/multi_tileset.rs` | GPU rendering and sheet UVs |
 | `src/dungeon_gen.rs`, `src/grid.rs`, `src/spawning.rs` | generation, terrain, spawn tables |
 | `src/fov.rs`, `src/pathfinding.rs`, `src/spatial_cache.rs`, `src/queries.rs` | visibility, A*, blocking cache, shared queries |

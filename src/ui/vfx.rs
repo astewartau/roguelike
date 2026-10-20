@@ -777,7 +777,7 @@ pub fn draw_enemy_status_indicators(
 }
 
 /// The on-screen rect of the tile whose centre is at world (`cx`, `cy`).
-fn tile_rect(camera: &Camera, ppp: f32, cx: f32, cy: f32) -> egui::Rect {
+pub(crate) fn tile_rect(camera: &Camera, ppp: f32, cx: f32, cy: f32) -> egui::Rect {
     let tile = camera.zoom / ppp;
     // World y points up: this is the tile's bottom-left corner on screen.
     let (sx, sy) = camera.world_to_screen(cx - 0.5, cy - 0.5);

@@ -12,7 +12,7 @@ use crate::systems;
 use crate::systems::action_dispatch;
 use crate::systems::player_input::{self, PlayerIntent};
 use crate::time_system::{self};
-use crate::ui::{DevMenu, UiActions};
+use crate::ui::UiActions;
 
 use super::{ActorCtx, SimCtx};
 use hecs::{Entity, World};
@@ -466,7 +466,6 @@ pub struct UiActionResult {
 pub fn process_ui_actions(
     ctx: &mut SimCtx,
     actions: &UiActions,
-    dev_menu: &mut DevMenu,
 ) -> UiActionResult {
     let player_entity = ctx.player;
     let game_time = ctx.clock.time;
@@ -480,11 +479,6 @@ pub fn process_ui_actions(
     );
 
     let mut result = UiActionResult::default();
-
-    // Dev menu item giving
-    if let Some(item) = dev_menu.take_item_to_give() {
-        systems::dev_tools::give_item_to_player(world, player_entity, item);
-    }
 
     // Chest interactions (also works for ground item piles)
     // The window covers every container on the tile (see `loot_sources`), so

@@ -5,7 +5,7 @@
 pub mod style;
 
 mod altar_window;
-mod dev_menu;
+mod devtools;
 mod dialogue;
 mod game_over_screen;
 mod hotbar;
@@ -23,7 +23,7 @@ mod vfx;
 
 // Re-export public items from submodules
 pub use altar_window::{draw_altar_window, get_altar_window_data};
-pub use dev_menu::{draw_dev_menu, DevMenu, DevTool};
+pub use devtools::{draw_cursor_ghost, draw_devtools, DevArt};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data};
 pub use game_over_screen::{run_game_over_screen, GameOverChoice, GameOverStats};
 pub use hotbar::{
@@ -40,7 +40,7 @@ pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use tile_info::{TileMenu, TileMenuOutcome};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
-pub use vfx::{
+pub use vfx::{RainStyle, 
     draw_alert_indicators, draw_attack_telegraphs, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras, draw_rain,
     draw_resting_indicators,
@@ -377,7 +377,7 @@ pub fn run_ui(
     egui_glow: &mut EguiGlow,
     window: &Window,
     ui_state: &mut GameUiState,
-    dev_menu: &mut DevMenu,
+    dev: &mut crate::devtools::DevTools,
     frame: UiFrame<'_>,
 ) -> UiActions {
     let UiFrame { game, resources, overlays, mouse_pos, game_time } = frame;
@@ -535,7 +535,12 @@ pub fn run_ui(
         draw_explosions(ctx, vfx_effects, camera, icons);
 
         // Call Rain still falling
-        draw_rain(ctx, camera, icons, rain, real_time, dev_menu.rain_style);
+        draw_rain(ctx, camera, icons, rain, real_time, dev.rain_style);
+
+        // The developer tools' preview of what a click would do
+        if pointer_on_map {
+            draw_cursor_ghost(ctx, dev, camera, &DevArt { icons, tileset }, world, grid, hover_tile);
+        }
 
         // Potion splash effects
         draw_potion_splashes(ctx, vfx_effects, camera);
@@ -551,7 +556,7 @@ pub fn run_ui(
         draw_channel_progress(ctx, camera, channels);
 
         // Developer menu
-        draw_dev_menu(ctx, dev_menu, icons, tileset);
+        draw_devtools(ctx, dev, &DevArt { icons, tileset });
 
         // Loot window (if chest is open)
         if let Some(ref data) = loot_data {
