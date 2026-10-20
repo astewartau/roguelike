@@ -1,13 +1,9 @@
 //! Floor transition and save/load logic for multi-floor dungeons.
 
-use crate::components::{
-    BlocksMovement, BlocksVision, ChaseAI, Container, ContainerType, Door, GroundItemPile, Health,
-    ItemInstance, Position, Sprite, SpriteTint, VisualPosition,
-};
+use crate::component_registry::{self, Snapshot};
+use crate::components::{Position, VisualPosition};
 use crate::constants::*;
 use crate::grid::Grid;
-use crate::spawning;
-use crate::tile::tile_ids;
 use crate::time_system::ActionScheduler;
 
 use hecs::{Entity, World};
@@ -19,123 +15,10 @@ use super::ActorCtx;
 /// Saved state of a floor for when the player leaves and returns.
 pub struct SavedFloor {
     pub grid: Grid,
-    pub entities: Vec<SavedEntity>,
-}
-
-/// Saved entity data (non-player entities like enemies, chests, doors).
-pub struct SavedEntity {
-    pub pos: (i32, i32),
-    pub entity_type: SavedEntityType,
-}
-
-/// Boss role data saved with a boss enemy (name, ability, announced state).
-pub struct SavedBoss {
-    pub name: String,
-    pub ability: crate::components::BossAbility,
-    pub announced: bool,
-}
-
-/// Types of entities that can be saved.
-pub enum SavedEntityType {
-    Enemy {
-        /// The full stat/trait template the enemy was spawned from, so a
-        /// revisited floor restores the same enemy type (shaman, spider,
-        /// archer, ...) instead of downgrading everything to a skeleton.
-        def: spawning::EnemyDef,
-        health_current: i32,
-        health_max: i32,
-        /// Whether the enemy was asleep when the player left the floor.
-        asleep: bool,
-        /// Present if this enemy is the floor boss.
-        boss: Option<SavedBoss>,
-    },
-    /// Any container that is not a corpse: chest, coffin, barrel or a pile of
-    /// dropped items.
-    ///
-    /// This used to be a `Chest` variant holding only `is_open`/`gold`/`items`,
-    /// which meant a revisited floor restored *every* container as a chest — a
-    /// coffin came back as a chest that could no longer release its skeleton
-    /// (`spawn_chance` was gone), a barrel came back wearing a chest sprite,
-    /// and a pile of dropped loot came back as a blocking chest.
-    Container {
-        container_type: ContainerType,
-        is_open: bool,
-        gold: u32,
-        items: Vec<ItemInstance>,
-        /// Chance to release an enemy when opened. Only coffins set it, and
-        /// losing it was what defanged a revisited crypt.
-        spawn_chance: f32,
-    },
-    /// The whole `Door` component, so its theme (green, grated, shop) and
-    /// open/shut sprites survive, plus any tint (discovered secret doors).
-    Door {
-        door: Door,
-        tint: Option<SpriteTint>,
-    },
-    Bones {
-        gold: u32,
-        items: Vec<ItemInstance>,
-        /// What died here, so the loot window can still say "Goblin's
-        /// corpse" after the floor is revisited.
-        name: Option<String>,
-    },
-    /// An undiscovered secret door (discovered ones are saved as `Door`)
-    SecretDoor,
-    /// A dungeon floor trap (triggered ones are despawned, so never saved)
-    Trap {
-        effect: crate::components::TrapEffect,
-        revealed: bool,
-    },
-    /// Room furniture (fountain / altar / shrine)
-    Furniture {
-        kind: crate::components::FurnitureKind,
-        used: bool,
-    },
-    /// A brazier: burning or gone out, or toppled for good.
-    Brazier {
-        lit: bool,
-        toppled: bool,
-    },
-    /// The starting-room campfire, burning or rained out.
-    Campfire {
-        lit: bool,
-    },
-    /// A room lantern still standing. Smashed lanterns are despawned, so
-    /// they are never saved.
-    Lantern {
-        /// Its fuel, which holds the light it gives.
-        fuel: crate::components::Fuel,
-        lit: bool,
-        tint: Option<SpriteTint>,
-    },
-    /// An oil barrel that has not gone off yet. Exploded barrels are
-    /// despawned, so they are simply never saved.
-    OilBarrel {
-        health_current: i32,
-        health_max: i32,
-        /// Seconds left on a lit fuse, and what lit it, if the barrel was
-        /// burning or broken open when the player left. It keeps counting
-        /// down on return (and a soaking still puts out a fire fuse only).
-        fuse: Option<(f32, crate::components::FuseCause)>,
-    },
-    /// A patch of glowing fungus. Burnt patches are consumed by the fire, so
-    /// they are never saved.
-    GlowMushroom,
-    CrystalCluster,
-    Stalagmites,
-    /// A decorative blocking prop (shop jar, sack) and the sprite it wore.
-    Decoration {
-        sprite: Sprite,
-    },
-    /// An unlit oil puddle. Its `Fuel` is kept so a short-lived drip stays a
-    /// drip. Burning puddles are mid-way to burning out and are not saved,
-    /// like every other fire.
-    OilPuddle {
-        fuel: crate::components::Fuel,
-    },
-    /// An unlit spider web. The spinner link is dropped: enemies come back as
-    /// new entities, so the old one would point at nothing.
-    Web,
+    /// Everything on the floor but the player, each as its components
+    /// (`component_registry::snapshot`), keyed by the entity it was so links
+    /// between them survive the reload.
+    pub entities: Vec<(Entity, Snapshot)>,
 }
 
 /// Result of a floor transition. The new grid is written straight into the
@@ -154,217 +37,40 @@ pub fn can_transition_floor(current_floor: u32, direction: crate::events::StairD
     }
 }
 
-/// Save the current floor state (non-player entities).
+/// Save the current floor: every entity on it but the player, as it is now,
+/// component for component. Nothing here knows what kinds of thing a floor
+/// holds; anything the component registry can read comes back on a revisit
+/// exactly as it was left.
+///
+/// An entity carrying a component the registry can't save (a projectile in
+/// flight) can't come back as it was, so it isn't saved at all, rather than
+/// coming back as a stray sprite. Passing visual state (a hit flash, a
+/// lunge) doesn't count against it: it's simply dropped.
 pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloor {
-    let mut entities = Vec::new();
-
-    // Save enemies (hostile ChaseAI actors; tamed companions use CompanionAI
-    // and are not floor-bound). The spawn template stored on the entity
-    // preserves its exact type; enemies spawned without one (dev tools,
-    // legacy saves) fall back to a skeleton as before.
-    for (id, (pos, health, _)) in world.query::<(&Position, &Health, &ChaseAI)>().iter() {
-        if id == player_entity {
-            continue;
-        }
-        let def = world
-            .get::<&spawning::EnemyDef>(id)
-            .map(|d| (*d).clone())
-            .unwrap_or_else(|_| spawning::enemies::SKELETON.clone());
-        let asleep = world
-            .entity(id)
-            .map(|e| e.has::<crate::components::Asleep>())
-            .unwrap_or(false);
-        let boss = world.get::<&crate::components::Boss>(id).ok().map(|b| SavedBoss {
-            name: world
-                .get::<&crate::components::Name>(id)
-                .map(|n| n.0.clone())
-                .unwrap_or_else(|_| def.name.to_string()),
-            ability: b.ability,
-            announced: b.announced,
-        });
-        entities.push(SavedEntity {
-            pos: (pos.x, pos.y),
-            entity_type: SavedEntityType::Enemy {
-                def,
-                health_current: health.current,
-                health_max: health.max,
-                asleep,
-                boss,
-            },
-        });
-    }
-
-    // Save containers. Corpses keep their own variant because they restore
-    // with different semantics (always open, never blocking); everything else
-    // round-trips through `Container` with its kind intact. The corpse test
-    // reads the component rather than sniffing for the bones sprite, which is
-    // what it used to do.
-    for (id, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
-        if id == player_entity {
-            continue;
-        }
-
-        if container.container_type == ContainerType::Corpse {
-            entities.push(SavedEntity {
-                pos: (pos.x, pos.y),
-                entity_type: SavedEntityType::Bones {
-                    gold: container.gold,
-                    items: container.items.clone(),
-                    name: world
-                        .get::<&crate::components::Name>(id)
-                        .ok()
-                        .map(|n| n.0.clone()),
-                },
-            });
-        } else {
-            entities.push(SavedEntity {
-                pos: (pos.x, pos.y),
-                entity_type: SavedEntityType::Container {
-                    container_type: container.container_type,
-                    is_open: container.is_open,
-                    gold: container.gold,
-                    items: container.items.clone(),
-                    spawn_chance: container.spawn_chance,
-                },
-            });
-        }
-    }
-
-    // Save doors
-    for (id, (pos, door)) in world.query::<(&Position, &Door)>().iter() {
-        if id == player_entity {
-            continue;
-        }
-        entities.push(SavedEntity {
-            pos: (pos.x, pos.y),
-            entity_type: SavedEntityType::Door {
-                door: *door,
-                tint: world.get::<&SpriteTint>(id).ok().map(|t| *t),
-            },
-        });
-    }
-
-    // Save undiscovered secret doors
-    for (_, (pos, _)) in world
-        .query::<(&Position, &crate::components::SecretDoor)>()
+    let passing = passing_component_types();
+    let entities = world
         .iter()
-    {
-        entities.push(SavedEntity {
-            pos: (pos.x, pos.y),
-            entity_type: SavedEntityType::SecretDoor,
-        });
-    }
-
-    // Save untriggered dungeon traps (keeping their revealed state)
-    for (id, (pos, trap)) in world
-        .query::<(&Position, &crate::components::Trap)>()
-        .iter()
-        .filter(|(_, (_, t))| t.owner.is_none())
-    {
-        entities.push(SavedEntity {
-            pos: (pos.x, pos.y),
-            entity_type: SavedEntityType::Trap {
-                effect: trap.effect,
-                revealed: world.get::<&crate::components::Concealed>(id).is_err(),
-            },
-        });
-    }
-
-    // Save room furniture (keeping spent state)
-    for (_, (pos, furniture)) in world
-        .query::<(&Position, &crate::components::Furniture)>()
-        .iter()
-    {
-        entities.push(SavedEntity {
-            pos: (pos.x, pos.y),
-            entity_type: SavedEntityType::Furniture {
-                kind: furniture.kind,
-                used: furniture.used,
-            },
-        });
-    }
-
-    save_scenery(world, &mut entities);
-
+        .map(|e| e.entity())
+        .filter(|&id| id != player_entity)
+        .filter(|&id| {
+            let (known, unknown) = component_registry::components_of(world, id);
+            let passing_here = world
+                .entity(id)
+                .map(|e| e.component_types().filter(|t| passing.contains(t)).count())
+                .unwrap_or(0);
+            !known.is_empty() && unknown == passing_here
+        })
+        .map(|id| (id, component_registry::snapshot(world, id)))
+        .collect();
     SavedFloor { grid, entities }
 }
 
-/// Save the floor's static scenery: light sources, oil barrels, cave dressing,
-/// shop props and loose fuel on the floor. Each is saved in the state it is in
-/// now, and anything already destroyed is gone from the world and so is not
-/// saved — re-running the spawn passes on a revisit would resurrect it.
-///
-/// Water animation entities are deliberately absent: they carry no state, and
-/// `load_floor` respawns them from `grid.water_positions`.
-fn save_scenery(world: &World, entities: &mut Vec<SavedEntity>) {
-    use crate::components::{
-        BarrelFuse, Topples, Campfire, CrystalCluster, Decoration, Fuel, GlowMushroom, OilBarrel,
-        OilPuddle, OnFire, Stalagmite, Web,
-    };
-
-    let mut push = |pos: &Position, entity_type| {
-        entities.push(SavedEntity {
-            pos: (pos.x, pos.y),
-            entity_type,
-        });
-    };
-
-    for (id, (pos, brazier)) in world.query::<(&Position, &Topples)>().iter() {
-        let lit = world.get::<&OnFire>(id).is_ok();
-        push(pos, SavedEntityType::Brazier { lit, toppled: brazier.toppled });
-    }
-    for (id, (pos, _)) in world.query::<(&Position, &Campfire)>().iter() {
-        push(pos, SavedEntityType::Campfire { lit: world.get::<&OnFire>(id).is_ok() });
-    }
-    for (id, (pos, fuel)) in world.query::<(&Position, &Fuel)>().with::<&crate::components::Shatters>().iter() {
-        push(
-            pos,
-            SavedEntityType::Lantern {
-                fuel: *fuel,
-                lit: world.get::<&OnFire>(id).is_ok(),
-                tint: world.get::<&SpriteTint>(id).ok().map(|t| *t),
-            },
-        );
-    }
-    for (_, (pos, health, fuse)) in world
-        .query::<(&Position, &Health, Option<&BarrelFuse>)>()
-        .with::<&OilBarrel>()
-        .iter()
-    {
-        // A barrel at zero health detonates on the next fire tick; the player
-        // left before it did, so let it go off on return rather than lose it.
-        push(
-            pos,
-            SavedEntityType::OilBarrel {
-                health_current: health.current,
-                health_max: health.max,
-                fuse: fuse.map(|f| (f.remaining, f.cause)),
-            },
-        );
-    }
-    for (_, (pos, _)) in world.query::<(&Position, &GlowMushroom)>().iter() {
-        push(pos, SavedEntityType::GlowMushroom);
-    }
-    for (_, (pos, _)) in world.query::<(&Position, &CrystalCluster)>().iter() {
-        push(pos, SavedEntityType::CrystalCluster);
-    }
-    for (_, (pos, _)) in world.query::<(&Position, &Stalagmite)>().iter() {
-        push(pos, SavedEntityType::Stalagmites);
-    }
-    for (_, (pos, sprite)) in world.query::<(&Position, &Sprite)>().with::<&Decoration>().iter() {
-        push(pos, SavedEntityType::Decoration { sprite: *sprite });
-    }
-    for (_, (pos, fuel)) in world
-        .query::<(&Position, &Fuel)>()
-        .with::<&OilPuddle>()
-        .without::<&OnFire>()
-        .iter()
-    {
-        push(pos, SavedEntityType::OilPuddle { fuel: *fuel });
-    }
-    for (_, (pos, _)) in world.query::<(&Position, &Web)>().without::<&OnFire>().iter() {
-        push(pos, SavedEntityType::Web);
-    }
+/// Components that are only a moment's presentation, never worth keeping
+/// when the player leaves a floor.
+fn passing_component_types() -> [std::any::TypeId; 3] {
+    use crate::components::{HitFlash, LastDamageSource, LungeAnimation};
+    use std::any::TypeId;
+    [TypeId::of::<HitFlash>(), TypeId::of::<LungeAnimation>(), TypeId::of::<LastDamageSource>()]
 }
 
 /// Clear all non-player entities from the world.
@@ -384,51 +90,11 @@ pub fn clear_floor_entities(world: &mut World, player_entity: Entity, scheduler:
     }
 }
 
-/// Sprite for a restored container.
-///
-/// Mirrors what each spawn pass uses and what `handle_container_opened` swaps
-/// to, so a container looks the same after a revisit as it did when the player
-/// left. A pile of dropped items wears its first item, like the code that
-/// creates one.
-fn container_sprite(
-    container_type: ContainerType,
-    is_open: bool,
-    items: &[ItemInstance],
-) -> (crate::tile::SpriteSheet, u32) {
-    match container_type {
-        ContainerType::Chest => {
-            if is_open {
-                tile_ids::CHEST_OPEN
-            } else {
-                tile_ids::CHEST_CLOSED
-            }
-        }
-        ContainerType::Coffin => {
-            if is_open {
-                tile_ids::COFFIN_OPEN
-            } else {
-                tile_ids::COFFIN_CLOSED
-            }
-        }
-        // Barrels keep one sprite open or shut.
-        ContainerType::Barrel => tile_ids::BARREL,
-        ContainerType::Corpse => tile_ids::BONES_4,
-        ContainerType::GroundPile => items
-            .first()
-            .map(|item| crate::systems::item_defs::get_def(item.kind).sprite)
-            .unwrap_or(tile_ids::COINS),
-    }
-}
-
-/// Load a saved floor, spawning entities.
-pub fn load_floor(
-    ctx: &mut ActorCtx,
-    saved_entities: &[SavedEntity],
-    player_spawn_pos: (i32, i32),
-) {
+/// Bring a saved floor back: every entity as it was left, and the player at
+/// `player_spawn_pos`. The caller rebuilds the caches and schedules the
+/// creatures.
+pub fn load_floor(ctx: &mut ActorCtx, saved: &[(Entity, Snapshot)], player_spawn_pos: (i32, i32)) {
     let player_entity = ctx.player;
-
-    // Update player position
     if let Ok(mut pos) = ctx.world.get::<&mut Position>(player_entity) {
         pos.x = player_spawn_pos.0;
         pos.y = player_spawn_pos.1;
@@ -437,177 +103,7 @@ pub fn load_floor(
         vis_pos.x = player_spawn_pos.0 as f32;
         vis_pos.y = player_spawn_pos.1 as f32;
     }
-
-    // Stateless, so rebuilt from the grid rather than saved.
-    super::initialization::spawn_water_entities(ctx.world, ctx.grid);
-
-    for saved_entity in saved_entities {
-        let pos = Position::new(saved_entity.pos.0, saved_entity.pos.1);
-        match &saved_entity.entity_type {
-            SavedEntityType::Enemy { def, health_current, health_max, asleep, boss } => {
-                let enemy = def.spawn(ctx.world, pos.x, pos.y, ctx.rng);
-                if let Ok(mut health) = ctx.world.get::<&mut Health>(enemy) {
-                    health.current = *health_current;
-                    health.max = *health_max;
-                }
-                // spawn() re-rolls the sleep chance; restore the state the
-                // enemy was actually left in.
-                if *asleep {
-                    let _ = ctx.world.insert_one(enemy, crate::components::Asleep);
-                } else {
-                    let _ = ctx.world.remove_one::<crate::components::Asleep>(enemy);
-                }
-                if let Some(b) = boss {
-                    spawning::apply_boss_role(ctx.world, enemy, &b.name, b.ability, b.announced);
-                }
-                // Scheduled by the caller once the tracker knows about it.
-            }
-            SavedEntityType::Container {
-                container_type,
-                is_open,
-                gold,
-                items,
-                spawn_chance,
-            } => {
-                let container = Container {
-                    container_type: *container_type,
-                    items: items.clone(),
-                    gold: *gold,
-                    is_open: *is_open,
-                    spawn_chance: *spawn_chance,
-                };
-                let sprite_ref = container_sprite(*container_type, *is_open, items);
-                // Read before the container moves into the world. Same
-                // predicate the live sweep uses, so staying on a floor and
-                // revisiting it agree about what blocks.
-                let looted = container.is_looted();
-                let entity = ctx.world.spawn((
-                    pos,
-                    VisualPosition::from_position(&pos),
-                    Sprite::from_ref(sprite_ref),
-                    container,
-                ));
-
-                // A pile of dropped items is walkable and needs its marker so
-                // the pickup prompt still finds it.
-                if *container_type == ContainerType::GroundPile {
-                    let _ = ctx.world.insert_one(entity, GroundItemPile);
-                } else if !looted {
-                    let _ = ctx.world.insert_one(entity, BlocksMovement);
-                }
-                // Storage barrels can be shoved (see `components::Pushable`).
-                if *container_type == ContainerType::Barrel {
-                    let _ = ctx.world.insert_one(entity, crate::components::Pushable);
-                }
-            }
-            SavedEntityType::Door { door, tint } => {
-                // Restore with the sprite that matches its state: an open door
-                // used to come back wearing the shut sprite while walkable.
-                let sprite = if door.is_open { door.open_sprite } else { door.closed_sprite };
-                let entity = ctx.world.spawn((
-                    pos,
-                    VisualPosition::from_position(&pos),
-                    Sprite::from_ref(sprite),
-                    *door,
-                ));
-                if !door.is_open {
-                    let _ = ctx.world.insert(entity, (BlocksVision, BlocksMovement));
-                }
-                if let Some(tint) = tint {
-                    let _ = ctx.world.insert_one(entity, *tint);
-                }
-            }
-            SavedEntityType::Bones { gold, items, name } => {
-                let mut container = Container::corpse(items.clone(), *gold);
-                container.is_open = true;
-                let corpse = ctx.world.spawn((
-                    pos,
-                    VisualPosition::from_position(&pos),
-                    Sprite::from_ref(tile_ids::BONES_4),
-                    container,
-                ));
-                if let Some(name) = name {
-                    let _ = ctx
-                        .world
-                        .insert_one(corpse, crate::components::Name::new(name.clone()));
-                }
-            }
-            SavedEntityType::SecretDoor => {
-                let wall_sprite =
-                    super::initialization::secret_door_wall_sprite(ctx.grid, pos.x, pos.y);
-                spawning::spawn_secret_door(ctx.world, pos.x, pos.y, wall_sprite);
-            }
-            SavedEntityType::Trap { effect, revealed } => {
-                let trap = spawning::spawn_dungeon_trap(ctx.world, pos.x, pos.y, *effect);
-                if *revealed {
-                    crate::systems::discovery::reveal(ctx.world, trap);
-                }
-            }
-            SavedEntityType::Furniture { kind, used } => {
-                let piece = spawning::spawn_furniture(ctx.world, pos.x, pos.y, *kind);
-                if *used {
-                    crate::systems::furniture::mark_spent(ctx.world, piece);
-                }
-            }
-            SavedEntityType::Brazier { lit, toppled } => {
-                let brazier = spawning::spawn_brazier(ctx.world, pos.x, pos.y);
-                if *toppled {
-                    crate::systems::fire::knock_over(ctx.world, brazier);
-                } else if !*lit {
-                    crate::systems::fire::douse_fuel(ctx.world, brazier);
-                }
-            }
-            SavedEntityType::Campfire { lit } => {
-                let fire = spawning::spawn_campfire(ctx.world, pos.x, pos.y);
-                if !*lit {
-                    crate::systems::fire::douse_fuel(ctx.world, fire);
-                }
-            }
-            SavedEntityType::Lantern { fuel, lit, tint } => {
-                let lantern =
-                    spawning::spawn_lantern(ctx.world, pos.x, pos.y, crate::components::LanternStyle::Warm);
-                crate::systems::fire::extinguish(ctx.world, lantern);
-                let _ = ctx.world.insert_one(lantern, *fuel);
-                match tint {
-                    Some(t) => drop(ctx.world.insert_one(lantern, *t)),
-                    None => drop(ctx.world.remove_one::<SpriteTint>(lantern)),
-                }
-                if *lit {
-                    crate::systems::fire::ignite_fuel(ctx.world, lantern);
-                }
-            }
-            SavedEntityType::OilBarrel { health_current, health_max, fuse } => {
-                let barrel = spawning::spawn_oil_barrel(ctx.world, pos.x, pos.y);
-                if let Ok(mut health) = ctx.world.get::<&mut Health>(barrel) {
-                    health.current = *health_current;
-                    health.max = *health_max;
-                }
-                if let Some((remaining, cause)) = fuse {
-                    let fuse = crate::components::BarrelFuse::new(*remaining, *cause);
-                    let _ = ctx.world.insert_one(barrel, fuse);
-                }
-            }
-            SavedEntityType::GlowMushroom => {
-                spawning::spawn_glow_mushrooms(ctx.world, pos.x, pos.y);
-            }
-            SavedEntityType::CrystalCluster => {
-                spawning::spawn_crystal_cluster(ctx.world, pos.x, pos.y);
-            }
-            SavedEntityType::Stalagmites => {
-                spawning::spawn_stalagmites(ctx.world, pos.x, pos.y);
-            }
-            SavedEntityType::Decoration { sprite } => {
-                spawning::spawn_decoration(ctx.world, pos.x, pos.y, *sprite);
-            }
-            SavedEntityType::OilPuddle { fuel } => {
-                let puddle = spawning::spawn_oil_puddle(ctx.world, pos.x, pos.y);
-                let _ = ctx.world.insert_one(puddle, *fuel);
-            }
-            SavedEntityType::Web => {
-                spawning::spawn_web(ctx.world, pos.x, pos.y, None);
-            }
-        }
-    }
+    component_registry::restore(ctx.world, saved);
 }
 
 /// Handle a floor transition (going up or down stairs).
@@ -737,7 +233,13 @@ pub fn transition_to_floor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Asleep, Boss, BossAbility, FearImmune, SupportAI, Venomous};
+    use crate::components::{
+        Asleep, BlocksMovement, BlocksVision, Boss, BossAbility, ChaseAI, Door,
+        FearImmune, Health, Sprite, SpriteTint,
+        SupportAI, Venomous,
+    };
+    use crate::spawning;
+    use crate::tile::tile_ids;
     use crate::events::EventQueue;
     use crate::time_system::GameClock;
     use rand::rngs::StdRng;
@@ -857,7 +359,7 @@ mod tests {
     #[test]
     fn test_revisited_floor_keeps_scenery_in_its_left_state() {
         use crate::components::{
-            Topples, CausesBurning, GlowMushroom, LightSource, OilBarrel,
+            Topples, CausesBurning, LightSource, Name, OilBarrel,
         };
 
         let (mut world, grid, player) = setup();
@@ -919,10 +421,10 @@ mod tests {
         );
 
         let mushrooms: Vec<(i32, i32)> = world
-            .query::<&Position>()
-            .with::<&GlowMushroom>()
+            .query::<(&Position, &Name)>()
             .iter()
-            .map(|(_, p)| (p.x, p.y))
+            .filter(|(_, (_, n))| n.0 == "Glowing Mushrooms")
+            .map(|(_, (p, _))| (p.x, p.y))
             .collect();
         assert_eq!(mushrooms, vec![(14, 5)], "the mushroom patch comes back");
     }
@@ -950,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_destroyed_scenery_stays_destroyed() {
-        use crate::components::{GlowMushroom, OilBarrel};
+        use crate::components::{Name, OilBarrel};
 
         let (mut world, grid, player) = setup();
 
@@ -965,26 +467,29 @@ mod tests {
         save_and_reload(&mut world, grid, player);
 
         assert_eq!(world.query::<&OilBarrel>().iter().count(), 0);
-        assert_eq!(world.query::<&GlowMushroom>().iter().count(), 0);
+        assert_eq!(world.query::<&Name>().iter().filter(|(_, n)| n.0 == "Glowing Mushrooms").count(), 0);
     }
 
     #[test]
-    fn test_enemy_without_template_falls_back_to_skeleton() {
+    fn a_creature_comes_back_as_whatever_it_was() {
         let (mut world, grid, player) = setup();
 
-        // A bare hostile without a spawn template (dev tools / legacy saves).
+        // Something put together by hand, from no template at all.
         let pos = Position::new(4, 4);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
+            crate::components::Name::new("Odd thing"),
             Health::new(9),
             ChaseAI::new(6),
+            crate::components::Venomous { slow_duration: 1.0, poison_duration: 2.0 },
         ));
 
         save_and_reload(&mut world, grid, player);
 
-        let skeleton = find_named(&world, "Skeleton");
-        assert_eq!(world.get::<&Health>(skeleton).unwrap().current, 9);
+        let odd = find_named(&world, "Odd thing");
+        assert_eq!(world.get::<&Health>(odd).unwrap().current, 9);
+        assert!(world.get::<&crate::components::Venomous>(odd).is_ok());
     }
 
     fn unlit_puddles(world: &World) -> Vec<(i32, i32)> {
@@ -1044,16 +549,24 @@ mod tests {
         assert!(checked_round_trip);
     }
 
-    /// A puddle that is burning when the player leaves is not saved.
+    /// A puddle burning when the player leaves is still burning on return,
+    /// with as long left to burn as it had.
     #[test]
-    fn burning_puddles_are_not_saved() {
+    fn burning_puddles_come_back_burning() {
         let (mut world, grid, player) = setup();
         let lit = spawning::spawn_oil_puddle(&mut world, 3, 3);
         crate::systems::fire::ignite_fuel(&mut world, lit);
+        let left = world.get::<&crate::components::OnFire>(lit).unwrap().remaining;
         spawning::spawn_oil_puddle(&mut world, 4, 4);
         save_and_reload(&mut world, grid, player);
         assert_eq!(unlit_puddles(&world), vec![(4, 4)]);
-        assert_eq!(world.query::<&crate::components::OilPuddle>().iter().count(), 1);
+        let burning: Vec<f32> = world
+            .query::<&crate::components::OnFire>()
+            .with::<&crate::components::OilPuddle>()
+            .iter()
+            .map(|(_, f)| f.remaining)
+            .collect();
+        assert_eq!(burning, vec![left]);
     }
 
     #[test]
@@ -1156,4 +669,59 @@ mod tests {
         }
         assert!(saw_active_enemy, "no seed put an enemy near the stairs; the test checked nothing");
     }
+
+    /// Everything on every floor, after a while of play, is either saved or
+    /// deliberately let go (passing visuals; a projectile in flight). A
+    /// component missing from the registry would otherwise vanish, silently,
+    /// the first time the player left its floor. And a save and reload of a
+    /// real floor puts back exactly what was there.
+    #[test]
+    fn every_component_on_a_floor_is_saved() {
+        use std::any::TypeId;
+        let mut engine = crate::engine::GameEngine::new();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        engine.start_game(crate::components::PlayerClass::Fighter, 77, &mut camera);
+        let in_flight = [
+            TypeId::of::<crate::components::Projectile>(),
+            TypeId::of::<crate::components::ProjectileMarker>(),
+        ];
+        for floor in 0..10u32 {
+            engine.dev.commands.push(crate::devtools::DevCommand::GoToFloor(floor));
+            engine.dev.commands.push(crate::devtools::DevCommand::AdvanceTime(30.0));
+            engine.process_ui_actions(&crate::ui::UiActions::default());
+            let state = engine.state.as_mut().unwrap();
+            let player = state.player_entity;
+            let passing = passing_component_types();
+            for e in state.world.iter().map(|e| e.entity()).filter(|&e| e != player) {
+                let types: Vec<TypeId> = state.world.entity(e).unwrap().component_types().collect();
+                if types.iter().any(|t| in_flight.contains(t)) {
+                    continue;
+                }
+                let (known, unknown) = component_registry::components_of(&state.world, e);
+                let passing_here = types.iter().filter(|t| passing.contains(t)).count();
+                assert_eq!(
+                    unknown,
+                    passing_here,
+                    "floor {floor}: an entity with {:?} carries a component the registry can't save",
+                    known.iter().map(|k| k.name).collect::<Vec<_>>()
+                );
+            }
+
+            // Round trip: everything saved comes back with every component,
+            // value for value.
+            let saved = save_floor(&state.world, Grid::filled(1, 1, crate::tile::TileType::Floor), player);
+            let mut fresh = World::new();
+            let restored = component_registry::restore(&mut fresh, &saved.entities);
+            for ((_, before), e) in saved.entities.iter().zip(restored) {
+                let after = component_registry::snapshot(&fresh, e);
+                let names = |snap: &Snapshot| {
+                    let mut n: Vec<&str> = snap.iter().map(|(n, _)| *n).collect();
+                    n.sort();
+                    n
+                };
+                assert_eq!(names(&after), names(before), "floor {floor}: the same components come back");
+            }
+        }
+    }
 }
+

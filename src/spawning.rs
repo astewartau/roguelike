@@ -165,10 +165,6 @@ impl EnemyDef {
         // Name so the message log can refer to this enemy
         let _ = world.insert_one(entity, crate::components::Name::new(self.name));
 
-        // Keep the full template on the entity so floor save/load can restore
-        // this exact enemy type when the player revisits the floor.
-        let _ = world.insert_one(entity, self.clone());
-
         // Add Tameable component for animals that can be tamed
         if self.tameable {
             let _ = world.insert_one(entity, Tameable);
@@ -1176,7 +1172,7 @@ pub mod vendors {
 /// Spawn a campfire, burning. It's fuel like any other (`Fuel::hearth`):
 /// rain puts it out, leaving its ring of stones, and a torch relights it.
 pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, Campfire, Fuel, Name};
+    use crate::components::{AnimatedSprite, Fuel, Name};
 
     let pos = Position::new(x, y);
     let fire = world.spawn((
@@ -1184,7 +1180,6 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::FIRE_PIT_UNLIT),
         Fuel::hearth(AnimatedSprite::fire_pit(), LightSource::campfire()),
-        Campfire,
         Name::new("Campfire"),
     ));
     crate::systems::fire::ignite_fuel(world, fire);
@@ -1235,14 +1230,13 @@ pub fn spawn_decoration(
     y: i32,
     sprite: Sprite,
 ) -> hecs::Entity {
-    use crate::components::{BlocksMovement, Decoration};
+    use crate::components::BlocksMovement;
 
     let pos = Position::new(x, y);
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         sprite,
-        Decoration,
         BlocksMovement,
     ))
 }
@@ -1252,7 +1246,7 @@ pub fn spawn_decoration(
 /// nothing destroys one, so it never needs clearing out of the SpatialCache
 /// (which is rebuilt from the world after every floor is populated anyway).
 pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{BlocksMovement, Name, Stalagmite};
+    use crate::components::{BlocksMovement, Name};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -1260,7 +1254,6 @@ pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::CAVE_STALAGMITES),
         Name::new("Stalagmites"),
-        Stalagmite,
         BlocksMovement,
     ))
 }
@@ -1268,7 +1261,7 @@ pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 /// Spawn a patch of glowing cave fungus: walkable, sheds a small soft light,
 /// and catches fire (`Fuel::fungus`).
 pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{Fuel, GlowMushroom, Name};
+    use crate::components::{Fuel, Name};
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -1277,14 +1270,13 @@ pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         Sprite::from_ref(tile_ids::CAVE_GLOW_MUSHROOMS),
         Name::new("Glowing Mushrooms"),
         LightSource::mushroom(),
-        GlowMushroom,
         Fuel::fungus(),
     ))
 }
 
 /// Spawn a crystal cluster: walkable, sheds a cold light, inert.
 pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{CrystalCluster, Name};
+    use crate::components::Name;
 
     let pos = Position::new(x, y);
     world.spawn((
@@ -1293,7 +1285,6 @@ pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity 
         Sprite::from_ref(tile_ids::CAVE_CRYSTAL_CLUSTER),
         Name::new("Crystal Cluster"),
         LightSource::crystal(),
-        CrystalCluster,
     ))
 }
 

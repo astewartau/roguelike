@@ -13,13 +13,14 @@
 pub mod cheats;
 pub mod paint;
 pub mod prefab;
-pub mod registry;
+
 pub mod spawn;
 
 use hecs::{Entity, World};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
+use crate::component_registry as registry;
 use crate::components::{AbilityType, EffectType, Inventory, ItemInstance, ItemType, Stats};
 use crate::engine::GameState;
 use crate::events::EventQueue;

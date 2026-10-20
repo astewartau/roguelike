@@ -475,7 +475,7 @@ impl Sprite {
 /// Overlay sprite component - rendered on top of the main sprite (an archer's
 /// bow). A carried torch is drawn from `CarriedTorch` instead, since it moves
 /// to the hand, and a ground item's badge from the pile's top item.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OverlaySprite {
     pub sheet: SpriteSheet,
     pub tile_id: u32,
@@ -1546,11 +1546,12 @@ pub enum ChannelEffect {
 pub struct Channel {
     pub effect: ChannelEffect,
     /// What it's aimed at, if anything.
-    #[serde(skip)]
+    #[serde(with = "crate::component_registry::entity_ref::option")]
     pub target: Option<Entity>,
     /// Seconds of focus so far.
     pub elapsed: f32,
     /// Seconds of focus it needs. Infinite for one that runs until broken.
+    #[serde(with = "crate::component_registry::seconds")]
     pub required: f32,
     /// It fails if the target is further than this (Chebyshev). Ignored
     /// without a target.
@@ -1575,8 +1576,9 @@ impl Channel {
 }
 
 /// A single entry in an entity's threat table.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct ThreatEntry {
+    #[serde(with = "crate::component_registry::entity_ref")]
     pub entity: Entity,
     pub threat: f32,
     /// Last known position of this target (for investigating after losing sight)
@@ -1676,7 +1678,7 @@ impl ChaseAI {
 }
 
 /// Visual position for smooth interpolation (separate from logical grid Position)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct VisualPosition {
     pub x: f32,
     pub y: f32,
@@ -1819,7 +1821,7 @@ impl Door {
 /// enemies can spot. Refreshed each frame for the player by
 /// `systems::light::update_light_exposure`; the AI reads it when deciding how
 /// fast it notices you.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LightExposure(pub f32);
 
 /// Marks an enemy that doesn't need light to see — undead, bats hunting by
@@ -1837,11 +1839,11 @@ pub struct BlocksVision;
 pub struct BlocksMovement;
 
 /// Marker component for ground item piles dropped by entities
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GroundItemPile;
 
 /// Weapon data - pure data, damage calculation in systems
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Weapon {
     #[allow(dead_code)] // Reserved for UI display
     pub name: String,
@@ -1890,7 +1892,7 @@ impl Weapon {
 }
 
 /// What type of weapon is equipped
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum EquippedWeapon {
     /// A melee weapon (sword, claws, etc.)
     Melee(Weapon),
@@ -1899,7 +1901,7 @@ pub enum EquippedWeapon {
 }
 
 /// Equipped items for an entity
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Equipment {
     /// Single weapon slot - can be melee or ranged (used by player)
     pub weapon: Option<EquippedWeapon>,
@@ -2074,7 +2076,7 @@ impl LungeAnimation {
 
 
 /// Ranged weapon data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RangedWeapon {
     #[allow(dead_code)] // Reserved for UI display
     pub name: String,
@@ -2195,11 +2197,11 @@ pub struct HitFlash {
 // =============================================================================
 
 /// Marker for friendly NPCs (not attackable, triggers dialogue on bump)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FriendlyNPC;
 
 /// Actions that can be triggered by dialogue options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum DialogueAction {
     /// No special action
     #[default]
@@ -2209,7 +2211,7 @@ pub enum DialogueAction {
 }
 
 /// A dialogue option the player can choose
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DialogueOption {
     /// Button text shown to player
     pub label: String,
@@ -2220,7 +2222,7 @@ pub struct DialogueOption {
 }
 
 /// A single node in a dialogue tree
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DialogueNode {
     /// What the NPC says
     pub text: String,
@@ -2229,7 +2231,7 @@ pub struct DialogueNode {
 }
 
 /// Dialogue tree stored on NPCs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Dialogue {
     /// NPC name for dialogue window title
     pub name: String,
@@ -2254,7 +2256,7 @@ impl Dialogue {
 // =============================================================================
 
 /// Vendor component - NPCs that can buy/sell items
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Vendor {
     /// Items for sale: (item type, stock count)
     pub inventory: Vec<(ItemType, u32)>,
@@ -2441,32 +2443,6 @@ impl Default for LightSource {
     }
 }
 
-/// Marker for a patch of glowing cave fungus. Walkable, sheds light, and
-/// burns (`Fuel::fungus`): a patch the fire reaches is consumed and leaves a
-/// grass-style fire in its place.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct GlowMushroom;
-
-/// Marker for a cave crystal cluster: a walkable, inert light source. Exists
-/// so a floor save can find the cluster again.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct CrystalCluster;
-
-/// Marker for a stalagmite cluster: cover that blocks movement but not
-/// vision. Exists so a floor save can find it again.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Stalagmite;
-
-/// Marker for the starting-room campfire. Without it a campfire is
-/// indistinguishable from a burning fire patch minus its `Fuel`.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Campfire;
-
-/// Marker for purely decorative blocking props (shop jars, sacks). The prop's
-/// look lives in its `Sprite`; the marker lets a floor save find it.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Decoration;
-
 /// Marker component for entities that cause burning when stepped on
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CausesBurning;
@@ -2491,6 +2467,7 @@ pub struct Fuel {
     /// Per fire-step chance this catches when a fire is on or next to it.
     pub catch_chance: f64,
     /// Game-time seconds it burns once lit.
+    #[serde(with = "crate::component_registry::seconds")]
     pub burn_time: f32,
     /// Whether a soaked tile (`WetTile`) stops it catching. Grass and fungus
     /// are damp-sensitive; oil burns on regardless.
@@ -2685,6 +2662,7 @@ impl Fuel {
 /// applies the fuel's `Burnout` when it reaches zero.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OnFire {
+    #[serde(with = "crate::component_registry::seconds")]
     pub remaining: f32,
 }
 
@@ -2703,7 +2681,7 @@ pub struct OilPuddle;
 pub struct OilBarrel;
 
 /// What lit an oil barrel's fuse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FuseCause {
     /// The barrel caught fire (`OIL_BARREL_FUSE_SECONDS`). Water puts this
     /// fuse out along with the flames.
@@ -2716,7 +2694,7 @@ pub enum FuseCause {
 /// Lit fuse on an oil barrel. Ticked in game time by `systems::fire`; the
 /// barrel explodes when `remaining` reaches zero. Damage to a fusing barrel
 /// zeroes `remaining` (immediate detonation on the next fire tick).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BarrelFuse {
     pub remaining: f32,
     /// The fuse's full length, for the telegraph's fill progress.
@@ -2881,7 +2859,7 @@ pub struct Trap {
     /// Who set it. They and their companions step over it safely, and it
     /// gives them threat on whoever it hurts. `None` for the dungeon's own,
     /// which go off under anyone.
-    #[serde(skip)]
+    #[serde(with = "crate::component_registry::entity_ref::option")]
     pub owner: Option<Entity>,
 }
 
@@ -2926,7 +2904,7 @@ pub struct Furniture {
 /// movement + vision like one. Passive discovery when the player is adjacent
 /// (Agility-scaled roll, same helper as traps) converts it into a normal
 /// openable `Door` with a distinct tint.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SecretDoor;
 
 // =============================================================================
@@ -3047,20 +3025,22 @@ pub struct Tameable;
 
 /// Marks a skeleton companion created by Raise Dead (counts against the
 /// caster's INT-scaled control cap while alive).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct RaisedUndead;
 
 /// Marks an animal as tamed
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct TamedBy {
     /// The player who tamed this animal
+    #[serde(with = "crate::component_registry::entity_ref")]
     pub owner: Entity,
 }
 
 /// AI for tamed companions - defensive mode, attacks enemies threatening owner
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompanionAI {
     /// The player this companion follows
+    #[serde(with = "crate::component_registry::entity_ref")]
     pub owner: Entity,
     /// Maximum distance before following (Manhattan distance)
     pub follow_distance: i32,
@@ -3095,7 +3075,7 @@ impl CompanionAI {
 // =============================================================================
 
 /// Cooldown tracker for ranged attacks (used by skeleton archers)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct RangedCooldown {
     /// Remaining cooldown time in seconds
     pub remaining: f32,
@@ -3109,19 +3089,19 @@ pub struct RangedCooldown {
 /// cooldown, heals the most wounded visible ally — or hastes one attacking
 /// the player. Behavior lives in `systems::ai`; the cooldown is ticked by
 /// `systems::ai::tick_role_cooldowns`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SupportAI {
     /// Seconds until the next support cast (heal/haste) is available.
     pub cooldown: f32,
 }
 
 /// Marker: spider-kin. Spiders never trigger (or consume) webs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Spider;
 
 /// Periodically lays `Web` entities on its own tile while awake
 /// (see `systems::webs::try_lay_web`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct WebSpinner {
     /// Seconds until the next web can be laid.
     pub cooldown: f32,
@@ -3131,15 +3111,16 @@ pub struct WebSpinner {
 
 /// A sticky web on the floor. Non-spider entities stepping in are Rooted
 /// briefly and the web is consumed. Highly flammable (see `systems::fire`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Web {
     /// The spider that laid it (None for dev-spawned webs); used for the
     /// per-spider live-web cap.
+    #[serde(with = "crate::component_registry::entity_ref::option")]
     pub spinner: Option<Entity>,
 }
 
 /// The unique ability a boss cycles on its cooldown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BossAbility {
     /// Gnash: stun + damage everything near him.
     GroundSlam,
@@ -3151,7 +3132,7 @@ pub enum BossAbility {
 
 /// A named floor boss: scaled-up enemy with a unique cooldown ability,
 /// immune to fear/morale, announced on first sighting, bonus XP on death.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Boss {
     pub ability: BossAbility,
     /// Seconds until the ability is ready (ticked by `tick_role_cooldowns`).
@@ -3161,8 +3142,9 @@ pub struct Boss {
 }
 
 /// A minion summoned by a boss (counts toward its alive-minion cap).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BossMinion {
+    #[serde(with = "crate::component_registry::entity_ref")]
     pub boss: Entity,
 }
 
@@ -3200,21 +3182,22 @@ pub struct Flying;
 /// fly away from the target for `BAT_RETREAT_DURATION`, then re-engage.
 /// `retreat_remaining` counts down in game time (`ai::tick_role_cooldowns`).
 /// Deliberately not the Feared status, which drives UI/VFX of its own.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct HitAndRun {
     pub retreat_remaining: f32,
 }
 
 /// A melee attacker whose connecting hits Grab the victim (zombies): see
 /// [`EffectType::Grabbed`] and [`GrabbedBy`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Grabber;
 
 /// Who is holding this entity in a grab. Lives alongside the
 /// [`EffectType::Grabbed`] timer so the grab can end early when the grabber
 /// dies, is stunned or is no longer adjacent (`systems::grab`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GrabbedBy {
+    #[serde(with = "crate::component_registry::entity_ref")]
     pub grabber: Entity,
 }
 
@@ -3243,20 +3226,20 @@ pub struct Charger {
 /// cornered; with its pack it shrugs off the wounded-morale panic, and when
 /// it becomes aware of a foe (or is hit) its packmates do too. See
 /// `systems::pack`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PackHunter;
 
 /// Works around the target's flank (goblins): when an ally is already
 /// adjacent to the target, it heads for the free tile on the far side of the
 /// target from that ally rather than the nearest one.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Flanker;
 
 /// The Rooted remaining-duration at the moment this entity was last told it
 /// is stuck fast, so the "You're stuck fast!" line is said once per root
 /// application rather than on every step attempt (`grab::pinned_in_place`).
 /// A root applied afresh has more time left than this and is announced again.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct RootStruggleNoticed {
     pub remaining: f32,
 }

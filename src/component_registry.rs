@@ -1,8 +1,11 @@
-//! The component registry: the components the inspector can show and edit
-//! and prefabs can be made of, each read and written as JSON.
+//! The component registry: every component a floor entity can carry, each
+//! read and written as JSON. It is how a floor is saved when the player
+//! leaves it (`snapshot` / `restore`), and what the developer tools' inspector
+//! and prefabs are built on.
 //!
-//! hecs has no type-erased access to components, so each one the tools
-//! understand is listed here. Most go through their serde form as is; the
+//! hecs has no type-erased access to components, so each one is listed here.
+//! A component missing from the list is lost when its floor is saved; the
+//! test `every_component_on_a_floor_is_saved` keeps the list complete. Most go through their serde form as is; the
 //! two that hold links to other entities (`Actor`'s action in progress,
 //! `ChaseAI`'s threat table) expose only their settings, and leave the links
 //! alone on write.
@@ -15,6 +18,125 @@ use serde_json::Value;
 
 use crate::components::*;
 use crate::tile::tile_ids;
+
+/// Serde for a link to another entity (`#[serde(with = "entity_ref")]`).
+///
+/// Written as the entity's bits. Read back through the remapping that
+/// `restore` sets up while it rebuilds a floor, since every entity it
+/// restores comes back with a new id; a link to anything it isn't restoring
+/// (the player, who stays) is kept as it was. hecs ids carry a generation,
+/// so a link to something long gone can't come back pointing at a stranger.
+pub mod entity_ref {
+    use hecs::Entity;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static REMAP: RefCell<HashMap<u64, Entity>> = RefCell::new(HashMap::new());
+    }
+
+    /// Run `f` with links to the keys of `map` pointing at its values.
+    pub(crate) fn with_remap<R>(map: HashMap<u64, Entity>, f: impl FnOnce() -> R) -> R {
+        REMAP.with(|r| *r.borrow_mut() = map);
+        let out = f();
+        REMAP.with(|r| r.borrow_mut().clear());
+        out
+    }
+
+    fn resolve(bits: u64) -> Option<Entity> {
+        REMAP.with(|r| r.borrow().get(&bits).copied()).or_else(|| Entity::from_bits(bits))
+    }
+
+    pub fn serialize<S: Serializer>(e: &Entity, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u64(e.to_bits().get())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Entity, D::Error> {
+        let bits = u64::deserialize(d)?;
+        resolve(bits).ok_or_else(|| serde::de::Error::custom("not an entity"))
+    }
+
+    /// The same, for an `Option<Entity>`.
+    pub mod option {
+        use super::*;
+
+        pub fn serialize<S: Serializer>(e: &Option<Entity>, s: S) -> Result<S::Ok, S::Error> {
+            match e {
+                Some(e) => s.serialize_some(&e.to_bits().get()),
+                None => s.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Entity>, D::Error> {
+            Ok(Option::<u64>::deserialize(d)?.and_then(resolve))
+        }
+    }
+}
+
+/// Serde for a time that may be forever (`f32::INFINITY`: a hearth that
+/// never burns out, a channel that runs until broken). JSON has no infinity,
+/// so forever is written as the string "forever"
+/// (`#[serde(with = "crate::component_registry::seconds")]`).
+pub mod seconds {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(t: &f32, s: S) -> Result<S::Ok, S::Error> {
+        if t.is_infinite() {
+            s.serialize_str("forever")
+        } else {
+            s.serialize_f32(*t)
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Time {
+            Seconds(f32),
+            Word(String),
+        }
+        match Time::deserialize(d)? {
+            Time::Seconds(t) => Ok(t),
+            Time::Word(w) if w == "forever" => Ok(f32::INFINITY),
+            Time::Word(w) => Err(serde::de::Error::custom(format!("not a time: {w}"))),
+        }
+    }
+}
+
+/// An entity as a list of its components' JSON: what a floor save holds for
+/// each thing on the floor, and what a prefab is.
+pub type Snapshot = Vec<(&'static str, Value)>;
+
+/// Every registered component `e` carries.
+pub fn snapshot(world: &World, e: Entity) -> Snapshot {
+    components_of(world, e)
+        .0
+        .into_iter()
+        .filter_map(|entry| (entry.read)(world, e).map(|v| (entry.name, v)))
+        .collect()
+}
+
+/// Rebuild entities from snapshots taken together (`snapshot`), with the
+/// links between them intact. Returns the new entities in the same order.
+/// A component that no longer parses is skipped, not a panic: one odd value
+/// shouldn't cost the whole floor.
+pub fn restore(world: &mut World, saved: &[(Entity, Snapshot)]) -> Vec<Entity> {
+    let fresh: Vec<Entity> = saved.iter().map(|_| world.spawn(())).collect();
+    let remap = saved.iter().zip(&fresh).map(|((old, _), new)| (old.to_bits().get(), *new)).collect();
+    entity_ref::with_remap(remap, || {
+        for ((_, parts), &e) in saved.iter().zip(&fresh) {
+            for (name, value) in parts {
+                if let Some(entry) = find(name) {
+                    if let Err(err) = (entry.write)(world, e, value.clone()) {
+                        eprintln!("[save] restoring {name}: {err}");
+                    }
+                }
+            }
+        }
+    });
+    fresh
+}
 
 /// One component the tools understand.
 pub struct ComponentEntry {
@@ -88,25 +210,6 @@ fn actor_entry() -> ComponentEntry {
             let _ = world.remove_one::<Actor>(e);
         },
         default: || serde_json::to_value(ActorSettings { speed: 1.0 }).unwrap_or(Value::Null),
-    }
-}
-
-/// `Trap`: its effect is editable, and whoever set it stays its owner.
-fn trap_entry() -> ComponentEntry {
-    ComponentEntry {
-        name: "Trap",
-        category: "Things",
-        type_id: || TypeId::of::<Trap>(),
-        read: |world, e| world.get::<&Trap>(e).ok().and_then(|t| serde_json::to_value(*t).ok()),
-        write: |world, e, value| {
-            let mut trap: Trap = serde_json::from_value(value).map_err(|err| err.to_string())?;
-            trap.owner = world.get::<&Trap>(e).ok().and_then(|t| t.owner);
-            world.insert_one(e, trap).map_err(|err| err.to_string())
-        },
-        remove: |world, e| {
-            let _ = world.remove_one::<Trap>(e);
-        },
-        default: || serde_json::to_value(Trap { effect: TrapEffect::spike(), owner: None }).unwrap_or(Value::Null),
     }
 }
 
@@ -208,21 +311,56 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(Topples, "Fire", Topples { toppled: false }),
             plain!(Shatters, "Fire", Shatters),
             plain!(HitOnlyOnPurpose, "Combat", HitOnlyOnPurpose),
-            plain!(Campfire, "Light", Campfire),
             plain!(CarriedTorch, "Light", CarriedTorch { lit: true }),
-            plain!(GlowMushroom, "Light", GlowMushroom),
-            plain!(CrystalCluster, "Light", CrystalCluster),
             plain!(Container, "Things", Container::chest(Vec::new(), 0)),
             plain!(Door, "Things", Door::new()),
-            trap_entry(),
+            plain!(Trap, "Things", Trap { effect: TrapEffect::spike(), owner: None }),
             plain!(Concealed, "Things", {
                 let (sprite, tint) = TrapEffect::spike().revealed_look();
                 Concealed { sprite, tint }
             }),
             plain!(FlameOverlay, "Looks", FlameOverlay),
+            plain!(VisualPosition, "Looks", VisualPosition { x: 0.0, y: 0.0 }),
+            plain!(OverlaySprite, "Looks", OverlaySprite::from_ref(tile_ids::BOW)),
+            plain!(SecretDoor, "Things", SecretDoor),
+            plain!(GroundItemPile, "Things", GroundItemPile),
+            plain!(BarrelFuse, "Fire", BarrelFuse::new(3.0, FuseCause::Fire)),
+            plain!(Equipment, "Creature", Equipment::empty()),
+            plain!(Channel, "Creature", Channel {
+                effect: ChannelEffect::Shout { radius: 5 },
+                target: None,
+                elapsed: 0.0,
+                required: 1.5,
+                range: 0,
+                breaks_on_move: true,
+                breaks_on_damage: true,
+            }),
+            plain!(LightExposure, "Creature", LightExposure(0.0)),
+            plain!(RootStruggleNoticed, "Creature", RootStruggleNoticed { remaining: 0.0 }),
+            plain!(RangedCooldown, "Combat", RangedCooldown { remaining: 0.0 }),
+            plain!(Charger, "Combat", Charger::default()),
+            plain!(HitAndRun, "Combat", HitAndRun::default()),
+            plain!(Grabber, "Combat", Grabber),
+            plain!(GrabbedBy, "Combat", GrabbedBy { grabber: Entity::DANGLING }),
+            plain!(Flanker, "Combat", Flanker),
+            plain!(PackHunter, "Combat", PackHunter),
+            plain!(SupportAI, "Creature", SupportAI { cooldown: 0.0 }),
+            plain!(Spider, "Creature", Spider),
+            plain!(WebSpinner, "Creature", WebSpinner { cooldown: 0.0, interval: 8.0 }),
+            plain!(Web, "Things", Web { spinner: None }),
+            plain!(Boss, "Creature", Boss { ability: BossAbility::GroundSlam, cooldown: 0.0, announced: false }),
+            plain!(BossMinion, "Creature", BossMinion { boss: Entity::DANGLING }),
+            plain!(TamedBy, "Companion", TamedBy { owner: Entity::DANGLING }),
+            plain!(CompanionAI, "Companion", CompanionAI {
+                owner: Entity::DANGLING,
+                follow_distance: 2,
+                threat_table: Vec::new(),
+            }),
+            plain!(RaisedUndead, "Companion", RaisedUndead),
+            plain!(FriendlyNPC, "People", FriendlyNPC),
+            plain!(Vendor, "People", Vendor::new(Vec::new(), 0)),
+            plain!(Dialogue, "People", Dialogue::new("Someone", Vec::new())),
             plain!(Furniture, "Things", Furniture { kind: FurnitureKind::Fountain, used: false }),
-            plain!(Decoration, "Things", Decoration),
-            plain!(Stalagmite, "Things", Stalagmite),
         ]
     })
 }

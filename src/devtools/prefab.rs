@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::registry;
+use crate::component_registry as registry;
 use super::spawn::{self, SpawnOptions, Spawnable};
 use crate::components::{Position, VisualPosition};
 use crate::engine::ActorCtx;

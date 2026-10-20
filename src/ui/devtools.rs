@@ -485,13 +485,13 @@ fn entity_label(world: &World, e: hecs::Entity) -> String {
     if let Ok(name) = world.get::<&crate::components::Name>(e) {
         return name.0.clone();
     }
-    let (known, _) = crate::devtools::registry::components_of(world, e);
+    let (known, _) = crate::component_registry::components_of(world, e);
     let parts: Vec<&str> = known.iter().map(|c| c.name).filter(|n| *n != "Position").take(2).collect();
     if parts.is_empty() { format!("#{}", e.id()) } else { parts.join(" + ") }
 }
 
 fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevArt) {
-    use crate::devtools::registry;
+    use crate::component_registry as registry;
     let world = view.world;
     ui.horizontal(|ui| {
         tool_button(ui, dev, CursorTool::Inspect, "Pick on the map", "Click a tile to look at what's there");
@@ -608,7 +608,8 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
 }
 
 fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
-    use crate::devtools::{prefab, registry, spawn};
+    use crate::component_registry as registry;
+    use crate::devtools::{prefab, spawn};
     ui.horizontal(|ui| {
         if ui.button("New empty").clicked() {
             dev.prefabs.push(prefab::Prefab::empty("New prefab"));

@@ -1608,7 +1608,7 @@ mod tests {
             "a burnt patch leaves fire on its tile, got {fires:?}"
         );
         assert_eq!(
-            world.query::<&crate::components::GlowMushroom>().iter().count(),
+            world.query::<&crate::components::Name>().iter().filter(|(_, n)| n.0 == "Glowing Mushrooms").count(),
             0,
             "no fungus survives the fire"
         );

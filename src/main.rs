@@ -5,6 +5,7 @@ mod active_ai_tracker;
 mod app;
 mod audio;
 mod camera;
+mod component_registry;
 mod components;
 mod constants;
 mod devtools;

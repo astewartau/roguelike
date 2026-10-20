@@ -723,12 +723,7 @@ mod tests {
         assert!(crate::queries::is_flying(&arena.world, b));
         assert!(arena.world.get::<&crate::components::HitAndRun>(b).is_ok());
         // Cave fauna use the same template, so they fly as well.
-        let (flying, hit_and_run) = arena
-            .world
-            .get::<&crate::spawning::EnemyDef>(b)
-            .map(|d| (d.flying, d.hit_and_run))
-            .unwrap();
-        assert!(flying && hit_and_run);
+        assert!(arena.world.get::<&crate::components::Flying>(b).is_ok());
         let rat = arena.rat(7, 7, 1.0);
         assert!(!crate::queries::is_flying(&arena.world, rat), "rats walk");
     }

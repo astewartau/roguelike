@@ -19,19 +19,18 @@
 //! `combat::remove_dead_entities`), so killing both halves pays what the
 //! original would have.
 //!
-//! The child is spawned through `EnemyDef::spawn` from a copy of the parent's
-//! template with `split_generation` bumped, so floor save/load restores it as
-//! a split half (tinted, non-splitting, reduced XP). The parent's stored
-//! template is bumped the same way.
+//! The child is a copy of the parent, component for component (through the
+//! component registry, the same way a floor is saved), so it is whatever the
+//! parent was: a slime, or anything else someone gave `Splits`. Both halves
+//! go up a generation and are tinted.
 
 use hecs::Entity;
 use rand::seq::SliceRandom;
 
-use crate::components::{Asleep, ChaseAI, Health, Splits, SpriteTint};
+use crate::components::{Asleep, ChaseAI, Health, Position, Splits, SpriteTint, VisualPosition};
 use crate::constants::*;
 use crate::engine::ActorCtx;
 use crate::events::GameEvent;
-use crate::spawning::EnemyDef;
 
 /// Whether a creature with this split state and health should split now.
 fn wants_split(splits: &Splits, health: &Health) -> bool {
@@ -83,17 +82,11 @@ fn split_one(ctx: &mut ActorCtx, parent: Entity) {
         Ok(h) => (h.current, h.max),
         Err(_) => return,
     };
-    let template = ctx.world.get::<&EnemyDef>(parent).map(|d| (*d).clone()).ok();
-
     let free = free_neighbours(ctx, pos);
     let spot = free.choose(ctx.rng).copied();
-    let (Some(spot), Some(template), true) = (spot, template, current >= 2) else {
-        // No room (or nothing to share, or no template to spawn from): no
-        // split. Persist that on the stored template so a revisited floor
-        // does not hand the slime a second chance.
-        if let Ok(mut def) = ctx.world.get::<&mut EnemyDef>(parent) {
-            def.splits = false;
-        }
+    let (Some(spot), true) = (spot, current >= 2) else {
+        // No room (or nothing to share): no split. `spent` is already set,
+        // so it doesn't get a second chance.
         return;
     };
 
@@ -102,33 +95,25 @@ fn split_one(ctx: &mut ActorCtx, parent: Entity) {
     let parent_hp = current - child_hp;
     let half_max = ((max + 1) / 2).max(parent_hp);
 
-    let mut child_def = template;
-    child_def.split_generation = child_def.split_generation.saturating_add(1);
-
-    // The parent becomes one of the two halves: next generation, tinted,
-    // template updated so save/load agrees.
+    // The parent becomes one of the two halves: next generation, tinted.
     if let Ok(mut h) = ctx.world.get::<&mut Health>(parent) {
         h.current = parent_hp;
         h.max = half_max;
     }
     if let Ok(mut s) = ctx.world.get::<&mut Splits>(parent) {
-        s.generation = child_def.split_generation;
-    }
-    if let Ok(mut def) = ctx.world.get::<&mut EnemyDef>(parent) {
-        *def = child_def.clone();
+        s.generation = s.generation.saturating_add(1);
     }
     let (r, g, b) = SLIME_SPLIT_TINT;
     let _ = ctx.world.insert_one(parent, SpriteTint { r, g, b });
 
-    // The child, through the normal enemy spawn path (save/loadable).
-    let child = child_def.spawn(ctx.world, spot.0, spot.1, ctx.rng);
+    // The child: a copy of the parent as it now is, on the free tile.
+    let copy = crate::component_registry::snapshot(ctx.world, parent);
+    let child = crate::component_registry::restore(ctx.world, &[(parent, copy)])[0];
+    let at = Position::new(spot.0, spot.1);
+    let _ = ctx.world.insert(child, (at, VisualPosition::from_position(&at)));
     if let Ok(mut h) = ctx.world.get::<&mut Health>(child) {
         h.current = child_hp;
         h.max = half_max;
-    }
-    // The split already happened; the child is not a fresh splitter.
-    if let Ok(mut s) = ctx.world.get::<&mut Splits>(child) {
-        s.spent = true;
     }
     // Same mind as the parent: awake and after the same target.
     let _ = ctx.world.remove_one::<Asleep>(child);
@@ -197,11 +182,10 @@ mod tests {
         assert_eq!(target, Some(arena.player), "the child goes after the parent's quarry");
         assert!(arena.world.get::<&Asleep>(child).is_err());
         assert!(arena.world.get::<&crate::components::Combustible>(child).is_err(), "fireproof");
-        // Both halves are the next generation, tinted, with a matching template.
+        // Both halves are the next generation, and tinted.
         for e in [parent, child] {
             assert_eq!(arena.world.get::<&Splits>(e).unwrap().generation, 1);
             assert!(arena.world.get::<&SpriteTint>(e).is_ok());
-            assert_eq!(arena.world.get::<&EnemyDef>(e).unwrap().split_generation, 1);
         }
         arena.cache.assert_coherent_with_world(&arena.world, "after a split");
         assert!(arena.events.drain().any(|e| matches!(e, GameEvent::SlimeSplit { .. })));
@@ -229,7 +213,6 @@ mod tests {
         assert_eq!(slimes(&arena).len(), 1, "no room, no split");
         assert_eq!(arena.hp(s), SLIME_HEALTH - 14, "and it keeps all its HP");
         assert!(arena.world.get::<&Splits>(s).unwrap().spent, "the chance is used up");
-        assert!(!arena.world.get::<&EnemyDef>(s).unwrap().splits, "persisted for save/load");
     }
 
     /// A split half's template respawns as a split half (floor save/load).
