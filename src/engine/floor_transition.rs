@@ -939,7 +939,7 @@ mod tests {
         save_and_reload(&mut world, grid, player);
 
         let ghost = LightSource::lantern(LanternStyle::Ghost);
-        let lanterns: Vec<((i32, i32), (f32, f32, f32))> = world
+        let lanterns: Vec<_> = world
             .query::<(&Position, &LightSource)>()
             .with::<&Shatters>()
             .iter()
