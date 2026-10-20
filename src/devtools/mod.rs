@@ -807,7 +807,7 @@ mod tests {
     use super::spawn::{DoorKind, BOSSES, ENEMIES};
     use super::*;
     use crate::components::{
-        Actor, DungeonTrapKind, FurnitureKind, LanternStyle, PlayerClass, Position,
+        Actor, FurnitureKind, TrapEffect, LanternStyle, PlayerClass, Position,
     };
     use crate::engine::GameEngine;
 
@@ -845,7 +845,7 @@ mod tests {
                 Spawnable::Web,
                 Spawnable::RainCloud,
                 Spawnable::Furniture(FurnitureKind::Altar),
-                Spawnable::Trap(DungeonTrapKind::Spike),
+                Spawnable::Trap(TrapEffect::spike()),
                 Spawnable::Chest,
                 Spawnable::Door(DoorKind::Grated),
                 Spawnable::SecretDoor,

@@ -13,7 +13,7 @@ use crate::constants::{
 use crate::devtools::paint::PAINTABLE;
 use crate::devtools::spawn::{DoorKind, BOSSES, ENEMIES};
 use crate::devtools::{CursorTool, DevCommand, DevTab, DevTools, Spawnable, Wakefulness};
-use crate::components::{BlocksMovement, DungeonTrapKind, FurnitureKind, LanternStyle, Position, Rarity};
+use crate::components::{BlocksMovement, FurnitureKind, TrapEffect, LanternStyle, Position, Rarity};
 use crate::grid::Grid;
 use crate::multi_tileset::MultiTileset;
 use crate::tile::SpriteSheet;
@@ -243,10 +243,10 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
                 Spawnable::Furniture(FurnitureKind::Fountain),
                 Spawnable::Furniture(FurnitureKind::Altar),
                 Spawnable::Furniture(FurnitureKind::Shrine),
-                Spawnable::Trap(DungeonTrapKind::Spike),
-                Spawnable::Trap(DungeonTrapKind::Fire),
-                Spawnable::Trap(DungeonTrapKind::Snare),
-                Spawnable::Trap(DungeonTrapKind::Alarm),
+                Spawnable::Trap(TrapEffect::spike()),
+                Spawnable::Trap(TrapEffect::fire()),
+                Spawnable::Trap(TrapEffect::snare()),
+                Spawnable::Trap(TrapEffect::alarm()),
             ],
         );
     });
@@ -727,7 +727,6 @@ fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
         (_, "ignition") => list(&["InPlace", "Replace"]),
         (_, "rarity") => list(&["Common", "Magic", "Rare", "Legendary"]),
         (_, "container_type") => list(&["Chest", "Coffin", "Barrel", "Corpse", "GroundPile"]),
-        ("DungeonTrap", "kind") => list(&["Spike", "Fire", "Snare", "Alarm"]),
         ("Furniture", "kind") => list(&["Fountain", "Altar", "Shrine"]),
         ("Container", "kind") => Some(
             crate::systems::item_defs::ITEM_DEFS.iter().map(|d| format!("{:?}", d.item_type)).collect(),

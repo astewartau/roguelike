@@ -400,19 +400,11 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
             GameEvent::StarvationDamage { entity, .. } if *entity == player_entity => {
                 record_player_damage_source(world, player_entity, "starvation".to_string());
             }
-            GameEvent::FireTrapTriggered { victim, .. } if *victim == player_entity => {
-                record_player_damage_source(world, player_entity, "a fire trap".to_string());
-            }
-            GameEvent::DungeonTrapTriggered { kind, victim, damage, .. }
+            GameEvent::TrapTriggered { effect, victim, damage, .. }
                 if *victim == player_entity && *damage > 0 =>
             {
-                let source = match kind {
-                    crate::components::DungeonTrapKind::Spike => "a spike trap",
-                    crate::components::DungeonTrapKind::Fire => "a fire trap",
-                    crate::components::DungeonTrapKind::Snare => "a snare trap",
-                    crate::components::DungeonTrapKind::Alarm => "an alarm trap",
-                };
-                record_player_damage_source(world, player_entity, source.to_string());
+                let source = format!("a {}", effect.name().to_lowercase());
+                record_player_damage_source(world, player_entity, source);
             }
             GameEvent::AIStateChanged { entity, new_state }
                 if *new_state == crate::components::AIState::Chasing =>

@@ -20,9 +20,7 @@ use crate::components::{
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
-use crate::systems::actions::{
-    check_dungeon_trap_trigger, check_fire_trap_trigger, check_snare_trap_trigger,
-};
+use crate::systems::actions::check_trap_trigger;
 use crate::systems::effects;
 
 /// Whether this entity touches the ground, and so is affected by what is on
@@ -90,11 +88,8 @@ pub fn on_enter_tile(
         // Webs root non-spiders (and are consumed).
         crate::systems::webs::trigger_web_at(world, entity, x, y, events);
 
-        // Placed traps, then dungeon-generated floor traps (no owner
-        // exemption: enemies set those off too).
-        check_fire_trap_trigger(world, grid, entity, x, y, events, rng);
-        check_snare_trap_trigger(world, entity, x, y, events);
-        check_dungeon_trap_trigger(world, grid, entity, x, y, events, rng);
+        // Traps: set ones spare their owner, the dungeon's go off under anyone.
+        check_trap_trigger(world, grid, entity, x, y, events, rng);
     }
 
     // After a player arrives: roll passive detection for hidden traps and

@@ -552,58 +552,44 @@ impl MessageLog {
                     log_colors::INFO,
                 );
             }
-            GameEvent::SnareTrapTriggered { victim, .. } => {
-                if *victim == me {
-                    self.push("You are caught in a snare!".to_string(), log_colors::HARM);
-                } else {
-                    let who = self.subject(world, *victim);
-                    self.push(format!("{who} is caught in a snare!"), log_colors::INFO);
-                }
-            }
-            GameEvent::FireTrapTriggered { victim, .. } => {
-                if *victim == me {
-                    self.push("You trigger a fire trap!".to_string(), log_colors::HARM);
-                } else {
-                    let who = self.subject(world, *victim);
-                    self.push(format!("{who} triggers a fire trap!"), log_colors::INFO);
-                }
-            }
             GameEvent::TrapSpotted { .. } => {
                 self.push("You spot a trap!".to_string(), log_colors::KILL);
             }
-            GameEvent::DungeonTrapTriggered { kind, victim, damage, .. } => {
-                use crate::components::DungeonTrapKind;
-                let (text, color) = match (kind, *victim == me) {
-                    (DungeonTrapKind::Spike, true) => (
-                        format!("Hidden spikes stab you for {damage}!"),
+            GameEvent::TrapTriggered { effect, victim, damage, was_hidden, .. } => {
+                use crate::components::TrapEffect;
+                let hidden = if *was_hidden { "hidden " } else { "" };
+                let spikes = if *was_hidden { "Hidden spikes" } else { "Spikes" };
+                let (text, color) = match (effect, *victim == me) {
+                    (TrapEffect::Spike { .. }, true) => (
+                        format!("{spikes} stab you for {damage}!"),
                         log_colors::HARM,
                     ),
-                    (DungeonTrapKind::Spike, false) => (
-                        format!("Hidden spikes stab {}!", self.object(world, *victim)),
+                    (TrapEffect::Spike { .. }, false) => (
+                        format!("{spikes} stab {}!", self.object(world, *victim)),
                         log_colors::INFO,
                     ),
-                    (DungeonTrapKind::Fire, true) => (
+                    (TrapEffect::Fire { .. }, true) => (
                         format!("A fire trap erupts beneath you for {damage}!"),
                         log_colors::HARM,
                     ),
-                    (DungeonTrapKind::Fire, false) => (
+                    (TrapEffect::Fire { .. }, false) => (
                         format!("A fire trap erupts beneath {}!", self.object(world, *victim)),
                         log_colors::INFO,
                     ),
-                    (DungeonTrapKind::Snare, true) => (
-                        "You are caught in a hidden snare!".to_string(),
+                    (TrapEffect::Snare { .. }, true) => (
+                        format!("You are caught in a {hidden}snare!"),
                         log_colors::HARM,
                     ),
-                    (DungeonTrapKind::Snare, false) => (
-                        format!("{} is caught in a hidden snare!", self.subject(world, *victim)),
+                    (TrapEffect::Snare { .. }, false) => (
+                        format!("{} is caught in a {hidden}snare!", self.subject(world, *victim)),
                         log_colors::INFO,
                     ),
-                    (DungeonTrapKind::Alarm, true) => (
+                    (TrapEffect::Alarm { .. }, true) => (
                         "You step on an alarm plate — a shrill ringing echoes through the dungeon!"
                             .to_string(),
                         log_colors::HARM,
                     ),
-                    (DungeonTrapKind::Alarm, false) => (
+                    (TrapEffect::Alarm { .. }, false) => (
                         format!("{} sets off an alarm!", self.subject(world, *victim)),
                         log_colors::INFO,
                     ),

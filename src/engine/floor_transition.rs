@@ -83,7 +83,7 @@ pub enum SavedEntityType {
     SecretDoor,
     /// A dungeon floor trap (triggered ones are despawned, so never saved)
     Trap {
-        kind: crate::components::DungeonTrapKind,
+        effect: crate::components::TrapEffect,
         revealed: bool,
     },
     /// Room furniture (fountain / altar / shrine)
@@ -253,15 +253,16 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
     }
 
     // Save untriggered dungeon traps (keeping their revealed state)
-    for (_, (pos, trap)) in world
-        .query::<(&Position, &crate::components::DungeonTrap)>()
+    for (id, (pos, trap)) in world
+        .query::<(&Position, &crate::components::Trap)>()
         .iter()
+        .filter(|(_, (_, t))| t.owner.is_none())
     {
         entities.push(SavedEntity {
             pos: (pos.x, pos.y),
             entity_type: SavedEntityType::Trap {
-                kind: trap.kind,
-                revealed: trap.revealed,
+                effect: trap.effect,
+                revealed: world.get::<&crate::components::Concealed>(id).is_err(),
             },
         });
     }
@@ -526,10 +527,10 @@ pub fn load_floor(
                     super::initialization::secret_door_wall_sprite(ctx.grid, pos.x, pos.y);
                 spawning::spawn_secret_door(ctx.world, pos.x, pos.y, wall_sprite);
             }
-            SavedEntityType::Trap { kind, revealed } => {
-                let trap = spawning::spawn_dungeon_trap(ctx.world, pos.x, pos.y, *kind);
+            SavedEntityType::Trap { effect, revealed } => {
+                let trap = spawning::spawn_dungeon_trap(ctx.world, pos.x, pos.y, *effect);
                 if *revealed {
-                    crate::systems::discovery::reveal_trap(ctx.world, trap, *kind);
+                    crate::systems::discovery::reveal(ctx.world, trap);
                 }
             }
             SavedEntityType::Furniture { kind, used } => {

@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, PlacedFireTrap, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -1498,14 +1498,14 @@ impl<'a> Passability<'a> {
     }
 }
 
-/// Collect tile positions that cause burning (campfires, braziers, fire traps).
-/// Used so idle AI doesn't casually wander into a fire.
+/// Tiles an idle creature would rather not wander onto: anything burning,
+/// and any trap in plain sight.
 fn fire_positions(world: &World) -> HashSet<(i32, i32)> {
     let mut fire = HashSet::new();
     for (_id, (pos, _)) in world.query::<(&Position, &CausesBurning)>().iter() {
         fire.insert((pos.x, pos.y));
     }
-    for (_id, (pos, _)) in world.query::<(&Position, &PlacedFireTrap)>().iter() {
+    for (_id, (pos, _)) in world.query::<(&Position, &Trap)>().without::<&Concealed>().iter() {
         fire.insert((pos.x, pos.y));
     }
     fire

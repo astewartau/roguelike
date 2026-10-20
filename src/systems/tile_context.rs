@@ -42,9 +42,9 @@ use hecs::{Entity, World};
 use crate::components::{
     AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Brazier,
     CausesBurning, OnFire, ClassAbility, ClassKit, Container, ContainerType,
-    Dialogue, Door, DungeonTrap, DungeonTrapKind, EffectType, Equipment, EquippedWeapon,
+    Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, FurnitureKind, Health, Inventory, ItemType, LearnedAbilities, Name,
-    OilBarrel, OilPuddle, PlacedFireTrap, PlacedTrap, Player, Position, RaisedUndead,
+    OilBarrel, OilPuddle, Player, Trap, Position, RaisedUndead,
     SecondaryAbility, SecretDoor, StatusEffects, TamedBy, Tameable, Vendor, WetTile, Web,
 };
 use crate::constants::*;
@@ -342,15 +342,6 @@ fn container_feature(world: &World, e: Entity, c: &Container) -> Option<String> 
     })
 }
 
-fn trap_kind_name(kind: DungeonTrapKind) -> &'static str {
-    match kind {
-        DungeonTrapKind::Spike => "Spike trap",
-        DungeonTrapKind::Fire => "Fire trap",
-        DungeonTrapKind::Snare => "Snare trap",
-        DungeonTrapKind::Alarm => "Alarm trap",
-    }
-}
-
 /// Non-creature features of `e`, as the player sees them. `visible` gates the
 /// transient ones (fire, a lit fuse) that a remembered tile does not show.
 fn features_of(world: &World, player: Entity, e: Entity, visible: bool, out: &mut Vec<String>) {
@@ -410,20 +401,12 @@ fn features_of(world: &World, player: Entity, e: Entity, visible: bool, out: &mu
         );
         return;
     }
-    if let Ok(t) = world.get::<&DungeonTrap>(e) {
+    if let Ok(t) = world.get::<&Trap>(e) {
         // A hidden trap has no sprite: never mention it.
-        if t.revealed {
-            out.push(trap_kind_name(t.kind).to_string());
+        if !has::<Concealed>(world, e) {
+            let yours = if t.owner == Some(player) { " (yours)" } else { "" };
+            out.push(format!("{}{yours}", t.effect.name()));
         }
-        return;
-    }
-    if let Ok(t) = world.get::<&PlacedFireTrap>(e) {
-        out.push(if t.owner == player { "Fire trap (yours)" } else { "Fire trap" }.to_string());
-        return;
-    }
-    if let Ok(t) = world.get::<&PlacedTrap>(e) {
-        let yours = if t.owner == player { " (yours)" } else { "" };
-        out.push(format!("Snare trap{yours}"));
         return;
     }
     if has::<OnFire>(world, e) {
@@ -1135,12 +1118,12 @@ mod tests {
     fn an_unrevealed_trap_is_not_listed_but_a_revealed_one_is() {
         let mut arena = Arena::new((5, 5));
         see_all(&mut arena);
-        let trap = crate::spawning::spawn_dungeon_trap(&mut arena.world, 6, 6, DungeonTrapKind::Spike);
+        let trap = crate::spawning::spawn_dungeon_trap(&mut arena.world, 6, 6, crate::components::TrapEffect::spike());
         let info = describe_tile(&arena.world, &arena.grid, arena.player, (6, 6));
         assert!(info.features.is_empty(), "{:?}", info.features);
         assert_eq!(info.summary(), "Floor.");
 
-        arena.world.get::<&mut DungeonTrap>(trap).unwrap().revealed = true;
+        crate::systems::discovery::reveal(&mut arena.world, trap);
         let info = describe_tile(&arena.world, &arena.grid, arena.player, (6, 6));
         assert_eq!(info.features, vec!["Spike trap".to_string()]);
     }

@@ -14,7 +14,7 @@
 use hecs::{Entity, World};
 use rand::Rng;
 
-use crate::components::{Door, DungeonTrap, DungeonTrapKind, Position, SecretDoor, Sprite, SpriteTint};
+use crate::components::{Concealed, Door, Position, SecretDoor, Sprite, SpriteTint};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::tile::tile_ids;
@@ -24,16 +24,6 @@ use crate::tile::tile_ids;
 pub fn detection_chance(agility: i32) -> f64 {
     (DETECT_BASE_CHANCE * (1.0 + (agility - 10) as f64 * DETECT_AGI_SCALING))
         .clamp(DETECT_CHANCE_MIN, DETECT_CHANCE_MAX)
-}
-
-/// Sprite tint for a revealed trap of the given kind.
-pub fn trap_tint(kind: DungeonTrapKind) -> (f32, f32, f32) {
-    match kind {
-        DungeonTrapKind::Spike => TRAP_TINT_SPIKE,
-        DungeonTrapKind::Fire => TRAP_TINT_FIRE,
-        DungeonTrapKind::Snare => TRAP_TINT_SNARE,
-        DungeonTrapKind::Alarm => TRAP_TINT_ALARM,
-    }
 }
 
 /// After a player step: roll detection for each hidden trap and secret door
@@ -49,18 +39,16 @@ pub fn roll_player_discovery(
     };
     let chance = detection_chance(crate::queries::effective_stats(world, player).agility);
 
-    // Hidden traps within one tile.
-    let hidden_traps: Vec<(Entity, DungeonTrapKind, (i32, i32))> = world
-        .query::<(&Position, &DungeonTrap)>()
+    // Hidden things within one tile.
+    let hidden: Vec<(Entity, (i32, i32))> = world
+        .query::<(&Position, &Concealed)>()
         .iter()
-        .filter(|(_, (p, t))| {
-            !t.revealed && (p.x - px).abs() <= 1 && (p.y - py).abs() <= 1
-        })
-        .map(|(id, (p, t))| (id, t.kind, (p.x, p.y)))
+        .filter(|(_, (p, _))| (p.x - px).abs() <= 1 && (p.y - py).abs() <= 1)
+        .map(|(id, (p, _))| (id, (p.x, p.y)))
         .collect();
-    for (id, kind, pos) in hidden_traps {
+    for (id, pos) in hidden {
         if rng.gen_bool(chance) {
-            reveal_trap(world, id, kind);
+            reveal(world, id);
             events.push(GameEvent::TrapSpotted { position: pos });
         }
     }
@@ -80,19 +68,11 @@ pub fn roll_player_discovery(
     }
 }
 
-/// Mark a trap revealed and give it a visible, kind-tinted sprite: spikes for
-/// a spike trap, and for the rest a trap door (which keeps them apart from
-/// the pressure plates of the traps you set yourself).
-pub fn reveal_trap(world: &mut World, trap: Entity, kind: DungeonTrapKind) {
-    if let Ok(mut t) = world.get::<&mut DungeonTrap>(trap) {
-        t.revealed = true;
+/// Bring a `Concealed` entity into view, wearing the look it was hiding.
+pub fn reveal(world: &mut World, entity: Entity) {
+    if let Ok(hidden) = world.remove_one::<Concealed>(entity) {
+        let _ = world.insert(entity, (hidden.sprite, hidden.tint));
     }
-    let sprite = match kind {
-        DungeonTrapKind::Spike => tile_ids::SPIKES,
-        DungeonTrapKind::Fire | DungeonTrapKind::Snare | DungeonTrapKind::Alarm => tile_ids::TRAP_DOOR,
-    };
-    let (r, g, b) = trap_tint(kind);
-    let _ = world.insert(trap, (Sprite::from_ref(sprite), SpriteTint { r, g, b }));
 }
 
 /// Convert a secret door into a normal closed (openable) door with a distinct
@@ -133,18 +113,19 @@ mod tests {
     }
 
     #[test]
-    fn test_reveal_trap_adds_sprite_and_flag() {
+    fn test_revealing_a_trap_gives_it_its_look() {
+        use crate::components::TrapEffect;
         let mut world = World::new();
-        let trap = crate::spawning::spawn_dungeon_trap(&mut world, 3, 3, DungeonTrapKind::Snare);
+        let trap = crate::spawning::spawn_dungeon_trap(&mut world, 3, 3, TrapEffect::snare());
         assert!(world.get::<&Sprite>(trap).is_err(), "hidden traps must not render");
 
-        reveal_trap(&mut world, trap, DungeonTrapKind::Snare);
+        reveal(&mut world, trap);
 
         assert!(world.get::<&Sprite>(trap).is_ok(), "revealed traps render");
-        assert!(world.get::<&DungeonTrap>(trap).expect("trap comp").revealed);
+        assert!(world.get::<&Concealed>(trap).is_err(), "no longer hidden");
 
-        let spikes = crate::spawning::spawn_dungeon_trap(&mut world, 4, 3, DungeonTrapKind::Spike);
-        reveal_trap(&mut world, spikes, DungeonTrapKind::Spike);
+        let spikes = crate::spawning::spawn_dungeon_trap(&mut world, 4, 3, TrapEffect::spike());
+        reveal(&mut world, spikes);
         let sprite = world.get::<&Sprite>(spikes).map(|s| (s.sheet, s.tile_id)).ok();
         assert_eq!(sprite, Some(tile_ids::SPIKES), "a spike trap shows its spikes");
     }

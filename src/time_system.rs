@@ -435,7 +435,8 @@ fn apply_action_effects(
             actions::apply_activate_stun(world, entity, events)
         }
         ActionType::PlaceFireTrap { target_x, target_y } => {
-            actions::apply_place_fire_trap(world, entity, *target_x, *target_y, events)
+            let effect = crate::components::TrapEffect::Fire { damage: FIRE_TRAP_BURST_DAMAGE };
+            actions::apply_place_trap(world, entity, effect, *target_x, *target_y, events)
         }
         ActionType::Disengage => {
             actions::apply_disengage(world, grid, entity, spatial_cache, events, rng)
@@ -444,7 +445,9 @@ fn apply_action_effects(
             actions::apply_tumble(world, grid, entity, (*target_x, *target_y), spatial_cache, events, rng)
         }
         ActionType::PlaceSnareTrap { target_x, target_y } => {
-            actions::apply_place_snare_trap(world, entity, *target_x, *target_y, events)
+            events.push(GameEvent::AbilityActivated { entity, ability: crate::components::AbilityType::SnareTrap });
+            let effect = crate::components::TrapEffect::Snare { seconds: SNARE_TRAP_ROOT_DURATION };
+            actions::apply_place_trap(world, entity, effect, *target_x, *target_y, events)
         }
         ActionType::ShootCripplingShot { target_x, target_y } => {
             actions::apply_shoot_crippling_shot(world, grid, entity, *target_x, *target_y, events, current_time)

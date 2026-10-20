@@ -61,20 +61,20 @@ fn spawn_chests(
 /// Spawn hidden floor traps at the positions rolled by dungeon generation.
 /// Kinds are rolled here (spike is slightly favored).
 fn spawn_dungeon_traps(world: &mut World, grid: &Grid, rng: &mut impl Rng) {
-    use crate::components::DungeonTrapKind;
+    use crate::components::TrapEffect;
 
     for (x, y) in &grid.trap_positions {
         let roll: f32 = rng.gen();
-        let kind = if roll < 0.30 {
-            DungeonTrapKind::Spike
+        let effect = if roll < 0.30 {
+            TrapEffect::spike()
         } else if roll < 0.55 {
-            DungeonTrapKind::Fire
+            TrapEffect::fire()
         } else if roll < 0.80 {
-            DungeonTrapKind::Snare
+            TrapEffect::snare()
         } else {
-            DungeonTrapKind::Alarm
+            TrapEffect::alarm()
         };
-        spawning::spawn_dungeon_trap(world, *x, *y, kind);
+        spawning::spawn_dungeon_trap(world, *x, *y, effect);
     }
 }
 

@@ -7,7 +7,7 @@ use rand::rngs::StdRng;
 
 use crate::components::{
     Actor, BlocksMovement, BlocksVision, BossAbility, ChaseAI, CompanionAI, Container, Door,
-    DungeonTrapKind, FurnitureKind, ItemInstance, ItemType, LanternStyle, Position, Rarity, RainCloud,
+    FurnitureKind, TrapEffect, ItemInstance, ItemType, LanternStyle, Position, Rarity, RainCloud,
     Sprite, TamedBy, VisualPosition,
 };
 use crate::engine::ActorCtx;
@@ -51,7 +51,7 @@ pub enum Spawnable {
     Web,
     RainCloud,
     Furniture(FurnitureKind),
-    Trap(DungeonTrapKind),
+    Trap(TrapEffect),
     Chest,
     Door(DoorKind),
     SecretDoor,
@@ -121,7 +121,7 @@ impl Spawnable {
             Spawnable::Web => "Spider web".into(),
             Spawnable::RainCloud => "Rain cloud".into(),
             Spawnable::Furniture(kind) => format!("{kind:?}"),
-            Spawnable::Trap(kind) => format!("{kind:?} trap"),
+            Spawnable::Trap(effect) => effect.name().into(),
             Spawnable::Chest => "Chest".into(),
             Spawnable::Door(DoorKind::Wooden) => "Door".into(),
             Spawnable::Door(DoorKind::Green) => "Green door".into(),
@@ -155,7 +155,7 @@ impl Spawnable {
             Spawnable::Furniture(FurnitureKind::Fountain) => tile_ids::FOUNTAIN,
             Spawnable::Furniture(FurnitureKind::Altar) => tile_ids::ALTAR,
             Spawnable::Furniture(FurnitureKind::Shrine) => tile_ids::SHRINE,
-            Spawnable::Trap(DungeonTrapKind::Spike) => tile_ids::SPIKES,
+            Spawnable::Trap(TrapEffect::Spike { .. }) => tile_ids::SPIKES,
             Spawnable::Trap(_) => tile_ids::TRAP_DOOR,
             Spawnable::Chest => tile_ids::CHEST_CLOSED,
             Spawnable::Door(DoorKind::Wooden) => Door::new().closed_sprite,
@@ -206,10 +206,10 @@ pub fn all_spawnables() -> Vec<Spawnable> {
             Spawnable::Furniture(FurnitureKind::Fountain),
             Spawnable::Furniture(FurnitureKind::Altar),
             Spawnable::Furniture(FurnitureKind::Shrine),
-            Spawnable::Trap(DungeonTrapKind::Spike),
-            Spawnable::Trap(DungeonTrapKind::Fire),
-            Spawnable::Trap(DungeonTrapKind::Snare),
-            Spawnable::Trap(DungeonTrapKind::Alarm),
+            Spawnable::Trap(TrapEffect::spike()),
+            Spawnable::Trap(TrapEffect::fire()),
+            Spawnable::Trap(TrapEffect::snare()),
+            Spawnable::Trap(TrapEffect::alarm()),
             Spawnable::Chest,
             Spawnable::Door(DoorKind::Wooden),
             Spawnable::Door(DoorKind::Green),
@@ -333,10 +333,10 @@ fn spawn_one(
             },
         )),
         Spawnable::Furniture(kind) => spawning::spawn_furniture(world, x, y, kind),
-        Spawnable::Trap(kind) => {
-            let e = spawning::spawn_dungeon_trap(world, x, y, kind);
+        Spawnable::Trap(effect) => {
+            let e = spawning::spawn_dungeon_trap(world, x, y, effect);
             if options.revealed {
-                crate::systems::discovery::reveal_trap(world, e, kind);
+                crate::systems::discovery::reveal(world, e);
             }
             e
         }

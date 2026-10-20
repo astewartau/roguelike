@@ -409,22 +409,10 @@ pub enum GameEvent {
     FlaskFillFailed {
         entity: Entity,
     },
-    /// A fire trap was placed
-    FireTrapPlaced {
+    /// Someone set a trap.
+    TrapPlaced {
         trap: Entity,
         placer: Entity,
-        position: (i32, i32),
-    },
-    /// A fire trap was triggered
-    FireTrapTriggered {
-        trap: Entity,
-        victim: Entity,
-        position: (i32, i32),
-    },
-    /// A snare trap was triggered
-    SnareTrapTriggered {
-        trap: Entity,
-        victim: Entity,
         position: (i32, i32),
     },
     /// Life drain channeling started (necromancer)
@@ -516,13 +504,15 @@ pub enum GameEvent {
     TrapSpotted {
         position: (i32, i32),
     },
-    /// A dungeon-generated floor trap was triggered (and consumed).
-    DungeonTrapTriggered {
-        kind: crate::components::DungeonTrapKind,
+    /// A trap went off under `victim` (and was used up).
+    TrapTriggered {
+        effect: crate::components::TrapEffect,
         victim: Entity,
         position: (i32, i32),
         /// Damage dealt (spike/fire traps; 0 for snare/alarm)
         damage: i32,
+        /// Whether it was still hidden when it went off.
+        was_hidden: bool,
     },
     /// The player noticed a hidden passage (secret door became a real door).
     SecretDoorFound {

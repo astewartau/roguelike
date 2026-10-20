@@ -1383,15 +1383,17 @@ pub fn spawn_dungeon_trap(
     world: &mut World,
     x: i32,
     y: i32,
-    kind: crate::components::DungeonTrapKind,
+    effect: crate::components::TrapEffect,
 ) -> hecs::Entity {
-    use crate::components::DungeonTrap;
+    use crate::components::{Concealed, Trap};
 
     let pos = Position::new(x, y);
+    let (sprite, tint) = effect.revealed_look();
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        DungeonTrap { kind, revealed: false },
+        Trap { effect, owner: None },
+        Concealed { sprite, tint },
     ))
 }
 

@@ -2760,71 +2760,96 @@ pub struct Brazier {
     pub toppled: bool,
 }
 
-/// Fire trap component - causes burning when stepped on (but not by owner or their pets)
-#[derive(Debug, Clone, Copy)]
-pub struct PlacedFireTrap {
-    /// The entity that placed this trap
-    pub owner: Entity,
-    /// Initial burst damage when triggered
-    pub burst_damage: i32,
-}
-
 // =============================================================================
-// GENERALIZED TRAP SYSTEM
+// TRAPS
 // =============================================================================
 
-/// Types of placed traps.
-///
-/// `Fire` is not constructed yet: it is the unbuilt half of the migration this
-/// enum exists for. Fire traps still use the older `PlacedFireTrap` component
-/// (live in rendering, AI fire-avoidance and trap triggering); only `Snare` has
-/// moved across so far.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TrapType {
-    /// Fire trap: deals burst damage and applies Burning
-    Fire { burst_damage: i32 },
-    /// Snare trap: applies Rooted effect
-    Snare { root_duration: f32 },
+/// What a trap does to whatever steps on it. The numbers live here, so a
+/// trap's strength is data on the entity rather than a lookup by kind.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TrapEffect {
+    /// Direct damage through `apply_damage`.
+    Spike { damage: i32 },
+    /// A burst of damage, then fire spilled onto the tile: the victim starts
+    /// Burning and any grass or oil there catches.
+    Fire { damage: i32 },
+    /// Roots the victim in place for `seconds`.
+    Snare { seconds: f32 },
+    /// Harmless but loud: a noise that wakes everything within `radius`.
+    Alarm { radius: i32 },
 }
 
-/// Generalized trap component (will eventually replace PlacedFireTrap)
-#[derive(Debug, Clone, Copy)]
-pub struct PlacedTrap {
-    /// The entity that placed this trap
-    pub owner: Entity,
-    /// Type of trap and its parameters
-    pub trap_type: TrapType,
+impl TrapEffect {
+    /// The trap the dungeon builds with this effect, at standard strength.
+    pub fn spike() -> Self {
+        Self::Spike { damage: crate::constants::DUNGEON_SPIKE_TRAP_DAMAGE }
+    }
+    pub fn fire() -> Self {
+        Self::Fire { damage: crate::constants::DUNGEON_FIRE_TRAP_DAMAGE }
+    }
+    pub fn snare() -> Self {
+        Self::Snare { seconds: crate::constants::DUNGEON_SNARE_ROOT_DURATION }
+    }
+    pub fn alarm() -> Self {
+        Self::Alarm { radius: crate::constants::DUNGEON_ALARM_WAKE_RADIUS }
+    }
+
+    /// "Spike trap", for tooltips and the dev tools.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Spike { .. } => "Spike trap",
+            Self::Fire { .. } => "Fire trap",
+            Self::Snare { .. } => "Snare trap",
+            Self::Alarm { .. } => "Alarm trap",
+        }
+    }
+
+    /// What a hidden trap with this effect looks like once spotted: spikes,
+    /// or a trap door tinted by what it does (which keeps them apart from
+    /// the pressure plates of the traps you set yourself).
+    pub fn revealed_look(&self) -> (Sprite, SpriteTint) {
+        use crate::constants::{TRAP_TINT_ALARM, TRAP_TINT_FIRE, TRAP_TINT_SNARE, TRAP_TINT_SPIKE};
+        use crate::tile::tile_ids;
+        let (sprite, (r, g, b)) = match self {
+            Self::Spike { .. } => (tile_ids::SPIKES, TRAP_TINT_SPIKE),
+            Self::Fire { .. } => (tile_ids::TRAP_DOOR, TRAP_TINT_FIRE),
+            Self::Snare { .. } => (tile_ids::TRAP_DOOR, TRAP_TINT_SNARE),
+            Self::Alarm { .. } => (tile_ids::TRAP_DOOR, TRAP_TINT_ALARM),
+        };
+        (Sprite::from_ref(sprite), SpriteTint { r, g, b })
+    }
 }
 
-// =============================================================================
-// DUNGEON TRAPS, FURNITURE, AND SECRET DOORS (dungeon-generated discoveries)
-// =============================================================================
-
-/// Kinds of hidden floor traps placed by dungeon generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum DungeonTrapKind {
-    /// Direct damage through `apply_damage`
-    Spike,
-    /// Small burst + Burning; spills fire onto the tile (ignites grass/oil)
-    Fire,
-    /// Roots the victim in place for a few seconds
-    Snare,
-    /// Harmless but loud: wakes every enemy in a wide radius
-    Alarm,
-}
-
-/// A hidden floor trap placed by dungeon generation. Spawned without a
-/// `Sprite` (invisible); when the player detects it (Agility-scaled per-step
-/// roll while adjacent — see `systems::discovery`) it gains a tinted trap-door
-/// sprite and can be stepped around. Stepping ON it — player or enemy,
-/// revealed or not — triggers and consumes it.
+/// A trap: something on the floor that goes off when stepped on and is used
+/// up. The dungeon's hidden traps and the ones the player sets are the same
+/// component; they differ only in data (`owner`) and in whether they're also
+/// `Concealed`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct DungeonTrap {
-    pub kind: DungeonTrapKind,
-    /// Whether the player has spotted this trap (it renders once revealed)
-    pub revealed: bool,
+pub struct Trap {
+    pub effect: TrapEffect,
+    /// Who set it. They and their companions step over it safely, and it
+    /// gives them threat on whoever it hurts. `None` for the dungeon's own,
+    /// which go off under anyone.
+    #[serde(skip)]
+    pub owner: Option<Entity>,
 }
+
+/// Invisible until the player spots it (an Agility-scaled roll while
+/// adjacent, see `systems::discovery`), then shown with this sprite and tint.
+/// Spawned without a `Sprite` of its own.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Concealed {
+    pub sprite: Sprite,
+    pub tint: SpriteTint,
+}
+
+/// Draws animated flames over the entity's sprite (an armed fire trap).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct FlameOverlay;
+
+// =============================================================================
+// ROOM FURNITURE AND SECRET DOORS (dungeon-generated discoveries)
+// =============================================================================
 
 /// Kinds of room furniture interactables placed by dungeon generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

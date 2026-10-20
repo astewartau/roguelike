@@ -91,6 +91,25 @@ fn actor_entry() -> ComponentEntry {
     }
 }
 
+/// `Trap`: its effect is editable, and whoever set it stays its owner.
+fn trap_entry() -> ComponentEntry {
+    ComponentEntry {
+        name: "Trap",
+        category: "Things",
+        type_id: || TypeId::of::<Trap>(),
+        read: |world, e| world.get::<&Trap>(e).ok().and_then(|t| serde_json::to_value(*t).ok()),
+        write: |world, e, value| {
+            let mut trap: Trap = serde_json::from_value(value).map_err(|err| err.to_string())?;
+            trap.owner = world.get::<&Trap>(e).ok().and_then(|t| t.owner);
+            world.insert_one(e, trap).map_err(|err| err.to_string())
+        },
+        remove: |world, e| {
+            let _ = world.remove_one::<Trap>(e);
+        },
+        default: || serde_json::to_value(Trap { effect: TrapEffect::spike(), owner: None }).unwrap_or(Value::Null),
+    }
+}
+
 fn chase_ai_entry() -> ComponentEntry {
     ComponentEntry {
         name: "ChaseAI",
@@ -194,7 +213,12 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(CrystalCluster, "Light", CrystalCluster),
             plain!(Container, "Things", Container::chest(Vec::new(), 0)),
             plain!(Door, "Things", Door::new()),
-            plain!(DungeonTrap, "Things", DungeonTrap { kind: DungeonTrapKind::Spike, revealed: true }),
+            trap_entry(),
+            plain!(Concealed, "Things", {
+                let (sprite, tint) = TrapEffect::spike().revealed_look();
+                Concealed { sprite, tint }
+            }),
+            plain!(FlameOverlay, "Looks", FlameOverlay),
             plain!(Furniture, "Things", Furniture { kind: FurnitureKind::Fountain, used: false }),
             plain!(Decoration, "Things", Decoration),
             plain!(Stalagmite, "Things", Stalagmite),

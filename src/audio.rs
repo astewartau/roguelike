@@ -381,7 +381,7 @@ impl AudioManager {
                 GameEvent::ItemPurchased { .. } | GameEvent::ItemSold { .. } => {
                     self.play(SoundType::CoinPickup);
                 }
-                GameEvent::FireTrapTriggered { position, .. } => {
+                GameEvent::TrapTriggered { effect: crate::components::TrapEffect::Fire { .. }, position, .. } => {
                     let dist = Self::distance(player_pos, *position);
                     self.play_at_distance(SoundType::Spell, dist);
                 }

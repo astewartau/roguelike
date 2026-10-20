@@ -813,7 +813,7 @@ mod tests {
         crate::spawning::spawn_oil_puddle(&mut arena.world, 7, 5);
         crate::spawning::spawn_web(&mut arena.world, 8, 5, None);
         let trap = crate::spawning::spawn_dungeon_trap(
-            &mut arena.world, 9, 5, crate::components::DungeonTrapKind::Snare,
+            &mut arena.world, 9, 5, crate::components::TrapEffect::snare(),
         );
         let b = bat(&mut arena, 5, 5);
         for _ in 0..4 {

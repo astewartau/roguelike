@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Container, Door, EffectType, GroundItemPile, OverlaySprite, PlacedFireTrap, Position, Projectile, ProjectileKind, Sprite, SpriteTint, StatusEffects, VisualPosition};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Container, Door, EffectType, GroundItemPile, OverlaySprite, FlameOverlay, Position, Projectile, ProjectileKind, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::constants::{FIRE_FRAME_DURATION, HELD_TORCH_FRAME_DURATION, INVISIBLE_PLAYER_ALPHA, PROJECTILE_TRAIL};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
@@ -615,9 +615,9 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         }
     }
 
-    // Add fire overlays for fire traps (rendered on top of trap base)
-    for (_, (pos, vis_pos, _trap)) in
-        world.query::<(&Position, &VisualPosition, &PlacedFireTrap)>().iter()
+    // Flames drawn over anything that asks for them (an armed fire trap)
+    for (_, (pos, vis_pos, _)) in
+        world.query::<(&Position, &VisualPosition, &FlameOverlay)>().iter()
     {
         let is_visible = grid
             .get(pos.x, pos.y)

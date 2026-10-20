@@ -5,8 +5,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    AbilityType, Container, ContainerType, EffectType, PlacedTrap, Position, Sprite, TrapType,
-    VisualPosition,
+    Container, ContainerType, EffectType, Position, Sprite, VisualPosition,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -15,9 +14,11 @@ use crate::tile::tile_ids;
 
 use super::{interrupt_life_drain_on_damage, ActionResult};
 
-/// Check if an entity stepping on a fire trap should trigger it.
-/// Fire traps ignore their owner and the owner's tamed pets.
-pub(crate) fn check_fire_trap_trigger(
+/// Whatever steps on a trap sets it off, and the trap is used up. A trap
+/// someone set spares them and their companions, and credits them with the
+/// threat for any damage it does; the dungeon's own go off under anyone,
+/// spotted or not.
+pub(crate) fn check_trap_trigger(
     world: &mut World,
     grid: &crate::grid::Grid,
     victim: Entity,
@@ -26,199 +27,84 @@ pub(crate) fn check_fire_trap_trigger(
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    use crate::components::{PlacedFireTrap, TamedBy};
-    use crate::constants::BURNING_DURATION;
+    use crate::components::{Concealed, TamedBy, Trap, TrapEffect};
 
-    // Find fire trap at this position
-    let trap_info: Option<(hecs::Entity, Entity, i32)> = world
-        .query::<(&Position, &PlacedFireTrap)>()
+    let trap_info: Option<(Entity, Trap)> = world
+        .query::<(&Position, &Trap)>()
         .iter()
-        .find_map(|(trap_id, (pos, trap))| {
-            if pos.x == target_x && pos.y == target_y {
-                Some((trap_id, trap.owner, trap.burst_damage))
-            } else {
-                None
-            }
-        });
-
-    let Some((trap_entity, trap_owner, burst_damage)) = trap_info else {
+        .find(|(_, (pos, _))| pos.x == target_x && pos.y == target_y)
+        .map(|(id, (_, trap))| (id, *trap));
+    let Some((trap_entity, trap)) = trap_info else {
         return;
     };
 
-    // Check if victim is the owner
-    if victim == trap_owner {
-        return;
-    }
-
-    // Check if victim is a tamed pet of the owner
-    if let Ok(tamed_by) = world.get::<&TamedBy>(victim) {
-        if tamed_by.owner == trap_owner {
+    if let Some(owner) = trap.owner {
+        let owners_pet = world.get::<&TamedBy>(victim).is_ok_and(|t| t.owner == owner);
+        if victim == owner || owners_pet {
             return;
         }
     }
-
-    // Trap triggered! Apply burst damage (handles invulnerability, armor defense,
-    // Protected/Barkskin) and a burning effect.
-    crate::systems::combat::apply_damage(world, grid, victim, burst_damage, rng, events);
-
-    // Interrupt life drain if victim was channeling
-    interrupt_life_drain_on_damage(world, victim, events);
-
-    // Generate threat on the victim for the trap owner
-    crate::systems::ai::generate_threat(world, victim, trap_owner, burst_damage as f32 * THREAT_PER_DAMAGE);
-    crate::systems::ai::generate_companion_threat(world, victim, trap_owner, burst_damage as f32 * THREAT_PER_DAMAGE);
-
-    // Apply burning effect (a Wet victim takes the burst but not the fire)
-    let ignited = effects::add_effect_to_entity(world, victim, EffectType::Burning, BURNING_DURATION);
-
-    // Emit events
-    events.push(GameEvent::FireTrapTriggered {
-        trap: trap_entity,
-        victim,
-        position: (target_x, target_y),
-    });
-
-    if ignited {
-        events.push(GameEvent::CaughtFire {
-            entity: victim,
-            position: (target_x, target_y),
-        });
-    }
-
-    // Destroy the trap after triggering
-    let _ = world.despawn(trap_entity);
-}
-
-/// Check if an entity stepping on a snare trap should trigger it.
-/// Snare traps ignore their owner and the owner's tamed pets.
-pub(crate) fn check_snare_trap_trigger(
-    world: &mut World,
-    victim: Entity,
-    target_x: i32,
-    target_y: i32,
-    events: &mut EventQueue,
-) {
-    use crate::components::{PlacedTrap, TrapType, TamedBy};
-
-    // Find snare trap at this position
-    let trap_info: Option<(hecs::Entity, Entity, f32)> = world
-        .query::<(&Position, &PlacedTrap)>()
-        .iter()
-        .find_map(|(trap_id, (pos, trap))| {
-            if pos.x == target_x && pos.y == target_y {
-                if let TrapType::Snare { root_duration } = trap.trap_type {
-                    return Some((trap_id, trap.owner, root_duration));
-                }
-            }
-            None
-        });
-
-    let Some((trap_entity, trap_owner, root_duration)) = trap_info else {
-        return;
-    };
-
-    // Check if victim is the owner
-    if victim == trap_owner {
-        return;
-    }
-
-    // Check if victim is a tamed pet of the owner
-    if let Ok(tamed_by) = world.get::<&TamedBy>(victim) {
-        if tamed_by.owner == trap_owner {
-            return;
-        }
-    }
-
-    // Trap triggered! Apply rooted effect
-    effects::add_effect_to_entity(world, victim, EffectType::Rooted, root_duration);
-
-    // Emit event
-    events.push(GameEvent::SnareTrapTriggered {
-        trap: trap_entity,
-        victim,
-        position: (target_x, target_y),
-    });
-
-    // Destroy the trap after triggering
-    let _ = world.despawn(trap_entity);
-}
-
-/// Check if an entity stepping on a dungeon-generated floor trap triggers it.
-/// Unlike player-placed traps there is no owner exemption: everything that
-/// steps on one (player, enemy, companion) sets it off, revealed or not.
-/// Triggered traps are consumed.
-pub(crate) fn check_dungeon_trap_trigger(
-    world: &mut World,
-    grid: &crate::grid::Grid,
-    victim: Entity,
-    target_x: i32,
-    target_y: i32,
-    events: &mut EventQueue,
-    rng: &mut impl Rng,
-) {
-    use crate::components::{DungeonTrap, DungeonTrapKind};
-
-    let trap_info: Option<(Entity, DungeonTrapKind)> = world
-        .query::<(&Position, &DungeonTrap)>()
-        .iter()
-        .find_map(|(trap_id, (pos, trap))| {
-            if pos.x == target_x && pos.y == target_y {
-                Some((trap_id, trap.kind))
-            } else {
-                None
-            }
-        });
-
-    let Some((trap_entity, kind)) = trap_info else {
-        return;
-    };
+    let was_hidden = world.get::<&Concealed>(trap_entity).is_ok();
 
     let mut damage = 0;
-    match kind {
-        DungeonTrapKind::Spike => {
-            damage = crate::systems::combat::apply_damage(
-                world, grid, victim, DUNGEON_SPIKE_TRAP_DAMAGE, rng, events,
-            );
+    match trap.effect {
+        TrapEffect::Spike { damage: amount } | TrapEffect::Fire { damage: amount } => {
+            damage = crate::systems::combat::apply_damage(world, grid, victim, amount, rng, events);
             interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);
+            if let Some(owner) = trap.owner {
+                let threat = damage as f32 * THREAT_PER_DAMAGE;
+                crate::systems::ai::generate_threat(world, victim, owner, threat);
+                crate::systems::ai::generate_companion_threat(world, victim, owner, threat);
+            }
+            if matches!(trap.effect, TrapEffect::Fire { .. }) {
+                // Hook into the fire ecosystem: sets the victim Burning (it
+                // is standing on the tile) and ignites any grass/oil there.
+                crate::systems::fire::spill_fire_at(world, grid, target_x, target_y, events);
+            }
         }
-        DungeonTrapKind::Fire => {
-            damage = crate::systems::combat::apply_damage(
-                world, grid, victim, DUNGEON_FIRE_TRAP_DAMAGE, rng, events,
-            );
-            interrupt_life_drain_on_damage(world, victim, events);
-            crate::systems::ai::wake_on_attacked(world, victim);
-            // Hook into the fire ecosystem: sets the victim Burning (it is
-            // standing on the tile) and ignites any grass/oil there.
-            crate::systems::fire::spill_fire_at(world, grid, target_x, target_y, events);
+        TrapEffect::Snare { seconds } => {
+            effects::add_effect_to_entity(world, victim, EffectType::Rooted, seconds);
         }
-        DungeonTrapKind::Snare => {
-            effects::add_effect_to_entity(
-                world,
-                victim,
-                EffectType::Rooted,
-                DUNGEON_SNARE_ROOT_DURATION,
-            );
-        }
-        DungeonTrapKind::Alarm => {
-            crate::systems::noise::make_noise(
-                world,
-                grid,
-                (target_x, target_y),
-                DUNGEON_ALARM_WAKE_RADIUS,
-            );
+        TrapEffect::Alarm { radius } => {
+            crate::systems::noise::make_noise(world, grid, (target_x, target_y), radius);
         }
     }
 
-    events.push(GameEvent::DungeonTrapTriggered {
-        kind,
+    events.push(GameEvent::TrapTriggered {
+        effect: trap.effect,
         victim,
         position: (target_x, target_y),
         damage,
+        was_hidden,
     });
 
-    // Triggered traps are consumed.
     let _ = world.despawn(trap_entity);
+}
+
+/// Set a trap with `effect` at the target tile: a visible pressure plate
+/// that the placer and their companions can cross safely.
+pub fn apply_place_trap(
+    world: &mut World,
+    placer: Entity,
+    effect: crate::components::TrapEffect,
+    target_x: i32,
+    target_y: i32,
+    events: &mut EventQueue,
+) -> ActionResult {
+    use crate::components::{FlameOverlay, Trap, TrapEffect};
+    let pos = Position::new(target_x, target_y);
+    let trap = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::PRESSURE_PLATE),
+        Trap { effect, owner: Some(placer) },
+    ));
+    if matches!(effect, TrapEffect::Fire { .. }) {
+        let _ = world.insert_one(trap, FlameOverlay);
+    }
+    events.push(GameEvent::TrapPlaced { trap, placer, position: (target_x, target_y) });
+    ActionResult::Completed
 }
 
 /// Apply open chest effect
@@ -279,77 +165,10 @@ pub fn apply_open_chest(
     ActionResult::Completed
 }
 
-/// Place a fire trap at the target location
-pub fn apply_place_fire_trap(
-    world: &mut World,
-    placer: Entity,
-    target_x: i32,
-    target_y: i32,
-    events: &mut EventQueue,
-) -> ActionResult {
-    use crate::components::PlacedFireTrap;
-    use crate::constants::FIRE_TRAP_BURST_DAMAGE;
-
-    // Spawn the fire trap entity with pressure plate sprite
-    // Fire animation is rendered as overlay in rendering.rs (like burning entities)
-    let pos = Position::new(target_x, target_y);
-    let trap = world.spawn((
-        pos,
-        VisualPosition::from_position(&pos),
-        // Base sprite (pressure plate)
-        Sprite::from_ref(tile_ids::PRESSURE_PLATE),
-        // Trap data - tracks owner and damage
-        PlacedFireTrap {
-            owner: placer,
-            burst_damage: FIRE_TRAP_BURST_DAMAGE,
-        },
-    ));
-
-    events.push(GameEvent::FireTrapPlaced {
-        trap,
-        placer,
-        position: (target_x, target_y),
-    });
-
-    ActionResult::Completed
-}
-
-/// Ranger ability: Place a snare trap that roots enemies
-pub fn apply_place_snare_trap(
-    world: &mut World,
-    placer: Entity,
-    target_x: i32,
-    target_y: i32,
-    events: &mut EventQueue,
-) -> ActionResult {
-    use crate::constants::SNARE_TRAP_ROOT_DURATION;
-
-    // Spawn the trap entity
-    let pos = Position::new(target_x, target_y);
-    let trap = world.spawn((
-        pos,
-        VisualPosition::from_position(&pos),
-        Sprite::from_ref(tile_ids::PRESSURE_PLATE),
-        PlacedTrap {
-            owner: placer,
-            trap_type: TrapType::Snare { root_duration: SNARE_TRAP_ROOT_DURATION },
-        },
-    ));
-
-    let _ = trap;
-
-    events.push(GameEvent::AbilityActivated {
-        entity: placer,
-        ability: AbilityType::SnareTrap,
-    });
-
-    ActionResult::Completed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Attackable, DungeonTrapKind, Health, StatusEffects};
+    use crate::components::{Attackable, Health, StatusEffects, TamedBy, TrapEffect};
     use crate::grid::Grid;
     use crate::tile::{Tile, TileType};
     use rand::rngs::StdRng;
@@ -403,9 +222,9 @@ mod tests {
             Attackable,
         ));
         let trap =
-            crate::spawning::spawn_dungeon_trap(&mut world, 3, 3, DungeonTrapKind::Spike);
+            crate::spawning::spawn_dungeon_trap(&mut world, 3, 3, TrapEffect::spike());
 
-        check_dungeon_trap_trigger(
+        check_trap_trigger(
             &mut world, &grid, victim, 3, 3, &mut events, &mut test_rng(),
         );
 
@@ -414,7 +233,7 @@ mod tests {
         assert!(!world.contains(trap), "triggered traps are consumed");
         assert!(events.drain().any(|e| matches!(
             e,
-            GameEvent::DungeonTrapTriggered { kind: DungeonTrapKind::Spike, .. }
+            GameEvent::TrapTriggered { effect: TrapEffect::Spike { .. }, was_hidden: true, .. }
         )));
     }
 
@@ -426,9 +245,9 @@ mod tests {
 
         let victim = world.spawn((Position::new(2, 2), StatusEffects::new()));
         let trap =
-            crate::spawning::spawn_dungeon_trap(&mut world, 2, 2, DungeonTrapKind::Snare);
+            crate::spawning::spawn_dungeon_trap(&mut world, 2, 2, TrapEffect::snare());
 
-        check_dungeon_trap_trigger(
+        check_trap_trigger(
             &mut world, &grid, victim, 2, 2, &mut events, &mut test_rng(),
         );
 
@@ -447,9 +266,29 @@ mod tests {
         let mut events = EventQueue::new();
 
         let victim = world.spawn((Position::new(1, 1), StatusEffects::new()));
-        check_dungeon_trap_trigger(
+        check_trap_trigger(
             &mut world, &grid, victim, 1, 1, &mut events, &mut test_rng(),
         );
         assert_eq!(events.drain().count(), 0);
+    }
+
+    #[test]
+    fn a_set_trap_spares_its_owner_and_their_pets() {
+        let mut world = hecs::World::new();
+        let grid = make_grid(7, 7);
+        let mut events = EventQueue::new();
+        let owner = world.spawn((Position::new(1, 1), StatusEffects::new()));
+        let pet = world.spawn((Position::new(1, 1), StatusEffects::new(), TamedBy { owner }));
+        let stranger = world.spawn((Position::new(1, 1), StatusEffects::new()));
+        apply_place_trap(&mut world, owner, TrapEffect::snare(), 1, 1, &mut events);
+
+        for friend in [owner, pet] {
+            check_trap_trigger(&mut world, &grid, friend, 1, 1, &mut events, &mut test_rng());
+        }
+        assert_eq!(world.query::<&crate::components::Trap>().iter().count(), 1, "still armed");
+
+        check_trap_trigger(&mut world, &grid, stranger, 1, 1, &mut events, &mut test_rng());
+        assert_eq!(world.query::<&crate::components::Trap>().iter().count(), 0, "sprung");
+        assert!(crate::systems::effects::entity_has_effect(&world, stranger, EffectType::Rooted));
     }
 }
