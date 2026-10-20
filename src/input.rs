@@ -274,8 +274,13 @@ pub fn identify_click_target(
 
     // Check for entities at this tile (order matters - check most specific first)
 
-    // 1. Check for attackable enemy
-    for (id, (pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+    // 1. Check for attackable enemy (a lantern is attackable, but only on
+    // purpose: Shift+direction, not a click)
+    for (id, (pos, _)) in world
+        .query::<(&Position, &Attackable)>()
+        .without::<&crate::components::Lantern>()
+        .iter()
+    {
         if pos.x == tile_x && pos.y == tile_y {
             return ClickTarget::Enemy { entity: id, x: tile_x, y: tile_y };
         }

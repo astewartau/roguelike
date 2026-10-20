@@ -1418,6 +1418,21 @@ mod tests {
     }
 
     #[test]
+    fn a_lantern_breaks_from_a_deliberate_attack_not_from_walking_into_it() {
+        use crate::components::ActionType;
+        let mut arena = Arena::new((3, 3));
+        let lantern = crate::spawning::spawn_lantern(&mut arena.world, 4, 3, crate::components::LanternStyle::Warm);
+        arena.cache.rebuild_in_place(&arena.world);
+
+        let bump = crate::systems::action_dispatch::determine_action_type(&arena.world, &arena.grid, arena.player, 1, 0);
+        assert!(!matches!(bump, ActionType::Attack { .. }), "walking into it isn't a swing: {bump:?}");
+
+        arena.player_does(ActionType::AttackDirection { dx: 1, dy: 0 });
+        crate::systems::fire::smash_broken_lanterns(&mut arena.world, &arena.grid, &mut arena.cache, &mut arena.events);
+        assert!(!arena.world.contains(lantern), "a deliberate blow breaks it");
+    }
+
+    #[test]
     fn grave_bolt_needs_range_and_line_of_sight() {
         let mut arena = Arena::new((2, 5));
         let player = arena.player;
