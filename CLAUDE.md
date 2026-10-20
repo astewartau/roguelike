@@ -181,7 +181,7 @@ between a fresh clone and a panic on launch.
 | `src/constants/` | all tuning numbers, by domain |
 | `src/ui/` | egui panels |
 | `src/component_registry.rs` | every saveable component as JSON: floor saves, the inspector, prefabs |
-| `src/devtools/`, `src/ui/devtools.rs`, `src/ui/devtools_overlays.rs` | developer tools (backquote): engine-side tools and commands, the docked panel, and its debug overlays |
+| `src/devtools/`, `src/ui/devtools*.rs` | developer tools (backquote): engine-side tools and commands, the docked panel, its debug overlays and the prefab builder (`devtools/catalog.rs` describes every component for it) |
 | `src/render/`, `src/renderer.rs`, `src/multi_tileset.rs` | GPU rendering and sheet UVs |
 | `src/dungeon_gen.rs`, `src/grid.rs`, `src/spawning.rs` | generation, terrain, spawn tables |
 | `src/fov.rs`, `src/pathfinding.rs`, `src/spatial_cache.rs`, `src/queries.rs` | visibility, A*, blocking cache, shared queries |

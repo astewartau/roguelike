@@ -216,12 +216,9 @@ impl MultiTileset {
             .is_some_and(|s| tile_id < s.columns * s.rows)
     }
 
-    /// Get row count for a sheet
-    #[allow(dead_code)]
-    pub fn rows(&self, sheet: SpriteSheet) -> u32 {
-        self.sheets
-            .get(&sheet)
-            .expect("Sheet not loaded")
-            .rows
+    /// How many rows and columns of tiles a sheet has (0 if it isn't
+    /// loaded).
+    pub fn grid_size(&self, sheet: SpriteSheet) -> (u32, u32) {
+        self.sheets.get(&sheet).map(|s| (s.columns, s.rows)).unwrap_or((0, 0))
     }
 }

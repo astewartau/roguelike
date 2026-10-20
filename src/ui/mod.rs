@@ -7,6 +7,7 @@ pub mod style;
 mod altar_window;
 mod devtools;
 mod devtools_overlays;
+mod devtools_prefab;
 mod dialogue;
 mod game_over_screen;
 mod hotbar;

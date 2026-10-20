@@ -12,6 +12,7 @@
 
 pub mod cheats;
 pub mod paint;
+pub mod catalog;
 pub mod prefab;
 
 pub mod spawn;
@@ -301,6 +302,18 @@ pub struct DevTools {
     pub selected_prefab: Option<usize>,
     /// Set by the panel when a prefab changes; saved soon after.
     pub prefabs_dirty: bool,
+    /// The prefab builder's add-component picker: whether it's open, what's
+    /// typed in its search box, and whether internal components are listed.
+    pub picker_open: bool,
+    pub picker_search: String,
+    pub picker_internal: bool,
+    /// The prefab component whose sprite is being picked, and the sheet the
+    /// picker shows.
+    pub sprite_pick: Option<usize>,
+    pub sprite_sheet: crate::tile::SpriteSheet,
+    /// Which prefab each placed entity came from (by name), so the
+    /// inspector can offer to update it from a tweaked copy.
+    pub placed_from: std::collections::HashMap<Entity, String>,
     prefab_path: std::path::PathBuf,
     last_prefab_save: Option<std::time::Instant>,
     /// Asked for by commands, handled by the engine (`take_requests`).
@@ -346,6 +359,12 @@ impl Default for DevTools {
             prefabs: prefab::load(std::path::Path::new(prefab::PREFAB_FILE)),
             selected_prefab: None,
             prefabs_dirty: false,
+            picker_open: false,
+            picker_search: String::new(),
+            picker_internal: false,
+            sprite_pick: None,
+            sprite_sheet: crate::tile::SpriteSheet::Monsters,
+            placed_from: std::collections::HashMap::new(),
             prefab_path: std::path::PathBuf::from(prefab::PREFAB_FILE),
             last_prefab_save: None,
             requests: Vec::new(),
@@ -496,7 +515,9 @@ impl DevTools {
                 let tiles = spawn::placement_tiles(&ctx, prefab.blocks(), at, self.spawn_options.count.max(1) as usize);
                 let mut problems = Vec::new();
                 for tile in &tiles {
-                    problems.extend(prefab::instantiate(&mut ctx, &prefab, *tile).1);
+                    let (made, trouble) = prefab::instantiate(&mut ctx, &prefab, *tile);
+                    self.placed_from.insert(made, prefab.name.clone());
+                    problems.extend(trouble);
                 }
                 problems.dedup();
                 self.status = Some(match (tiles.len(), problems.first()) {
@@ -1122,4 +1143,37 @@ mod tests {
         state.spatial_cache.assert_coherent_with_world(&state.world, "after placing prefabs");
         assert!(!dev.prefabs_dirty, "placing doesn't touch the library");
     }
+
+    /// A prefab put together from building blocks alone works when placed:
+    /// a creature turned companion follows the player, and remembers which
+    /// prefab it came from so the inspector can update it.
+    #[test]
+    fn a_prefab_from_blocks_comes_alive() {
+        let mut engine = live_run();
+        let mut events = EventQueue::new();
+        let mut vfx = VfxManager::new();
+        let state = engine.state.as_mut().unwrap();
+        let mut friend = prefab::Prefab::empty("Friend");
+        for block in ["Creature", "Companion"] {
+            for part in catalog::BLOCKS.iter().find(|b| b.name == block).unwrap().parts {
+                friend.add(part);
+            }
+        }
+        // Follow, don't hunt.
+        friend.components.retain(|c| c.component != "ChaseAI");
+        assert!(friend.unmet_needs().is_empty(), "{:?}", friend.unmet_needs());
+
+        let mut dev = DevTools::new();
+        dev.prefabs = vec![friend];
+        let spot = free_tile_near(state);
+        dev.tool = Some(CursorTool::PlacePrefab(0));
+        dev.use_tool(state, &mut events, &mut vfx, spot);
+        let (made, origin) = dev.placed_from.iter().next().map(|(e, n)| (*e, n.clone())).expect("placed");
+        assert_eq!(origin, "Friend");
+        let leader = state.world.get::<&crate::components::Follower>(made).map(|f| f.leader).unwrap();
+        assert_eq!(leader, state.player_entity, "a follower of nobody follows you");
+        assert!(state.active_ai_tracker.is_tracked(made), "it takes turns");
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after placing a built prefab");
+    }
 }
+

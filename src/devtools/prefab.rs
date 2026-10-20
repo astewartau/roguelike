@@ -39,6 +39,49 @@ impl Prefab {
         Self { name: name.to_string(), components: Vec::new() }
     }
 
+    /// The names of the components it has.
+    pub fn names(&self) -> Vec<&str> {
+        self.components.iter().map(|c| c.component.as_str()).collect()
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.components.iter().any(|c| c.component == name)
+    }
+
+    /// Add `name` at its registry default, if it isn't there already.
+    /// Returns whether it was added.
+    pub fn add(&mut self, name: &str) -> bool {
+        if self.has(name) || name == "Position" {
+            return false;
+        }
+        let Some(entry) = registry::find(name) else {
+            return false;
+        };
+        self.components.push(PrefabComponent { component: entry.name.to_string(), value: (entry.default)() });
+        true
+    }
+
+    /// The value of `name`, if it has it.
+    pub fn value(&self, name: &str) -> Option<&Value> {
+        self.components.iter().find(|c| c.component == name).map(|c| &c.value)
+    }
+
+    /// What it's missing for its components to do anything: (component,
+    /// what it needs), where the need is "A" or "A|B".
+    pub fn unmet_needs(&self) -> Vec<(&str, &'static str)> {
+        let have = self.names();
+        let mut out = Vec::new();
+        for name in &have {
+            let Some(info) = super::catalog::info_of(name) else { continue };
+            for need in info.needs {
+                if !super::catalog::need_met(need, &have) {
+                    out.push((*name, *need));
+                }
+            }
+        }
+        out
+    }
+
     /// Whether it blocks its tile, so needs a clear one to go on.
     pub fn blocks(&self) -> bool {
         self.components.iter().any(|c| c.component == "BlocksMovement")
@@ -113,6 +156,12 @@ pub fn instantiate(ctx: &mut ActorCtx, prefab: &Prefab, at: (i32, i32)) -> (Enti
         if let Err(why) = (entry.write)(ctx.world, e, part.value.clone()) {
             problems.push(format!("{}: {why}", part.component));
         }
+    }
+    // A follower with nobody to follow (a prefab made from scratch) follows
+    // the player.
+    let leaderless = ctx.world.get::<&crate::components::Follower>(e).is_ok_and(|f| !ctx.world.contains(f.leader));
+    if leaderless {
+        let _ = ctx.world.insert_one(e, crate::components::Follower { leader: ctx.player });
     }
     spawn::adopt(ctx, e);
     (e, problems)

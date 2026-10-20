@@ -30,7 +30,7 @@ pub struct DevArt<'a> {
 }
 
 impl DevArt<'_> {
-    fn icon(&self, sprite: (SpriteSheet, u32)) -> (egui::TextureId, egui::Rect) {
+    pub(super) fn icon(&self, sprite: (SpriteSheet, u32)) -> (egui::TextureId, egui::Rect) {
         (self.icons.texture_for_sheet(sprite.0), self.tileset.get_egui_uv(sprite.0, sprite.1))
     }
 }
@@ -74,7 +74,7 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
                             DevTab::Player => player_tab(ui, dev, view),
                             DevTab::World => world_tab(ui, dev, view),
                             DevTab::Inspect => inspect_tab(ui, dev, view, art),
-                            DevTab::Prefabs => prefabs_tab(ui, dev, art),
+                            DevTab::Prefabs => super::devtools_prefab::prefabs_tab(ui, dev, art),
                             DevTab::Overlays => overlays_tab(ui, dev),
                             DevTab::Effects => effects_tab(ui, dev),
                         });
@@ -115,7 +115,7 @@ fn header(ui: &mut egui::Ui, dev: &mut DevTools) {
 }
 
 /// One selectable row: icon and name. Returns its response.
-fn row(ui: &mut egui::Ui, art: &DevArt, sprite: (SpriteSheet, u32), label: &str, selected: bool) -> egui::Response {
+pub(super) fn row(ui: &mut egui::Ui, art: &DevArt, sprite: (SpriteSheet, u32), label: &str, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
     let bg = if selected {
         colors::SELECTED
@@ -563,6 +563,17 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                 dev.prefabs_dirty = true;
                 dev.tab = DevTab::Prefabs;
             }
+            // Placed from a prefab and tweaked here: write the tweaks back.
+            let origin = dev.placed_from.get(&e).and_then(|name| dev.prefabs.iter().position(|p| &p.name == name));
+            if let Some(index) = origin {
+                let label = format!("Update “{}” from this", dev.prefabs[index].name);
+                if ui.button(label).on_hover_text("Replace the prefab's components with this one's").clicked() {
+                    let name = dev.prefabs[index].name.clone();
+                    dev.prefabs[index] = crate::devtools::prefab::capture(world, e, &name);
+                    dev.selected_prefab = Some(index);
+                    dev.prefabs_dirty = true;
+                }
+            }
             if ui.button("Teleport me beside it").clicked() {
                 if let Some(at) = world.get::<&Position>(e).ok().map(|p| (p.x, p.y)) {
                     dev.commands.push(DevCommand::TeleportPlayerTo((at.0 + 1, at.1)));
@@ -605,115 +616,6 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
             }
         });
     });
-}
-
-fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
-    use crate::component_registry as registry;
-    use crate::devtools::{prefab, spawn};
-    ui.horizontal(|ui| {
-        if ui.button("New empty").clicked() {
-            dev.prefabs.push(prefab::Prefab::empty("New prefab"));
-            dev.selected_prefab = Some(dev.prefabs.len() - 1);
-            dev.prefabs_dirty = true;
-        }
-        egui::ComboBox::from_id_salt("prefab_template").selected_text("From a template").show_ui(ui, |ui| {
-            for what in spawn::all_spawnables() {
-                if ui.selectable_label(false, what.name()).clicked() {
-                    if let Some(template) = prefab::template(what) {
-                        dev.prefabs.push(template);
-                        dev.selected_prefab = Some(dev.prefabs.len() - 1);
-                        dev.prefabs_dirty = true;
-                    }
-                }
-            }
-        });
-    });
-    ui.colored_label(
-        colors::TEXT_MUTED,
-        "Or Save as prefab from the Inspect tab. Saved to dev_prefabs.json; the Spawn tab's count applies.",
-    );
-
-    let mut delete = None;
-    let mut duplicate = None;
-    for i in 0..dev.prefabs.len() {
-        let (name, sprite) = (dev.prefabs[i].name.clone(), dev.prefabs[i].sprite());
-        ui.horizontal(|ui| {
-            let armed = dev.tool == Some(CursorTool::PlacePrefab(i));
-            if ui.selectable_label(armed, "Place").clicked() {
-                dev.tool = if armed { None } else { Some(CursorTool::PlacePrefab(i)) };
-            }
-            if ui.small_button("Copy").clicked() {
-                duplicate = Some(i);
-            }
-            if ui.small_button("✕").on_hover_text("Delete").clicked() {
-                delete = Some(i);
-            }
-            let selected = dev.selected_prefab == Some(i);
-            let clicked = match sprite {
-                Some(sprite) => row(ui, art, sprite, &name, selected).clicked(),
-                None => ui.selectable_label(selected, &name).clicked(),
-            };
-            if clicked {
-                dev.selected_prefab = if selected { None } else { Some(i) };
-            }
-        });
-    }
-    if let Some(i) = duplicate {
-        let mut copy = dev.prefabs[i].clone();
-        copy.name = format!("{} copy", copy.name);
-        dev.prefabs.push(copy);
-        dev.prefabs_dirty = true;
-    }
-    if let Some(i) = delete {
-        dev.prefabs.remove(i);
-        dev.selected_prefab = None;
-        if matches!(dev.tool, Some(CursorTool::PlacePrefab(_))) {
-            dev.disarm();
-        }
-        dev.prefabs_dirty = true;
-    }
-
-    let Some(i) = dev.selected_prefab.filter(|i| *i < dev.prefabs.len()) else {
-        return;
-    };
-    ui.separator();
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label("Name");
-        changed |= ui.text_edit_singleline(&mut dev.prefabs[i].name).changed();
-    });
-    let mut remove = None;
-    for (n, part) in dev.prefabs[i].components.iter_mut().enumerate() {
-        let known = registry::find(&part.component).is_some();
-        let title = if known { part.component.clone() } else { format!("{} (unknown)", part.component) };
-        egui::CollapsingHeader::new(title).id_salt(("prefab_part", i, n)).show(ui, |ui| {
-            let name = part.component.clone();
-            changed |= edit_value(ui, &name, "", &mut part.value);
-            if ui.small_button("Remove").clicked() {
-                remove = Some(n);
-            }
-        });
-    }
-    if let Some(n) = remove {
-        dev.prefabs[i].components.remove(n);
-        changed = true;
-    }
-    egui::ComboBox::from_id_salt("prefab_add_component").selected_text("Add component").show_ui(ui, |ui| {
-        for entry in registry::entries() {
-            if entry.name == "Position" || dev.prefabs[i].components.iter().any(|c| c.component == entry.name) {
-                continue;
-            }
-            if ui.selectable_label(false, format!("{} ({})", entry.name, entry.category)).clicked() {
-                dev.prefabs[i]
-                    .components
-                    .push(prefab::PrefabComponent { component: entry.name.to_string(), value: (entry.default)() });
-                changed = true;
-            }
-        }
-    });
-    if changed {
-        dev.prefabs_dirty = true;
-    }
 }
 
 /// The variants a string field can take, where it holds an enum: by the
@@ -781,7 +683,7 @@ fn edit_rgb(ui: &mut egui::Ui, value: &mut serde_json::Value, mut rgb: [f32; 3])
     changed
 }
 
-fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
+pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
     use serde_json::Value;
     if let Some(rgb) = as_rgb(key, value) {
         return ui.horizontal(|ui| edit_rgb(ui, value, rgb)).inner;
