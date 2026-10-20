@@ -8,7 +8,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{EffectType, Position, Spider, Web};
+use crate::components::{EffectType, Position, WebWalker, Web};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 
@@ -61,7 +61,7 @@ pub fn trigger_web_at(
     y: i32,
     events: &mut EventQueue,
 ) {
-    if world.get::<&Spider>(entity).is_ok() {
+    if world.get::<&WebWalker>(entity).is_ok() {
         return;
     }
     let Some(web) = web_at(world, x, y) else {
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn test_web_per_spider_cap() {
         let mut world = World::new();
-        let spider = world.spawn((Position::new(0, 0), Spider));
+        let spider = world.spawn((Position::new(0, 0), WebWalker));
 
         // Lay webs on distinct tiles; only WEB_MAX_PER_SPIDER stick.
         let mut laid = 0;
@@ -93,7 +93,7 @@ mod tests {
         assert_eq!(world.query::<&Web>().iter().count(), WEB_MAX_PER_SPIDER);
 
         // Same tile twice never stacks.
-        let spider2 = world.spawn((Position::new(0, 1), Spider));
+        let spider2 = world.spawn((Position::new(0, 1), WebWalker));
         assert!(try_lay_web(&mut world, spider2, 0, 1));
         assert!(!try_lay_web(&mut world, spider2, 0, 1));
     }
@@ -103,7 +103,7 @@ mod tests {
         let mut world = World::new();
         // Enough spiders to exceed the global cap on their own.
         let spiders: Vec<Entity> = (0..8)
-            .map(|i| world.spawn((Position::new(i, -1), Spider)))
+            .map(|i| world.spawn((Position::new(i, -1), WebWalker)))
             .collect();
 
         let mut laid = 0;
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_web_roots_non_spider_and_is_consumed() {
         let mut world = World::new();
-        let spider = world.spawn((Position::new(0, 0), Spider));
+        let spider = world.spawn((Position::new(0, 0), WebWalker));
         assert!(try_lay_web(&mut world, spider, 3, 3));
 
         let victim = world.spawn((Position::new(3, 3), StatusEffects::new()));

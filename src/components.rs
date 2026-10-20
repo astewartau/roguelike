@@ -1845,10 +1845,11 @@ pub struct GroundItemPile;
 /// Weapon data - pure data, damage calculation in systems
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Weapon {
-    #[allow(dead_code)] // Reserved for UI display
+    /// What it's called in the UI ("Attack (Sword)").
     pub name: String,
-    #[allow(dead_code)] // Reserved for inventory icons
-    pub sprite: (SpriteSheet, u32),
+    /// The item this weapon is, if it's a real one you can carry (a sword);
+    /// `None` for natural weapons (claws).
+    pub item: Option<ItemType>,
     pub base_damage: i32,
     pub damage_bonus: i32,
 }
@@ -1857,7 +1858,7 @@ impl Weapon {
     pub fn sword() -> Self {
         Self {
             name: "Sword".to_string(),
-            sprite: crate::tile::tile_ids::SWORD,
+            item: Some(ItemType::Sword),
             base_damage: SWORD_BASE_DAMAGE,
             damage_bonus: SWORD_DAMAGE_BONUS,
         }
@@ -1866,7 +1867,7 @@ impl Weapon {
     pub fn dagger() -> Self {
         Self {
             name: "Dagger".to_string(),
-            sprite: crate::tile::tile_ids::DAGGER,
+            item: Some(ItemType::Dagger),
             base_damage: DAGGER_BASE_DAMAGE,
             damage_bonus: DAGGER_DAMAGE_BONUS,
         }
@@ -1875,7 +1876,7 @@ impl Weapon {
     pub fn claws(base_damage: i32) -> Self {
         Self {
             name: "Claws".to_string(),
-            sprite: crate::tile::tile_ids::BONES, // No specific icon, use bones
+            item: None,
             base_damage,
             damage_bonus: 0,
         }
@@ -1884,7 +1885,7 @@ impl Weapon {
     pub fn staff() -> Self {
         Self {
             name: "Staff".to_string(),
-            sprite: crate::tile::tile_ids::STAFF,
+            item: Some(ItemType::Staff),
             base_damage: STAFF_BASE_DAMAGE,
             damage_bonus: STAFF_DAMAGE_BONUS,
         }
@@ -2078,10 +2079,8 @@ impl LungeAnimation {
 /// Ranged weapon data
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RangedWeapon {
-    #[allow(dead_code)] // Reserved for UI display
+    /// What it's called in the UI.
     pub name: String,
-    #[allow(dead_code)] // Reserved for inventory icons
-    pub sprite: (SpriteSheet, u32),
     pub base_damage: i32,
     pub arrow_speed: f32,  // Tiles per second
 }
@@ -2090,7 +2089,6 @@ impl RangedWeapon {
     pub fn bow() -> Self {
         Self {
             name: "Bow".to_string(),
-            sprite: crate::tile::tile_ids::BOW,
             base_damage: BOW_BASE_DAMAGE,
             arrow_speed: ARROW_SPEED,
         }
@@ -2100,7 +2098,6 @@ impl RangedWeapon {
     pub fn enemy_bow(damage: i32) -> Self {
         Self {
             name: "Bow".to_string(),
-            sprite: crate::tile::tile_ids::BOW,
             base_damage: damage,
             arrow_speed: ARROW_SPEED,
         }
@@ -3102,9 +3099,10 @@ pub struct SupportAI {
     pub cooldown: f32,
 }
 
-/// Marker: spider-kin. Spiders never trigger (or consume) webs.
+/// Walks across webs without being caught in them (or using them up): a
+/// spider.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Spider;
+pub struct WebWalker;
 
 /// Periodically lays `Web` entities on its own tile while awake
 /// (see `systems::webs::try_lay_web`).

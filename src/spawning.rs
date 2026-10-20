@@ -233,7 +233,7 @@ impl EnemyDef {
             let _ = world.insert(
                 entity,
                 (
-                    crate::components::Spider,
+                    crate::components::WebWalker,
                     crate::components::WebSpinner {
                         cooldown: crate::constants::WEB_LAY_COOLDOWN,
                         interval: crate::constants::WEB_LAY_COOLDOWN,

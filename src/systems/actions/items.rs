@@ -42,18 +42,13 @@ fn equipped_weapon_for_kind(kind: ItemType) -> Option<EquippedWeapon> {
     })
 }
 
-/// Reconstruct a plain `ItemInstance` from an equipped weapon by its name.
+/// Reconstruct a plain `ItemInstance` from an equipped weapon's `item`.
 /// Used as a fallback when no `weapon_source` is recorded (e.g. the player's
 /// starting weapon set directly on `Equipment`). Returns `None` for enemy
 /// weapons like claws, which are not real items.
 fn equipped_weapon_to_instance(weapon: &EquippedWeapon) -> Option<ItemInstance> {
     let kind = match weapon {
-        EquippedWeapon::Melee(w) => match w.name.as_str() {
-            "Sword" => ItemType::Sword,
-            "Dagger" => ItemType::Dagger,
-            "Staff" => ItemType::Staff,
-            _ => return None,
-        },
+        EquippedWeapon::Melee(w) => w.item?,
         EquippedWeapon::Ranged(_) => ItemType::Bow,
     };
     Some(ItemInstance::plain(kind))

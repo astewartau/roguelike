@@ -317,7 +317,7 @@ mod tests {
         save_and_reload(&mut world, grid, player);
 
         let spider = find_named(&world, "Giant Spider");
-        assert!(world.get::<&crate::components::Spider>(spider).is_ok());
+        assert!(world.get::<&crate::components::WebWalker>(spider).is_ok());
         assert!(world.get::<&Venomous>(spider).is_ok());
         assert_eq!(world.get::<&Health>(spider).unwrap().current, 3);
         assert!(world.get::<&Asleep>(spider).is_err(), "awake spider stays awake");

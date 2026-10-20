@@ -345,7 +345,7 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(Flanker, "Combat", Flanker),
             plain!(PackHunter, "Combat", PackHunter),
             plain!(SupportAI, "Creature", SupportAI { cooldown: 0.0 }),
-            plain!(Spider, "Creature", Spider),
+            plain!(WebWalker, "Creature", WebWalker),
             plain!(WebSpinner, "Creature", WebSpinner { cooldown: 0.0, interval: 8.0 }),
             plain!(Web, "Things", Web { spinner: None }),
             plain!(Boss, "Creature", Boss { ability: BossAbility::GroundSlam, cooldown: 0.0, announced: false }),
