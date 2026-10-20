@@ -171,6 +171,9 @@ assets/
 │   └── LICENSE.txt
 ├── custom/
 │   └── *.png                     (output of tools/make_tiles.py)
+├── fonts/                        (optional, developer tools only)
+│   ├── AdwaitaSans-Regular.ttf
+│   └── NotoSans-Medium.ttf
 ├── sounds/
 │   ├── battle/                   ** see table above
 │   ├── enemies/                  **
@@ -179,6 +182,15 @@ assets/
 │   └── world/                    **
 └── (optional unused packs)
 ```
+
+## Fonts (optional)
+
+The developer tools' modern looks use two fonts from `assets/fonts/`, both
+under the SIL Open Font License: **Adwaita Sans** (Inter-based; GNOME ships it
+as `/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf`) and **Noto Sans
+Medium** (`/usr/share/fonts/noto/NotoSans-Medium.ttf`). Copy them in if you
+have them. Without them the panel falls back to the game's own font; nothing
+breaks.
 
 ## Checking your work
 

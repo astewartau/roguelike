@@ -351,6 +351,24 @@ pub fn load_fonts() -> FontDefinitions {
             .insert(0, "hack".to_owned());
     }
 
+    // The developer tools' modern looks: a clean sans and a heavier one for
+    // headings, from assets/fonts (optional, see assets/README.md). Each
+    // family ends with the ordinary proportional fonts, so a missing file,
+    // or a glyph the font lacks (emoji), falls back rather than vanishing.
+    let fallback = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for (family, file) in [
+        (super::devtools_look::SANS, "assets/fonts/AdwaitaSans-Regular.ttf"),
+        (super::devtools_look::SANS_STRONG, "assets/fonts/NotoSans-Medium.ttf"),
+    ] {
+        let mut chain = Vec::new();
+        if let Ok(data) = std::fs::read(file) {
+            fonts.font_data.insert(family.to_owned(), FontData::from_owned(data));
+            chain.push(family.to_owned());
+        }
+        chain.extend(fallback.iter().cloned());
+        fonts.families.insert(FontFamily::Name(family.into()), chain);
+    }
+
     fonts
 }
 

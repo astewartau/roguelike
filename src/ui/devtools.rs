@@ -20,7 +20,7 @@ use crate::tile::SpriteSheet;
 use hecs::World;
 
 use super::icons::UiIcons;
-use super::style::{self, colors};
+use super::devtools_look as look;
 use super::vfx::{tile_rect, RainStyle};
 
 /// What the panel needs to draw icons.
@@ -56,17 +56,18 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
         .order(egui::Order::Middle)
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            egui::Frame::none()
-                .fill(colors::PANEL_BG)
-                .stroke(egui::Stroke::new(style::BORDER_WIDTH, colors::PANEL_BORDER))
-                .inner_margin(egui::Margin::same(8.0))
-                .show(ui, |ui| {
-                    ui.set_width(DEVTOOLS_PANEL_WIDTH - 16.0);
-                    ui.set_min_height(screen.height() - 16.0);
-                    header(ui, dev);
-                    ui.separator();
+            look::apply(ui, dev.look);
+            let frame = look::panel_frame(dev.look);
+            let chrome = frame.total_margin().sum();
+            frame.show(ui, |ui| {
+                    ui.set_width(DEVTOOLS_PANEL_WIDTH - chrome.x);
+                    ui.set_min_height(screen.height() - chrome.y);
+                    let top = ui.cursor().top();
+                    header(ui, dev, view);
+                    ui.add_space(4.0);
+                    let used = ui.cursor().top() - top;
                     egui::ScrollArea::vertical()
-                        .max_height(screen.height() - 120.0)
+                        .max_height(screen.height() - chrome.y - used)
                         .auto_shrink([false, false])
                         .show(ui, |ui| match dev.tab {
                             DevTab::Spawn => spawn_tab(ui, dev, art),
@@ -82,49 +83,70 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
         });
 }
 
-fn header(ui: &mut egui::Ui, dev: &mut DevTools) {
+fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
+    let p = look::pal(ui);
     ui.horizontal(|ui| {
-        ui.heading("Developer tools");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.vertical(|ui| {
+            ui.heading("Developer tools");
+            ui.label(
+                egui::RichText::new(format!("Floor {} · seed {} · {:.0} fps", dev.floor, dev.seed, dev.fps))
+                    .small()
+                    .color(p.muted),
+            );
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             if ui.button("✕").on_hover_text("Close (`)").clicked() {
                 dev.toggle();
             }
-        });
-    });
-    ui.horizontal_wrapped(|ui| {
-        for tab in DevTab::ALL {
-            ui.selectable_value(&mut dev.tab, tab, tab.name());
-        }
-    });
-    match dev.tool {
-        Some(tool) => {
-            ui.horizontal(|ui| {
-                ui.colored_label(colors::TEXT_PRIMARY, format!("Tool: {}", tool.describe()));
-                if ui.small_button("Drop").on_hover_text("Or right-click the map, or Esc").clicked() {
-                    dev.disarm();
+            egui::ComboBox::from_id_salt("dev_look").selected_text(dev.look.name()).width(84.0).show_ui(ui, |ui| {
+                for choice in crate::ui::DevLook::ALL {
+                    ui.selectable_value(&mut dev.look, choice, choice.name());
                 }
             });
-        }
-        None => {
-            ui.colored_label(colors::TEXT_MUTED, "Pick something, then click the map.");
-        }
+        });
+    });
+    let _ = view;
+    ui.add_space(4.0);
+    let tabs: Vec<(DevTab, &str, &str)> = DevTab::ALL.iter().map(|&t| (t, t.icon(), t.name())).collect();
+    if let Some(tab) = look::pill_tabs(ui, dev.tab, &tabs) {
+        dev.tab = tab;
     }
-    if let Some(status) = &dev.status {
-        ui.colored_label(colors::TEXT_MUTED, status);
-    }
+    ui.add_space(4.0);
+    look::card(ui, |ui| {
+        match dev.tool {
+            Some(tool) => {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("●").color(p.accent));
+                    ui.label(tool.describe());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Drop").on_hover_text("Or right-click the map, or Esc").clicked() {
+                            dev.disarm();
+                        }
+                    });
+                });
+            }
+            None => {
+                ui.colored_label(p.muted, "Pick something, then click the map.");
+            }
+        }
+        if let Some(status) = &dev.status {
+            ui.label(egui::RichText::new(status).small().color(p.muted));
+        }
+    });
 }
 
 /// One selectable row: icon and name. Returns its response.
 pub(super) fn row(ui: &mut egui::Ui, art: &DevArt, sprite: (SpriteSheet, u32), label: &str, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+    let p = look::pal(ui);
     let bg = if selected {
-        colors::SELECTED
+        p.accent
     } else if response.hovered() {
-        colors::HOVERED
+        p.hover
     } else {
         egui::Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, 0.0, bg);
+    ui.painter().rect_filled(rect, 6.0, bg);
     let (tex, uv) = art.icon(sprite);
     let icon = egui::Rect::from_min_size(rect.min + egui::vec2(4.0, 1.0), egui::vec2(24.0, 24.0));
     ui.painter().image(tex, icon, uv, egui::Color32::WHITE);
@@ -132,8 +154,8 @@ pub(super) fn row(ui: &mut egui::Ui, art: &DevArt, sprite: (SpriteSheet, u32), l
         egui::pos2(icon.max.x + 8.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(14.0),
-        colors::TEXT_PRIMARY,
+        egui::TextStyle::Body.resolve(ui.style()),
+        if selected { p.on_accent } else { p.text },
     );
     response
 }
@@ -170,7 +192,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
             }
         });
         ui.horizontal(|ui| {
-            ui.checkbox(&mut options.companion, "Tamed companion");
+            look::toggle(ui, &mut options.companion, "Tamed companion");
             ui.label("Count");
             ui.add(egui::DragValue::new(&mut options.count).range(1..=30));
         });
@@ -194,7 +216,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
                 ui.selectable_value(&mut dev.spawn_options.rarity, rarity, label);
             }
         });
-        ui.label(egui::RichText::new("Click to drop on the map; Give puts it in your pack.").color(colors::TEXT_MUTED));
+        ui.label(egui::RichText::new("Click to drop on the map; Give puts it in your pack.").color(look::pal(ui).muted));
         let search = dev.search.to_lowercase();
         for def in crate::systems::item_defs::ITEM_DEFS {
             if !search.is_empty() && !def.name.to_lowercase().contains(&search) {
@@ -234,7 +256,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     });
 
     egui::CollapsingHeader::new("Furniture and traps").default_open(false).show(ui, |ui| {
-        ui.checkbox(&mut dev.spawn_options.revealed, "Traps start revealed");
+        look::toggle(ui, &mut dev.spawn_options.revealed, "Traps start revealed");
         place_list(
             ui,
             dev,
@@ -277,7 +299,7 @@ fn paint_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
             ui.selectable_value(&mut dev.brush, radius, label);
         }
     });
-    ui.label(egui::RichText::new("Click or drag on the map to paint.").color(colors::TEXT_MUTED));
+    ui.label(egui::RichText::new("Click or drag on the map to paint.").color(look::pal(ui).muted));
     for tile in PAINTABLE {
         let selected = dev.tool == Some(CursorTool::Paint(tile));
         if row(ui, art, tile.sprite_ref(), &format!("{tile:?}"), selected).clicked() {
@@ -300,11 +322,11 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
     let (world, player) = (view.world, view.player);
 
     ui.horizontal(|ui| {
-        ui.checkbox(&mut dev.god_mode, "God mode");
-        ui.checkbox(&mut dev.keep_fed, "Never hungry or tired");
+        look::toggle(ui, &mut dev.god_mode, "God mode");
+        look::toggle(ui, &mut dev.keep_fed, "Never hungry or tired");
     });
 
-    style::panel_header(ui, "Health");
+    look::section(ui, "Health");
     if let Ok(health) = world.get::<&Health>(player) {
         let (mut current, mut max) = (health.current, health.max);
         ui.horizontal(|ui| {
@@ -319,7 +341,7 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         });
     }
 
-    style::panel_header(ui, "Stats");
+    look::section(ui, "Stats");
     if let Ok(stats) = world.get::<&Stats>(player) {
         let (mut strength, mut intelligence, mut agility) = (stats.strength, stats.intelligence, stats.agility);
         ui.horizontal(|ui| {
@@ -332,7 +354,7 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         });
     }
 
-    style::panel_header(ui, "Experience and gold");
+    look::section(ui, "Experience and gold");
     let level = world.get::<&Experience>(player).map(|e| (e.level, e.current)).ok();
     let gold = world.get::<&Inventory>(player).map(|i| i.gold).unwrap_or(0);
     if let Some((level, xp)) = level {
@@ -351,7 +373,7 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         }
     });
 
-    style::panel_header(ui, "Hunger and fatigue");
+    look::section(ui, "Hunger and fatigue");
     let hunger = world.get::<&Hunger>(player).map(|h| h.value).ok();
     let fatigue = world.get::<&Fatigue>(player).map(|f| f.value).ok();
     if let (Some(mut hunger), Some(mut fatigue)) = (hunger, fatigue) {
@@ -362,7 +384,7 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         }
     }
 
-    style::panel_header(ui, "Spells and cooldowns");
+    look::section(ui, "Spells and cooldowns");
     let known = world.get::<&LearnedAbilities>(player).ok();
     ui.horizontal_wrapped(|ui| {
         for ability in LEARNABLE {
@@ -377,7 +399,7 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         dev.commands.push(DevCommand::ResetCooldowns);
     }
 
-    style::panel_header(ui, "Status effects");
+    look::section(ui, "Status effects");
     ui.horizontal(|ui| {
         ui.label("Add for");
         ui.add(egui::DragValue::new(&mut dev.effect_seconds).range(1.0..=600.0).suffix(" s"));
@@ -409,7 +431,7 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
 }
 
 fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
-    style::panel_header(ui, "Click tools");
+    look::section(ui, "Click tools");
     ui.horizontal_wrapped(|ui| {
         tool_button(ui, dev, CursorTool::Teleport, "Teleport", "Move yourself to the clicked tile");
         tool_button(ui, dev, CursorTool::Ignite, "Ignite", "Set the tile alight, and whoever is on it");
@@ -419,15 +441,15 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         tool_button(ui, dev, CursorTool::Delete, "Delete", "Remove everything on the tile but you");
     });
 
-    style::panel_header(ui, "Map");
+    look::section(ui, "Map");
     ui.horizontal(|ui| {
         if ui.button("Reveal map").clicked() {
             dev.commands.push(DevCommand::RevealMap);
         }
-        ui.checkbox(&mut dev.no_fog, "See everything");
+        look::toggle(ui, &mut dev.no_fog, "See everything");
     });
 
-    style::panel_header(ui, "Creatures");
+    look::section(ui, "Creatures");
     ui.horizontal_wrapped(|ui| {
         if ui.button("Kill visible").clicked() {
             dev.commands.push(DevCommand::KillHostiles { visible_only: true });
@@ -436,7 +458,7 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
             dev.commands.push(DevCommand::KillHostiles { visible_only: false });
         }
         let mut frozen = dev.ai_frozen;
-        if ui.checkbox(&mut frozen, "Freeze AI").changed() {
+        if look::toggle(ui, &mut frozen, "Freeze AI").changed() {
             dev.commands.push(DevCommand::FreezeAi(frozen));
         }
         if ui.button("Wake all").clicked() {
@@ -444,7 +466,7 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         }
     });
 
-    style::panel_header(ui, "Floors");
+    look::section(ui, "Floors");
     ui.horizontal(|ui| {
         ui.label(format!("On floor {}.", dev.floor));
         ui.add(egui::DragValue::new(&mut dev.target_floor).range(0..=99).prefix("floor "));
@@ -456,7 +478,7 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         }
     });
 
-    style::panel_header(ui, "Time");
+    look::section(ui, "Time");
     ui.horizontal(|ui| {
         ui.add(egui::DragValue::new(&mut dev.advance_seconds).range(0.5..=600.0).suffix(" s"));
         if ui.button("Let it pass").on_hover_text("You wait while game time runs on").clicked() {
@@ -465,7 +487,7 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
     });
     ui.add(egui::Slider::new(&mut dev.anim_speed, 0.05..=2.0).text("animation speed"));
 
-    style::panel_header(ui, "Run");
+    look::section(ui, "Run");
     ui.horizontal(|ui| {
         ui.label(format!("Seed {}", dev.seed));
         if ui.small_button("Copy").clicked() {
@@ -501,11 +523,11 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
         }
     });
     let Some(tile) = dev.inspect_tile else {
-        ui.colored_label(colors::TEXT_MUTED, "Nothing picked yet.");
+        ui.colored_label(look::pal(ui).muted, "Nothing picked yet.");
         return;
     };
 
-    style::panel_header(ui, &format!("Tile {}, {}", tile.0, tile.1));
+    look::section(ui, &format!("Tile {}, {}", tile.0, tile.1));
     if let Some(cell) = view.grid.get(tile.0, tile.1) {
         let light = view
             .grid
@@ -546,7 +568,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
     ui.separator();
     ui.horizontal(|ui| {
         ui.strong(entity_label(world, e));
-        ui.colored_label(colors::TEXT_MUTED, format!("#{}", e.id()));
+        ui.colored_label(look::pal(ui).muted, format!("#{}", e.id()));
     });
     ui.horizontal_wrapped(|ui| {
         if e != view.player {
@@ -602,7 +624,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
         });
     }
     if unknown > 0 {
-        ui.colored_label(colors::TEXT_MUTED, format!("and {unknown} more the tools can't edit"));
+        ui.colored_label(look::pal(ui).muted, format!("and {unknown} more the tools can't edit"));
     }
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("add_component").selected_text("Add component").show_ui(ui, |ui| {
@@ -690,10 +712,10 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
     }
     match value {
         Value::Null => {
-            ui.colored_label(colors::TEXT_MUTED, "(a marker: no settings)");
+            ui.colored_label(look::pal(ui).muted, "(a marker: no settings)");
             false
         }
-        Value::Bool(b) => ui.checkbox(b, "").changed(),
+        Value::Bool(b) => look::toggle(ui, b, "").changed(),
         Value::Number(n) => {
             if let Some(mut i) = n.as_i64() {
                 let changed = ui.add(egui::DragValue::new(&mut i)).changed();
@@ -745,7 +767,7 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
                 changed = true;
             }
             if items.is_empty() {
-                ui.colored_label(colors::TEXT_MUTED, "(empty)");
+                ui.colored_label(look::pal(ui).muted, "(empty)");
             }
             changed
         }
@@ -775,37 +797,37 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
 fn overlays_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
     let o = &mut dev.overlays;
     let muted = |ui: &mut egui::Ui, text: &str| {
-        ui.label(egui::RichText::new(text).color(colors::TEXT_MUTED));
+        ui.label(egui::RichText::new(text).color(look::pal(ui).muted));
     };
-    style::panel_header(ui, "Map");
-    ui.checkbox(&mut o.light, "Light level");
+    look::section(ui, "Map");
+    look::toggle(ui, &mut o.light, "Light level");
     muted(ui, "Dark blue is pitch black, yellow is fully lit (explored tiles).");
-    ui.checkbox(&mut o.blockers, "Blockers");
+    look::toggle(ui, &mut o.blockers, "Blockers");
     muted(ui, "Red cross blocks movement, dark square blocks sight.");
-    ui.checkbox(&mut o.fire_and_water, "Fire and water");
+    look::toggle(ui, &mut o.fire_and_water, "Fire and water");
     muted(ui, "Blue is wet, orange outline is fuel, bright outline is burning, rain clouds boxed.");
-    ui.checkbox(&mut o.coords, "Tile coordinates");
+    look::toggle(ui, &mut o.coords, "Tile coordinates");
     muted(ui, "Shown when zoomed in far enough to read.");
 
-    style::panel_header(ui, "Noise");
-    ui.checkbox(&mut o.noise, "Noise reach from the cursor");
+    look::section(ui, "Noise");
+    look::toggle(ui, &mut o.noise, "Noise reach from the cursor");
     ui.add(egui::Slider::new(&mut o.noise_radius, 1..=20).text("radius"));
     muted(ui, "Each tile shows the muffled distance a sound travels to reach it.");
 
-    style::panel_header(ui, "Creatures");
-    ui.checkbox(&mut o.ai, "AI state and sight");
+    look::section(ui, "Creatures");
+    look::toggle(ui, &mut o.ai, "AI state and sight");
     muted(ui, "Label, sight ring (halved for idle ones while you sneak), and a red line from any that can see you.");
-    ui.checkbox(&mut o.path, "Path to the player");
+    look::toggle(ui, &mut o.path, "Path to the player");
     muted(ui, "From the creature selected on the Inspect tab.");
 }
 
 fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
     use crate::devtools::Shot;
     let muted = |ui: &mut egui::Ui, text: &str| {
-        ui.label(egui::RichText::new(text).color(colors::TEXT_MUTED));
+        ui.label(egui::RichText::new(text).color(look::pal(ui).muted));
     };
 
-    style::panel_header(ui, "Projectiles");
+    look::section(ui, "Projectiles");
     muted(ui, "Click a tile to fire from the player through the real game rules.");
     ui.horizontal_wrapped(|ui| {
         for shot in Shot::ALL {
@@ -813,7 +835,7 @@ fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
         }
     });
 
-    style::panel_header(ui, "Explosions (look only)");
+    look::section(ui, "Explosions (look only)");
     ui.horizontal(|ui| {
         tool_button(ui, dev, CursorTool::LookOfExplosion { fiery: true }, "Fiery", "The barrel blast and fireball look");
         tool_button(ui, dev, CursorTool::LookOfExplosion { fiery: false }, "Shockwave", "A blast with no fire");
@@ -821,7 +843,7 @@ fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
     ui.add(egui::Slider::new(&mut dev.explosion_radius, 1..=6).text("radius"));
     muted(ui, "Nothing is harmed: use the Blast tool on the World tab for a real one.");
 
-    style::panel_header(ui, "Camera and numbers");
+    look::section(ui, "Camera and numbers");
     ui.horizontal(|ui| {
         for (label, amount) in [
             ("Swing", CAMERA_SHAKE_PLAYER_SWING),
@@ -842,14 +864,14 @@ fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
         }
     });
 
-    style::panel_header(ui, "Call Rain look");
+    look::section(ui, "Call Rain look");
     ui.horizontal(|ui| {
         for rain in RainStyle::ALL {
             ui.selectable_value(&mut dev.rain_style, rain, rain.name());
         }
     });
 
-    style::panel_header(ui, "Particle fire");
+    look::section(ui, "Particle fire");
     ui.horizontal(|ui| {
         tool_button(ui, dev, CursorTool::ParticleFire, "Place on the map", "A looping fire");
         if ui.button("Clear all").clicked() {

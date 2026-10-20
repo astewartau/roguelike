@@ -16,9 +16,8 @@ use crate::devtools::{spawn, CursorTool, DevTools};
 use crate::tile::SpriteSheet;
 
 use super::devtools::{edit_value, row, DevArt};
-use super::style::colors;
+use super::devtools_look as look;
 
-const WARNING: egui::Color32 = egui::Color32::from_rgb(225, 170, 80);
 /// Side of one tile in the sprite picker, in points.
 const PICKER_TILE: f32 = 28.0;
 const SHEETS: [(SpriteSheet, &str); 5] = [
@@ -89,7 +88,7 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         });
     });
     ui.colored_label(
-        colors::TEXT_MUTED,
+        look::pal(ui).muted,
         "Or Save as prefab from the Inspect tab. Saved to dev_prefabs.json; the Spawn tab's count applies.",
     );
 
@@ -140,7 +139,7 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
 /// few words what its components make it do.
 fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
     egui::Frame::none()
-        .stroke(egui::Stroke::new(1.0_f32, colors::PANEL_BORDER))
+        .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).border))
         .inner_margin(egui::Margin::same(6.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -158,7 +157,7 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                             egui::Align2::CENTER_CENTER,
                             "?",
                             egui::FontId::proportional(20.0),
-                            colors::TEXT_MUTED,
+                            look::pal(ui).muted,
                         );
                     }
                 }
@@ -167,7 +166,7 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                     ui.strong(name);
                     ui.horizontal(|ui| {
                         if let Some(hp) = prefab.value("Health").and_then(|h| h.get("max")).and_then(|v| v.as_i64()) {
-                            ui.colored_label(colors::RELATION_HOSTILE, format!("{hp} HP"));
+                            ui.colored_label(look::pal(ui).danger, format!("{hp} HP"));
                         }
                         if let Some(light) = prefab.value("LightSource") {
                             let rgb = light
@@ -180,7 +179,7 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                             let (swatch, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                             ui.painter().circle_filled(swatch.center(), 6.0, colour);
                             let radius = light.get("radius").and_then(|r| r.as_f64()).unwrap_or(0.0);
-                            ui.colored_label(colors::TEXT_MUTED, format!("light {radius:.1}"));
+                            ui.colored_label(look::pal(ui).muted, format!("light {radius:.1}"));
                         }
                     });
                     let phrases: Vec<&str> = prefab
@@ -191,7 +190,7 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                         .filter(|p| !p.is_empty())
                         .collect();
                     let summary = if phrases.is_empty() { "does nothing yet".to_string() } else { phrases.join(" · ") };
-                    ui.add(egui::Label::new(egui::RichText::new(summary).color(colors::TEXT_ACCENT)).wrap());
+                    ui.add(egui::Label::new(egui::RichText::new(summary).color(look::pal(ui).accent)).wrap());
                 });
             });
         });
@@ -214,7 +213,7 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
     let invisible = !prefab.has("Sprite") && !prefab.has("AnimatedSprite") && !prefab.components.is_empty();
     if invisible {
         ui.horizontal_wrapped(|ui| {
-            ui.colored_label(WARNING, "⚠ Nothing to see:");
+            ui.colored_label(look::pal(ui).warning, "⚠ Nothing to see:");
             if ui.small_button("Add Sprite").clicked() {
                 add = Some("Sprite");
             }
@@ -223,7 +222,7 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
     for (component, need) in &unmet {
         ui.horizontal_wrapped(|ui| {
             let what = need.replace('|', " or ");
-            ui.colored_label(WARNING, format!("⚠ {component} does nothing without {what}"));
+            ui.colored_label(look::pal(ui).warning, format!("⚠ {component} does nothing without {what}"));
             for option in need.split('|') {
                 if let Some(entry) = registry::find(option) {
                     if ui.small_button(format!("Add {option}")).clicked() {
@@ -241,12 +240,12 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
 fn picker(ui: &mut egui::Ui, dev: &mut DevTools, i: usize) -> bool {
     let mut changed = false;
     egui::Frame::none()
-        .stroke(egui::Stroke::new(1.0_f32, colors::TEXT_ACCENT))
+        .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).accent))
         .inner_margin(egui::Margin::same(6.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut dev.picker_search).hint_text("Search: burn, light, door…").desired_width(180.0));
-                ui.checkbox(&mut dev.picker_internal, "Internal").on_hover_text("Also list state the game keeps for itself");
+                look::toggle(ui, &mut dev.picker_internal, "Internal").on_hover_text("Also list state the game keeps for itself");
             });
             let search = dev.picker_search.to_lowercase();
             egui::ScrollArea::vertical().id_salt("component_picker").max_height(260.0).show(ui, |ui| {
@@ -267,7 +266,7 @@ fn picker(ui: &mut egui::Ui, dev: &mut DevTools, i: usize) -> bool {
                     if entries.is_empty() {
                         continue;
                     }
-                    ui.label(egui::RichText::new(group).strong().color(colors::TEXT_ACCENT));
+                    ui.label(egui::RichText::new(group).strong().color(look::pal(ui).accent));
                     for info in entries {
                         let response = ui
                             .add(
@@ -277,7 +276,7 @@ fn picker(ui: &mut egui::Ui, dev: &mut DevTools, i: usize) -> bool {
                                 .frame(false),
                             )
                             .on_hover_text(info.summary);
-                        ui.add(egui::Label::new(egui::RichText::new(info.summary).small().color(colors::TEXT_MUTED)).wrap());
+                        ui.add(egui::Label::new(egui::RichText::new(info.summary).small().color(look::pal(ui).muted)).wrap());
                         if response.clicked() {
                             changed |= dev.prefabs[i].add(info.name);
                         }
@@ -303,12 +302,12 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
             continue;
         }
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(group).strong().color(colors::TEXT_ACCENT));
+        ui.label(egui::RichText::new(group).strong().color(look::pal(ui).accent));
         for n in indices {
             let name = dev.prefabs[i].components[n].component.clone();
             let info = catalog::info_of(&name);
             egui::Frame::none()
-                .stroke(egui::Stroke::new(1.0_f32, colors::PANEL_BORDER))
+                .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).border))
                 .inner_margin(egui::Margin::symmetric(6.0, 4.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -317,7 +316,7 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
                         let title = if known { name.clone() } else { format!("{name} (unknown)") };
                         ui.strong(title).on_hover_text(info.map(|i| i.summary).unwrap_or(""));
                         if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
-                            ui.colored_label(colors::TEXT_MUTED, info.phrase);
+                            ui.colored_label(look::pal(ui).muted, info.phrase);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("✕").on_hover_text("Remove").clicked() {
@@ -379,7 +378,7 @@ fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize
             let sheet = dev.sprite_sheet;
             let (columns, rows) = art.tileset.grid_size(sheet);
             if columns == 0 {
-                ui.colored_label(colors::TEXT_MUTED, "That sheet isn't loaded.");
+                ui.colored_label(look::pal(ui).muted, "That sheet isn't loaded.");
                 return;
             }
             let tex = art.icons.texture_for_sheet(sheet);
@@ -393,7 +392,7 @@ fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize
                             let (rect, response) =
                                 ui.allocate_exact_size(egui::vec2(PICKER_TILE, PICKER_TILE), egui::Sense::click());
                             if response.hovered() {
-                                ui.painter().rect_filled(rect, 0.0, colors::HOVERED);
+                                ui.painter().rect_filled(rect, 0.0, look::pal(ui).hover);
                             }
                             ui.painter().image(tex, rect.shrink(2.0), uv, egui::Color32::WHITE);
                             if response.on_hover_text(format!("#{id}")).clicked() {
