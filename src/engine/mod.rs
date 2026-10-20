@@ -642,11 +642,7 @@ impl GameEngine {
         {
             profile_scope!("visual_lerp");
             systems::visual_lerp(&mut state.world, anim_dt, state.game_clock.time);
-            systems::lerp_projectiles_realtime(
-                &mut state.world,
-                anim_dt,
-                crate::constants::ARROW_SPEED,
-            );
+            systems::lerp_projectiles_realtime(&mut state.world, anim_dt);
         }
 
         // Projectile cleanup
@@ -707,6 +703,18 @@ impl GameEngine {
         {
             profile_scope!("tick_fire");
             let game_dt = state.game_clock.time - clock_t0;
+            // Call Rain still falling soaks again first, so a fire it
+            // reaches this frame doesn't get to spread.
+            systems::rain::tick_rain(
+                &mut EffectCtx {
+                    world: &mut state.world,
+                    grid: &mut state.grid,
+                    spatial: &mut state.spatial_cache,
+                    events: &mut self.events,
+                    rng: &mut state.rng,
+                },
+                game_dt,
+            );
             systems::fire::tick_fire(
                 &mut EffectCtx {
                     world: &mut state.world,
@@ -1115,6 +1123,7 @@ impl GameEngine {
                     &self.vfx.taming_beams,
                 );
                 let channels = crate::ui::get_channel_data(&state.world);
+                let rain = crate::ui::get_rain_data(&state.world, &state.grid);
 
                 crate::ui::run_ui(
                     egui_glow,
@@ -1134,6 +1143,7 @@ impl GameEngine {
                             life_drain_beams: &life_drain_beams,
                             taming_beams: &taming_beams,
                             channels: &channels,
+                            rain: &rain,
                             real_time: self.real_time,
                             targeting_mode: self.input.targeting_mode.as_ref(),
                             ability_targeting_mode: self.input.ability_targeting_mode.as_ref(),

@@ -48,15 +48,22 @@ pub const STAFF_DAMAGE_BONUS: i32 = 2;
 
 /// Bow base damage
 pub const BOW_BASE_DAMAGE: i32 = 8;
-/// Arrow speed in tiles per second
+/// Arrow speed in tiles per second: the fastest thing that flies. Fireballs
+/// and grave bolts are slower (`FIREBALL_SPEED`), a thrown potion slowest.
 pub const ARROW_SPEED: f32 = 15.0;
 
 /// Chance an arrow that hit its target is recoverable from the ground.
 /// Arrows that missed are always recoverable.
 pub const ARROW_RECOVERY_CHANCE_ON_HIT: f32 = 0.5;
 
-/// Speed of thrown potions (tiles per second)
-pub const POTION_THROW_SPEED: f32 = 12.0;
+/// Speed of thrown potions (tiles per second): the slowest projectile, a
+/// lobbed bottle rather than a shot.
+pub const POTION_THROW_SPEED: f32 = 7.0;
+
+// Arrows fly fastest, then fireballs and grave bolts, then a thrown bottle.
+const _: () = assert!(
+    ARROW_SPEED > super::effects::FIREBALL_SPEED && super::effects::FIREBALL_SPEED > POTION_THROW_SPEED
+);
 /// Range for throwing potions
 pub const POTION_THROW_RANGE: i32 = 6;
 /// Splash radius for all thrown potions

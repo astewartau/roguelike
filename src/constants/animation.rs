@@ -266,8 +266,5 @@ pub const EXPLOSION_PUFF_SPILL: f32 = 0.25;
 pub const EXPLOSION_SHOCKWAVE_DURATION: f32 = 0.3;
 /// How long the white flash at the heart of a blast lasts, in seconds.
 pub const EXPLOSION_FLASH_DURATION: f32 = 0.1;
-/// How long Call Rain is seen falling on a tile, in seconds (its effect on
-/// the world is immediate).
-pub const RAIN_VFX_DURATION: f32 = 1.4;
 /// Seconds per frame of falling rain (`tile_ids::RAIN`). Lower falls faster.
 pub const RAIN_FRAME_DURATION: f32 = 0.08;

@@ -288,10 +288,11 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
 }
 
 /// Update visual positions of projectiles for smooth interpolation.
-/// This runs every frame in real-time to animate arrows along their path.
-/// Uses real_time_elapsed to interpolate based on actual frame time.
-pub fn lerp_projectiles_realtime(world: &mut World, real_time_elapsed: f32, arrow_speed: f32) {
-    for (_, (pos, vis_pos, _projectile)) in
+/// This runs every frame in real-time to animate arrows along their path,
+/// each at its own `speed`, so a second of flight in game time takes a second
+/// on screen.
+pub fn lerp_projectiles_realtime(world: &mut World, real_time_elapsed: f32) {
+    for (_, (pos, vis_pos, projectile)) in
         world.query_mut::<(&Position, &mut VisualPosition, &Projectile)>()
     {
         // Calculate target position
@@ -308,8 +309,8 @@ pub fn lerp_projectiles_realtime(world: &mut World, real_time_elapsed: f32, arro
             vis_pos.x = target_x;
             vis_pos.y = target_y;
         } else {
-            // Move at arrow_speed tiles per second
-            let move_dist = arrow_speed * real_time_elapsed;
+            // Move at the projectile's own speed, in tiles per second
+            let move_dist = projectile.speed * real_time_elapsed;
             if move_dist >= dist {
                 vis_pos.x = target_x;
                 vis_pos.y = target_y;
@@ -378,10 +379,19 @@ pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Landings) {
 }
 
 /// Seconds until a projectile's sprite reaches where it came down. Its
-/// landing is settled in game time, usually the moment it is fired, while
-/// the sprite flies there at `ARROW_SPEED` in real time.
-fn visual_arrival(vis: &VisualPosition, (x, y): (i32, i32)) -> f32 {
-    (x as f32 - vis.x).hypot(y as f32 - vis.y) / crate::constants::ARROW_SPEED
+/// landing is settled in game time, which jumps ahead in an instant, while
+/// the sprite flies there at its own speed in real time.
+fn visual_arrival(projectile: &Projectile, vis: &VisualPosition, (x, y): (i32, i32)) -> f32 {
+    (x as f32 - vis.x).hypot(y as f32 - vis.y) / projectile.speed.max(0.1)
+}
+
+/// Whether `shooter` has something it fired still in flight (in game time).
+/// The shooter waits it out (`time_system`), so nothing hangs in the air.
+pub fn has_projectile_in_flight(world: &World, shooter: Entity) -> bool {
+    world
+        .query::<&Projectile>()
+        .iter()
+        .any(|(_, p)| p.source == shooter && p.finished.is_none())
 }
 
 /// How long to hold back what `event` shows (numbers, splashes) so it
@@ -390,11 +400,12 @@ fn visual_arrival(vis: &VisualPosition, (x, y): (i32, i32)) -> f32 {
 pub fn impact_delay(world: &World, event: &GameEvent) -> f32 {
     let at = match event {
         GameEvent::ProjectileHit { projectile, .. } => {
-            return world
-                .get::<&VisualPosition>(*projectile)
-                .ok()
-                .zip(world.get::<&Projectile>(*projectile).ok().and_then(|p| p.finished))
-                .map_or(0.0, |(vis, (x, y, _))| visual_arrival(&vis, (x, y)));
+            let (Ok(vis), Ok(p)) =
+                (world.get::<&VisualPosition>(*projectile), world.get::<&Projectile>(*projectile))
+            else {
+                return 0.0;
+            };
+            return p.finished.map_or(0.0, |(x, y, _)| visual_arrival(&p, &vis, (x, y)));
         }
         GameEvent::PotionSplash { x, y, .. } => (*x, *y),
         GameEvent::AttackHit { kind: crate::events::DamageKind::Fireball, target_pos, .. } => {
@@ -409,7 +420,7 @@ pub fn impact_delay(world: &World, event: &GameEvent) -> f32 {
         .filter_map(|(_, (p, vis))| {
             let (x, y, _) = p.finished?;
             let reach = if p.kind == ProjectileKind::Fireball { crate::constants::FIREBALL_RADIUS } else { 0 };
-            ((at.0 - x).abs().max((at.1 - y).abs()) <= reach).then(|| visual_arrival(vis, (x, y)))
+            ((at.0 - x).abs().max((at.1 - y).abs()) <= reach).then(|| visual_arrival(p, vis, (x, y)))
         })
         .fold(0.0, f32::max)
 }

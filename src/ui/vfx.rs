@@ -882,11 +882,35 @@ fn ring_tiles(ring: i32) -> impl Iterator<Item = (i32, i32)> {
         .filter(move |(dx, dy)| dx.abs().max(dy.abs()) == ring)
 }
 
+/// Call Rain still falling: its tiles you can see, and how strongly it's
+/// raining (it eases off over the last moments).
+pub struct RainPatch {
+    pub tiles: Vec<(i32, i32)>,
+    pub opacity: f32,
+}
+
+/// Every rain cloud in the world, as the visible tiles it falls on.
+pub fn get_rain_data(world: &World, grid: &Grid) -> Vec<RainPatch> {
+    use crate::components::{Position, RainCloud};
+    world
+        .query::<(&Position, &RainCloud)>()
+        .iter()
+        .map(|(_, (p, cloud))| RainPatch {
+            tiles: (-cloud.radius..=cloud.radius)
+                .flat_map(|dy| (-cloud.radius..=cloud.radius).map(move |dx| (p.x + dx, p.y + dy)))
+                .filter(|&(x, y)| grid.get(x, y).is_some_and(|t| t.visible && t.tile_type.is_walkable()))
+                .collect(),
+            opacity: (cloud.remaining / 0.6).clamp(0.0, 1.0),
+        })
+        .collect()
+}
+
 /// Render Call Rain: rain (`tile_ids::RAIN`) falling on each tile of the
-/// patch under a passing cloud's shadow, fading in and out.
-pub fn draw_rain(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera, icons: &UiIcons) {
+/// patch under a cloud's shadow, for as long as the rain lasts. Animated in
+/// real time, so it keeps falling while the game waits on you.
+pub fn draw_rain(ctx: &egui::Context, camera: &Camera, icons: &UiIcons, patches: &[RainPatch], time: f32) {
     let frames = icons.rain_uvs.len() as u32;
-    if frames == 0 {
+    if frames == 0 || patches.is_empty() {
         return;
     }
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -895,25 +919,21 @@ pub fn draw_rain(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera,
     ));
     let ppp = ctx.pixels_per_point();
 
-    for effect in effects {
-        let VfxType::Rain { phase } = effect.effect_type else {
-            continue;
-        };
-        let t = effect.progress() * effect.duration;
-        let fade_in = (t / 0.15).min(1.0);
-        let fade_out = ((effect.duration - t) / 0.35).min(1.0);
-        let opacity = fade_in.min(fade_out).max(0.0);
-
-        let rect = tile_rect(camera, ppp, effect.x, effect.y);
-        let shadow = egui::Color32::from_rgba_unmultiplied(20, 30, 50, (70.0 * opacity) as u8);
-        painter.rect_filled(rect, 0.0, shadow);
-        let frame = ((t / RAIN_FRAME_DURATION) as u32).wrapping_add(phase) % frames;
-        painter.image(
-            icons.items_texture_id,
-            rect,
-            icons.rain_uvs[frame as usize],
-            egui::Color32::from_white_alpha((235.0 * opacity) as u8),
-        );
+    for patch in patches {
+        for &(x, y) in &patch.tiles {
+            let rect = tile_rect(camera, ppp, x as f32 + 0.5, y as f32 + 0.5);
+            let shadow = egui::Color32::from_rgba_unmultiplied(20, 30, 50, (70.0 * patch.opacity) as u8);
+            painter.rect_filled(rect, 0.0, shadow);
+            // Neighbouring tiles a little out of step
+            let phase = tile_hash(x, y);
+            let frame = ((time / RAIN_FRAME_DURATION) as u32).wrapping_add(phase) % frames;
+            painter.image(
+                icons.items_texture_id,
+                rect,
+                icons.rain_uvs[frame as usize],
+                egui::Color32::from_white_alpha((235.0 * patch.opacity) as u8),
+            );
+        }
     }
 }
 

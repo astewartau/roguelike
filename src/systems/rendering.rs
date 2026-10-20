@@ -745,6 +745,7 @@ mod tests {
                 hit_enemy: false,
                 incendiary: false,
                 kind: ProjectileKind::Missile,
+                speed: crate::constants::ARROW_SPEED,
             },
             ProjectileMarker,
         ));

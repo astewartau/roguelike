@@ -150,6 +150,7 @@ pub fn apply_fireball(
             hit_enemy: false,
             incendiary: false,
             kind: crate::components::ProjectileKind::Fireball,
+            speed: FIREBALL_SPEED,
         },
         ProjectileMarker,
     ));
@@ -1099,6 +1100,7 @@ pub fn apply_shoot_crippling_shot(
             hit_enemy: false,
             incendiary: false,
             kind: crate::components::ProjectileKind::Missile,
+            speed: arrow_speed,
         },
         ProjectileMarker,
     ));

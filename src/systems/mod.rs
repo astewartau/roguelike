@@ -50,6 +50,7 @@ pub mod pack;
 pub mod player_input;
 pub mod projectile;
 pub mod push;
+pub mod rain;
 pub mod rendering;
 pub mod split;
 pub mod survival;

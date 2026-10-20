@@ -199,8 +199,9 @@ pub const GRAVE_BOLT_DAMAGE: i32 = 3;
 pub const GRAVE_BOLT_COOLDOWN: f32 = 5.0;
 /// Grave Bolt cast time, same as drawing and loosing a bow.
 pub const GRAVE_BOLT_CAST_DURATION: f32 = 1.2;
-/// Flight speed of the bone shard, in tiles per game second.
-pub const GRAVE_BOLT_SPEED: f32 = 12.0;
+/// Flight speed of the bone shard, in tiles per game second: as fast as a
+/// fireball.
+pub const GRAVE_BOLT_SPEED: f32 = super::effects::FIREBALL_SPEED;
 /// Fatigue effort for one Grave Bolt.
 pub const GRAVE_BOLT_ENERGY_COST: f32 = 15.0;
 
@@ -255,6 +256,13 @@ pub const CALL_RAIN_RADIUS: i32 = 2;
 pub const CALL_RAIN_COOLDOWN: f32 = 40.0;
 /// Call Rain cast time (a targeted spell, like Entangle).
 pub const CALL_RAIN_CAST_DURATION: f32 = 0.5;
+/// How long the rain keeps falling, in game seconds. Everything in the patch
+/// is soaked again as it falls, so walking into it gets you wet and a fire
+/// can't take hold there until it stops.
+pub const CALL_RAIN_DURATION: f32 = 5.0;
+/// Game seconds between soakings while it rains. Shorter catches something
+/// that walks in sooner.
+pub const CALL_RAIN_SOAK_INTERVAL: f32 = 0.5;
 /// Fatigue effort for one Call Rain.
 pub const CALL_RAIN_ENERGY_COST: f32 = 20.0;
 

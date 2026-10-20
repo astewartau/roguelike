@@ -330,6 +330,7 @@ pub fn apply_grave_bolt(
             hit_enemy: false,
             incendiary: false,
             kind: ProjectileKind::GraveBolt,
+            speed: GRAVE_BOLT_SPEED,
         },
         ProjectileMarker,
     ));
@@ -635,6 +636,12 @@ pub fn apply_call_rain(ctx: &mut EffectCtx, caster: Entity, tx: i32, ty: i32) ->
         .filter(|&(x, y)| ctx.grid.is_walkable(x, y))
         .collect();
     ctx.events.push(GameEvent::RainCalled { caster, position: (tx, ty), tiles, doused });
+
+    // And it keeps raining there for a while (`systems::rain`).
+    ctx.world.spawn((
+        Position::new(tx, ty),
+        crate::components::RainCloud { radius: CALL_RAIN_RADIUS, remaining: CALL_RAIN_DURATION, since_soak: 0.0 },
+    ));
     ActionResult::Completed
 }
 
@@ -1380,9 +1387,34 @@ mod tests {
         assert!(!arena.seen.iter().any(explosion), "not before it's seen to land");
         let (_, landings) = crate::systems::cleanup_finished_projectiles(&arena.world);
         assert!(landings.fireballs.is_empty(), "still in the air on screen");
-        crate::systems::lerp_projectiles_realtime(&mut arena.world, 10.0, crate::constants::ARROW_SPEED);
+        crate::systems::lerp_projectiles_realtime(&mut arena.world, 10.0);
         let (_, landings) = crate::systems::cleanup_finished_projectiles(&arena.world);
         assert_eq!(landings.fireballs, vec![(12, 5)]);
+    }
+
+    #[test]
+    fn a_long_shot_lands_before_the_shooter_acts_again() {
+        // At full range the bolt is in the air longer than the post-shot
+        // pause; the shooter waits for it rather than leaving it hanging.
+        let mut arena = Arena::new((3, 5));
+        let target = dummy(&mut arena, 3 + GRAVE_BOLT_RANGE, 5, 100);
+        arena.player_does(ActionType::GraveBolt { target_x: 3 + GRAVE_BOLT_RANGE, target_y: 5 });
+        assert!(arena.hp(target) < 100, "it hit without the shooter doing anything else");
+        assert!(!crate::systems::projectile::has_projectile_in_flight(&arena.world, arena.player));
+    }
+
+    #[test]
+    fn a_fireball_takes_time_to_get_there() {
+        let mut arena = Arena::new((3, 5));
+        dummy(&mut arena, 12, 5, 100);
+        let cast_at = arena.clock.time;
+        arena.player_does(ActionType::CastFireball { target_x: 12, target_y: 5 });
+        let flight = 9.0 / crate::constants::FIREBALL_SPEED;
+        assert!(
+            arena.clock.time - cast_at >= ACTION_SHOOT_DURATION + flight,
+            "the world moves on while it flies: {} s passed",
+            arena.clock.time - cast_at
+        );
     }
 
     #[test]

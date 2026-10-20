@@ -108,8 +108,6 @@ pub enum VfxType {
     /// `fiery` (fireballs, barrels, corpse explosions), just the shockwave
     /// otherwise (a boss's ground slam).
     Explosion { radius: i32, fiery: bool },
-    /// Rain falling on one tile (Call Rain); `phase` desyncs neighbours.
-    Rain { phase: u32 },
     /// Potion splash effect
     PotionSplash { potion_type: crate::components::ItemType },
 }
@@ -132,7 +130,6 @@ impl VfxType {
             VfxType::Explosion { radius, .. } => {
                 EXPLOSION_TILE_DURATION + *radius as f32 * EXPLOSION_RING_DELAY
             }
-            VfxType::Rain { .. } => RAIN_VFX_DURATION,
             VfxType::PotionSplash { .. } => POTION_SPLASH_DURATION,
         }
     }
@@ -504,16 +501,6 @@ impl VfxManager {
                     *damage,
                     damage_tier(Some(*entity), player, *damage, false),
                 );
-            }
-            // Rain falls on every tile of the patch, each a little out of
-            // step with its neighbours. Thread rng: presentation only.
-            GameEvent::RainCalled { tiles, .. } => {
-                for &(x, y) in tiles {
-                    if grid.get(x, y).map(|t| t.visible).unwrap_or(false) {
-                        let phase = rand::random::<u32>();
-                        self.spawn(x as f32 + 0.5, y as f32 + 0.5, VfxType::Rain { phase });
-                    }
-                }
             }
             GameEvent::BurnDamage { entity, position, damage } => {
                 // Show damage number for burn damage

@@ -162,6 +162,7 @@ pub fn apply_shoot_bow(
             hit_enemy: false,
             incendiary: is_fire_arrow,
             kind: crate::components::ProjectileKind::Missile,
+            speed: arrow_speed,
         },
         ProjectileMarker,
     ));
@@ -308,6 +309,7 @@ pub fn apply_throw_potion(
             hit_enemy: false,
             incendiary: false,
             kind: crate::components::ProjectileKind::Missile,
+            speed: POTION_THROW_SPEED,
         },
         ProjectileMarker,
     ));

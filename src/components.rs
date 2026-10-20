@@ -2091,6 +2091,9 @@ pub struct Projectile {
     pub incendiary: bool,
     /// What is flying: a physical missile (arrow / thrown potion) or a spell.
     pub kind: ProjectileKind,
+    /// How fast it flies, in tiles per second: the pace `path` was timed at
+    /// in game time, and the pace its sprite flies at on screen.
+    pub speed: f32,
 }
 
 /// What a projectile is, for the parts of impact handling that differ between
@@ -2650,6 +2653,18 @@ pub struct Pushable;
 #[derive(Debug, Clone, Copy)]
 pub struct WetTile {
     pub remaining: f32,
+}
+
+/// Rain falling on the tiles within `radius` of its `Position` (Call Rain),
+/// soaking them again every `CALL_RAIN_SOAK_INTERVAL` until it runs out.
+/// See `systems::rain`.
+#[derive(Debug, Clone, Copy)]
+pub struct RainCloud {
+    pub radius: i32,
+    /// Game seconds of rain left
+    pub remaining: f32,
+    /// Game time since the last soaking (the accumulator)
+    pub since_soak: f32,
 }
 
 /// How a room's lanterns burn. Each themed room gets its own style of light

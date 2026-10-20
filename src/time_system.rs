@@ -307,16 +307,21 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
         return ActionResult::Invalid;
     }
 
-    // Check if this is a shot that needs recovery follow-up (a short pause
-    // that lets the missile fly before the shooter acts again)
-    let needs_recovery = matches!(
+    // Shots are followed by a recovery pause, which lasts (one short Recover
+    // after another) until what was fired has landed. Game time only moves
+    // while someone acts, so without it a shot still in flight when the
+    // shooter's turn came round would hang in the air until their next move.
+    let fired = matches!(
         action.action_type,
         ActionType::ShootBow { .. }
             | ActionType::ShootCripplingShot { .. }
             | ActionType::GraveBolt { .. }
+            | ActionType::ThrowPotion { .. }
             | ActionType::CastFireball { .. }
             | ActionType::CastLearnedSpell { ability: crate::components::AbilityType::LearnedFireball, .. }
     );
+    let still_flying = matches!(action.action_type, ActionType::Recover)
+        && crate::systems::projectile::has_projectile_in_flight(ctx.world, entity);
 
     // Apply action effects
     let now = ctx.clock.time;
@@ -327,8 +332,8 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
         actor.current_action = None;
     }
 
-    // Auto-queue recovery action after bow shots
-    if needs_recovery && matches!(result, ActionResult::Completed) {
+    // Auto-queue recovery after a shot, and again while it's still flying
+    if (fired || still_flying) && matches!(result, ActionResult::Completed) {
         let _ = start_action(ctx.world, entity, ActionType::Recover, ctx.clock, ctx.scheduler);
     }
 

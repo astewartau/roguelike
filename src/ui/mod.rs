@@ -45,7 +45,7 @@ pub use vfx::{
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras, draw_rain,
     draw_resting_indicators,
     draw_channel_progress, draw_potion_splashes, draw_raise_dead_channels, draw_taming_beams,
-    get_buff_aura_data, get_channel_data, get_enemy_health_data, ChannelData,
+    get_buff_aura_data, get_channel_data, get_enemy_health_data, get_rain_data, ChannelData, RainPatch,
     get_attack_telegraph_data, get_enemy_status_data, get_life_drain_beam_data, get_loot_indicator_data, get_taming_beam_data, LifeDrainBeamData,
     TamingBeamData,
 };
@@ -355,6 +355,8 @@ pub struct UiOverlays<'a> {
     pub taming_beams: &'a [TamingBeamData],
     /// Tame and Raise Dead channels under way
     pub channels: &'a [ChannelData],
+    /// Call Rain still falling
+    pub rain: &'a [RainPatch],
     /// Real seconds since the engine started, for looping animations
     pub real_time: f32,
     pub targeting_mode: Option<&'a TargetingMode>,
@@ -387,6 +389,7 @@ pub fn run_ui(
         life_drain_beams,
         taming_beams,
         channels,
+        rain,
         real_time,
         targeting_mode,
         ability_targeting_mode,
@@ -531,8 +534,8 @@ pub fn run_ui(
         // Explosions (fireballs, barrels, corpse explosions, ground slams)
         draw_explosions(ctx, vfx_effects, camera, icons);
 
-        // Call Rain
-        draw_rain(ctx, vfx_effects, camera, icons);
+        // Call Rain still falling
+        draw_rain(ctx, camera, icons, rain, real_time);
 
         // Potion splash effects
         draw_potion_splashes(ctx, vfx_effects, camera);
