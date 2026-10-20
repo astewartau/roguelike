@@ -185,6 +185,42 @@ impl Spawnable {
     }
 }
 
+/// Everything but items that the Spawn tab places, for templates.
+pub fn all_spawnables() -> Vec<Spawnable> {
+    (0..ENEMIES.len())
+        .map(Spawnable::Enemy)
+        .chain(BOSSES.iter().map(|(a, _)| Spawnable::Boss(*a)))
+        .chain([
+            Spawnable::Wizard,
+            Spawnable::Merchant,
+            Spawnable::Campfire,
+            Spawnable::Brazier,
+            Spawnable::Lantern(LanternStyle::Warm),
+            Spawnable::Lantern(LanternStyle::Ghost),
+            Spawnable::FirePatch,
+            Spawnable::DroppedTorch,
+            Spawnable::OilBarrel,
+            Spawnable::OilPuddle,
+            Spawnable::Web,
+            Spawnable::RainCloud,
+            Spawnable::Furniture(FurnitureKind::Fountain),
+            Spawnable::Furniture(FurnitureKind::Altar),
+            Spawnable::Furniture(FurnitureKind::Shrine),
+            Spawnable::Trap(DungeonTrapKind::Spike),
+            Spawnable::Trap(DungeonTrapKind::Fire),
+            Spawnable::Trap(DungeonTrapKind::Snare),
+            Spawnable::Trap(DungeonTrapKind::Alarm),
+            Spawnable::Chest,
+            Spawnable::Door(DoorKind::Wooden),
+            Spawnable::Door(DoorKind::Green),
+            Spawnable::Door(DoorKind::Grated),
+            Spawnable::Stalagmites,
+            Spawnable::GlowMushrooms,
+            Spawnable::CrystalCluster,
+        ])
+        .collect()
+}
+
 /// Place `what` at `at` (and `options.count - 1` more nearby), keeping the
 /// spatial cache and AI in step. Returns what was made, or why not.
 pub fn spawn(
@@ -198,7 +234,7 @@ pub fn spawn(
     if !ctx.grid.is_walkable(at.0, at.1) {
         return Err("not a floor tile".into());
     }
-    let tiles = placement_tiles(ctx, what, at, options.count.max(1) as usize);
+    let tiles = placement_tiles(ctx, what.needs_clear_tile(), at, options.count.max(1) as usize);
     if tiles.is_empty() {
         return Err("something is in the way".into());
     }
@@ -216,12 +252,10 @@ pub fn spawn(
     }
 }
 
-/// Up to `count` tiles for `what`, nearest `at` first: walkable, and clear
-/// if it needs to be.
-fn placement_tiles(ctx: &ActorCtx, what: Spawnable, at: (i32, i32), count: usize) -> Vec<(i32, i32)> {
-    let ok = |(x, y): (i32, i32)| {
-        ctx.grid.is_walkable(x, y) && !(what.needs_clear_tile() && ctx.spatial.is_blocked((x, y)))
-    };
+/// Up to `count` tiles nearest `at` first: walkable, and clear if
+/// `needs_clear`.
+pub(crate) fn placement_tiles(ctx: &ActorCtx, needs_clear: bool, at: (i32, i32), count: usize) -> Vec<(i32, i32)> {
+    let ok = |(x, y): (i32, i32)| ctx.grid.is_walkable(x, y) && !(needs_clear && ctx.spatial.is_blocked((x, y)));
     let mut out = Vec::new();
     for r in 0..=6i32 {
         for dy in -r..=r {

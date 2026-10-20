@@ -1,0 +1,199 @@
+//! Prefabs: an entity described as a list of registered components and
+//! their settings, to place as many times as you like.
+//!
+//! Made from scratch, captured from an entity in the world, or started from
+//! anything the Spawn tab can place (built in a scratch world and
+//! captured). Kept in `PREFAB_FILE` in the working directory; reading and
+//! writing it is best effort, like the run history: a prefab that doesn't
+//! parse is skipped, a write that fails is logged.
+
+use std::path::Path;
+
+use hecs::{Entity, World};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::registry;
+use super::spawn::{self, SpawnOptions, Spawnable};
+use crate::components::{Position, VisualPosition};
+use crate::engine::ActorCtx;
+
+/// Where prefabs are kept, relative to the working directory.
+pub const PREFAB_FILE: &str = "dev_prefabs.json";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Prefab {
+    pub name: String,
+    pub components: Vec<PrefabComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrefabComponent {
+    /// A registry name (`registry::find`).
+    pub component: String,
+    pub value: Value,
+}
+
+impl Prefab {
+    pub fn empty(name: &str) -> Self {
+        Self { name: name.to_string(), components: Vec::new() }
+    }
+
+    /// Whether it blocks its tile, so needs a clear one to go on.
+    pub fn blocks(&self) -> bool {
+        self.components.iter().any(|c| c.component == "BlocksMovement")
+    }
+
+    /// The sprite it shows, for lists and the cursor's ghost.
+    pub fn sprite(&self) -> Option<(crate::tile::SpriteSheet, u32)> {
+        let look = self
+            .components
+            .iter()
+            .find(|c| c.component == "Sprite" || c.component == "AnimatedSprite")?;
+        let sheet = serde_json::from_value(look.value.get("sheet")?.clone()).ok()?;
+        let id = look.value.get("tile_id").or_else(|| look.value.get("base_tile_id"))?.as_u64()?;
+        Some((sheet, id as u32))
+    }
+}
+
+/// An entity as a prefab: every registered component it has but its
+/// position (which comes from where it's placed).
+pub fn capture(world: &World, e: Entity, name: &str) -> Prefab {
+    let (known, _) = registry::components_of(world, e);
+    let components = known
+        .iter()
+        .filter(|entry| entry.name != "Position")
+        .filter_map(|entry| {
+            Some(PrefabComponent { component: entry.name.to_string(), value: (entry.read)(world, e)? })
+        })
+        .collect();
+    Prefab { name: name.to_string(), components }
+}
+
+/// A prefab of something the Spawn tab places: built in a scratch world (so
+/// nothing in the run is touched) and captured.
+pub fn template(what: Spawnable) -> Option<Prefab> {
+    let mut world = World::new();
+    let mut grid = crate::grid::Grid::filled(5, 5, crate::tile::TileType::Floor);
+    let mut clock = crate::time_system::GameClock::new();
+    let mut scheduler = crate::time_system::ActionScheduler::new();
+    let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+    let mut spatial = crate::spatial_cache::SpatialCache::new();
+    let mut events = crate::events::EventQueue::new();
+    let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::from_entropy();
+    let player = world.spawn((Position::new(0, 0),));
+    let mut ctx = ActorCtx {
+        world: &mut world,
+        grid: &mut grid,
+        player,
+        clock: &mut clock,
+        scheduler: &mut scheduler,
+        tracker: &mut tracker,
+        spatial: &mut spatial,
+        events: &mut events,
+        rng: &mut rng,
+    };
+    let mut dev_rng = <rand::rngs::StdRng as rand::SeedableRng>::from_entropy();
+    let made = spawn::spawn(&mut ctx, what, (2, 2), &SpawnOptions::default(), 1, &mut dev_rng).ok()?;
+    Some(capture(&world, *made.first()?, &what.name()))
+}
+
+/// Make one of `prefab` at `at`, keeping the spatial cache and AI in step.
+/// Components it can't build are skipped and named in the error, with the
+/// entity made anyway.
+pub fn instantiate(ctx: &mut ActorCtx, prefab: &Prefab, at: (i32, i32)) -> (Entity, Vec<String>) {
+    let pos = Position::new(at.0, at.1);
+    let e = ctx.world.spawn((pos, VisualPosition::from_position(&pos)));
+    let mut problems = Vec::new();
+    for part in &prefab.components {
+        let Some(entry) = registry::find(&part.component) else {
+            problems.push(format!("{}: not a known component", part.component));
+            continue;
+        };
+        if let Err(why) = (entry.write)(ctx.world, e, part.value.clone()) {
+            problems.push(format!("{}: {why}", part.component));
+        }
+    }
+    spawn::adopt(ctx, e);
+    (e, problems)
+}
+
+/// Read the prefab file, skipping anything that doesn't parse. A missing
+/// file is no prefabs.
+pub fn load(path: &Path) -> Vec<Prefab> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&text) else {
+        eprintln!("{}: not a list of prefabs; ignoring it", path.display());
+        return Vec::new();
+    };
+    items.into_iter().filter_map(|item| serde_json::from_value(item).ok()).collect()
+}
+
+/// Write every prefab to the file. Failures are logged and otherwise
+/// ignored: losing a dev convenience must never stop the game.
+pub fn save(path: &Path, prefabs: &[Prefab]) {
+    match serde_json::to_string_pretty(prefabs) {
+        Ok(text) => {
+            if let Err(err) = std::fs::write(path, text) {
+                eprintln!("Couldn't save prefabs to {}: {err}", path.display());
+            }
+        }
+        Err(err) => eprintln!("Couldn't write prefabs: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_template_saves_loads_and_builds_the_same_thing() {
+        let goblin = template(Spawnable::Enemy(3)).expect("a goblin template");
+        assert!(goblin.components.iter().any(|c| c.component == "ChaseAI"));
+        assert!(goblin.blocks());
+        assert!(goblin.sprite().is_some());
+
+        let dir = std::env::temp_dir().join(format!("grid_prefabs_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("prefabs.json");
+        save(&path, std::slice::from_ref(&goblin));
+        let loaded = load(&path);
+        assert_eq!(loaded, vec![goblin.clone()]);
+
+        // Built in another scratch world, it has what the template has.
+        let mut world = World::new();
+        let player = world.spawn((Position::new(0, 0),));
+        let mut grid = crate::grid::Grid::filled(5, 5, crate::tile::TileType::Floor);
+        let (mut clock, mut scheduler) = (crate::time_system::GameClock::new(), crate::time_system::ActionScheduler::new());
+        let mut tracker = crate::active_ai_tracker::ActiveAITracker::new();
+        let mut spatial = crate::spatial_cache::SpatialCache::new();
+        let mut events = crate::events::EventQueue::new();
+        let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(3);
+        let mut ctx = ActorCtx {
+            world: &mut world,
+            grid: &mut grid,
+            player,
+            clock: &mut clock,
+            scheduler: &mut scheduler,
+            tracker: &mut tracker,
+            spatial: &mut spatial,
+            events: &mut events,
+            rng: &mut rng,
+        };
+        let (e, problems) = instantiate(&mut ctx, &loaded[0], (1, 1));
+        assert!(problems.is_empty(), "{problems:?}");
+        let rebuilt = capture(&world, e, &goblin.name);
+        let names = |p: &Prefab| p.components.iter().map(|c| c.component.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&rebuilt), names(&goblin));
+        spatial.assert_coherent_with_world(&world, "after building a prefab");
+
+        // A corrupt file, or a corrupt entry in it, is skipped, not a panic.
+        std::fs::write(&path, r#"[{"name": "ok", "components": []}, {"nonsense": 1}]"#).unwrap();
+        assert_eq!(load(&path).len(), 1);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load(&path).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

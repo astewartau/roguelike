@@ -107,8 +107,8 @@ impl Grid {
     }
 
     /// A blank `width` x `height` floor of one tile type with nothing placed on
-    /// it, for tests that need terrain but not a generated dungeon.
-    #[cfg(test)]
+    /// it, for tests that need terrain but not a generated dungeon (and the
+    /// developer tools' scratch world for building prefab templates).
     pub fn filled(width: usize, height: usize, tile_type: crate::tile::TileType) -> Self {
         Self {
             width,

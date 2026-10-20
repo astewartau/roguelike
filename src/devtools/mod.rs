@@ -12,6 +12,7 @@
 
 pub mod cheats;
 pub mod paint;
+pub mod prefab;
 pub mod registry;
 pub mod spawn;
 
@@ -37,12 +38,20 @@ pub enum DevTab {
     Player,
     World,
     Inspect,
+    Prefabs,
     Effects,
 }
 
 impl DevTab {
-    pub const ALL: [DevTab; 6] =
-        [DevTab::Spawn, DevTab::Paint, DevTab::Player, DevTab::World, DevTab::Inspect, DevTab::Effects];
+    pub const ALL: [DevTab; 7] = [
+        DevTab::Spawn,
+        DevTab::Paint,
+        DevTab::Player,
+        DevTab::World,
+        DevTab::Inspect,
+        DevTab::Prefabs,
+        DevTab::Effects,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -51,6 +60,7 @@ impl DevTab {
             DevTab::Player => "Player",
             DevTab::World => "World",
             DevTab::Inspect => "Inspect",
+            DevTab::Prefabs => "Prefabs",
             DevTab::Effects => "Effects",
         }
     }
@@ -79,6 +89,8 @@ pub enum CursorTool {
     Delete,
     /// Pick what's on the tile to look at in the Inspect tab.
     Inspect,
+    /// Place one of the prefabs (by its index in `DevTools::prefabs`).
+    PlacePrefab(usize),
 }
 
 impl CursorTool {
@@ -94,6 +106,7 @@ impl CursorTool {
             CursorTool::Kill => "Kill".into(),
             CursorTool::Delete => "Delete".into(),
             CursorTool::Inspect => "Inspect".into(),
+            CursorTool::PlacePrefab(_) => "Place prefab".into(),
         }
     }
 
@@ -200,6 +213,13 @@ pub struct DevTools {
     /// Inspector edits that didn't parse, kept so the text being typed isn't
     /// lost, with why: component name -> (draft, error).
     pub drafts: std::collections::HashMap<&'static str, (serde_json::Value, String)>,
+    /// The prefab library, and the one being edited.
+    pub prefabs: Vec<prefab::Prefab>,
+    pub selected_prefab: Option<usize>,
+    /// Set by the panel when a prefab changes; saved soon after.
+    pub prefabs_dirty: bool,
+    prefab_path: std::path::PathBuf,
+    last_prefab_save: Option<std::time::Instant>,
     /// Asked for by commands, handled by the engine (`take_requests`).
     requests: Vec<EngineRequest>,
     /// God mode as last applied, to notice it being switched off.
@@ -238,6 +258,11 @@ impl Default for DevTools {
             inspect_tile: None,
             inspected: None,
             drafts: std::collections::HashMap::new(),
+            prefabs: prefab::load(std::path::Path::new(prefab::PREFAB_FILE)),
+            selected_prefab: None,
+            prefabs_dirty: false,
+            prefab_path: std::path::PathBuf::from(prefab::PREFAB_FILE),
+            last_prefab_save: None,
             requests: Vec::new(),
             god_mode_applied: false,
             held_at: None,
@@ -368,11 +393,31 @@ impl DevTools {
                 self.select(at, here.first().copied());
                 self.tab = DevTab::Inspect;
             }
+            CursorTool::PlacePrefab(index) => {
+                let Some(prefab) = self.prefabs.get(index).cloned() else {
+                    self.disarm();
+                    return;
+                };
+                let mut ctx = state.actor_ctx(events);
+                let tiles = spawn::placement_tiles(&ctx, prefab.blocks(), at, self.spawn_options.count.max(1) as usize);
+                let mut problems = Vec::new();
+                for tile in &tiles {
+                    problems.extend(prefab::instantiate(&mut ctx, &prefab, *tile).1);
+                }
+                problems.dedup();
+                self.status = Some(match (tiles.len(), problems.first()) {
+                    (0, _) => "Can't place there: something is in the way".into(),
+                    (n, None) => format!("Placed {n} x {}", prefab.name),
+                    (n, Some(problem)) => format!("Placed {n} x {}, but {problem}", prefab.name),
+                });
+                state.fov_dirty = true;
+            }
         }
     }
 
     /// Carry out everything the panel queued this frame.
     pub fn apply_commands(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager) {
+        self.save_prefabs_if_changed();
         let player = state.player_entity;
         for command in std::mem::take(&mut self.commands) {
             match command {
@@ -516,6 +561,19 @@ impl DevTools {
             self.drafts.clear();
         }
         self.inspected = entity;
+    }
+}
+
+impl DevTools {
+    /// Write the prefab library if the panel changed it, at most twice a
+    /// second (dragging a value changes it every frame).
+    fn save_prefabs_if_changed(&mut self) {
+        let due = self.last_prefab_save.is_none_or(|t| t.elapsed().as_secs_f32() > 0.5);
+        if self.prefabs_dirty && due {
+            prefab::save(&self.prefab_path, &self.prefabs);
+            self.prefabs_dirty = false;
+            self.last_prefab_save = Some(std::time::Instant::now());
+        }
     }
 }
 
@@ -795,5 +853,24 @@ mod tests {
         dev.apply_commands(state, &mut events, &mut vfx);
         state.spatial_cache.assert_coherent_with_world(&state.world, "after adding it back");
         assert!(state.spatial_cache.is_blocked(elsewhere));
+    }
+
+    #[test]
+    fn placing_a_prefab_builds_it_where_clicked() {
+        let mut engine = live_run();
+        let mut events = EventQueue::new();
+        let mut vfx = VfxManager::new();
+        let state = engine.state.as_mut().unwrap();
+        let mut dev = DevTools::new();
+        dev.prefabs = vec![prefab::template(Spawnable::Enemy(3)).unwrap()];
+        dev.spawn_options.count = 3;
+        let spot = free_tile_near(state);
+        let before = state.world.query::<&crate::components::ChaseAI>().iter().count();
+        dev.tool = Some(CursorTool::PlacePrefab(0));
+        dev.use_tool(state, &mut events, &mut vfx, spot);
+        assert!(dev.status.as_deref().is_some_and(|s| s.starts_with("Placed 3")), "{:?}", dev.status);
+        assert_eq!(state.world.query::<&crate::components::ChaseAI>().iter().count(), before + 3);
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after placing prefabs");
+        assert!(!dev.prefabs_dirty, "placing doesn't touch the library");
     }
 }

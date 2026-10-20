@@ -14,3 +14,7 @@ assets/*
 # Run history, written to the process working directory at runtime
 # (RUN_HISTORY_FILE in src/run_history.rs).
 /runs_history.jsonl
+
+# Developer tools prefabs, written to the working directory at runtime
+# (PREFAB_FILE in src/devtools/prefab.rs).
+/dev_prefabs.json
