@@ -6,6 +6,7 @@ pub mod style;
 
 mod altar_window;
 mod devtools;
+mod devtools_overlays;
 mod dialogue;
 mod game_over_screen;
 mod hotbar;
@@ -24,6 +25,7 @@ mod vfx;
 // Re-export public items from submodules
 pub use altar_window::{draw_altar_window, get_altar_window_data};
 pub use devtools::{draw_cursor_ghost, draw_devtools, DevArt, DevView};
+pub use devtools_overlays::draw_dev_overlays;
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data};
 pub use game_over_screen::{run_game_over_screen, GameOverChoice, GameOverStats};
 pub use hotbar::{
@@ -536,6 +538,9 @@ pub fn run_ui(
 
         // Call Rain still falling
         draw_rain(ctx, camera, icons, rain, real_time, dev.rain_style);
+
+        // The developer tools' debug overlays
+        draw_dev_overlays(ctx, dev, camera, world, grid, player_entity, hover_tile);
 
         // The developer tools' preview of what a click would do
         if pointer_on_map {

@@ -1257,7 +1257,7 @@ fn has_clear_shot(from: (i32, i32), to: (i32, i32), spatial_cache: &SpatialCache
 }
 
 /// Check if an entity can see a target position.
-fn can_see_target(
+pub(crate) fn can_see_target(
     world: &World,
     grid: &Grid,
     from: (i32, i32),
@@ -1415,7 +1415,7 @@ fn update_state_machine(
 /// Build the set of impassable tiles for AI pathfinding. Other actors are walked
 /// through (they move out of the way). Closed doors are treated as passable only
 /// if `can_open_doors` — dumb enemies must route around them.
-fn ai_pathfinding_blocked(
+pub(crate) fn ai_pathfinding_blocked(
     world: &World,
     spatial_cache: &SpatialCache,
     can_open_doors: bool,

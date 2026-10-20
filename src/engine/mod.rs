@@ -1963,6 +1963,7 @@ impl GameEngine {
                 }
             }
             EngineRequest::ClearPath => self.input.clear_path(),
+            EngineRequest::WaitForShots => self.dev_wait_for_shots(),
         }
     }
 
@@ -1994,6 +1995,31 @@ impl GameEngine {
         state.fov_dirty = true;
         self.input.clear_path();
         self.dev.status = Some(if reroll { format!("Rerolled floor {floor}") } else { format!("Went to floor {floor}") });
+    }
+
+    /// The player fired something from the dev tools: wait until it has
+    /// landed in game time, so it flies (as the post-shot pause would).
+    fn dev_wait_for_shots(&mut self) {
+        for _ in 0..crate::constants::DEV_MAX_SHOT_WAITS {
+            let in_flight = self
+                .state
+                .as_ref()
+                .is_some_and(|s| crate::systems::projectile::has_projectile_in_flight(&s.world, s.player_entity));
+            if !in_flight {
+                break;
+            }
+            let Some(mut ctx) = self.sim_ctx() else {
+                return;
+            };
+            if execute_player_intent(&mut ctx, crate::systems::player_input::PlayerIntent::Wait).turn_result
+                != simulation::TurnResult::Started
+            {
+                break;
+            }
+        }
+        if let Some(state) = self.state.as_mut() {
+            state.fov_dirty = true;
+        }
     }
 
     /// Let `seconds` of game time pass, the player waiting throughout

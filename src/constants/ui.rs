@@ -257,3 +257,7 @@ pub const DEVTOOLS_PANEL_WIDTH: f32 = 340.0;
 /// Opacity of the cursor's ghost preview of what a dev tool will place
 /// (0-255). Enough to see where it lands, little enough to see under it.
 pub const DEVTOOLS_GHOST_ALPHA: u8 = 150;
+/// Most Wait steps the developer tools' effects bench takes to let a shot
+/// it fired land (a stray arrow can fly a long way). Each is half a second
+/// of game time.
+pub const DEV_MAX_SHOT_WAITS: usize = 16;

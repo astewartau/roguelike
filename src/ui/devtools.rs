@@ -6,7 +6,10 @@
 //! `devtools::DevCommand` for the engine to carry out.
 
 use crate::camera::Camera;
-use crate::constants::{DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_WIDTH};
+use crate::constants::{
+    CAMERA_SHAKE_BOSS_ABILITY, CAMERA_SHAKE_EXPLOSION, CAMERA_SHAKE_MAX_AMPLITUDE, CAMERA_SHAKE_PLAYER_SWING,
+    DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_WIDTH,
+};
 use crate::devtools::paint::PAINTABLE;
 use crate::devtools::spawn::{DoorKind, BOSSES, ENEMIES};
 use crate::devtools::{CursorTool, DevCommand, DevTab, DevTools, Spawnable, Wakefulness};
@@ -72,6 +75,7 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
                             DevTab::World => world_tab(ui, dev, view),
                             DevTab::Inspect => inspect_tab(ui, dev, view, art),
                             DevTab::Prefabs => prefabs_tab(ui, dev, art),
+                            DevTab::Overlays => overlays_tab(ui, dev),
                             DevTab::Effects => effects_tab(ui, dev),
                         });
                 });
@@ -822,25 +826,91 @@ fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_j
     }
 }
 
+fn overlays_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
+    let o = &mut dev.overlays;
+    let muted = |ui: &mut egui::Ui, text: &str| {
+        ui.label(egui::RichText::new(text).color(colors::TEXT_MUTED));
+    };
+    style::panel_header(ui, "Map");
+    ui.checkbox(&mut o.light, "Light level");
+    muted(ui, "Dark blue is pitch black, yellow is fully lit (explored tiles).");
+    ui.checkbox(&mut o.blockers, "Blockers");
+    muted(ui, "Red cross blocks movement, dark square blocks sight.");
+    ui.checkbox(&mut o.fire_and_water, "Fire and water");
+    muted(ui, "Blue is wet, orange outline is fuel, bright outline is burning, rain clouds boxed.");
+    ui.checkbox(&mut o.coords, "Tile coordinates");
+    muted(ui, "Shown when zoomed in far enough to read.");
+
+    style::panel_header(ui, "Noise");
+    ui.checkbox(&mut o.noise, "Noise reach from the cursor");
+    ui.add(egui::Slider::new(&mut o.noise_radius, 1..=20).text("radius"));
+    muted(ui, "Each tile shows the muffled distance a sound travels to reach it.");
+
+    style::panel_header(ui, "Creatures");
+    ui.checkbox(&mut o.ai, "AI state and sight");
+    muted(ui, "Label, sight ring (halved for idle ones while you sneak), and a red line from any that can see you.");
+    ui.checkbox(&mut o.path, "Path to the player");
+    muted(ui, "From the creature selected on the Inspect tab.");
+}
+
 fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
+    use crate::devtools::Shot;
+    let muted = |ui: &mut egui::Ui, text: &str| {
+        ui.label(egui::RichText::new(text).color(colors::TEXT_MUTED));
+    };
+
+    style::panel_header(ui, "Projectiles");
+    muted(ui, "Click a tile to fire from the player through the real game rules.");
+    ui.horizontal_wrapped(|ui| {
+        for shot in Shot::ALL {
+            tool_button(ui, dev, CursorTool::Shoot(shot), shot.name(), "Fire at the clicked tile");
+        }
+    });
+
+    style::panel_header(ui, "Explosions (look only)");
+    ui.horizontal(|ui| {
+        tool_button(ui, dev, CursorTool::LookOfExplosion { fiery: true }, "Fiery", "The barrel blast and fireball look");
+        tool_button(ui, dev, CursorTool::LookOfExplosion { fiery: false }, "Shockwave", "A blast with no fire");
+    });
+    ui.add(egui::Slider::new(&mut dev.explosion_radius, 1..=6).text("radius"));
+    muted(ui, "Nothing is harmed: use the Blast tool on the World tab for a real one.");
+
+    style::panel_header(ui, "Camera and numbers");
+    ui.horizontal(|ui| {
+        for (label, amount) in [
+            ("Swing", CAMERA_SHAKE_PLAYER_SWING),
+            ("Boss", CAMERA_SHAKE_BOSS_ABILITY),
+            ("Explosion", CAMERA_SHAKE_EXPLOSION),
+            ("Max", CAMERA_SHAKE_MAX_AMPLITUDE),
+        ] {
+            if ui.button(label).clicked() {
+                dev.commands.push(DevCommand::Shake(amount));
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        for amount in [3, 12, 40] {
+            if ui.button(format!("Damage {amount}")).on_hover_text("A number over the player").clicked() {
+                dev.commands.push(DevCommand::DamageNumber(amount));
+            }
+        }
+    });
+
     style::panel_header(ui, "Call Rain look");
     ui.horizontal(|ui| {
         for rain in RainStyle::ALL {
             ui.selectable_value(&mut dev.rain_style, rain, rain.name());
         }
     });
-    ui.add_space(8.0);
+
     style::panel_header(ui, "Particle fire");
     ui.horizontal(|ui| {
-        let armed = dev.tool == Some(CursorTool::ParticleFire);
-        if ui.selectable_label(armed, "Place on the map").clicked() {
-            dev.tool = if armed { None } else { Some(CursorTool::ParticleFire) };
-        }
+        tool_button(ui, dev, CursorTool::ParticleFire, "Place on the map", "A looping fire");
         if ui.button("Clear all").clicked() {
             dev.commands.push(DevCommand::ClearParticleFires);
         }
     });
-    ui.label(egui::RichText::new("A looping fire drawn by the GPU: visual only, nothing burns.").color(colors::TEXT_MUTED));
+    muted(ui, "A looping fire drawn by the GPU: visual only, nothing burns.");
 }
 
 /// The armed tool's preview at the hovered tile: what would be placed (red
@@ -888,6 +958,26 @@ pub fn draw_cursor_ghost(
             let low = tile_rect(camera, ppp, hover.0 as f32 - r + 0.5, hover.1 as f32 - r + 0.5);
             let high = tile_rect(camera, ppp, hover.0 as f32 + r + 0.5, hover.1 as f32 + r + 0.5);
             painter.rect_stroke(low.union(high), 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 120, 60)));
+        }
+        CursorTool::LookOfExplosion { fiery } => {
+            let r = dev.explosion_radius as f32;
+            let low = tile_rect(camera, ppp, hover.0 as f32 - r + 0.5, hover.1 as f32 - r + 0.5);
+            let high = tile_rect(camera, ppp, hover.0 as f32 + r + 0.5, hover.1 as f32 + r + 0.5);
+            let colour = if fiery { egui::Color32::from_rgb(255, 170, 80) } else { egui::Color32::from_rgb(200, 200, 220) };
+            painter.rect_stroke(low.union(high), 2.0, egui::Stroke::new(1.0_f32, colour));
+        }
+        CursorTool::Shoot(_) => {
+            let shooter = world
+                .query::<(&crate::components::Player, &crate::components::Position)>()
+                .iter()
+                .map(|(_, (_, p))| (p.x, p.y))
+                .next();
+            let to = tile_rect(camera, ppp, hover.0 as f32 + 0.5, hover.1 as f32 + 0.5);
+            if let Some((x, y)) = shooter {
+                let from = tile_rect(camera, ppp, x as f32 + 0.5, y as f32 + 0.5).center();
+                painter.line_segment([from, to.center()], egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(255, 220, 120)));
+            }
+            painter.rect_stroke(to, 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 220, 120)));
         }
         CursorTool::Douse => {
             let low = tile_rect(camera, ppp, hover.0 as f32 - 0.5, hover.1 as f32 - 0.5);

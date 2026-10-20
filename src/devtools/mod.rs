@@ -39,17 +39,19 @@ pub enum DevTab {
     World,
     Inspect,
     Prefabs,
+    Overlays,
     Effects,
 }
 
 impl DevTab {
-    pub const ALL: [DevTab; 7] = [
+    pub const ALL: [DevTab; 8] = [
         DevTab::Spawn,
         DevTab::Paint,
         DevTab::Player,
         DevTab::World,
         DevTab::Inspect,
         DevTab::Prefabs,
+        DevTab::Overlays,
         DevTab::Effects,
     ];
 
@@ -61,6 +63,7 @@ impl DevTab {
             DevTab::World => "World",
             DevTab::Inspect => "Inspect",
             DevTab::Prefabs => "Prefabs",
+            DevTab::Overlays => "Overlays",
             DevTab::Effects => "Effects",
         }
     }
@@ -91,6 +94,73 @@ pub enum CursorTool {
     Inspect,
     /// Place one of the prefabs (by its index in `DevTools::prefabs`).
     PlacePrefab(usize),
+    /// An explosion's look on the tile, and nothing else: fiery, or just
+    /// the shockwave of a ground slam.
+    LookOfExplosion { fiery: bool },
+    /// Fire a projectile from the player at the tile, for real.
+    Shoot(Shot),
+}
+
+/// What the effects bench can fire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shot {
+    Arrow,
+    FireArrow,
+    GraveBolt,
+    Fireball,
+    WaterFlask,
+    HealthPotion,
+}
+
+impl Shot {
+    pub const ALL: [Shot; 6] =
+        [Shot::Arrow, Shot::FireArrow, Shot::GraveBolt, Shot::Fireball, Shot::WaterFlask, Shot::HealthPotion];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Shot::Arrow => "Arrow",
+            Shot::FireArrow => "Fire arrow",
+            Shot::GraveBolt => "Grave bolt",
+            Shot::Fireball => "Fireball",
+            Shot::WaterFlask => "Water flask",
+            Shot::HealthPotion => "Health potion",
+        }
+    }
+}
+
+/// Which debug overlays are drawn over the map.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Overlays {
+    /// How lit each tile is.
+    pub light: bool,
+    /// How far a noise at the cursor carries.
+    pub noise: bool,
+    pub noise_radius: i32,
+    /// Each creature's AI state and sight, and who can see you.
+    pub ai: bool,
+    /// The route the inspected creature would take to you.
+    pub path: bool,
+    /// What blocks movement and sight.
+    pub blockers: bool,
+    /// Wet ground, burning fuel and rain.
+    pub fire_and_water: bool,
+    /// Tile coordinates.
+    pub coords: bool,
+}
+
+impl Default for Overlays {
+    fn default() -> Self {
+        Self {
+            light: false,
+            noise: false,
+            noise_radius: crate::constants::THROWN_IMPACT_NOISE_RADIUS,
+            ai: false,
+            path: false,
+            blockers: false,
+            fire_and_water: false,
+            coords: false,
+        }
+    }
 }
 
 impl CursorTool {
@@ -107,6 +177,9 @@ impl CursorTool {
             CursorTool::Delete => "Delete".into(),
             CursorTool::Inspect => "Inspect".into(),
             CursorTool::PlacePrefab(_) => "Place prefab".into(),
+            CursorTool::LookOfExplosion { fiery: true } => "Explosion (look only)".into(),
+            CursorTool::LookOfExplosion { fiery: false } => "Shockwave (look only)".into(),
+            CursorTool::Shoot(shot) => format!("Shoot {}", shot.name()),
         }
     }
 
@@ -151,6 +224,10 @@ pub enum DevCommand {
     DeleteEntity(Entity),
     KillEntity(Entity),
     TeleportPlayerTo((i32, i32)),
+    /// Rattle the camera, as a hit of this strength would.
+    Shake(f32),
+    /// Float a damage number over the player.
+    DamageNumber(i32),
 }
 
 /// What a command needs the engine itself for, beyond the `GameState`.
@@ -163,6 +240,8 @@ pub enum EngineRequest {
     Learned(AbilityType),
     /// The player moved: drop any path they were following.
     ClearPath,
+    /// The player fired something: wait until it lands, so it flies.
+    WaitForShots,
 }
 
 /// Everything the developer tools remember between frames.
@@ -213,6 +292,9 @@ pub struct DevTools {
     /// Inspector edits that didn't parse, kept so the text being typed isn't
     /// lost, with why: component name -> (draft, error).
     pub drafts: std::collections::HashMap<&'static str, (serde_json::Value, String)>,
+    pub overlays: Overlays,
+    /// Radius of the look-only explosion.
+    pub explosion_radius: i32,
     /// The prefab library, and the one being edited.
     pub prefabs: Vec<prefab::Prefab>,
     pub selected_prefab: Option<usize>,
@@ -258,6 +340,8 @@ impl Default for DevTools {
             inspect_tile: None,
             inspected: None,
             drafts: std::collections::HashMap::new(),
+            overlays: Overlays::default(),
+            explosion_radius: 2,
             prefabs: prefab::load(std::path::Path::new(prefab::PREFAB_FILE)),
             selected_prefab: None,
             prefabs_dirty: false,
@@ -393,6 +477,15 @@ impl DevTools {
                 self.select(at, here.first().copied());
                 self.tab = DevTab::Inspect;
             }
+            CursorTool::LookOfExplosion { fiery } => {
+                let (x, y) = (at.0 as f32 + 0.5, at.1 as f32 + 0.5);
+                let radius = self.explosion_radius;
+                vfx.spawn(x, y, crate::vfx::VfxType::Explosion { radius, fiery });
+            }
+            CursorTool::Shoot(shot) => match shoot(state, events, &mut self.rng, shot, at) {
+                Ok(()) => self.requests.push(EngineRequest::WaitForShots),
+                Err(why) => self.status = Some(format!("Can't shoot there: {why}")),
+            },
             CursorTool::PlacePrefab(index) => {
                 let Some(prefab) = self.prefabs.get(index).cloned() else {
                     self.disarm();
@@ -516,6 +609,21 @@ impl DevTools {
                         health.current = 0;
                     }
                 }
+                DevCommand::Shake(amplitude) => vfx.request_shake(crate::camera::ShakeRequest {
+                    amplitude,
+                    origin: None,
+                    direction: None,
+                }),
+                DevCommand::DamageNumber(amount) => {
+                    if let Some(pos) = state.world.get::<&crate::components::Position>(player).ok().map(|p| *p) {
+                        vfx.spawn_damage_number(
+                            pos.x as f32 + 0.5,
+                            pos.y as f32 + 0.5,
+                            amount,
+                            crate::vfx::DamageTier::Dealt,
+                        );
+                    }
+                }
                 DevCommand::TeleportPlayerTo(at) => match cheats::teleport(state, at) {
                     Ok(()) => self.requests.push(EngineRequest::ClearPath),
                     Err(why) => self.status = Some(format!("Can't teleport there: {why}")),
@@ -574,6 +682,77 @@ impl DevTools {
             self.prefabs_dirty = false;
             self.last_prefab_save = Some(std::time::Instant::now());
         }
+    }
+}
+
+/// Fire `shot` from the player at `at` through the game's own projectile
+/// code (arrows are made by hand, since shooting a bow needs one equipped).
+fn shoot(state: &mut GameState, events: &mut EventQueue, rng: &mut StdRng, shot: Shot, at: (i32, i32)) -> Result<(), String> {
+    use crate::components::{EffectType, Position, Projectile, ProjectileKind, ProjectileMarker, Sprite, SpriteTint, VisualPosition};
+    use crate::systems::actions::{self, ActionResult};
+    let player = state.player_entity;
+    let now = state.game_clock.time;
+    let from = state.world.get::<&Position>(player).map(|p| (p.x, p.y)).map_err(|_| "no player".to_string())?;
+    let result = match shot {
+        Shot::Fireball => actions::apply_fireball(&mut state.world, &state.grid, player, at, events, rng, now),
+        Shot::GraveBolt => actions::apply_grave_bolt(
+            &mut crate::engine::EffectCtx {
+                world: &mut state.world,
+                grid: &mut state.grid,
+                spatial: &mut state.spatial_cache,
+                events,
+                rng,
+            },
+            player,
+            at.0,
+            at.1,
+            now,
+        ),
+        Shot::WaterFlask | Shot::HealthPotion => {
+            let kind = if shot == Shot::WaterFlask { ItemType::WaterFlaskFull } else { ItemType::HealthPotion };
+            actions::apply_throw_potion(&mut state.world, player, kind, at.0, at.1, events, now)
+        }
+        Shot::Arrow | Shot::FireArrow => {
+            let fire = shot == Shot::FireArrow;
+            let speed = crate::constants::ARROW_SPEED;
+            let path = actions::calculate_arrow_path(from.0, from.1, at.0, at.1, speed, &state.grid);
+            if path.is_empty() {
+                return Err("that's where you are".into());
+            }
+            let (dx, dy) = ((at.0 - from.0) as f32, (at.1 - from.1) as f32);
+            let len = (dx * dx + dy * dy).sqrt().max(0.001);
+            let pos = Position::new(from.0, from.1);
+            let arrow = state.world.spawn((
+                pos,
+                VisualPosition::from_position(&pos),
+                Sprite::from_ref(crate::tile::tile_ids::ARROW),
+                Projectile {
+                    source: player,
+                    damage: crate::constants::BOW_BASE_DAMAGE,
+                    path,
+                    path_index: 0,
+                    direction: (dx / len, dy / len),
+                    spawn_time: now,
+                    finished: None,
+                    potion_type: None,
+                    on_hit_effect: fire.then_some((EffectType::Burning, crate::constants::BURNING_DURATION)),
+                    hit_enemy: false,
+                    incendiary: fire,
+                    kind: ProjectileKind::Missile,
+                    speed,
+                },
+                ProjectileMarker,
+            ));
+            if fire {
+                let (r, g, b) = crate::constants::FIRE_ARROW_TINT;
+                let _ = state.world.insert_one(arrow, SpriteTint { r, g, b });
+            }
+            ActionResult::Completed
+        }
+    };
+    match result {
+        ActionResult::Completed => Ok(()),
+        other => Err(format!("{other:?}")),
     }
 }
 
@@ -810,6 +989,75 @@ mod tests {
         engine.dev.commands.push(DevCommand::AdvanceTime(10.0));
         engine.process_ui_actions(&crate::ui::UiActions::default());
         assert!(engine.state.as_ref().unwrap().game_clock.time - start_time >= 10.0);
+    }
+
+    #[test]
+    fn every_bench_shot_lands() {
+        let mut engine = live_run();
+        let (player, from) = {
+            let state = engine.state.as_ref().unwrap();
+            let p = state.player_entity;
+            (p, state.world.get::<&Position>(p).map(|p| (p.x, p.y)).unwrap())
+        };
+        // Two tiles off in a straight line of open floor, so even the
+        // spells that want a clear line of sight have one.
+        let target = {
+            let state = engine.state.as_ref().unwrap();
+            let open = |x: i32, y: i32| state.grid.is_walkable(x, y) && !state.spatial_cache.is_blocked((x, y));
+            [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+                .into_iter()
+                .map(|(dx, dy)| ((from.0 + dx, from.1 + dy), (from.0 + 2 * dx, from.1 + 2 * dy)))
+                .find(|&(a, b)| open(a.0, a.1) && open(b.0, b.1))
+                .expect("open floor beside the start")
+                .1
+        };
+        for shot in Shot::ALL {
+            engine.dev.tool = Some(CursorTool::Shoot(shot));
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, target);
+            let refused = engine.dev.status.as_deref().is_some_and(|s| s.starts_with("Can't"));
+            assert!(!refused, "{}: {:?}", shot.name(), engine.dev.status);
+            engine.process_ui_actions(&crate::ui::UiActions::default());
+            let state = engine.state.as_ref().unwrap();
+            assert!(
+                !crate::systems::projectile::has_projectile_in_flight(&state.world, player),
+                "{} is still in the air",
+                shot.name()
+            );
+            state.spatial_cache.assert_coherent_with_world(&state.world, "after a bench shot");
+            // Heal back up in case a blast caught the player.
+            engine.dev.commands.push(DevCommand::FullHeal);
+            engine.process_ui_actions(&crate::ui::UiActions::default());
+        }
+    }
+
+    #[test]
+    fn every_overlay_draws_on_a_live_run() {
+        let engine = live_run();
+        let state = engine.state.as_ref().unwrap();
+        let player = state.player_entity;
+        let at = state.world.get::<&Position>(player).map(|p| (p.x, p.y)).unwrap();
+        let mut dev = DevTools::new();
+        dev.visible = true;
+        dev.overlays = Overlays {
+            light: true,
+            noise: true,
+            ai: true,
+            path: true,
+            blockers: true,
+            fire_and_water: true,
+            coords: true,
+            ..Overlays::default()
+        };
+        // Something to path from.
+        dev.inspected = state.world.query::<&crate::components::ChaseAI>().iter().map(|(id, _)| id).next();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        camera.zoom = 48.0;
+        camera.position = glam::Vec2::new(at.0 as f32, at.1 as f32);
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            crate::ui::draw_dev_overlays(ctx, &dev, &camera, &state.world, &state.grid, player, at);
+        });
     }
 
     #[test]
