@@ -141,8 +141,6 @@ pub fn restore(world: &mut World, saved: &[(Entity, Snapshot)]) -> Vec<Entity> {
 /// One component the tools understand.
 pub struct ComponentEntry {
     pub name: &'static str,
-    /// Grouping for the add-component menu.
-    pub category: &'static str,
     pub type_id: fn() -> TypeId,
     pub read: fn(&World, Entity) -> Option<Value>,
     /// Insert (or replace) it from JSON; the error says what didn't parse.
@@ -153,10 +151,9 @@ pub struct ComponentEntry {
 }
 
 macro_rules! plain {
-    ($ty:ty, $cat:expr, $default:expr) => {
+    ($ty:ty, $default:expr) => {
         ComponentEntry {
             name: stringify!($ty),
-            category: $cat,
             type_id: || TypeId::of::<$ty>(),
             read: |world, e| world.get::<&$ty>(e).ok().and_then(|c| serde_json::to_value(&*c).ok()),
             write: |world, e, value| {
@@ -192,7 +189,6 @@ struct ChaseAiSettings {
 fn actor_entry() -> ComponentEntry {
     ComponentEntry {
         name: "Actor",
-        category: "Creature",
         type_id: || TypeId::of::<Actor>(),
         read: |world, e| {
             let a = world.get::<&Actor>(e).ok()?;
@@ -216,7 +212,6 @@ fn actor_entry() -> ComponentEntry {
 fn chase_ai_entry() -> ComponentEntry {
     ComponentEntry {
         name: "ChaseAI",
-        category: "Creature",
         type_id: || TypeId::of::<ChaseAI>(),
         read: |world, e| {
             let ai = world.get::<&ChaseAI>(e).ok()?;
@@ -267,68 +262,66 @@ pub fn entries() -> &'static [ComponentEntry] {
     static ENTRIES: std::sync::OnceLock<Vec<ComponentEntry>> = std::sync::OnceLock::new();
     ENTRIES.get_or_init(|| {
         vec![
-            plain!(Position, "Core", Position::new(0, 0)),
-            plain!(Name, "Core", Name::new("Thing")),
-            plain!(Sprite, "Look", Sprite::from_ref(tile_ids::SKELETON)),
-            plain!(SpriteTint, "Look", SpriteTint { r: 1.0, g: 1.0, b: 1.0 }),
-            plain!(AnimatedSprite, "Look", AnimatedSprite::flames()),
-            plain!(Health, "Creature", Health::new(10)),
-            plain!(Stats, "Creature", Stats::new(10, 10, 10)),
+            plain!(Position, Position::new(0, 0)),
+            plain!(Name, Name::new("Thing")),
+            plain!(Sprite, Sprite::from_ref(tile_ids::SKELETON)),
+            plain!(SpriteTint, SpriteTint { r: 1.0, g: 1.0, b: 1.0 }),
+            plain!(AnimatedSprite, AnimatedSprite::flames()),
+            plain!(Health, Health::new(10)),
+            plain!(Stats, Stats::new(10, 10, 10)),
             actor_entry(),
             chase_ai_entry(),
-            plain!(StatusEffects, "Creature", StatusEffects::new()),
-            plain!(Asleep, "Creature", Asleep),
-            plain!(CanOpenDoors, "Creature", CanOpenDoors),
-            plain!(SeesInDark, "Creature", SeesInDark),
-            plain!(Flying, "Creature", Flying),
-            plain!(FearImmune, "Creature", FearImmune),
-            plain!(Tameable, "Creature", Tameable),
-            plain!(Venomous, "Creature", Venomous { slow_duration: 3.0, poison_duration: 6.0 }),
-            plain!(Lacerating, "Creature", Lacerating { bleed_chance: 0.3 }),
-            plain!(Splits, "Creature", Splits { generation: 0, spent: false }),
-            plain!(DevFrozen, "Creature", DevFrozen),
-            plain!(Attackable, "Physics", Attackable),
-            plain!(BlocksMovement, "Physics", BlocksMovement),
-            plain!(BlocksVision, "Physics", BlocksVision),
-            plain!(Pushable, "Physics", Pushable),
-            plain!(Combustible, "Fire and water", Combustible { flammability: 0.5 }),
-            plain!(Fuel, "Fire and water", Fuel::oil()),
-            plain!(OnFire, "Fire and water", OnFire { remaining: 10.0 }),
-            plain!(CausesBurning, "Fire and water", CausesBurning),
-            plain!(OilPuddle, "Fire and water", OilPuddle),
-            plain!(Explosive, "Fire and water", Explosive),
-            plain!(WetTile, "Fire and water", WetTile { remaining: 10.0 }),
-            plain!(
-                RainCloud,
-                "Fire and water",
+            plain!(StatusEffects, StatusEffects::new()),
+            plain!(Asleep, Asleep),
+            plain!(CanOpenDoors, CanOpenDoors),
+            plain!(SeesInDark, SeesInDark),
+            plain!(Flying, Flying),
+            plain!(FearImmune, FearImmune),
+            plain!(Tameable, Tameable),
+            plain!(Venomous, Venomous { slow_duration: 3.0, poison_duration: 6.0 }),
+            plain!(Lacerating, Lacerating { bleed_chance: 0.3 }),
+            plain!(Splits, Splits { generation: 0, spent: false }),
+            plain!(DevFrozen, DevFrozen),
+            plain!(Attackable, Attackable),
+            plain!(BlocksMovement, BlocksMovement),
+            plain!(BlocksVision, BlocksVision),
+            plain!(Pushable, Pushable),
+            plain!(Combustible, Combustible { flammability: 0.5 }),
+            plain!(Fuel, Fuel::oil()),
+            plain!(OnFire, OnFire { remaining: 10.0 }),
+            plain!(CausesBurning, CausesBurning),
+            plain!(OilPuddle, OilPuddle),
+            plain!(Explosive, Explosive),
+            plain!(WetTile, WetTile { remaining: 10.0 }),
+            plain!(RainCloud,
                 RainCloud {
                     radius: crate::constants::CALL_RAIN_RADIUS,
                     remaining: crate::constants::CALL_RAIN_DURATION,
                     since_soak: 0.0
                 }
             ),
-            plain!(LightSource, "Light", LightSource::torch()),
-            plain!(Topples, "Fire", Topples { toppled: false }),
-            plain!(Shatters, "Fire", Shatters),
-            plain!(HitOnlyOnPurpose, "Combat", HitOnlyOnPurpose),
-            plain!(CarriedTorch, "Light", CarriedTorch { lit: true }),
-            plain!(Container, "Things", Container::chest(Vec::new(), 0)),
-            plain!(Door, "Things", Door::new()),
-            plain!(Trap, "Things", Trap { effect: TrapEffect::spike(), owner: None }),
-            plain!(Concealed, "Things", {
+            plain!(LightSource, LightSource::torch()),
+            plain!(Topples, Topples { toppled: false }),
+            plain!(Shatters, Shatters),
+            plain!(HitOnlyOnPurpose, HitOnlyOnPurpose),
+            plain!(CarriedTorch, CarriedTorch { lit: true }),
+            plain!(Container, Container::chest(Vec::new(), 0)),
+            plain!(Door, Door::new()),
+            plain!(Trap, Trap { effect: TrapEffect::spike(), owner: None }),
+            plain!(Concealed, {
                 let (sprite, tint) = TrapEffect::spike().revealed_look();
                 Concealed { sprite, tint }
             }),
-            plain!(FlameOverlay, "Looks", FlameOverlay),
-            plain!(VisualPosition, "Looks", VisualPosition { x: 0.0, y: 0.0 }),
-            plain!(OverlaySprite, "Looks", OverlaySprite::from_ref(tile_ids::BOW)),
-            plain!(SecretDoor, "Things", SecretDoor),
-            plain!(GroundItemPile, "Things", GroundItemPile),
-            plain!(Raisable, "Things", Raisable),
-            plain!(XpMultiplier, "Creature", XpMultiplier(2)),
-            plain!(BarrelFuse, "Fire", BarrelFuse::new(3.0, FuseCause::Fire)),
-            plain!(Equipment, "Creature", Equipment::empty()),
-            plain!(Channel, "Creature", Channel {
+            plain!(FlameOverlay, FlameOverlay),
+            plain!(VisualPosition, VisualPosition { x: 0.0, y: 0.0 }),
+            plain!(OverlaySprite, OverlaySprite::from_ref(tile_ids::BOW)),
+            plain!(SecretDoor, SecretDoor),
+            plain!(GroundItemPile, GroundItemPile),
+            plain!(Raisable, Raisable),
+            plain!(XpMultiplier, XpMultiplier(2)),
+            plain!(BarrelFuse, BarrelFuse::new(3.0, FuseCause::Fire)),
+            plain!(Equipment, Equipment::empty()),
+            plain!(Channel, Channel {
                 effect: ChannelEffect::Shout { radius: 5 },
                 target: None,
                 elapsed: 0.0,
@@ -337,27 +330,27 @@ pub fn entries() -> &'static [ComponentEntry] {
                 breaks_on_move: true,
                 breaks_on_damage: true,
             }),
-            plain!(LightExposure, "Creature", LightExposure(0.0)),
-            plain!(RootStruggleNoticed, "Creature", RootStruggleNoticed { remaining: 0.0 }),
-            plain!(RangedCooldown, "Combat", RangedCooldown { remaining: 0.0 }),
-            plain!(Charger, "Combat", Charger::default()),
-            plain!(HitAndRun, "Combat", HitAndRun::default()),
-            plain!(Grabber, "Combat", Grabber),
-            plain!(GrabbedBy, "Combat", GrabbedBy { grabber: Entity::DANGLING }),
-            plain!(Flanker, "Combat", Flanker),
-            plain!(PackHunter, "Combat", PackHunter),
-            plain!(SupportAI, "Creature", SupportAI { cooldown: 0.0 }),
-            plain!(WebWalker, "Creature", WebWalker),
-            plain!(WebSpinner, "Creature", WebSpinner { cooldown: 0.0, interval: 8.0 }),
-            plain!(Web, "Things", Web { spinner: None }),
-            plain!(Boss, "Creature", Boss { ability: BossAbility::GroundSlam, cooldown: 0.0, announced: false }),
-            plain!(Summoned, "Companion", Summoned { by: Entity::DANGLING }),
-            plain!(Follower, "Companion", Follower { leader: Entity::DANGLING }),
-            plain!(CompanionAI, "Companion", CompanionAI::new()),
-            plain!(FriendlyNPC, "People", FriendlyNPC),
-            plain!(Vendor, "People", Vendor::new(Vec::new(), 0)),
-            plain!(Dialogue, "People", Dialogue::new("Someone", Vec::new())),
-            plain!(Furniture, "Things", Furniture { kind: FurnitureKind::Fountain, used: false }),
+            plain!(LightExposure, LightExposure(0.0)),
+            plain!(RootStruggleNoticed, RootStruggleNoticed { remaining: 0.0 }),
+            plain!(RangedCooldown, RangedCooldown { remaining: 0.0 }),
+            plain!(Charger, Charger::default()),
+            plain!(HitAndRun, HitAndRun::default()),
+            plain!(Grabber, Grabber),
+            plain!(GrabbedBy, GrabbedBy { grabber: Entity::DANGLING }),
+            plain!(Flanker, Flanker),
+            plain!(PackHunter, PackHunter),
+            plain!(SupportAI, SupportAI { cooldown: 0.0 }),
+            plain!(WebWalker, WebWalker),
+            plain!(WebSpinner, WebSpinner { cooldown: 0.0, interval: 8.0 }),
+            plain!(Web, Web { spinner: None }),
+            plain!(Boss, Boss { ability: BossAbility::GroundSlam, cooldown: 0.0, announced: false }),
+            plain!(Summoned, Summoned { by: Entity::DANGLING }),
+            plain!(Follower, Follower { leader: Entity::DANGLING }),
+            plain!(CompanionAI, CompanionAI::new()),
+            plain!(FriendlyNPC, FriendlyNPC),
+            plain!(Vendor, Vendor::new(Vec::new(), 0)),
+            plain!(Dialogue, Dialogue::new("Someone", Vec::new())),
+            plain!(Furniture, Furniture { kind: FurnitureKind::Fountain, used: false }),
         ]
     })
 }

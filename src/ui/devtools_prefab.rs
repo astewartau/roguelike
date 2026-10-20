@@ -42,23 +42,16 @@ pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     preview_card(ui, art, &dev.prefabs[i]);
     changed |= needs(ui, &mut dev.prefabs[i]);
 
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("prefab_blocks").selected_text("Add a building block").width(160.0).show_ui(ui, |ui| {
-            for block in BLOCKS {
-                if ui.selectable_label(false, block.name).on_hover_text(block.summary).clicked() {
-                    for part in block.parts {
-                        changed |= dev.prefabs[i].add(part);
-                    }
-                }
-            }
-        });
-        let label = if dev.picker_open { "Done adding" } else { "+ Component" };
-        if ui.button(label).clicked() {
-            dev.picker_open = !dev.picker_open;
-        }
-    });
+    ui.add_space(4.0);
+    let label = if dev.picker_open { "Done adding" } else { "+  Add to it" };
+    if look::primary_button(ui, label).clicked() {
+        dev.picker_open = !dev.picker_open;
+    }
     if dev.picker_open {
-        changed |= picker(ui, dev, i);
+        let current = dev.prefabs[i].clone();
+        for name in picker(ui, dev, &|n| current.has(n)) {
+            changed |= dev.prefabs[i].add(name);
+        }
     }
     changed |= cards(ui, dev, art, i);
     changed |= sprite_picker(ui.ctx(), dev, art, i);
@@ -76,6 +69,7 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
             dev.prefabs_dirty = true;
         }
         egui::ComboBox::from_id_salt("prefab_template").selected_text("From a template").show_ui(ui, |ui| {
+            look::apply(ui);
             for what in spawn::all_spawnables() {
                 if ui.selectable_label(false, what.name()).clicked() {
                     if let Some(template) = prefab::template(what) {
@@ -235,57 +229,67 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
     add.is_some_and(|name| prefab.add(name))
 }
 
-/// The add-component picker: a search box, then every component it hasn't
-/// got, grouped by what it does, each with what it does in a sentence.
-fn picker(ui: &mut egui::Ui, dev: &mut DevTools, i: usize) -> bool {
-    let mut changed = false;
-    egui::Frame::none()
-        .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).accent))
-        .inner_margin(egui::Margin::same(6.0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut dev.picker_search).hint_text("Search: burn, light, door…").desired_width(180.0));
-                look::toggle(ui, &mut dev.picker_internal, "Internal").on_hover_text("Also list state the game keeps for itself");
-            });
-            let search = dev.picker_search.to_lowercase();
-            egui::ScrollArea::vertical().id_salt("component_picker").max_height(260.0).show(ui, |ui| {
-                for group in GROUPS {
-                    if group == "Internal" && !dev.picker_internal {
-                        continue;
+/// The add picker: a search box, building blocks as chips, then every
+/// component not yet there (`has`), grouped by what it does, each with what
+/// it does in a sentence. Returns the components picked this frame (all of
+/// a block's parts, for a block). Used by the prefab builder and the
+/// inspector alike; it stays open to add more.
+pub(super) fn picker(ui: &mut egui::Ui, dev: &mut DevTools, has: &dyn Fn(&str) -> bool) -> Vec<&'static str> {
+    let mut picked = Vec::new();
+    look::card(ui, |ui| {
+        look::search_box(ui, &mut dev.picker_search, "Search: burn, light, door…");
+        let search = dev.picker_search.to_lowercase();
+        let matches = |name: &str, summary: &str, phrase: &str| {
+            search.is_empty()
+                || name.to_lowercase().contains(&search)
+                || summary.to_lowercase().contains(&search)
+                || phrase.contains(&search)
+        };
+
+        let blocks: Vec<_> = BLOCKS.iter().filter(|b| matches(b.name, b.summary, "")).collect();
+        if !blocks.is_empty() {
+            look::section(ui, "Building blocks");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                for block in blocks {
+                    if look::chip(ui, block.name).on_hover_text(block.summary).clicked() {
+                        picked.extend(block.parts.iter().copied().filter(|p| !has(p)));
                     }
-                    let entries: Vec<&catalog::Info> = catalog::INFO
-                        .iter()
-                        .filter(|info| info.group == group && !dev.prefabs[i].has(info.name) && info.name != "Position")
-                        .filter(|info| {
-                            search.is_empty()
-                                || info.name.to_lowercase().contains(&search)
-                                || info.summary.to_lowercase().contains(&search)
-                                || info.phrase.contains(&search)
-                        })
-                        .collect();
-                    if entries.is_empty() {
-                        continue;
-                    }
-                    ui.label(egui::RichText::new(group).strong().color(look::pal(ui).accent));
-                    for info in entries {
-                        let response = ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(format!("{}  ", info.name)).strong(),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text(info.summary);
-                        ui.add(egui::Label::new(egui::RichText::new(info.summary).small().color(look::pal(ui).muted)).wrap());
-                        if response.clicked() {
-                            changed |= dev.prefabs[i].add(info.name);
-                        }
-                    }
-                    ui.add_space(4.0);
                 }
             });
-        });
-    changed
+        }
+
+        let mut any = false;
+        for group in GROUPS {
+            if group == "Internal" && !dev.picker_internal {
+                continue;
+            }
+            let entries: Vec<&catalog::Info> = catalog::INFO
+                .iter()
+                .filter(|info| info.group == group && !has(info.name) && info.name != "Position")
+                .filter(|info| matches(info.name, info.summary, info.phrase))
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            any = true;
+            look::section(ui, group);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for info in entries {
+                if look::add_row(ui, info.name, info.summary).clicked() {
+                    picked.push(info.name);
+                }
+            }
+            ui.spacing_mut().item_spacing.y = 7.0;
+        }
+        if !any && !search.is_empty() {
+            ui.colored_label(look::pal(ui).muted, "Nothing matches that.");
+        }
+        ui.add_space(6.0);
+        look::toggle(ui, &mut dev.picker_internal, "Show internal state")
+            .on_hover_text("Also list state the game keeps for itself");
+    });
+    picked
 }
 
 /// The prefab's components, as cards grouped like the picker, each with its
@@ -369,7 +373,9 @@ fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize
         .open(&mut open)
         .default_size(egui::vec2(420.0, 480.0))
         .collapsible(false)
+        .frame(look::panel_frame())
         .show(ctx, |ui| {
+            look::apply(ui);
             ui.horizontal_wrapped(|ui| {
                 for (sheet, label) in SHEETS {
                     ui.selectable_value(&mut dev.sprite_sheet, sheet, label);

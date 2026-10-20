@@ -56,8 +56,8 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
         .order(egui::Order::Middle)
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            look::apply(ui, dev.look);
-            let frame = look::panel_frame(dev.look);
+            look::apply(ui);
+            let frame = look::panel_frame();
             let chrome = frame.total_margin().sum();
             frame.show(ui, |ui| {
                     ui.set_width(DEVTOOLS_PANEL_WIDTH - chrome.x);
@@ -98,11 +98,6 @@ fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
             if ui.button("✕").on_hover_text("Close (`)").clicked() {
                 dev.toggle();
             }
-            egui::ComboBox::from_id_salt("dev_look").selected_text(dev.look.name()).width(84.0).show_ui(ui, |ui| {
-                for choice in crate::ui::DevLook::ALL {
-                    ui.selectable_value(&mut dev.look, choice, choice.name());
-                }
-            });
         });
     });
     let _ = view;
@@ -626,18 +621,19 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
     if unknown > 0 {
         ui.colored_label(look::pal(ui).muted, format!("and {unknown} more the tools can't edit"));
     }
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("add_component").selected_text("Add component").show_ui(ui, |ui| {
-            for entry in registry::entries() {
-                if known.iter().any(|k| k.name == entry.name) {
-                    continue;
-                }
-                if ui.selectable_label(false, format!("{} ({})", entry.name, entry.category)).clicked() {
-                    dev.commands.push(DevCommand::AddComponent { entity: e, name: entry.name });
-                }
+    ui.add_space(4.0);
+    let label = if dev.inspect_picker_open { "Done adding" } else { "+  Add to it" };
+    if look::primary_button(ui, label).clicked() {
+        dev.inspect_picker_open = !dev.inspect_picker_open;
+    }
+    if dev.inspect_picker_open {
+        let have: Vec<&str> = known.iter().map(|k| k.name).collect();
+        for name in super::devtools_prefab::picker(ui, dev, &|n| have.contains(&n)) {
+            if let Some(entry) = registry::find(name) {
+                dev.commands.push(DevCommand::AddComponent { entity: e, name: entry.name });
             }
-        });
-    });
+        }
+    }
 }
 
 /// The variants a string field can take, where it holds an enum: by the
@@ -738,6 +734,7 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
             Some(options) => {
                 let mut changed = false;
                 egui::ComboBox::from_id_salt(("enum", component, key)).selected_text(text.as_str()).show_ui(ui, |ui| {
+                    look::apply(ui);
                     for option in options {
                         if ui.selectable_label(*text == option, &option).clicked() && *text != option {
                             *text = option;

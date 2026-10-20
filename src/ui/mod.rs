@@ -44,7 +44,6 @@ pub use start_screen::run_start_screen;
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use tile_info::{TileMenu, TileMenuOutcome};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
-pub use devtools_look::DevLook;
 pub use vfx::{RainStyle, 
     draw_alert_indicators, draw_attack_telegraphs, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras, draw_rain,

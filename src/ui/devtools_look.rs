@@ -1,48 +1,14 @@
-//! How the developer tools panel looks: switchable styles, so they can be
-//! compared in the game (the picker is in the panel's header).
+//! How the developer tools panel looks: a modern dark style with the game's
+//! amber fire as its accent ("Ember").
 //!
 //! Everything here is scoped to the panel: `apply` sets the style of the
 //! panel's own `Ui`, so the game's HUD and windows keep the dungeon look.
-//! The panel's widgets ask this module for colours (`pal`) instead of using
-//! the dungeon palette directly, so every look reads well, light ones
-//! included.
+//! The panel's widgets take their colours from `PALETTE` (through `pal`)
+//! rather than the dungeon palette.
 
 use egui::{Color32, FontFamily, FontId, Rounding, Stroke};
 
-use super::style::colors;
-
-/// A look for the panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DevLook {
-    /// The dungeon style the rest of the UI uses.
-    Classic,
-    /// Modern dark: cool greys, an indigo accent, rounded cards.
-    #[default]
-    Slate,
-    /// Modern light, like a web app.
-    Daylight,
-    /// Modern dark with the game's amber fire as its accent.
-    Ember,
-}
-
-impl DevLook {
-    pub const ALL: [DevLook; 4] = [DevLook::Classic, DevLook::Slate, DevLook::Daylight, DevLook::Ember];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            DevLook::Classic => "Classic",
-            DevLook::Slate => "Slate",
-            DevLook::Daylight => "Daylight",
-            DevLook::Ember => "Ember",
-        }
-    }
-
-    fn modern(self) -> bool {
-        self != DevLook::Classic
-    }
-}
-
-/// The colours a look is drawn in.
+/// The colours the panel is drawn in.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     /// Behind the panel.
@@ -60,59 +26,22 @@ pub struct Palette {
     pub danger: Color32,
 }
 
-pub fn palette(look: DevLook) -> Palette {
-    let hex = |rgb: u32| Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
-    match look {
-        DevLook::Classic => Palette {
-            bg: colors::PANEL_BG,
-            card: colors::BUTTON_BG,
-            border: colors::PANEL_BORDER,
-            text: colors::TEXT_PRIMARY,
-            muted: colors::TEXT_MUTED,
-            accent: colors::TEXT_ACCENT,
-            on_accent: Color32::BLACK,
-            hover: colors::HOVERED,
-            warning: Color32::from_rgb(225, 170, 80),
-            danger: colors::RELATION_HOSTILE,
-        },
-        DevLook::Slate => Palette {
-            bg: Color32::from_rgba_unmultiplied(17, 20, 27, 244),
-            card: hex(0x1B2030),
-            border: hex(0x2B3245),
-            text: hex(0xE7EAF2),
-            muted: hex(0x8C94A9),
-            accent: hex(0x7C8CFF),
-            on_accent: hex(0x0E1020),
-            hover: hex(0x252B3C),
-            warning: hex(0xF0B357),
-            danger: hex(0xF0716A),
-        },
-        DevLook::Daylight => Palette {
-            bg: Color32::from_rgba_unmultiplied(248, 249, 251, 248),
-            card: hex(0xFFFFFF),
-            border: hex(0xE2E5EC),
-            text: hex(0x1B2130),
-            muted: hex(0x6A7286),
-            accent: hex(0x2F6BFF),
-            on_accent: hex(0xFFFFFF),
-            hover: hex(0xEEF1F7),
-            warning: hex(0xB76E00),
-            danger: hex(0xD8443B),
-        },
-        DevLook::Ember => Palette {
-            bg: Color32::from_rgba_unmultiplied(22, 17, 14, 244),
-            card: hex(0x241B16),
-            border: hex(0x3A2D24),
-            text: hex(0xF3E8DC),
-            muted: hex(0xA8957F),
-            accent: hex(0xF2A33A),
-            on_accent: hex(0x1E1309),
-            hover: hex(0x2F241D),
-            warning: hex(0xF2C94C),
-            danger: hex(0xF07A5A),
-        },
-    }
+const fn hex(rgb: u32) -> Color32 {
+    Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
+
+pub const PALETTE: Palette = Palette {
+    bg: Color32::from_rgba_premultiplied(21, 16, 13, 244),
+    card: hex(0x241B16),
+    border: hex(0x3A2D24),
+    text: hex(0xF3E8DC),
+    muted: hex(0xA8957F),
+    accent: hex(0xF2A33A),
+    on_accent: hex(0x1E1309),
+    hover: hex(0x2F241D),
+    warning: hex(0xF2C94C),
+    danger: hex(0xF07A5A),
+};
 
 /// The font families `style::load_fonts` registers for the modern looks:
 /// a clean sans for text, a heavier one for headings. Both fall back to
@@ -120,27 +49,15 @@ pub fn palette(look: DevLook) -> Palette {
 pub const SANS: &str = "dev-sans";
 pub const SANS_STRONG: &str = "dev-sans-strong";
 
-fn look_id() -> egui::Id {
-    egui::Id::new("devtools_look")
+/// The panel's colours. (Takes the `Ui` so callers read naturally, and so a
+/// look could vary by context later without touching them.)
+pub fn pal(_ui: &egui::Ui) -> Palette {
+    PALETTE
 }
 
-/// The look the panel is being drawn in.
-pub fn current(ui: &egui::Ui) -> DevLook {
-    ui.ctx().data(|d| d.get_temp(look_id())).unwrap_or_default()
-}
-
-/// The current look's colours.
-pub fn pal(ui: &egui::Ui) -> Palette {
-    palette(current(ui))
-}
-
-/// Style the panel's `Ui` for `look`, and remember it for the helpers below.
-pub fn apply(ui: &mut egui::Ui, look: DevLook) {
-    ui.ctx().data_mut(|d| d.insert_temp(look_id(), look));
-    if !look.modern() {
-        return;
-    }
-    let p = palette(look);
+/// Style the panel's `Ui`.
+pub fn apply(ui: &mut egui::Ui) {
+    let p = PALETTE;
     let style = ui.style_mut();
     let sans = |size: f32| FontId::new(size, FontFamily::Name(SANS.into()));
     style.text_styles.insert(egui::TextStyle::Body, sans(14.0));
@@ -153,7 +70,7 @@ pub fn apply(ui: &mut egui::Ui, look: DevLook) {
     style.spacing.slider_rail_height = 5.0;
 
     let v = &mut style.visuals;
-    v.dark_mode = look != DevLook::Daylight;
+    v.dark_mode = true;
     v.override_text_color = Some(p.text);
     v.panel_fill = p.bg;
     v.window_fill = p.bg;
@@ -184,15 +101,9 @@ pub fn apply(ui: &mut egui::Ui, look: DevLook) {
 }
 
 /// The frame the whole panel sits in: a floating rounded card with a soft
-/// shadow for the modern looks, the dungeon panel for Classic.
-pub fn panel_frame(look: DevLook) -> egui::Frame {
-    let p = palette(look);
-    if !look.modern() {
-        return egui::Frame::none()
-            .fill(p.bg)
-            .stroke(Stroke::new(super::style::BORDER_WIDTH, p.border))
-            .inner_margin(egui::Margin::same(8.0));
-    }
+/// shadow.
+pub fn panel_frame() -> egui::Frame {
+    let p = PALETTE;
     egui::Frame::none()
         .fill(p.bg)
         .stroke(Stroke::new(1.0_f32, p.border))
@@ -203,16 +114,13 @@ pub fn panel_frame(look: DevLook) -> egui::Frame {
             offset: egui::vec2(0.0, 6.0),
             blur: 24.0,
             spread: 0.0,
-            color: Color32::from_black_alpha(if look == DevLook::Daylight { 40 } else { 110 }),
+            color: Color32::from_black_alpha(110),
         })
 }
 
-/// A card around a group of controls (a plain group for Classic).
+/// A card around a group of controls.
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let p = pal(ui);
-    if !current(ui).modern() {
-        return add(ui);
-    }
     egui::Frame::none()
         .fill(p.card)
         .stroke(Stroke::new(1.0_f32, p.border))
@@ -225,13 +133,8 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         .inner
 }
 
-/// A section label: small, quiet capitals with room above, in the modern
-/// looks; the dungeon's ruled header in Classic.
+/// A section label: small, quiet capitals with room above.
 pub fn section(ui: &mut egui::Ui, text: &str) {
-    if !current(ui).modern() {
-        super::style::panel_header(ui, text);
-        return;
-    }
     let p = pal(ui);
     ui.add_space(10.0);
     ui.label(
@@ -242,12 +145,8 @@ pub fn section(ui: &mut egui::Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-/// A switch for an on/off setting in the modern looks (a checkbox in
-/// Classic). Clicking the label toggles it too.
+/// A switch for an on/off setting. Clicking the label toggles it too.
 pub fn toggle(ui: &mut egui::Ui, on: &mut bool, label: impl Into<egui::WidgetText>) -> egui::Response {
-    if !current(ui).modern() {
-        return ui.checkbox(on, label);
-    }
     let p = pal(ui);
     ui.horizontal(|ui| {
         let size = egui::vec2(34.0, 19.0);
@@ -273,7 +172,6 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, label: impl Into<egui::WidgetTex
 /// many rows as it takes. Returns the tab clicked, if any.
 pub fn pill_tabs<T: Copy + PartialEq>(ui: &mut egui::Ui, current_tab: T, tabs: &[(T, &str, &str)]) -> Option<T> {
     let p = pal(ui);
-    let modern = current(ui).modern();
     let mut picked = None;
     let per_row = 4;
     let gap = 4.0;
@@ -283,12 +181,6 @@ pub fn pill_tabs<T: Copy + PartialEq>(ui: &mut egui::Ui, current_tab: T, tabs: &
             ui.spacing_mut().item_spacing.x = gap;
             for &(tab, icon, name) in row {
                 let selected = tab == current_tab;
-                if !modern {
-                    if ui.selectable_label(selected, name).clicked() {
-                        picked = Some(tab);
-                    }
-                    continue;
-                }
                 let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 46.0), egui::Sense::click());
                 let fill = if selected {
                     p.accent
@@ -311,6 +203,100 @@ pub fn pill_tabs<T: Copy + PartialEq>(ui: &mut egui::Ui, current_tab: T, tabs: &
     picked
 }
 
+/// A filled accent button for the main action in a place.
+pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let p = pal(ui);
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).color(p.on_accent).font(FontId::new(14.0, FontFamily::Name(SANS_STRONG.into()))))
+            .fill(p.accent)
+            .stroke(Stroke::NONE)
+            .rounding(Rounding::same(8.0)),
+    )
+}
+
+/// A small rounded chip (a building block to add): outlined, filling on
+/// hover.
+pub fn chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let p = pal(ui);
+    let font = FontId::new(12.5, FontFamily::Name(SANS.into()));
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, p.text);
+    let size = galley.size() + egui::vec2(20.0, 10.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hovered = response.hovered();
+    let fill = if hovered { p.accent } else { p.card };
+    ui.painter().rect(rect, Rounding::same(rect.height() / 2.0), fill, Stroke::new(1.0_f32, if hovered { p.accent } else { p.border }));
+    let ink = if hovered { p.on_accent } else { p.text };
+    ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, ink);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A full-width search box with a magnifier and a clear button.
+pub fn search_box(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Response {
+    let p = pal(ui);
+    egui::Frame::none()
+        .fill(p.card)
+        .stroke(Stroke::new(1.0_f32, p.border))
+        .rounding(Rounding::same(8.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("🔍").color(p.muted));
+                let clear = !text.is_empty();
+                let width = ui.available_width() - if clear { 22.0 } else { 0.0 };
+                let edit = ui.add(egui::TextEdit::singleline(text).hint_text(hint).frame(false).desired_width(width));
+                if clear && ui.add(egui::Button::new(egui::RichText::new("✕").color(p.muted)).frame(false)).clicked() {
+                    text.clear();
+                }
+                edit
+            })
+            .inner
+        })
+        .inner
+}
+
+/// One entry in a list to add from: its name, what it does underneath,
+/// and a "+" on the right; the whole row highlights on hover and is the
+/// thing to click.
+pub fn add_row(ui: &mut egui::Ui, name: &str, summary: &str) -> egui::Response {
+    let p = pal(ui);
+    let width = ui.available_width();
+    let pad = egui::vec2(10.0, 7.0);
+    let plus_w = 26.0;
+    let name_galley = ui.painter().layout_no_wrap(
+        name.to_owned(),
+        FontId::new(14.0, FontFamily::Name(SANS_STRONG.into())),
+        p.text,
+    );
+    let summary_galley = ui.painter().layout(
+        summary.to_owned(),
+        FontId::new(12.0, FontFamily::Name(SANS.into())),
+        p.muted,
+        (width - pad.x * 2.0 - plus_w).max(40.0),
+    );
+    let height = pad.y * 2.0 + name_galley.size().y + 2.0 + summary_galley.size().y;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, Rounding::same(8.0), p.hover);
+    }
+    let text_at = rect.min + pad;
+    let name_h = name_galley.size().y;
+    ui.painter().galley(text_at, name_galley, p.text);
+    ui.painter().galley(text_at + egui::vec2(0.0, name_h + 2.0), summary_galley, p.muted);
+    let plus = egui::pos2(rect.right() - pad.x - plus_w / 2.0, rect.center().y);
+    if hovered {
+        ui.painter().circle_filled(plus, 11.0, p.accent);
+    }
+    ui.painter().text(
+        plus,
+        egui::Align2::CENTER_CENTER,
+        "+",
+        FontId::new(17.0, FontFamily::Name(SANS_STRONG.into())),
+        if hovered { p.on_accent } else { p.accent },
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,16 +315,14 @@ mod tests {
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
-    /// Text reads on every look: body text comfortably, muted text and text
-    /// on the accent at least passably.
+    /// Body text reads comfortably; muted text and text on the accent at
+    /// least passably.
     #[test]
-    fn every_look_is_readable() {
-        for look in DevLook::ALL {
-            let p = palette(look);
-            let bg = Color32::from_rgb(p.bg.r(), p.bg.g(), p.bg.b());
-            assert!(contrast(p.text, bg) >= 7.0, "{}: text {}", look.name(), contrast(p.text, bg));
-            assert!(contrast(p.muted, bg) >= 3.0, "{}: muted {}", look.name(), contrast(p.muted, bg));
-            assert!(contrast(p.on_accent, p.accent) >= 3.0, "{}: on accent {}", look.name(), contrast(p.on_accent, p.accent));
-        }
+    fn the_palette_is_readable() {
+        let p = PALETTE;
+        let bg = Color32::from_rgb(p.bg.r(), p.bg.g(), p.bg.b());
+        assert!(contrast(p.text, bg) >= 7.0, "text {}", contrast(p.text, bg));
+        assert!(contrast(p.muted, bg) >= 3.0, "muted {}", contrast(p.muted, bg));
+        assert!(contrast(p.on_accent, p.accent) >= 3.0, "on accent {}", contrast(p.on_accent, p.accent));
     }
 }

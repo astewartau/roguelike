@@ -319,8 +319,8 @@ pub struct DevTools {
     /// The prefab builder's add-component picker: whether it's open, what's
     /// typed in its search box, and whether internal components are listed.
     pub picker_open: bool,
-    /// How the panel looks (switchable in its header).
-    pub look: crate::ui::DevLook,
+    /// The same picker, open on the Inspect tab.
+    pub inspect_picker_open: bool,
     pub picker_search: String,
     pub picker_internal: bool,
     /// The prefab component whose sprite is being picked, and the sheet the
@@ -376,7 +376,7 @@ impl Default for DevTools {
             selected_prefab: None,
             prefabs_dirty: false,
             picker_open: false,
-            look: crate::ui::DevLook::default(),
+            inspect_picker_open: false,
             picker_search: String::new(),
             picker_internal: false,
             sprite_pick: None,
