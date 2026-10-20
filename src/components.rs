@@ -10,7 +10,7 @@ use hecs::Entity;
 ///
 /// Used by the message log (and, in future, tooltips and a bestiary) to refer
 /// to entities by name instead of by their opaque ECS id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Name(pub String);
 
 impl Name {
@@ -439,7 +439,7 @@ impl SecondaryAbility {
 // =============================================================================
 
 /// Position component - world coordinates (grid-based)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Position {
     pub x: i32,
     pub y: i32,
@@ -452,7 +452,7 @@ impl Position {
 }
 
 /// Sprite component - visual representation using tileset
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Sprite {
     pub sheet: SpriteSheet,
     pub tile_id: u32,
@@ -492,7 +492,7 @@ impl OverlaySprite {
 }
 
 /// Animated sprite component - cycles through frames in real-time
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct AnimatedSprite {
     pub sheet: SpriteSheet,
     /// First frame's tile ID
@@ -736,7 +736,7 @@ impl Default for Fatigue {
 }
 
 /// Health component - pure data
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Health {
     pub current: i32,
     pub max: i32,
@@ -776,7 +776,7 @@ impl Health {
 }
 
 /// Stats component - pure data
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
     pub strength: i32,
     pub intelligence: i32,
@@ -803,7 +803,7 @@ impl Experience {
 }
 
 /// Item type - pure data enum, properties defined in systems
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ItemType {
     // Weapons
     Sword,
@@ -871,7 +871,7 @@ impl ItemType {
 // =============================================================================
 
 /// Rarity tier of a gear instance. Drives affix count, tooltip color, and price.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Rarity {
     Common,
     Magic,
@@ -905,7 +905,7 @@ impl Rarity {
 /// `systems::identify`), but apply while equipped regardless: `CursedFragile`
 /// through defense math, `CursedHeavy` through action speed in the time
 /// system, and `CursedLoud` through attack noise radius.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Affix {
     /// Bonus melee/ranged damage (weapons)
     Damage(i32),
@@ -978,7 +978,7 @@ impl Affix {
 /// One concrete item in the world. Consumables are trivial instances (no
 /// affixes, Common); gear can carry rolled rarity, affixes, and (for
 /// Legendary items) a generated name.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ItemInstance {
     pub kind: ItemType,
     pub rarity: Rarity,
@@ -1099,7 +1099,7 @@ impl ItemInstance {
 // =============================================================================
 
 /// Types of status effects that can be applied to entities
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum EffectType {
     /// Entity cannot be seen by enemies
     Invisible,
@@ -1160,7 +1160,7 @@ pub enum EffectType {
 }
 
 /// An active status effect with remaining duration
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct ActiveEffect {
     pub effect_type: EffectType,
     /// Remaining duration in game-time seconds
@@ -1174,7 +1174,7 @@ pub struct ActiveEffect {
 }
 
 /// Component for entities with active status effects
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct StatusEffects {
     pub effects: Vec<ActiveEffect>,
 }
@@ -1205,7 +1205,7 @@ impl Inventory {
 }
 
 /// Type of container (affects sprite and behavior)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContainerType {
     Chest,
     Coffin,
@@ -1217,7 +1217,7 @@ pub enum ContainerType {
 }
 
 /// Container component (for chests, coffins, barrels)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Container {
     pub container_type: ContainerType,
     pub items: Vec<ItemInstance>,
@@ -1481,7 +1481,7 @@ impl Actor {
 }
 
 /// AI behavior state
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AIState {
     /// Not yet aware of any target (sleeping or idly patrolling). Won't chase
     /// until it perceives a target or is woken by noise/a shout.
@@ -1497,12 +1497,12 @@ pub enum AIState {
 /// Marker for an enemy that is asleep (a deeper subset of `AIState::Unaware`).
 /// Asleep enemies stay put, perceive at a reduced range, and take extra damage
 /// from the first hit (sneak attack). Removed when the enemy wakes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Asleep;
 
 /// Held still by the developer tools' Freeze AI: the creature only waits
 /// (staying scheduled, so it carries on as soon as it's unfrozen).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DevFrozen;
 
 /// Marker: this actor was just stunned and must drop whatever action it is in
@@ -1522,7 +1522,7 @@ pub struct LastDamageSource(pub String);
 
 /// Marker for enemies intelligent enough to open doors (and to raise an alarm
 /// shout). Dumb beasts/undead lack it, so a closed door stops them.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CanOpenDoors;
 
 /// Active alarm-shout channel. While present the enemy is busy shouting; when
@@ -1721,7 +1721,7 @@ impl Container {
 }
 
 /// Door component - can be open or closed
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Door {
     pub is_open: bool,
     /// Sprite to use when door is open
@@ -1784,15 +1784,15 @@ pub struct LightExposure(pub f32);
 /// Marks an enemy that doesn't need light to see — undead, bats hunting by
 /// sound, spiders. Darkness gives no stealth against it, and being lit up
 /// gives it nothing extra either.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SeesInDark;
 
 /// Marker component for entities that block vision when present
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BlocksVision;
 
 /// Marker component for entities that block movement when present
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BlocksMovement;
 
 /// Marker component for ground item piles dropped by entities
@@ -2008,7 +2008,7 @@ impl Equipment {
 }
 
 /// Marker for entities that can be attacked
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Attackable;
 
 /// Visual effect: lunge animation toward a target
@@ -2129,7 +2129,7 @@ pub struct ActiveAmmo {
 
 /// Per-entity sprite color tint (multiplied with the texture color).
 /// Used e.g. to render fire arrows as red/orange-tinted normal arrows.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SpriteTint {
     pub r: f32,
     pub g: f32,
@@ -2238,7 +2238,7 @@ impl Vendor {
 /// something* rather than evenly lit: see `src/constants/lighting.rs` for the
 /// palette and the flicker shaping, and `Engine::render_light_map` for where the
 /// flicker is actually evaluated.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct LightSource {
     /// Radius of light emission (in tiles)
     pub radius: f32,
@@ -2397,36 +2397,36 @@ impl Default for LightSource {
 /// Marker for a patch of glowing cave fungus. Walkable, sheds light, and
 /// burns (`Fuel::fungus`): a patch the fire reaches is consumed and leaves a
 /// grass-style fire in its place.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GlowMushroom;
 
 /// Marker for a cave crystal cluster: a walkable, inert light source. Exists
 /// so a floor save can find the cluster again.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CrystalCluster;
 
 /// Marker for a stalagmite cluster: cover that blocks movement but not
 /// vision. Exists so a floor save can find it again.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Stalagmite;
 
 /// Marker for the starting-room campfire. Without it a campfire is
 /// indistinguishable from a burning fire patch minus its `Fuel`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Campfire;
 
 /// Marker for purely decorative blocking props (shop jars, sacks). The prop's
 /// look lives in its `Sprite`; the marker lets a floor save find it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Decoration;
 
 /// Marker component for entities that cause burning when stepped on
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CausesBurning;
 
 /// How readily an entity catches fire. Entities without this component never
 /// ignite. `flammability` is a 0..1 chance multiplier applied to ignition rolls.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Combustible {
     pub flammability: f32,
 }
@@ -2439,7 +2439,7 @@ pub struct Combustible {
 /// All the per-thing differences live here as data, so `systems::fire`
 /// ignites, spreads, douses and burns out every kind of fuel through one code
 /// path. A new burnable object needs a constructor below, not new fire code.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fuel {
     /// Per fire-step chance this catches when a fire is on or next to it.
     pub catch_chance: f64,
@@ -2467,7 +2467,7 @@ pub struct Fuel {
 }
 
 /// The fire a fuel shows while it burns (with `Ignition::InPlace`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FlameLook {
     /// Open flames on the floor: oil, webs, grass.
     Open,
@@ -2480,7 +2480,7 @@ pub enum FlameLook {
 }
 
 /// How a fuel entity takes fire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Ignition {
     /// The entity itself burns (gains `OnFire`, flames and a light) and keeps
     /// its identity, so it can be doused and relit: oil, webs, grass fires.
@@ -2491,7 +2491,7 @@ pub enum Ignition {
 }
 
 /// What a water splash does to a burning fuel entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Doused {
     /// The flames go out and the fuel stays, ready to be relit (oil, webs).
     Extinguish,
@@ -2507,7 +2507,7 @@ pub enum Doused {
 }
 
 /// What a fuel entity leaves behind once it has burnt out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Burnout {
     /// Nothing: the entity is gone (spent oil, a web).
     Despawn,
@@ -2632,7 +2632,7 @@ impl Fuel {
 /// A `Fuel` entity that is currently alight. Paired with `CausesBurning`, a
 /// fire sprite and a light while it burns; `systems::fire` counts it down and
 /// applies the fuel's `Burnout` when it reaches zero.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OnFire {
     pub remaining: f32,
 }
@@ -2640,7 +2640,7 @@ pub struct OnFire {
 /// A puddle of spilled oil on the floor. Walkable, doesn't block vision, and
 /// harmless until fire reaches it — then it ignites readily (`Fuel::oil`).
 /// Water splashes douse the flames but the puddle remains, re-ignitable.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OilPuddle;
 
 /// Marker for explosive oil barrels. Blocks movement and is highly
@@ -2648,7 +2648,7 @@ pub struct OilPuddle;
 /// barrel explodes — damage in a radius plus a spray of burning oil puddles.
 /// Breaking one open (0 HP) starts a shorter fuse; any damage to a barrel
 /// whose fuse is already running detonates it at once (see `systems::fire`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OilBarrel;
 
 /// What lit an oil barrel's fuse.
@@ -2697,13 +2697,13 @@ impl BarrelFuse {
 /// furniture (fountains, altars, shrines), shop decor or stalagmites. A
 /// pushable only matters while it also `BlocksMovement`: a looted storage
 /// barrel becomes walkable scenery and there is nothing left to shove.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Pushable;
 
 /// A tile soaked by a water splash: damp-sensitive fuel on it (grass, fungus)
 /// can't catch until it dries out. Lives as an invisible timer entity on the
 /// tile, checked by fire spread.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct WetTile {
     pub remaining: f32,
 }
@@ -2711,7 +2711,7 @@ pub struct WetTile {
 /// Rain falling on the tiles within `radius` of its `Position` (Call Rain),
 /// soaking them again every `CALL_RAIN_SOAK_INTERVAL` until it runs out.
 /// See `systems::rain`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct RainCloud {
     pub radius: i32,
     /// Game seconds of rain left
@@ -2723,7 +2723,7 @@ pub struct RainCloud {
 /// How a room's lanterns burn. Each themed room gets its own style of light
 /// (see `spawn_room_lanterns` in engine/initialization.rs), so you can read
 /// a room by its glow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LanternStyle {
     /// Warm, steady lamplight: shops and storerooms.
     Warm,
@@ -2734,7 +2734,7 @@ pub enum LanternStyle {
 /// A standing lantern: glass and oil. Blocks movement like any furniture.
 /// Interacting with one, or shoving something into it, smashes it into a
 /// puddle of burning oil (see `systems::fire::smash_lantern`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Lantern {
     /// Kept so a revisited floor restores the same light (see
     /// `engine::floor_transition`).
@@ -2745,7 +2745,7 @@ pub struct Lantern {
 /// `LightSource` and sets alight oil and webs it walks into; a soaking puts it
 /// out for good. Dropped, still burning, when the carrier dies (see
 /// `systems::torches`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CarriedTorch {
     pub lit: bool,
 }
@@ -2755,7 +2755,7 @@ pub struct CarriedTorch {
 /// nearby tiles, and a toppled brazier stays out for good. Whether it's
 /// burning otherwise is the fire system's business (`Fuel::hearth`): rain
 /// puts it out and a torch or nearby fire relights it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Brazier {
     pub toppled: bool,
 }
@@ -2802,7 +2802,7 @@ pub struct PlacedTrap {
 // =============================================================================
 
 /// Kinds of hidden floor traps placed by dungeon generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DungeonTrapKind {
     /// Direct damage through `apply_damage`
     Spike,
@@ -2819,7 +2819,7 @@ pub enum DungeonTrapKind {
 /// roll while adjacent — see `systems::discovery`) it gains a tinted trap-door
 /// sprite and can be stepped around. Stepping ON it — player or enemy,
 /// revealed or not — triggers and consumes it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DungeonTrap {
     pub kind: DungeonTrapKind,
     /// Whether the player has spotted this trap (it renders once revealed)
@@ -2827,7 +2827,7 @@ pub struct DungeonTrap {
 }
 
 /// Kinds of room furniture interactables placed by dungeon generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FurnitureKind {
     /// Drink for a random outcome (heal / food / buff / mild debuff); one use
     Fountain,
@@ -2839,7 +2839,7 @@ pub enum FurnitureKind {
 
 /// Room furniture the player can interact with (bump or Ctrl+direction).
 /// See `systems::furniture` for the interaction logic.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Furniture {
     pub kind: FurnitureKind,
     /// One-use pieces (fountain, shrine) flip this and go inert/grey
@@ -2966,7 +2966,7 @@ pub struct BoneWard {
 // =============================================================================
 
 /// Marker for animals that can be tamed by the Druid
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Tameable;
 
 /// Tracks active taming progress for a player
@@ -3123,14 +3123,14 @@ pub struct BossMinion {
 }
 
 /// Marker: never panics from morale checks and cannot be Feared (bosses).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FearImmune;
 
 /// A venomous melee attacker: successful hits apply Slowed and/or Poisoned
 /// for these durations (0 = none) — Giant Spider slows and poisons, Lesser
 /// Giant Spider only poisons, briefly. Applied directly in the enemy melee path
 /// since enemy natural weapons are not item instances with on-hit affixes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Venomous {
     pub slow_duration: f32,
     pub poison_duration: f32,
@@ -3138,7 +3138,7 @@ pub struct Venomous {
 
 /// A melee attacker whose connecting hits open a wound (Bleeding) with this
 /// chance (rats). Applied in the enemy melee path, like [`Venomous`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Lacerating {
     pub bleed_chance: f32,
 }
@@ -3149,7 +3149,7 @@ pub struct Lacerating {
 /// touch the ground, so water, oil, webs, traps and burning ground leave them
 /// alone (`tile_effects::touches_ground`); fire from other sources (a
 /// fireball, an adjacent blaze, a burning attacker) still catches them.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Flying;
 
 /// Hit-and-run melee (bats): after each swing, hit or miss, break off and
@@ -3178,7 +3178,7 @@ pub struct GrabbedBy {
 /// how many splits produced this one (0 = an original slime); a creature
 /// splits only while `generation < SLIME_MAX_SPLITS` and only once
 /// (`spent`). See `systems::split`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Splits {
     pub generation: u8,
     pub spent: bool,
@@ -3189,7 +3189,7 @@ pub struct Splits {
 /// winds up (`ActionType::OrcChargeWindup`, telegraphed) and then dashes
 /// down that lane. `cooldown` counts down in game time
 /// (`ai::tick_role_cooldowns`). See `systems::charge`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Charger {
     pub cooldown: f32,
 }

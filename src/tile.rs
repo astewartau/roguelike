@@ -1,5 +1,5 @@
 /// Sprite sheet identifiers for the 32rogues tileset
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SpriteSheet {
     Tiles,         // tiles.png - terrain, doors, stairs, decals
     Rogues,        // rogues.png - player characters, NPCs

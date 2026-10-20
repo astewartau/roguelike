@@ -35,6 +35,7 @@ impl DevArt<'_> {
 /// The run as the panel sees it (read only).
 pub struct DevView<'a> {
     pub world: &'a World,
+    pub grid: &'a Grid,
     pub player: hecs::Entity,
     pub game_time: f32,
 }
@@ -69,6 +70,7 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
                             DevTab::Paint => paint_tab(ui, dev, art),
                             DevTab::Player => player_tab(ui, dev, view),
                             DevTab::World => world_tab(ui, dev, view),
+                            DevTab::Inspect => inspect_tab(ui, dev, view, art),
                             DevTab::Effects => effects_tab(ui, dev),
                         });
                 });
@@ -473,6 +475,237 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
     ));
 }
 
+/// A short name for an entity: its `Name`, else what it's made of.
+fn entity_label(world: &World, e: hecs::Entity) -> String {
+    if let Ok(name) = world.get::<&crate::components::Name>(e) {
+        return name.0.clone();
+    }
+    let (known, _) = crate::devtools::registry::components_of(world, e);
+    let parts: Vec<&str> = known.iter().map(|c| c.name).filter(|n| *n != "Position").take(2).collect();
+    if parts.is_empty() { format!("#{}", e.id()) } else { parts.join(" + ") }
+}
+
+fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevArt) {
+    use crate::devtools::registry;
+    let world = view.world;
+    ui.horizontal(|ui| {
+        tool_button(ui, dev, CursorTool::Inspect, "Pick on the map", "Click a tile to look at what's there");
+        if ui.button("Me").clicked() {
+            let at = world.get::<&Position>(view.player).map(|p| (p.x, p.y)).unwrap_or((0, 0));
+            dev.select(at, Some(view.player));
+        }
+    });
+    let Some(tile) = dev.inspect_tile else {
+        ui.colored_label(colors::TEXT_MUTED, "Nothing picked yet.");
+        return;
+    };
+
+    style::panel_header(ui, &format!("Tile {}, {}", tile.0, tile.1));
+    if let Some(cell) = view.grid.get(tile.0, tile.1) {
+        let light = view
+            .grid
+            .illumination
+            .get(tile.1 as usize * view.grid.width + tile.0 as usize)
+            .copied()
+            .unwrap_or(0.0);
+        ui.label(format!(
+            "{:?}{}{}, light {:.2}",
+            cell.tile_type,
+            if cell.visible { ", in sight" } else { "" },
+            if cell.explored { ", explored" } else { ", unexplored" },
+            light
+        ));
+    }
+    let here: Vec<hecs::Entity> = world
+        .query::<&Position>()
+        .iter()
+        .filter(|(_, p)| (p.x, p.y) == tile)
+        .map(|(id, _)| id)
+        .collect();
+    for e in &here {
+        let sprite = world.get::<&crate::components::Sprite>(*e).map(|s| (s.sheet, s.tile_id)).ok();
+        let label = entity_label(world, *e);
+        let selected = dev.inspected == Some(*e);
+        let clicked = match sprite {
+            Some(sprite) => row(ui, art, sprite, &label, selected).clicked(),
+            None => ui.selectable_label(selected, &label).clicked(),
+        };
+        if clicked {
+            dev.select(tile, Some(*e));
+        }
+    }
+
+    let Some(e) = dev.inspected.filter(|e| world.contains(*e)) else {
+        return;
+    };
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.strong(entity_label(world, e));
+        ui.colored_label(colors::TEXT_MUTED, format!("#{}", e.id()));
+    });
+    ui.horizontal_wrapped(|ui| {
+        if e != view.player {
+            if ui.button("Delete").clicked() {
+                dev.commands.push(DevCommand::DeleteEntity(e));
+            }
+            if ui.button("Kill").clicked() {
+                dev.commands.push(DevCommand::KillEntity(e));
+            }
+            if ui.button("Teleport me beside it").clicked() {
+                if let Some(at) = world.get::<&Position>(e).ok().map(|p| (p.x, p.y)) {
+                    dev.commands.push(DevCommand::TeleportPlayerTo((at.0 + 1, at.1)));
+                }
+            }
+        }
+    });
+
+    let (known, unknown) = registry::components_of(world, e);
+    for entry in &known {
+        let current = (entry.read)(world, e).unwrap_or(serde_json::Value::Null);
+        let (mut value, error) = match dev.drafts.get(entry.name) {
+            Some((draft, why)) => (draft.clone(), Some(why.clone())),
+            None => (current, None),
+        };
+        egui::CollapsingHeader::new(entry.name).id_salt(("component", entry.name)).default_open(false).show(ui, |ui| {
+            if edit_value(ui, entry.name, "", &mut value) {
+                dev.commands.push(DevCommand::SetComponent { entity: e, name: entry.name, value });
+            }
+            if let Some(why) = error {
+                ui.colored_label(egui::Color32::from_rgb(230, 110, 100), why);
+            }
+            if ui.small_button("Remove").clicked() {
+                dev.commands.push(DevCommand::RemoveComponent { entity: e, name: entry.name });
+            }
+        });
+    }
+    if unknown > 0 {
+        ui.colored_label(colors::TEXT_MUTED, format!("and {unknown} more the tools can't edit"));
+    }
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("add_component").selected_text("Add component").show_ui(ui, |ui| {
+            for entry in registry::entries() {
+                if known.iter().any(|k| k.name == entry.name) {
+                    continue;
+                }
+                if ui.selectable_label(false, format!("{} ({})", entry.name, entry.category)).clicked() {
+                    dev.commands.push(DevCommand::AddComponent { entity: e, name: entry.name });
+                }
+            }
+        });
+    });
+}
+
+/// The variants a string field can take, where it holds an enum: by the
+/// component it's in and the field's name.
+fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
+    let list = |names: &[&str]| Some(names.iter().map(|n| n.to_string()).collect());
+    match (component, key) {
+        (_, "sheet") => list(&["Tiles", "Rogues", "Monsters", "Items", "AnimatedTiles"]),
+        ("ChaseAI", "state") => list(&["Unaware", "Idle", "Chasing", "Investigating"]),
+        (_, "style") => list(&["Warm", "Ghost"]),
+        (_, "flame") => list(&["Open", "FirePit", "Brazier", "Lantern"]),
+        (_, "ignition") => list(&["InPlace", "Replace"]),
+        (_, "rarity") => list(&["Common", "Magic", "Rare", "Legendary"]),
+        (_, "container_type") => list(&["Chest", "Coffin", "Barrel", "Corpse", "GroundPile"]),
+        ("DungeonTrap", "kind") => list(&["Spike", "Fire", "Snare", "Alarm"]),
+        ("Furniture", "kind") => list(&["Fountain", "Altar", "Shrine"]),
+        ("Container", "kind") => Some(
+            crate::systems::item_defs::ITEM_DEFS.iter().map(|d| format!("{:?}", d.item_type)).collect(),
+        ),
+        (_, "effect_type") => {
+            Some(crate::devtools::cheats::ALL_EFFECTS.iter().map(|e| format!("{e:?}")).collect())
+        }
+        _ => None,
+    }
+}
+
+/// Edit a JSON value in place: numbers, switches, text (a dropdown for an
+/// enum), and nested objects and lists. Returns whether it changed.
+fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
+    use serde_json::Value;
+    match value {
+        Value::Null => {
+            ui.colored_label(colors::TEXT_MUTED, "(a marker: no settings)");
+            false
+        }
+        Value::Bool(b) => ui.checkbox(b, "").changed(),
+        Value::Number(n) => {
+            if let Some(mut i) = n.as_i64() {
+                let changed = ui.add(egui::DragValue::new(&mut i)).changed();
+                if changed {
+                    *value = Value::from(i);
+                }
+                changed
+            } else {
+                let mut f = n.as_f64().unwrap_or(0.0);
+                let changed = ui.add(egui::DragValue::new(&mut f).speed(0.05)).changed();
+                if changed {
+                    if let Some(num) = serde_json::Number::from_f64(f) {
+                        *value = Value::Number(num);
+                    }
+                }
+                changed
+            }
+        }
+        Value::String(text) => match enum_options(component, key).filter(|opts| opts.contains(text)) {
+            Some(options) => {
+                let mut changed = false;
+                egui::ComboBox::from_id_salt(("enum", component, key)).selected_text(text.as_str()).show_ui(ui, |ui| {
+                    for option in options {
+                        if ui.selectable_label(*text == option, &option).clicked() && *text != option {
+                            *text = option;
+                            changed = true;
+                        }
+                    }
+                });
+                changed
+            }
+            None => ui.text_edit_singleline(text).changed(),
+        },
+        Value::Array(items) => {
+            let mut changed = false;
+            let mut remove = None;
+            for (i, item) in items.iter_mut().enumerate() {
+                ui.push_id(i, |ui| {
+                    ui.horizontal_top(|ui| {
+                        if ui.small_button("✕").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.vertical(|ui| changed |= edit_value(ui, component, key, item));
+                    });
+                });
+            }
+            if let Some(i) = remove {
+                items.remove(i);
+                changed = true;
+            }
+            if items.is_empty() {
+                ui.colored_label(colors::TEXT_MUTED, "(empty)");
+            }
+            changed
+        }
+        Value::Object(fields) => {
+            let mut changed = false;
+            for (name, field) in fields.iter_mut() {
+                ui.push_id(name.as_str(), |ui| {
+                    let scalar = !matches!(field, Value::Object(_) | Value::Array(_));
+                    if scalar {
+                        ui.horizontal(|ui| {
+                            ui.label(name.as_str());
+                            changed |= edit_value(ui, component, name, field);
+                        });
+                    } else {
+                        egui::CollapsingHeader::new(name.as_str()).default_open(false).show(ui, |ui| {
+                            changed |= edit_value(ui, component, name, field);
+                        });
+                    }
+                });
+            }
+            changed
+        }
+    }
+}
+
 fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
     style::panel_header(ui, "Call Rain look");
     ui.horizontal(|ui| {
@@ -554,6 +787,7 @@ pub fn draw_cursor_ghost(
         other => {
             let colour = match other {
                 CursorTool::Teleport => egui::Color32::from_rgb(150, 200, 255),
+                CursorTool::Inspect => egui::Color32::from_rgb(235, 235, 235),
                 CursorTool::Ignite | CursorTool::ParticleFire => egui::Color32::from_rgb(255, 170, 80),
                 _ => egui::Color32::from_rgb(230, 90, 80),
             };

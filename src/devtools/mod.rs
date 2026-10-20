@@ -12,6 +12,7 @@
 
 pub mod cheats;
 pub mod paint;
+pub mod registry;
 pub mod spawn;
 
 use hecs::{Entity, World};
@@ -35,11 +36,13 @@ pub enum DevTab {
     Paint,
     Player,
     World,
+    Inspect,
     Effects,
 }
 
 impl DevTab {
-    pub const ALL: [DevTab; 5] = [DevTab::Spawn, DevTab::Paint, DevTab::Player, DevTab::World, DevTab::Effects];
+    pub const ALL: [DevTab; 6] =
+        [DevTab::Spawn, DevTab::Paint, DevTab::Player, DevTab::World, DevTab::Inspect, DevTab::Effects];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -47,6 +50,7 @@ impl DevTab {
             DevTab::Paint => "Paint",
             DevTab::Player => "Player",
             DevTab::World => "World",
+            DevTab::Inspect => "Inspect",
             DevTab::Effects => "Effects",
         }
     }
@@ -73,6 +77,8 @@ pub enum CursorTool {
     Kill,
     /// Remove everything on the tile but you.
     Delete,
+    /// Pick what's on the tile to look at in the Inspect tab.
+    Inspect,
 }
 
 impl CursorTool {
@@ -87,6 +93,7 @@ impl CursorTool {
             CursorTool::Blast => "Blast".into(),
             CursorTool::Kill => "Kill".into(),
             CursorTool::Delete => "Delete".into(),
+            CursorTool::Inspect => "Inspect".into(),
         }
     }
 
@@ -123,6 +130,14 @@ pub enum DevCommand {
     RerollFloor,
     /// Let `n` game seconds pass (the player waits).
     AdvanceTime(f32),
+    /// Replace one of an entity's components with this JSON.
+    SetComponent { entity: Entity, name: &'static str, value: serde_json::Value },
+    /// Give an entity a component, at its default.
+    AddComponent { entity: Entity, name: &'static str },
+    RemoveComponent { entity: Entity, name: &'static str },
+    DeleteEntity(Entity),
+    KillEntity(Entity),
+    TeleportPlayerTo((i32, i32)),
 }
 
 /// What a command needs the engine itself for, beyond the `GameState`.
@@ -179,6 +194,12 @@ pub struct DevTools {
     pub effect_seconds: f32,
     pub target_floor: u32,
     pub advance_seconds: f32,
+    /// The tile and entity the Inspect tab is looking at.
+    pub inspect_tile: Option<(i32, i32)>,
+    pub inspected: Option<Entity>,
+    /// Inspector edits that didn't parse, kept so the text being typed isn't
+    /// lost, with why: component name -> (draft, error).
+    pub drafts: std::collections::HashMap<&'static str, (serde_json::Value, String)>,
     /// Asked for by commands, handled by the engine (`take_requests`).
     requests: Vec<EngineRequest>,
     /// God mode as last applied, to notice it being switched off.
@@ -214,6 +235,9 @@ impl Default for DevTools {
             effect_seconds: 30.0,
             target_floor: 1,
             advance_seconds: 10.0,
+            inspect_tile: None,
+            inspected: None,
+            drafts: std::collections::HashMap::new(),
             requests: Vec::new(),
             god_mode_applied: false,
             held_at: None,
@@ -328,6 +352,22 @@ impl DevTools {
                 let n = cheats::delete_at(state, at);
                 self.status = Some(format!("Deleted {n}"));
             }
+            CursorTool::Inspect => {
+                let player = state.player_entity;
+                let mut here: Vec<Entity> = state
+                    .world
+                    .query::<&crate::components::Position>()
+                    .iter()
+                    .filter(|(_, p)| (p.x, p.y) == at)
+                    .map(|(id, _)| id)
+                    .collect();
+                // Creatures first, the player last.
+                here.sort_by_key(|&id| {
+                    (id == player, state.world.get::<&crate::components::Actor>(id).is_err())
+                });
+                self.select(at, here.first().copied());
+                self.tab = DevTab::Inspect;
+            }
         }
     }
 
@@ -391,6 +431,50 @@ impl DevTools {
                 DevCommand::GoToFloor(floor) => self.requests.push(EngineRequest::GoToFloor(floor)),
                 DevCommand::RerollFloor => self.requests.push(EngineRequest::RerollFloor),
                 DevCommand::AdvanceTime(seconds) => self.requests.push(EngineRequest::AdvanceTime(seconds)),
+                DevCommand::SetComponent { entity, name, value } => {
+                    let Some(entry) = registry::find(name) else { continue };
+                    match (entry.write)(&mut state.world, entity, value.clone()) {
+                        Ok(()) => {
+                            self.drafts.remove(name);
+                            resync(state, entity);
+                        }
+                        Err(why) => {
+                            self.drafts.insert(name, (value, why));
+                        }
+                    }
+                }
+                DevCommand::AddComponent { entity, name } => {
+                    if let Some(entry) = registry::find(name) {
+                        let _ = (entry.write)(&mut state.world, entity, (entry.default)());
+                        resync(state, entity);
+                    }
+                }
+                DevCommand::RemoveComponent { entity, name } => {
+                    if let Some(entry) = registry::find(name) {
+                        (entry.remove)(&mut state.world, entity);
+                        self.drafts.remove(name);
+                        resync(state, entity);
+                    }
+                }
+                DevCommand::DeleteEntity(entity) => {
+                    if entity != player && state.world.contains(entity) {
+                        state.spatial_cache.remove_entity(entity);
+                        state.active_ai_tracker.remove_entity(entity);
+                        state.action_scheduler.cancel_for_entity(entity);
+                        let _ = state.world.despawn(entity);
+                        state.fov_dirty = true;
+                        self.inspected = None;
+                    }
+                }
+                DevCommand::KillEntity(entity) => {
+                    if let Ok(mut health) = state.world.get::<&mut crate::components::Health>(entity) {
+                        health.current = 0;
+                    }
+                }
+                DevCommand::TeleportPlayerTo(at) => match cheats::teleport(state, at) {
+                    Ok(()) => self.requests.push(EngineRequest::ClearPath),
+                    Err(why) => self.status = Some(format!("Can't teleport there: {why}")),
+                },
             }
         }
     }
@@ -422,6 +506,50 @@ impl DevTools {
     pub fn take_requests(&mut self) -> Vec<EngineRequest> {
         std::mem::take(&mut self.requests)
     }
+}
+
+impl DevTools {
+    /// Look at `entity` (on `tile`) in the Inspect tab.
+    pub fn select(&mut self, tile: (i32, i32), entity: Option<Entity>) {
+        self.inspect_tile = Some(tile);
+        if self.inspected != entity {
+            self.drafts.clear();
+        }
+        self.inspected = entity;
+    }
+}
+
+/// After an entity's components were changed by hand: re-register it with
+/// the spatial cache as it now is, put its sprite where its position says,
+/// and hand it to the AI if it has just started acting.
+fn resync(state: &mut GameState, e: Entity) {
+    use crate::components::{Actor, Position, VisualPosition};
+    if !state.world.contains(e) {
+        return;
+    }
+    state.spatial_cache.remove_entity(e);
+    if let Some(pos) = state.world.get::<&Position>(e).ok().map(|p| *p) {
+        if let Ok(mut vis) = state.world.get::<&mut VisualPosition>(e) {
+            *vis = VisualPosition::from_position(&pos);
+        }
+    }
+    let needs_ai = e != state.player_entity
+        && state.world.get::<&Actor>(e).is_ok()
+        && !state.active_ai_tracker.is_tracked(e);
+    if needs_ai {
+        spawn::adopt(&mut state.actor_ctx(&mut EventQueue::new()), e);
+    } else {
+        let (blocks, sight) = state
+            .world
+            .entity(e)
+            .map(|r| (r.has::<crate::components::BlocksMovement>(), r.has::<crate::components::BlocksVision>()))
+            .unwrap_or((false, false));
+        let pos = state.world.get::<&Position>(e).ok().map(|p| (p.x, p.y));
+        if let (Some(pos), true) = (pos, blocks || sight) {
+            state.spatial_cache.register_entity(e, pos, blocks, sight);
+        }
+    }
+    state.fov_dirty = true;
 }
 
 /// Put one of `kind` in `player`'s pack, ignoring the weight limit. Gear is
@@ -624,5 +752,48 @@ mod tests {
         engine.dev.commands.push(DevCommand::AdvanceTime(10.0));
         engine.process_ui_actions(&crate::ui::UiActions::default());
         assert!(engine.state.as_ref().unwrap().game_clock.time - start_time >= 10.0);
+    }
+
+    #[test]
+    fn inspector_edits_keep_the_world_coherent() {
+        use crate::components::{BlocksMovement, Health};
+        let mut engine = live_run();
+        let mut events = EventQueue::new();
+        let mut vfx = VfxManager::new();
+        let state = engine.state.as_mut().unwrap();
+        let mut dev = DevTools::new();
+        let spot = free_tile_near(state);
+        dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
+        dev.use_tool(state, &mut events, &mut vfx, spot);
+        dev.tool = Some(CursorTool::Inspect);
+        dev.use_tool(state, &mut events, &mut vfx, spot);
+        let goblin = dev.inspected.expect("picked the goblin");
+        assert_eq!(dev.tab, DevTab::Inspect);
+
+        // An edit lands; a bad one is kept as a draft with the reason.
+        dev.commands.push(DevCommand::SetComponent {
+            entity: goblin,
+            name: "Health",
+            value: serde_json::json!({"current": 3, "max": 99, "regen_amount": 0, "regen_interval": 5.0, "last_regen_time": 0.0}),
+        });
+        dev.commands.push(DevCommand::SetComponent { entity: goblin, name: "Stats", value: serde_json::json!({"strength": "huge"}) });
+        dev.apply_commands(state, &mut events, &mut vfx);
+        assert_eq!(state.world.get::<&Health>(goblin).map(|h| (h.current, h.max)).unwrap(), (3, 99));
+        assert!(dev.drafts.contains_key("Stats"), "the bad edit is kept to fix");
+
+        // Moving it and taking its blocking away keep the cache in step.
+        let elsewhere = free_tile_near(state);
+        let mut pos = (registry::find("Position").unwrap().read)(&state.world, goblin).unwrap();
+        pos["x"] = serde_json::json!(elsewhere.0);
+        pos["y"] = serde_json::json!(elsewhere.1);
+        dev.commands.push(DevCommand::SetComponent { entity: goblin, name: "Position", value: pos });
+        dev.commands.push(DevCommand::RemoveComponent { entity: goblin, name: "BlocksMovement" });
+        dev.apply_commands(state, &mut events, &mut vfx);
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after inspector edits");
+        assert!(state.world.get::<&BlocksMovement>(goblin).is_err());
+        dev.commands.push(DevCommand::AddComponent { entity: goblin, name: "BlocksMovement" });
+        dev.apply_commands(state, &mut events, &mut vfx);
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after adding it back");
+        assert!(state.spatial_cache.is_blocked(elsewhere));
     }
 }

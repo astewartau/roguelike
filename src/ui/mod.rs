@@ -560,7 +560,7 @@ pub fn run_ui(
             ctx,
             dev,
             &DevArt { icons, tileset },
-            &DevView { world, player: player_entity, game_time },
+            &DevView { world, grid, player: player_entity, game_time },
         );
 
         // Loot window (if chest is open)

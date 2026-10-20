@@ -151,9 +151,9 @@ impl ActiveAITracker {
         &self.active_entities
     }
 
-    /// Test-only: is this entity held in either set? A despawned or dead entity
-    /// must not be, or its stale id leaks until the next rebuild.
-    #[cfg(test)]
+    /// Is this entity held in either set? A despawned or dead entity must not
+    /// be, or its stale id leaks until the next rebuild. (The developer tools
+    /// ask before handing a hand-built creature to the AI.)
     pub fn is_tracked(&self, entity: Entity) -> bool {
         self.active_entities.contains(&entity) || self.dormant_entities.contains(&entity)
     }
