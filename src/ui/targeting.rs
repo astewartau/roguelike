@@ -93,7 +93,7 @@ pub fn get_ability_targeting_overlay_data(
         AbilityType::Sacrifice => {
             // Your own raised skeletons in range.
             for (e, (pos, _)) in world
-                .query::<(&Position, &crate::components::RaisedUndead)>()
+                .query::<(&Position, &crate::components::Summoned)>()
                 .iter()
             {
                 if crate::systems::actions::is_valid_sacrifice_target(world, player_entity, e) {

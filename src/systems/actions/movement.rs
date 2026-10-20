@@ -39,8 +39,8 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
     if let Some(target_entity) = queries::get_attackable_at(world, target_x, target_y, Some(entity)) {
         // Allow walking through our own tamed companions
         let is_our_companion = world
-            .get::<&crate::components::TamedBy>(target_entity)
-            .map(|t| t.owner == entity)
+            .get::<&crate::components::Follower>(target_entity)
+            .map(|t| t.leader == entity)
             .unwrap_or(false);
         if !is_our_companion {
             return ActionResult::Blocked;
@@ -474,7 +474,7 @@ pub fn apply_use_stairs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Attackable, CompanionAI, TamedBy, VisualPosition};
+    use crate::components::{Attackable, CompanionAI, Follower, VisualPosition};
     use rand::SeedableRng;
 
     // =========================================================================
@@ -649,8 +649,8 @@ mod tests {
             VisualPosition::from_position(&comp_pos),
             BlocksMovement,
             Attackable,
-            TamedBy { owner },
-            CompanionAI { owner, follow_distance: 2, threat_table: Vec::new() },
+            Follower { leader: owner },
+            CompanionAI::new(),
         ));
         let stranger_pos = Position::new(3, 1);
         let stranger = world.spawn((stranger_pos, VisualPosition::from_position(&stranger_pos)));

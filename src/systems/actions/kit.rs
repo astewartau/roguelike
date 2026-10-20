@@ -17,7 +17,7 @@ use hecs::Entity;
 
 use crate::components::{
     AbilityType, ActionType, Actor, BoneWard, ChaseAI, Container, ContainerType, EffectType,
-    Health, Player, Position, RaisedUndead, TamedBy, VisualPosition,
+    Health, Player, Position, Summoned, Follower, VisualPosition,
 };
 use crate::constants::*;
 use crate::engine::EffectCtx;
@@ -374,8 +374,7 @@ fn start_bone_ward(ctx: &mut EffectCtx, entity: Entity) {
 /// Whether `skeleton` is a living raised skeleton owned by `owner` within
 /// `SACRIFICE_RANGE`. Shared by click validation and the action itself.
 pub fn is_valid_sacrifice_target(world: &hecs::World, owner: Entity, skeleton: Entity) -> bool {
-    let owned = world.get::<&RaisedUndead>(skeleton).is_ok()
-        && world.get::<&TamedBy>(skeleton).map(|t| t.owner == owner).unwrap_or(false)
+    let owned = world.get::<&Summoned>(skeleton).is_ok_and(|s| s.by == owner)
         && world.get::<&Health>(skeleton).map(|h| h.current > 0).unwrap_or(false);
     let (Some(a), Some(b)) = (
         queries::get_entity_position(world, owner),
@@ -472,7 +471,7 @@ pub fn is_valid_corpse_target(world: &hecs::World, caster: Entity, corpse: Entit
 fn hostiles_near(world: &hecs::World, center: (i32, i32), radius: i32) -> Vec<(Entity, (i32, i32))> {
     world
         .query::<(&Position, &Health, &ChaseAI)>()
-        .without::<&TamedBy>()
+        .without::<&Follower>()
         .without::<&Player>()
         .iter()
         .filter(|(_, (p, h, _))| {
@@ -688,9 +687,9 @@ mod tests {
         let _ = arena.world.insert(
             s,
             (
-                TamedBy { owner },
-                CompanionAI { owner, follow_distance: 2, threat_table: Vec::new() },
-                RaisedUndead,
+                Follower { leader: owner },
+                CompanionAI::new(),
+                Summoned { by: owner },
             ),
         );
         arena.cache.rebuild_in_place(&arena.world);

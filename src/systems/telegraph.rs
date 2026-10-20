@@ -10,7 +10,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{ActionType, Actor, BarrelFuse, ChaseAI, OilBarrel, Position, TamedBy};
+use crate::components::{ActionType, Actor, BarrelFuse, ChaseAI, OilBarrel, Position, Follower};
 use crate::constants::*;
 
 /// Which tiles an in-progress attack will hit when it lands.
@@ -70,7 +70,7 @@ pub fn hostile_telegraphs(world: &World, now: f32) -> Vec<Telegraph> {
     let mut out = Vec::new();
     for (attacker, (actor, pos, _)) in world
         .query::<(&Actor, &Position, &ChaseAI)>()
-        .without::<&TamedBy>()
+        .without::<&Follower>()
         .iter()
     {
         let Some(action) = actor.current_action else {
@@ -229,7 +229,7 @@ mod tests {
         hostile(&mut world, 4, 6);
         // Swinging, but a tamed companion.
         let pet = hostile(&mut world, 5, 5);
-        world.insert_one(pet, TamedBy { owner: target }).unwrap();
+        world.insert_one(pet, Follower { leader: target }).unwrap();
         set_action(&mut world, pet, ActionType::Attack { target }, 0.0, 1.0);
         assert!(hostile_telegraphs(&world, 0.5).is_empty());
     }

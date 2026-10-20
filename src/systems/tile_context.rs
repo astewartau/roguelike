@@ -44,8 +44,8 @@ use crate::components::{
     CausesBurning, OnFire, ClassAbility, ClassKit, Container, ContainerType,
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, FurnitureKind, Health, Inventory, ItemType, LearnedAbilities, Name,
-    OilBarrel, OilPuddle, Player, Trap, Position, RaisedUndead,
-    SecondaryAbility, SecretDoor, StatusEffects, TamedBy, Tameable, Vendor, WetTile, Web,
+    OilBarrel, OilPuddle, Player, Trap, Position, Summoned,
+    SecondaryAbility, SecretDoor, StatusEffects, Follower, Tameable, Vendor, WetTile, Web,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -226,7 +226,7 @@ fn is_seen_creature(world: &World, player: Entity, e: Entity) -> bool {
 fn relation_of(world: &World, player: Entity, e: Entity) -> Relation {
     if e == player {
         Relation::You
-    } else if world.get::<&TamedBy>(e).map(|t| t.owner == player).unwrap_or(false) {
+    } else if world.get::<&Follower>(e).map(|t| t.leader == player).unwrap_or(false) {
         Relation::Companion
     } else if has::<FriendlyNPC>(world, e) {
         Relation::Friendly
@@ -901,7 +901,7 @@ pub fn context_actions(
                 PlayerIntent::CastLearnedSpell { ability: AbilityType::LearnedFireball, target_x: x, target_y: y },
                 in_range(dist, FIREBALL_RANGE),
             ));
-            let drainable = world.get::<&Health>(target).is_ok() && !has::<TamedBy>(world, target);
+            let drainable = world.get::<&Health>(target).is_ok() && !has::<Follower>(world, target);
             if drainable {
                 abilities.push(ability(
                     AbilityType::LifeDrain,
@@ -923,7 +923,7 @@ pub fn context_actions(
             in_range(dist, CALL_RAIN_RANGE),
         ));
     }
-    if let Some(target) = seen.iter().copied().find(|&e| has::<Tameable>(world, e) && !has::<TamedBy>(world, e)) {
+    if let Some(target) = seen.iter().copied().find(|&e| has::<Tameable>(world, e) && !has::<Follower>(world, e)) {
         abilities.push(ability(AbilityType::Tame, PlayerIntent::StartTaming { target }, in_range(dist, TAME_RANGE)));
     }
     if let Some(corpse) = corpse {
@@ -935,7 +935,7 @@ pub fn context_actions(
         let int = crate::queries::effective_stats(world, player).intelligence;
         let cap = raise_dead_cap(int);
         let check = in_range(dist, RAISE_DEAD_RANGE).and_then(|_| {
-            if actions::raised_undead_count(world) >= cap {
+            if actions::summoned_count(world, player) >= cap {
                 Err(format!("You can control only {cap} skeleton{}", if cap == 1 { "" } else { "s" }))
             } else {
                 Ok(())
@@ -943,7 +943,7 @@ pub fn context_actions(
         });
         abilities.push(ability(AbilityType::RaiseDead, PlayerIntent::StartRaiseDead { target: corpse }, check));
     }
-    if let Some(skeleton) = companion.filter(|&e| has::<RaisedUndead>(world, e)) {
+    if let Some(skeleton) = companion.filter(|&e| world.get::<&Summoned>(e).is_ok_and(|s| s.by == player)) {
         let check = if actions::is_valid_sacrifice_target(world, player, skeleton) {
             Ok(())
         } else {

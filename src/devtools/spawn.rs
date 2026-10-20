@@ -8,7 +8,7 @@ use rand::rngs::StdRng;
 use crate::components::{
     Actor, BlocksMovement, BlocksVision, BossAbility, ChaseAI, CompanionAI, Container, Door,
     FurnitureKind, TrapEffect, ItemInstance, ItemType, LanternStyle, Position, Rarity, RainCloud,
-    Sprite, TamedBy, VisualPosition,
+    Sprite, Follower, VisualPosition,
 };
 use crate::engine::ActorCtx;
 use crate::spawning::{self, enemies, EnemyDef};
@@ -396,7 +396,7 @@ fn make_companion(world: &mut hecs::World, e: Entity, owner: Entity) {
     let _ = world.remove_one::<crate::components::Asleep>(e);
     let _ = world.insert(
         e,
-        (TamedBy { owner }, CompanionAI { owner, follow_distance: 2, threat_table: Vec::new() }),
+        (Follower { leader: owner }, CompanionAI::new()),
     );
 }
 

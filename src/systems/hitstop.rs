@@ -20,7 +20,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{CompanionAI, TamedBy};
+use crate::components::Follower;
 use crate::constants::*;
 use crate::events::{DamageKind, GameEvent};
 
@@ -92,8 +92,7 @@ impl HitStop {
 
 /// Whether `entity` fights for `player` (tamed or raised companion).
 fn is_companion_of(world: &World, entity: Entity, player: Entity) -> bool {
-    world.get::<&TamedBy>(entity).map(|t| t.owner == player).unwrap_or(false)
-        || world.get::<&CompanionAI>(entity).map(|c| c.owner == player).unwrap_or(false)
+    world.get::<&Follower>(entity).map(|t| t.leader == player).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -157,7 +156,7 @@ mod tests {
     fn which_events_freeze() {
         let mut world = World::new();
         let player = world.spawn(());
-        let pet = world.spawn((TamedBy { owner: player },));
+        let pet = world.spawn((Follower { leader: player },));
         let orc = world.spawn(());
         let d = |e: GameEvent| HitStop::duration_for(&world, player, &e);
 

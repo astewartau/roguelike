@@ -203,7 +203,7 @@ pub fn combat_side(world: &World, entity: Entity) -> Option<CombatSide> {
         return None;
     };
     if e.has::<crate::components::Player>()
-        || e.has::<crate::components::TamedBy>()
+        || e.has::<crate::components::Follower>()
         || e.has::<CompanionAI>()
     {
         Some(CombatSide::Player)

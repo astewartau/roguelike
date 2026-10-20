@@ -338,7 +338,7 @@ mod tests {
         let mut arena = Arena::new((5, 5));
         let player = arena.player;
         let pet = crate::spawning::enemies::RAT.spawn(&mut arena.world, 8, 8, &mut arena.rng);
-        arena.world.insert_one(pet, crate::components::TamedBy { owner: player }).unwrap();
+        arena.world.insert_one(pet, crate::components::Follower { leader: player }).unwrap();
         effects::add_effect_to_entity(&mut arena.world, pet, EffectType::Rooted, 4.0);
         let r = crate::systems::actions::apply_move(&mut arena.ctx().effects(), pet, -1, 0);
         assert_eq!(r, ActionResult::Blocked);

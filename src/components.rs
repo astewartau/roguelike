@@ -3023,25 +3023,27 @@ pub struct BoneWard {
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Tameable;
 
-/// Marks a skeleton companion created by Raise Dead (counts against the
-/// caster's INT-scaled control cap while alive).
+/// Brought into being by `by` (raised from bones, called up by a boss), and
+/// counting against how many it can keep at once while it lives.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct RaisedUndead;
-
-/// Marks an animal as tamed
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct TamedBy {
-    /// The player who tamed this animal
+pub struct Summoned {
     #[serde(with = "crate::component_registry::entity_ref")]
-    pub owner: Entity,
+    pub by: Entity,
 }
 
-/// AI for tamed companions - defensive mode, attacks enemies threatening owner
+/// On `leader`'s side: it won't attack them or their other followers, nor
+/// they it, their traps spare it, and a `CompanionAI` follows them. A tamed
+/// animal, a raised skeleton.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Follower {
+    #[serde(with = "crate::component_registry::entity_ref")]
+    pub leader: Entity,
+}
+
+/// AI for companions: stays near its `Follower::leader` and fights whoever
+/// threatens them.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompanionAI {
-    /// The player this companion follows
-    #[serde(with = "crate::component_registry::entity_ref")]
-    pub owner: Entity,
     /// Maximum distance before following (Manhattan distance)
     pub follow_distance: i32,
     /// Per-target threat tracking (populated by being attacked or owner combat)
@@ -3049,6 +3051,11 @@ pub struct CompanionAI {
 }
 
 impl CompanionAI {
+    /// A companion that keeps within a couple of tiles of its leader.
+    pub fn new() -> Self {
+        Self { follow_distance: 2, threat_table: Vec::new() }
+    }
+
     /// Add threat for a specific entity. Creates entry if not present.
     pub fn add_threat(&mut self, target: Entity, amount: f32) {
         if let Some(entry) = self.threat_table.iter_mut().find(|e| e.entity == target) {
@@ -3139,13 +3146,6 @@ pub struct Boss {
     pub cooldown: f32,
     /// Whether the first-sighting message has been shown.
     pub announced: bool,
-}
-
-/// A minion summoned by a boss (counts toward its alive-minion cap).
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct BossMinion {
-    #[serde(with = "crate::component_registry::entity_ref")]
-    pub boss: Entity,
 }
 
 /// Marker: never panics from morale checks and cannot be Feared (bosses).

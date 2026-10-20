@@ -8,7 +8,7 @@ use crate::components::{
     AbilityType, Attackable, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container, ContainerType,
     EffectType, Equipment, EquippedWeapon, Health, Inventory, ItemType, LearnedAbilities,
     Player, Position, Projectile, ProjectileMarker,
-    SecondaryAbility, Sprite, TamedBy, VisualPosition,
+    SecondaryAbility, Sprite, Follower, VisualPosition,
 };
 use crate::constants::*;
 use crate::engine::EffectCtx;
@@ -311,7 +311,7 @@ pub fn apply_activate_fear(
     let targets: Vec<hecs::Entity> = world
         .query::<(&Position, &Health)>()
         .without::<&Player>()
-        .without::<&TamedBy>()
+        .without::<&Follower>()
         .iter()
         .filter(|(_, (pos, health))| {
             let dx = (pos.x - ex).abs();
@@ -439,13 +439,13 @@ pub fn apply_cast_learned_spell(
 // RAISE DEAD (Necromancer)
 // =============================================================================
 
-/// Number of living raised skeletons in the world (they lose `Health` when
-/// they die and turn into bones, so this counts only active ones).
-pub fn raised_undead_count(world: &World) -> usize {
+/// How many living things `by` has summoned (raised skeletons lose `Health`
+/// when they die and turn into bones, so this counts only active ones).
+pub fn summoned_count(world: &World, by: Entity) -> usize {
     world
-        .query::<(&crate::components::RaisedUndead, &Health)>()
+        .query::<(&crate::components::Summoned, &Health)>()
         .iter()
-        .filter(|(_, (_, h))| h.current > 0)
+        .filter(|(_, (s, h))| s.by == by && h.current > 0)
         .count()
 }
 
@@ -482,7 +482,7 @@ pub fn apply_start_raise_dead(
 
     // Control cap (also enforced at activation; re-checked defensively here)
     let cap = crate::constants::raise_dead_cap(queries::effective_stats(world, caster).intelligence);
-    if raised_undead_count(world) >= cap {
+    if summoned_count(world, caster) >= cap {
         return ActionResult::Invalid;
     }
 
@@ -756,7 +756,7 @@ fn complete_taming(
     target: Entity,
     events: &mut EventQueue,
 ) {
-    use crate::components::{CompanionAI, TamedBy};
+    use crate::components::{CompanionAI, Follower};
 
     // Remove hostile AI (but keep Attackable so enemies can still attack the companion)
     let _ = world.remove_one::<ChaseAI>(target);
@@ -770,12 +770,8 @@ fn complete_taming(
     spatial_cache.clear_blocking_flags(target);
 
     // Add companion components
-    let _ = world.insert_one(target, TamedBy { owner: tamer });
-    let _ = world.insert_one(target, CompanionAI {
-        owner: tamer,
-        follow_distance: 2,
-        threat_table: Vec::new(),
-    });
+    let _ = world.insert_one(target, Follower { leader: tamer });
+    let _ = world.insert_one(target, CompanionAI::new());
 
     // Emit event
     events.push(GameEvent::TamingCompleted { tamer, target });
@@ -1074,7 +1070,7 @@ pub fn apply_shoot_crippling_shot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{RaisedUndead, Stats};
+    use crate::components::{Stats, Summoned};
     use crate::events::GameEvent;
 
     /// Blinking onto a web roots you, the same as walking into it would.
@@ -1134,8 +1130,8 @@ mod tests {
         let bones = spawn_bones(&mut world, 6, 5, vec![], 0);
 
         // One raised skeleton already up: at the cap, the channel refuses.
-        let undead = world.spawn((RaisedUndead, Health::new(8)));
-        assert_eq!(raised_undead_count(&world), 1);
+        let undead = world.spawn((Summoned { by: caster }, Health::new(8)));
+        assert_eq!(summoned_count(&world, caster), 1);
         assert_eq!(
             apply_start_raise_dead(&mut world, caster, bones, &mut events),
             ActionResult::Invalid
@@ -1144,7 +1140,7 @@ mod tests {
 
         // The skeleton falls -> a slot frees up and the channel starts.
         world.get::<&mut Health>(undead).unwrap().current = 0;
-        assert_eq!(raised_undead_count(&world), 0);
+        assert_eq!(summoned_count(&world, caster), 0);
         assert_eq!(
             apply_start_raise_dead(&mut world, caster, bones, &mut events),
             ActionResult::Completed

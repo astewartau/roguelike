@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{AbilityType, Attackable, BlocksMovement, Container, ContainerType, Door, Health, ItemType, Player, Position, TamedBy, Tameable};
+use crate::components::{AbilityType, Attackable, BlocksMovement, Container, ContainerType, Door, Health, ItemType, Player, Position, Follower, Tameable};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -782,7 +782,7 @@ pub fn process_frame(
                             let mut enemy_target = None;
                             for (entity, (tpos, health)) in world.query::<(&Position, &Health)>()
                                 .without::<&Player>()
-                                .without::<&TamedBy>()
+                                .without::<&Follower>()
                                 .iter()
                             {
                                 if tpos.x == target_x && tpos.y == target_y && health.current > 0 {
@@ -899,7 +899,7 @@ pub fn process_frame(
                         AbilityType::Sacrifice => {
                             // One of your own raised skeletons, in range.
                             let skeleton = world
-                                .query::<(&Position, &crate::components::RaisedUndead)>()
+                                .query::<(&Position, &crate::components::Summoned)>()
                                 .iter()
                                 .find(|(e, (p, _))| {
                                     p.x == target_x

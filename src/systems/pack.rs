@@ -18,12 +18,12 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{AIState, Asleep, ChaseAI, Health, PackHunter, Player, Position, TamedBy};
+use crate::components::{AIState, Asleep, ChaseAI, Health, PackHunter, Player, Position, Follower};
 use crate::constants::*;
 
 /// Whether `entity` is an untamed pack rat.
 fn is_wild_pack_rat(world: &World, entity: Entity) -> bool {
-    world.get::<&PackHunter>(entity).is_ok() && world.get::<&TamedBy>(entity).is_err()
+    world.get::<&PackHunter>(entity).is_ok() && world.get::<&Follower>(entity).is_err()
 }
 
 /// Living untamed pack rats within `RAT_PACK_RADIUS` (Chebyshev) of `rat`,
@@ -34,7 +34,7 @@ fn packmates_near(world: &World, rat: Entity) -> Vec<Entity> {
     };
     world
         .query::<(&Position, &Health, &PackHunter)>()
-        .without::<&TamedBy>()
+        .without::<&Follower>()
         .iter()
         .filter(|(id, (p, h, _))| {
             *id != rat

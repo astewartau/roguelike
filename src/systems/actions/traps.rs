@@ -27,7 +27,7 @@ pub(crate) fn check_trap_trigger(
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) {
-    use crate::components::{Concealed, TamedBy, Trap, TrapEffect};
+    use crate::components::{Concealed, Follower, Trap, TrapEffect};
 
     let trap_info: Option<(Entity, Trap)> = world
         .query::<(&Position, &Trap)>()
@@ -39,7 +39,7 @@ pub(crate) fn check_trap_trigger(
     };
 
     if let Some(owner) = trap.owner {
-        let owners_pet = world.get::<&TamedBy>(victim).is_ok_and(|t| t.owner == owner);
+        let owners_pet = world.get::<&Follower>(victim).is_ok_and(|t| t.leader == owner);
         if victim == owner || owners_pet {
             return;
         }
@@ -167,7 +167,7 @@ pub fn apply_open_chest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Attackable, Health, StatusEffects, TamedBy, TrapEffect};
+    use crate::components::{Attackable, Health, StatusEffects, Follower, TrapEffect};
     use crate::grid::Grid;
     use crate::tile::{Tile, TileType};
     use rand::rngs::StdRng;
@@ -277,7 +277,7 @@ mod tests {
         let grid = make_grid(7, 7);
         let mut events = EventQueue::new();
         let owner = world.spawn((Position::new(1, 1), StatusEffects::new()));
-        let pet = world.spawn((Position::new(1, 1), StatusEffects::new(), TamedBy { owner }));
+        let pet = world.spawn((Position::new(1, 1), StatusEffects::new(), Follower { leader: owner }));
         let stranger = world.spawn((Position::new(1, 1), StatusEffects::new()));
         apply_place_trap(&mut world, owner, TrapEffect::snare(), 1, 1, &mut events);
 

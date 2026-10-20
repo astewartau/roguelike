@@ -1,7 +1,7 @@
 //! Game simulation - turn execution, time advancement, and event processing.
 
 use crate::components::{
-    ActionType, Actor, AIState, ChaseAI, EffectType, Health, Inventory, ItemType, TamedBy,
+    ActionType, Actor, AIState, ChaseAI, EffectType, Health, Inventory, ItemType, Follower,
 };
 use crate::constants;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -129,10 +129,10 @@ pub fn player_at_full_health(world: &World, player: Entity) -> bool {
 
 /// Whether any hostile enemy is currently aware of a target (chasing or
 /// investigating). Tamed companions are excluded — they use `CompanionAI`, but
-/// we guard with `TamedBy` as well so a friendly never blocks resting.
+/// we guard with `Follower` as well so a friendly never blocks resting.
 pub fn any_enemy_alerted(world: &World, _player: Entity) -> bool {
     for (id, ai) in world.query::<&ChaseAI>().iter() {
-        if world.get::<&TamedBy>(id).is_ok() {
+        if world.get::<&Follower>(id).is_ok() {
             continue;
         }
         if matches!(ai.state, AIState::Chasing | AIState::Investigating) {

@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, Channel, ChannelEffect, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, Channel, ChannelEffect, Asleep, Boss, BossAbility, Summoned, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, Follower, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -54,13 +54,13 @@ pub fn generate_companion_threat(world: &mut World, companion: Entity, threat_so
 /// Whether `other` is on `companion`'s own side: its owner, or another
 /// companion tamed by the same owner.
 fn is_own_side_of_companion(world: &World, companion: Entity, other: Entity) -> bool {
-    let Ok(owner) = world.get::<&CompanionAI>(companion).map(|ai| ai.owner) else {
+    let Ok(owner) = world.get::<&Follower>(companion).map(|f| f.leader) else {
         return false;
     };
     other == owner
         || world
-            .get::<&TamedBy>(other)
-            .map(|t| t.owner == owner)
+            .get::<&Follower>(other)
+            .map(|t| t.leader == owner)
             .unwrap_or(false)
 }
 
@@ -318,7 +318,10 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
 
     // Check if entity has AI (ChaseAI for enemies, CompanionAI for tamed animals)
     let has_chase_ai = world.get::<&ChaseAI>(entity).is_ok();
-    let companion_ai = world.get::<&CompanionAI>(entity).ok().map(|ai| (ai.owner, ai.follow_distance));
+    let companion_ai = world
+        .get::<&CompanionAI>(entity)
+        .ok()
+        .and_then(|ai| Some((world.get::<&Follower>(entity).ok()?.leader, ai.follow_distance)));
 
     if !has_chase_ai && companion_ai.is_none() {
         return;
@@ -911,9 +914,9 @@ fn try_boss_ability(
             // Cap living minions; don't consume the cooldown while capped so
             // the next brood follows promptly once one falls.
             let alive = world
-                .query::<(&BossMinion, &Health)>()
+                .query::<(&Summoned, &Health)>()
                 .iter()
-                .filter(|(_, (minion, health))| minion.boss == entity && health.current > 0)
+                .filter(|(_, (minion, health))| minion.by == entity && health.current > 0)
                 .count();
             if alive >= BOSS_SPIDER_MINION_CAP {
                 return None;
@@ -1583,7 +1586,7 @@ fn flank_destination(
     }
     let allies: Vec<(i32, i32)> = world
         .query::<(&Position, &ChaseAI, &Health)>()
-        .without::<&TamedBy>()
+        .without::<&Follower>()
         .iter()
         .filter(|(id, (p, _, h))| {
             *id != entity && *id != target && h.current > 0 && adjacent((p.x, p.y), target_pos)
@@ -2001,7 +2004,7 @@ mod tests {
         arena.hunt(gob, GOBLIN_SPEED);
         // A tamed "ally" next to the player does not count.
         let pet = crate::spawning::enemies::SKELETON.spawn(&mut arena.world, 7, 8, &mut arena.rng);
-        arena.world.insert_one(pet, TamedBy { owner: player }).unwrap();
+        arena.world.insert_one(pet, Follower { leader: player }).unwrap();
         // Awake, so the goblin has nobody to shout awake first.
         arena.world.get::<&mut ChaseAI>(pet).unwrap().state = AIState::Idle;
         arena.cache.rebuild_in_place(&arena.world);

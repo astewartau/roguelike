@@ -2066,8 +2066,8 @@ fn player_too_hungry_to_recover(world: &hecs::World, player: Entity) -> bool {
 /// Spawn a raised skeleton companion at a position (Raise Dead completion).
 ///
 /// Uses the standard Skeleton stat block but wired into the tamed-companion
-/// infrastructure: no hostile AI, walkable (no BlocksMovement), `TamedBy` +
-/// `CompanionAI` for defensive follow behavior, plus the `RaisedUndead`
+/// infrastructure: no hostile AI, walkable (no BlocksMovement), `Follower` +
+/// `CompanionAI` for defensive follow behavior, plus `Summoned`
 /// marker that counts against the caster's INT-scaled control cap.
 /// Pick where the starting-room campfire goes, or `None` if the room has
 /// nowhere safe for it.
@@ -2145,13 +2145,9 @@ fn spawn_raised_skeleton(ctx: &mut ActorCtx, x: i32, y: i32) {
     let _ = world.insert(
         skeleton,
         (
-            crate::components::TamedBy { owner },
-            crate::components::CompanionAI {
-                owner,
-                follow_distance: 2,
-                threat_table: Vec::new(),
-            },
-            crate::components::RaisedUndead,
+            crate::components::Follower { leader: owner },
+            crate::components::CompanionAI::new(),
+            crate::components::Summoned { by: owner },
             // Sickly green tint so allied bones read differently from the
             // hostile skeletons they share a sprite with.
             crate::components::SpriteTint { r: 0.65, g: 1.0, b: 0.75 },
@@ -2174,7 +2170,7 @@ fn spawn_boss_minion(ctx: &mut ActorCtx, boss: Entity, x: i32, y: i32) {
     let spider = spawning::enemies::LESSER_GIANT_SPIDER.spawn(ctx.world, x, y, ctx.rng);
     let _ = ctx
         .world
-        .insert_one(spider, crate::components::BossMinion { boss });
+        .insert_one(spider, crate::components::Summoned { by: boss });
 
     // Summoned mid-fight: wide awake and already hunting the summoner's prey.
     let _ = ctx.world.remove_one::<crate::components::Asleep>(spider);
@@ -2273,7 +2269,7 @@ impl AbilitySlot {
                 // Enforce the INT-scaled control cap up front, with feedback.
                 let int = crate::queries::effective_stats(ctx.world, player).intelligence;
                 let cap = raise_dead_cap(int);
-                let active = systems::actions::raised_undead_count(ctx.world);
+                let active = systems::actions::summoned_count(ctx.world, player);
                 if active >= cap {
                     ctx.ui.message_log.system(format!(
                         "You cannot control more than {} raised skeleton{} (1 + 1 per {} INT above 10).",
@@ -2300,10 +2296,10 @@ impl AbilitySlot {
                 // targeting mode with no valid target.
                 let has_skeleton = ctx
                     .world
-                    .query::<(&crate::components::RaisedUndead, &crate::components::TamedBy)>()
+                    .query::<&crate::components::Summoned>()
                     .iter()
-                    .any(|(e, (_, t))| {
-                        t.owner == player
+                    .any(|(e, s)| {
+                        s.by == player
                             && systems::actions::is_valid_sacrifice_target(ctx.world, player, e)
                     });
                 if !has_skeleton {
@@ -3587,7 +3583,7 @@ mod tests {
             .query::<&crate::components::ChaseAI>()
             .iter()
             .map(|(id, _)| id)
-            .find(|id| state.world.get::<&crate::components::TamedBy>(*id).is_err())
+            .find(|id| state.world.get::<&crate::components::Follower>(*id).is_err())
             .expect("a fresh floor has hostiles");
         if let Ok(mut ai) = state.world.get::<&mut crate::components::ChaseAI>(hostile) {
             ai.state = crate::components::AIState::Chasing;
@@ -3765,8 +3761,8 @@ mod tests {
     }
 
     /// A raised skeleton is a true companion: standard skeleton stat block
-    /// wired into the tamed-ally infrastructure (CompanionAI + TamedBy +
-    /// RaisedUndead), not a hostile — and it doesn't block its owner's path.
+    /// wired into the tamed-ally infrastructure (CompanionAI + Follower +
+    /// Summoned), not a hostile — and it doesn't block its owner's path.
     #[test]
     fn test_spawn_raised_skeleton_is_companion_not_hostile() {
         let mut world = hecs::World::new();
@@ -3800,19 +3796,20 @@ mod tests {
         );
 
         let (skeleton, _) = world
-            .query::<&crate::components::RaisedUndead>()
+            .query::<&crate::components::Summoned>()
             .iter()
             .next()
             .map(|(id, r)| (id, *r))
             .expect("a raised skeleton exists");
 
         // Ally wiring...
+        assert!(world.get::<&crate::components::CompanionAI>(skeleton).is_ok(), "companion AI attached");
         let companion_owner = world
-            .get::<&crate::components::CompanionAI>(skeleton)
-            .map(|c| c.owner)
-            .expect("companion AI attached");
+            .get::<&crate::components::Follower>(skeleton)
+            .map(|c| c.leader)
+            .expect("follows its raiser");
         assert_eq!(companion_owner, owner);
-        assert!(world.get::<&crate::components::TamedBy>(skeleton).is_ok());
+        assert!(world.get::<&crate::components::Follower>(skeleton).is_ok());
         // ... and no hostile leftovers.
         assert!(world.get::<&crate::components::ChaseAI>(skeleton).is_err());
         assert!(world.get::<&crate::components::Asleep>(skeleton).is_err());
@@ -3834,7 +3831,7 @@ mod tests {
         cache.assert_coherent_with_world(&world, "after raising a skeleton");
         // It keeps the skeleton stat block (alive, counted against the cap).
         assert_eq!(
-            crate::systems::actions::raised_undead_count(&world),
+            crate::systems::actions::summoned_count(&world, owner),
             1,
             "the new companion counts against the raise cap"
         );

@@ -3,7 +3,7 @@
 //! Converts input into action types and calculates action durations.
 //! Extracted from time_system.rs to separate action semantics from time management.
 
-use crate::components::{ActionType, Attackable, BlocksMovement, Container, Door, FriendlyNPC, Player, Position, TamedBy};
+use crate::components::{ActionType, Attackable, BlocksMovement, Container, Door, FriendlyNPC, Player, Position, Follower};
 use crate::constants::*;
 use crate::events::StairDirection;
 use crate::grid::Grid;
@@ -122,13 +122,13 @@ pub fn determine_action_type(
                 continue;
             }
             // Skip if this is our own tamed companion (player walking into their pet)
-            if let Ok(tamed_by) = world.get::<&TamedBy>(id) {
-                if tamed_by.owner == entity {
+            if let Ok(tamed_by) = world.get::<&Follower>(id) {
+                if tamed_by.leader == entity {
                     continue;
                 }
                 // Skip if we're a companion and target is a sibling companion (same owner)
-                if let Ok(my_tamed_by) = world.get::<&TamedBy>(entity) {
-                    if tamed_by.owner == my_tamed_by.owner {
+                if let Ok(my_tamed_by) = world.get::<&Follower>(entity) {
+                    if tamed_by.leader == my_tamed_by.leader {
                         continue;
                     }
                 }
@@ -136,7 +136,7 @@ pub fn determine_action_type(
             // A companion stepping into its own owner (a confused or
             // fleeing skeleton stumbling into the necromancer) holds still
             // instead of attacking them.
-            if world.get::<&TamedBy>(entity).map(|t| t.owner == id).unwrap_or(false) {
+            if world.get::<&Follower>(entity).map(|t| t.leader == id).unwrap_or(false) {
                 return ActionType::Wait;
             }
             return ActionType::Attack { target: id };

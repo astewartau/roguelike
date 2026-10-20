@@ -6,7 +6,7 @@ use rand::Rng;
 
 use crate::components::{
     Attackable, CompanionAI, EffectType, Equipment, Health, LungeAnimation, Player, Position,
-    SecondaryAbility, TamedBy,
+    SecondaryAbility, Follower,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, MissReason};
@@ -449,7 +449,7 @@ pub fn apply_activate_stun(
     let targets: Vec<hecs::Entity> = world
         .query::<(&Position, &Health)>()
         .without::<&Player>()
-        .without::<&TamedBy>()
+        .without::<&Follower>()
         .iter()
         .filter(|(_, (pos, health))| {
             let dx = (pos.x - ex).abs();
@@ -1060,7 +1060,7 @@ pub(super) mod tests {
             Position::new(x, y),
             Health::new(20),
             StatusEffects::new(),
-            TamedBy { owner: player },
+            Follower { leader: player },
             Attackable,
             crate::components::BlocksMovement,
         ));
