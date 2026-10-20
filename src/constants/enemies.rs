@@ -365,6 +365,10 @@ pub const THROWN_IMPACT_NOISE_RADIUS: i32 = 5;
 /// An arrow clattering off whatever it lands on — a quieter lure than a
 /// thrown bottle (the bow's own twang is `RANGED_NOISE_RADIUS`, at the archer).
 pub const ARROW_IMPACT_NOISE_RADIUS: i32 = 3;
+/// A Call Rain downpour starting. Heard where it falls, not at the caster, so
+/// it wakes whatever is near the rain and sends it to look at the rain, not
+/// at you: rain out a guard's torch and slip past while it investigates.
+pub const CALL_RAIN_NOISE_RADIUS: i32 = 5;
 /// Extra tiles of travel a noise pays to get through a closed door. At 3 a
 /// fight (4) behind a shut door is only heard right outside it; an explosion
 /// (10) still carries.

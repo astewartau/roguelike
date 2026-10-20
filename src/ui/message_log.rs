@@ -963,15 +963,17 @@ fn capitalize(s: &str) -> String {
 
 /// Draw the message log in the bottom-left corner.
 ///
-/// Rendered as a non-interactive background area so it never steals clicks from
-/// the world or other UI.
+/// Rendered as a non-interactive area so it never steals clicks from the
+/// world or other UI. It sits at the windows' level, `Middle`, not
+/// `Background`: the world-space overlays (`ui::vfx`) paint on `Background`,
+/// and there egui draws painter layers over areas, so effects would cover it.
 pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
     if log.messages.is_empty() {
         return;
     }
 
     egui::Area::new(egui::Id::new("message_log"))
-        .order(egui::Order::Background)
+        .order(egui::Order::Middle)
         .interactable(false)
         .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
         .show(ctx, |ui| {

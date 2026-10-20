@@ -414,7 +414,7 @@ fn outlined_number(
 /// Render floating damage and heal numbers
 pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("damage_numbers"),
     ));
 
@@ -497,7 +497,7 @@ pub fn draw_damage_numbers(ctx: &egui::Context, effects: &[VisualEffect], camera
 /// Render alert indicators ("!") when enemies spot the player
 pub fn draw_alert_indicators(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("alert_indicators"),
     ));
 
@@ -572,7 +572,7 @@ pub fn draw_resting_indicators(
     };
 
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("resting_indicators"),
     ));
     let ppp = ctx.pixels_per_point();
@@ -694,7 +694,7 @@ pub fn draw_enemy_status_indicators(
     enemies: &[EnemyStatusData],
 ) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("enemy_status_indicators"),
     ));
 
@@ -797,7 +797,7 @@ fn tile_hash(dx: i32, dy: i32) -> u32 {
 /// Tiles are flipped and nudged at random so the grid doesn't show.
 pub fn draw_explosions(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera, icons: &UiIcons) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("explosions"),
     ));
 
@@ -945,7 +945,7 @@ pub fn draw_rain(
         return;
     }
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("rain"),
     ));
     let ppp = ctx.pixels_per_point();
@@ -1008,7 +1008,7 @@ fn rain_particles(painter: &egui::Painter, tile: egui::Rect, seed: u32, time: f3
 /// Render potion splash effects
 pub fn draw_potion_splashes(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("potion_splashes"),
     ));
 
@@ -1127,10 +1127,10 @@ pub fn draw_player_buff_auras(
     let center = egui::pos2(egui_x + tile_size / 2.0, egui_y - tile_size / 2.0);
 
     // Sneaking indicator: an eye emoji tucked into the top-right corner of the
-    // player sprite (foreground so it reads over the sprite/terrain).
+    // player sprite (over the sprite and terrain, under the UI windows).
     if data.is_sneaking {
         let fg = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
+            egui::Order::Background,
             egui::Id::new("sneak_indicator"),
         ));
         // Top-left corner of the player tile (like the other status indicators).
@@ -1301,7 +1301,7 @@ pub fn draw_life_drain_beams(
     }
 
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("life_drain_beams"),
     ));
 
@@ -1414,7 +1414,7 @@ pub fn draw_taming_beams(ctx: &egui::Context, camera: &Camera, beams: &[TamingBe
     }
 
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("taming_beams"),
     ));
 
@@ -1578,7 +1578,7 @@ pub fn draw_channel_progress(ctx: &egui::Context, camera: &Camera, channels: &[C
 /// souls rising off them, and a wavering tether back to the necromancer.
 pub fn draw_raise_dead_channels(ctx: &egui::Context, camera: &Camera, channels: &[ChannelData], time: f32) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("raise_dead_channels"),
     ));
     let ppp = ctx.pixels_per_point();

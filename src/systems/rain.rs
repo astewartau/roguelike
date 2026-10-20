@@ -96,4 +96,36 @@ mod tests {
         tick_rain(&mut ctx, CALL_RAIN_DURATION);
         assert!(ctx.world.get::<&RainCloud>(cloud).is_err());
     }
+
+    #[test]
+    fn rain_puts_out_carried_torches() {
+        let mut world = hecs::World::new();
+        let mut grid = Grid::filled(12, 12, TileType::Floor);
+        let mut spatial = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
+        let mut events = EventQueue::new();
+        let mut rng = StdRng::seed_from_u64(2);
+        let goblin = crate::spawning::enemies::GOBLIN.spawn(&mut world, 6, 5, &mut rng);
+        let hero = world.spawn((
+            Position::new(4, 5),
+            crate::components::Equipment::empty(),
+            StatusEffects::new(),
+        ));
+        world.get::<&mut crate::components::Equipment>(hero).unwrap().off_hand =
+            Some(crate::components::ItemInstance::plain(crate::components::ItemType::Torch));
+        crate::systems::torches::sync_held_torch(&mut world, hero);
+        world.spawn((
+            Position::new(5, 5),
+            RainCloud { radius: CALL_RAIN_RADIUS, remaining: CALL_RAIN_DURATION, since_soak: 0.0 },
+        ));
+        let lit = |w: &hecs::World, e| w.get::<&crate::components::CarriedTorch>(e).is_ok_and(|t| t.lit);
+        assert!(lit(&world, goblin) && lit(&world, hero));
+
+        let mut ctx = EffectCtx { world: &mut world, grid: &mut grid, spatial: &mut spatial, events: &mut events, rng: &mut rng };
+        tick_rain(&mut ctx, 0.6);
+        let mut acc = 0.0;
+        let mut dirty = false;
+        crate::systems::fire::tick_fire(&mut ctx, 0.1, &mut acc, &mut dirty);
+        assert!(!lit(ctx.world, goblin), "the goblin's torch is rained out");
+        assert!(!lit(ctx.world, hero), "so is yours");
+    }
 }

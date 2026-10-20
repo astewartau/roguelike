@@ -637,6 +637,10 @@ pub fn apply_call_rain(ctx: &mut EffectCtx, caster: Entity, tx: i32, ty: i32) ->
         .collect();
     ctx.events.push(GameEvent::RainCalled { caster, position: (tx, ty), tiles, doused });
 
+    // The downpour is heard where it falls: it wakes those near it and they
+    // come to look at the rain, not at whoever called it.
+    crate::systems::noise::make_noise(ctx.world, ctx.grid, (tx, ty), CALL_RAIN_NOISE_RADIUS);
+
     // And it keeps raining there for a while (`systems::rain`).
     ctx.world.spawn((
         Position::new(tx, ty),
@@ -1430,6 +1434,23 @@ mod tests {
         arena.player_does(ActionType::AttackDirection { dx: 1, dy: 0 });
         crate::systems::fire::smash_broken_lanterns(&mut arena.world, &arena.grid, &mut arena.cache, &mut arena.events);
         assert!(!arena.world.contains(lantern), "a deliberate blow breaks it");
+    }
+
+    #[test]
+    fn rain_wakes_whoever_is_under_it_but_points_them_at_the_rain() {
+        use crate::components::{AIState, Asleep, ChaseAI};
+        let mut arena = Arena::new((3, 5));
+        let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(9);
+        let goblin = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, 9, 5, &mut rng);
+        let _ = arena.world.insert_one(goblin, Asleep);
+        arena.cache.rebuild_in_place(&arena.world);
+
+        arena.player_does(ActionType::CallRain { target_x: 9, target_y: 5 });
+
+        assert!(arena.world.get::<&Asleep>(goblin).is_err(), "the rain wakes it");
+        let ai = arena.world.get::<&ChaseAI>(goblin).unwrap();
+        assert_ne!(ai.state, AIState::Chasing, "but it isn't onto you");
+        assert_eq!(ai.last_known_pos_for(arena.player), Some((9, 5)), "it goes to look at the rain");
     }
 
     #[test]

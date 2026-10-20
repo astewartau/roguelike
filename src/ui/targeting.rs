@@ -196,9 +196,10 @@ pub fn draw_targeting_overlay(ctx: &egui::Context, camera: &Camera, data: &Targe
     // Tile size: camera.zoom pixels = 1 world unit, convert to egui points
     let tile_size = camera.zoom / ppp;
 
-    // Get the painter for the foreground layer
+    // Painted over the world but under the UI windows, like every other
+    // world-space overlay (see `ui::vfx`).
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("targeting_overlay"),
     ));
 
