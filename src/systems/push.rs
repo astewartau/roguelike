@@ -157,7 +157,7 @@ pub fn on_object_enter_tile(
     _rng: &mut impl Rng,
 ) {
     if grid.water_positions.contains(&(x, y)) {
-        let duration = if world.get::<&crate::components::OilBarrel>(object).is_ok() {
+        let duration = if world.get::<&crate::components::Explosive>(object).is_ok() {
             BARREL_SOAK_DURATION
         } else {
             WET_DURATION
@@ -220,7 +220,7 @@ pub fn has_bash_target(world: &World, basher: Entity, tile: (i32, i32)) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{ActionType, OilBarrel};
+    use crate::components::{ActionType, Explosive};
     use crate::systems::actions::TestArena as Arena;
 
     fn barrel(arena: &mut Arena, x: i32, y: i32) -> Entity {
@@ -327,6 +327,6 @@ mod tests {
         arena.player_does(ActionType::Push { dx: 1, dy: 0 });
         assert_eq!(arena.pos(b), (7, 5));
         assert!(!crate::queries::has_status_effect(&arena.world, b, EffectType::Burning));
-        assert!(arena.world.get::<&OilBarrel>(b).is_ok());
+        assert!(arena.world.get::<&Explosive>(b).is_ok());
     }
 }

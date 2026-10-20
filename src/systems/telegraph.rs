@@ -10,7 +10,7 @@
 
 use hecs::{Entity, World};
 
-use crate::components::{ActionType, Actor, BarrelFuse, ChaseAI, OilBarrel, Position, Follower};
+use crate::components::{ActionType, Actor, BarrelFuse, ChaseAI, Explosive, Position, Follower};
 use crate::constants::*;
 
 /// Which tiles an in-progress attack will hit when it lands.
@@ -120,7 +120,7 @@ pub fn hostile_telegraphs(world: &World, now: f32) -> Vec<Telegraph> {
 /// `systems::fire`), so this is frozen while the player decides.
 pub fn barrel_fuse_telegraphs(world: &World) -> Vec<Telegraph> {
     world
-        .query::<(&Position, &BarrelFuse, &OilBarrel)>()
+        .query::<(&Position, &BarrelFuse, &Explosive)>()
         .iter()
         .map(|(barrel, (pos, fuse, _))| Telegraph {
             attacker: barrel,

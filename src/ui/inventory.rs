@@ -210,12 +210,8 @@ fn draw_stats_column(
 
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
 
-                        // Use correct icon based on weapon type
-                        let weapon_uv = match weapon.name.as_str() {
-                            "Dagger" => icons.dagger_uv,
-                            "Staff" => icons.staff_uv,
-                            _ => icons.sword_uv,
-                        };
+                        // The icon of the item it is (a sword for natural weapons).
+                        let weapon_uv = icons.get_item_uv(weapon.item.unwrap_or(crate::components::ItemType::Sword));
                         let image = egui::Image::new(egui::load::SizedTexture::new(
                             icons.items_texture_id,
                             size,

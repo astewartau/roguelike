@@ -1291,7 +1291,7 @@ pub fn spawn_crystal_cluster(world: &mut World, x: i32, y: i32) -> hecs::Entity 
 /// Spawn an (unlit) oil puddle on a floor tile: walkable, doesn't block
 /// vision, and harmless until fire reaches it (see `systems::fire`).
 pub fn spawn_oil_puddle(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{Fuel, OilPuddle, Sprite, SpriteTint};
+    use crate::components::{Fuel, Name, OilPuddle, Sprite, SpriteTint};
     use crate::constants::OIL_PUDDLE_TINT;
 
     let pos = Position::new(x, y);
@@ -1301,6 +1301,7 @@ pub fn spawn_oil_puddle(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::OIL_PUDDLE),
         SpriteTint { r, g, b },
+        Name::new("Oil puddle"),
         OilPuddle,
         Fuel::oil(),
     ))
@@ -1457,13 +1458,14 @@ pub fn spawn_web(
     y: i32,
     spinner: Option<hecs::Entity>,
 ) -> hecs::Entity {
-    use crate::components::{Fuel, Web};
+    use crate::components::{Fuel, Name, Web};
 
     let pos = Position::new(x, y);
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::WEB),
+        Name::new("Web"),
         Web { spinner },
         Fuel::web(),
     ))
@@ -1561,7 +1563,7 @@ pub fn apply_boss_role(
     ability: crate::components::BossAbility,
     announced: bool,
 ) {
-    use crate::components::{Asleep, Boss, BossAbility, FearImmune, Name, WebSpinner};
+    use crate::components::{Asleep, Boss, BossAbility, FearImmune, Name, WebSpinner, XpMultiplier};
 
     // Awake (asleep=false), just not yet alerted.
     let _ = world.remove_one::<Asleep>(entity);
@@ -1574,6 +1576,7 @@ pub fn apply_boss_role(
         (
             Boss { ability, cooldown: boss_cooldown(ability), announced },
             FearImmune,
+            XpMultiplier(crate::constants::BOSS_XP_MULT),
         ),
     );
 
@@ -1590,7 +1593,7 @@ pub fn apply_boss_role(
 /// attackable (breaking it open lights a short fuse — see `systems::fire`)
 /// and pushable. Distinguished from food storage barrels by a red/dark tint.
 pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{Combustible, Health, Name, OilBarrel, Sprite, SpriteTint};
+    use crate::components::{Combustible, Health, Name, Explosive, Sprite, SpriteTint};
     use crate::constants::{OIL_BARREL_FLAMMABILITY, OIL_BARREL_HEALTH, OIL_BARREL_TINT};
 
     let pos = Position::new(x, y);
@@ -1600,8 +1603,8 @@ pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::BARREL),
         SpriteTint { r, g, b },
-        Name::new("Oil Barrel"),
-        OilBarrel,
+        Name::new("Oil barrel"),
+        Explosive,
         Health::new(OIL_BARREL_HEALTH),
         StatusEffects::new(),
         Combustible { flammability: OIL_BARREL_FLAMMABILITY },

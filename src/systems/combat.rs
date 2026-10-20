@@ -583,18 +583,15 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // Things that shatter likewise break in the fire system.
         if world
             .entity(id)
-            .map(|e| e.has::<crate::components::OilBarrel>() || e.has::<crate::components::Shatters>())
+            .map(|e| e.has::<crate::components::Explosive>() || e.has::<crate::components::Shatters>())
             .unwrap_or(false)
         {
             continue;
         }
         if id != player_entity && health.current <= 0 {
-            // Bosses grant a bonus multiple of their (already stat-inflated) XP.
-            let is_boss = world
-                .entity(id)
-                .map(|e| e.has::<crate::components::Boss>())
-                .unwrap_or(false);
-            let mut xp = calculate_xp_value(stats) * if is_boss { BOSS_XP_MULT } else { 1 };
+            // Some are worth a multiple of their (already stat-inflated) XP.
+            let mult = world.get::<&crate::components::XpMultiplier>(id).map(|m| m.0).unwrap_or(1);
+            let mut xp = calculate_xp_value(stats) * mult;
             // Split slimes pay half per generation, so the two halves of a
             // split together are worth what the original was.
             let split_generation = world

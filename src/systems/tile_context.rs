@@ -43,9 +43,9 @@ use crate::components::{
     AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Topples,
     CausesBurning, OnFire, ClassAbility, ClassKit, Container, GroundItemPile,
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
-    FriendlyNPC, Furniture, FurnitureKind, Health, Inventory, ItemType, LearnedAbilities, Name,
-    OilBarrel, OilPuddle, Player, Trap, Position, Summoned,
-    SecondaryAbility, SecretDoor, StatusEffects, Follower, Tameable, Vendor, WetTile, Web,
+    FriendlyNPC, Furniture, Health, Inventory, ItemType, LearnedAbilities, Name,
+    Explosive, Player, Trap, Position, Summoned,
+    SecondaryAbility, SecretDoor, StatusEffects, Follower, Tameable, Vendor, WetTile,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -337,91 +337,63 @@ fn container_feature(world: &World, e: Entity, c: &Container) -> Option<String> 
     })
 }
 
-/// Non-creature features of `e`, as the player sees them. `visible` gates the
-/// transient ones (fire, a lit fuse) that a remembered tile does not show.
+/// Non-creature features of `e`, as the player sees them: its `Name`, and
+/// what its state components say about it (lit or out, burning, toppled,
+/// used, damaged, a lit fuse, yours). `visible` gates the transient ones
+/// that a remembered tile does not show.
 fn features_of(world: &World, player: Entity, e: Entity, visible: bool, out: &mut Vec<String>) {
+    // Hidden things aren't mentioned; doors are reported as terrain.
+    if has::<Concealed>(world, e) || has::<SecretDoor>(world, e) || has::<Door>(world, e) {
+        return;
+    }
     if let Ok(c) = world.get::<&Container>(e) {
         if let Some(f) = container_feature(world, e, &c) {
             out.push(f);
         }
         return;
     }
-    if has::<OilBarrel>(world, e) {
-        let mut s = "Oil barrel".to_string();
-        if visible {
-            if let Ok(h) = world.get::<&Health>(e) {
-                s.push_str(&format!(" ({}/{} HP)", h.current.max(0), h.max));
-            }
-            if has::<BarrelFuse>(world, e) {
-                s.push_str(", fuse lit!");
-            }
-        }
-        out.push(s);
+    let burning = has::<OnFire>(world, e);
+    let tended = world.get::<&crate::components::Fuel>(e).is_ok_and(|f| f.tended);
+    // A loose fire isn't remembered: it will have moved on by the time you
+    // look again.
+    if burning && !tended && !visible {
         return;
     }
-    if let Ok(f) = world.get::<&Furniture>(e) {
-        let name = match f.kind {
-            FurnitureKind::Fountain => "Fountain",
-            FurnitureKind::Altar => "Altar",
-            FurnitureKind::Shrine => "Shrine",
-        };
-        let one_use = !matches!(f.kind, FurnitureKind::Altar);
-        out.push(if one_use && f.used { format!("{name} (used)") } else { name.to_string() });
-        return;
-    }
-    if let Ok(t) = world.get::<&Topples>(e) {
-        let name = world.get::<&Name>(e).map(|n| n.0.clone()).unwrap_or_else(|_| "Brazier".into());
-        let burning = world.get::<&crate::components::OnFire>(e).is_ok();
-        out.push(if t.toppled {
-            format!("Toppled {}", name.to_lowercase())
-        } else if burning {
-            format!("{name} (lit)")
-        } else {
-            format!("{name} (out)")
-        });
-        return;
-    }
-    if has::<OilPuddle>(world, e) {
-        out.push(
-            if visible && has::<OnFire>(world, e) { "Burning oil" } else { "Oil puddle" }
-                .to_string(),
-        );
-        return;
-    }
-    if has::<Web>(world, e) {
-        out.push(
-            if visible && has::<OnFire>(world, e) { "Burning web" } else { "Web" }.to_string(),
-        );
-        return;
-    }
-    if let Ok(t) = world.get::<&Trap>(e) {
-        // A hidden trap has no sprite: never mention it.
-        if !has::<Concealed>(world, e) {
-            let yours = if t.owner == Some(player) { " (yours)" } else { "" };
-            out.push(format!("{}{yours}", t.effect.name()));
-        }
-        return;
-    }
-    if has::<OnFire>(world, e) {
-        // Anything else alight on the floor: a grass fire, burning fungus.
-        // Fire is never remembered: it will have moved on.
-        if visible {
+    let trap = world.get::<&Trap>(e).ok().map(|t| *t);
+    let name = match (trap, world.get::<&Name>(e)) {
+        (Some(t), _) => t.effect.name().to_string(),
+        (None, Ok(n)) => n.0.clone(),
+        (None, Err(_)) if burning => {
             out.push("Fire".to_string());
+            return;
         }
-        return;
+        (None, Err(_)) => return,
+    };
+
+    let mut s = if world.get::<&Topples>(e).is_ok_and(|t| t.toppled) {
+        format!("Toppled {}", name.to_lowercase())
+    } else if tended {
+        format!("{name} ({})", if burning { "lit" } else { "out" })
+    } else if burning {
+        format!("Burning {}", name.to_lowercase())
+    } else {
+        name
+    };
+    if world.get::<&Furniture>(e).is_ok_and(|f| f.used) {
+        s.push_str(" (used)");
     }
-    if has::<CausesBurning>(world, e) {
-        // Campfires (a fire pit that stays put): remembered like furniture.
-        out.push("Campfire".to_string());
-        return;
+    if trap.is_some_and(|t| t.owner == Some(player)) {
+        s.push_str(" (yours)");
     }
-    if has::<SecretDoor>(world, e) || has::<Door>(world, e) {
-        return; // Reported as terrain.
+    if visible && !has::<crate::components::Actor>(world, e) {
+        if let Ok(h) = world.get::<&Health>(e) {
+            s.push_str(&format!(" ({}/{} HP)", h.current.max(0), h.max));
+        }
+        if has::<BarrelFuse>(world, e) {
+            s.push_str(", fuse lit!");
+        }
     }
-    // Named scenery: stalagmites, glowing mushrooms, crystal clusters.
-    if let Ok(n) = world.get::<&Name>(e) {
-        out.push(n.0.clone());
-    }
+    out.push(s);
 }
 
 /// Describe `tile` as far as `player` can know it (see the module docs).
@@ -690,7 +662,7 @@ pub fn context_actions(
         .find(|&e| relation_of(world, player, e) == Relation::Hostile && has::<Attackable>(world, e));
     let npc = seen.iter().copied().find(|&e| has::<FriendlyNPC>(world, e));
     let companion = seen.iter().copied().find(|&e| relation_of(world, player, e) == Relation::Companion);
-    let oil_barrel = if visible { here.iter().copied().find(|&e| has::<OilBarrel>(world, e)) } else { None };
+    let explosive = if visible { here.iter().copied().find(|&e| has::<Explosive>(world, e)) } else { None };
     let pushable = if visible { crate::systems::push::pushable_at(world, x, y) } else { None };
     let corpse = if visible {
         here.iter().copied().find(|&e| {
@@ -700,7 +672,7 @@ pub fn context_actions(
         None
     };
     // Something the attack/shoot/bolt entries can aim at.
-    let attack_target = hostile.or(oil_barrel);
+    let attack_target = hostile.or(explosive);
 
     // --- Attacks ----------------------------------------------------------
     if attack_target.is_some() {

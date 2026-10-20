@@ -26,7 +26,7 @@ pub fn melee_reach_check(world: &World, attacker: Entity, target: Entity) -> Res
     // A broken oil barrel sits at 0 HP while its fuse hisses and is still
     // there to be hit (the hit sets it off): it is not "gone".
     let alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true)
-        || world.get::<&crate::components::OilBarrel>(target).is_ok();
+        || world.get::<&crate::components::Explosive>(target).is_ok();
     let (Some(a), Some(t)) = (
         queries::get_entity_position(world, attacker),
         queries::get_entity_position(world, target),

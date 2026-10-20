@@ -344,7 +344,7 @@ fn spawn_oil_spills(
     avoid: &[(i32, i32)],
     rng: &mut impl Rng,
 ) {
-    use crate::components::{CausesBurning, OilBarrel};
+    use crate::components::{CausesBurning, Explosive};
     use std::collections::HashSet;
 
     let fires: Vec<(i32, i32)> = world
@@ -398,7 +398,7 @@ fn spawn_oil_spills(
     // above). Sorted so a seed replays identically.
     let mut barrels: Vec<(i32, i32)> = world
         .query::<&Position>()
-        .with::<&OilBarrel>()
+        .with::<&Explosive>()
         .iter()
         .map(|(_, p)| (p.x, p.y))
         .filter(|&(x, y)| in_any_room(grid, x, y))

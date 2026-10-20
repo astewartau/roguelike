@@ -2664,13 +2664,13 @@ pub struct OnFire {
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OilPuddle;
 
-/// Marker for explosive oil barrels. Blocks movement and is highly
-/// combustible: once Burning, a short fuse (`BarrelFuse`) starts, then the
-/// barrel explodes — damage in a radius plus a spray of burning oil puddles.
-/// Breaking one open (0 HP) starts a shorter fuse; any damage to a barrel
-/// whose fuse is already running detonates it at once (see `systems::fire`).
+/// Goes off: once Burning, a short fuse (`BarrelFuse`) starts, then it
+/// explodes — damage in a radius plus a spray of burning oil puddles.
+/// Breaking it open (0 HP) starts a shorter fuse; any damage while its fuse
+/// is already running sets it off at once (see `systems::fire`). An oil
+/// barrel.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct OilBarrel;
+pub struct Explosive;
 
 /// What lit an oil barrel's fuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -3140,6 +3140,10 @@ pub struct Boss {
     /// Whether the first-sighting message has been shown.
     pub announced: bool,
 }
+
+/// Worth this many times the usual XP when killed (a boss).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct XpMultiplier(pub u32);
 
 /// Marker: never panics from morale checks and cannot be Feared (bosses).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]

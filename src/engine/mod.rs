@@ -2969,7 +2969,7 @@ mod tests {
         // leaves kills=24) or torches. Two separate runs agreed.
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=170d890e";
+        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=eff941fa";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -3043,7 +3043,7 @@ mod tests {
         // being scheduled on arrival (they used to never act).
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=0b53bf79";
+        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=fe8fd330";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

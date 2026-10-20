@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn test_revisited_floor_keeps_scenery_in_its_left_state() {
         use crate::components::{
-            Topples, CausesBurning, LightSource, Name, OilBarrel,
+            Topples, CausesBurning, LightSource, Name, Explosive,
         };
 
         let (mut world, grid, player) = setup();
@@ -407,7 +407,7 @@ mod tests {
 
         let barrels: Vec<(Entity, (i32, i32))> = world
             .query::<&Position>()
-            .with::<&OilBarrel>()
+            .with::<&Explosive>()
             .iter()
             .map(|(id, p)| (id, (p.x, p.y)))
             .collect();
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_destroyed_scenery_stays_destroyed() {
-        use crate::components::{Name, OilBarrel};
+        use crate::components::{Name, Explosive};
 
         let (mut world, grid, player) = setup();
 
@@ -466,7 +466,7 @@ mod tests {
 
         save_and_reload(&mut world, grid, player);
 
-        assert_eq!(world.query::<&OilBarrel>().iter().count(), 0);
+        assert_eq!(world.query::<&Explosive>().iter().count(), 0);
         assert_eq!(world.query::<&Name>().iter().filter(|(_, n)| n.0 == "Glowing Mushrooms").count(), 0);
     }
 
@@ -509,7 +509,7 @@ mod tests {
     /// barrels — come back when the floor is revisited.
     #[test]
     fn generated_oil_spills_are_unlit_valid_and_survive_a_revisit() {
-        use crate::components::{BlocksMovement, OilBarrel, PlayerClass};
+        use crate::components::{BlocksMovement, Explosive, PlayerClass};
         let mut total = 0;
         let mut checked_round_trip = false;
         for seed in 0..12u64 {
@@ -534,11 +534,11 @@ mod tests {
             }
 
             if !puddles.is_empty() && !checked_round_trip {
-                let barrels = world.query::<&OilBarrel>().iter().count();
+                let barrels = world.query::<&Explosive>().iter().count();
                 save_and_reload(&mut world, grid, player);
                 assert_eq!(unlit_puddles(&world), puddles, "seed {seed}: puddles survive");
                 assert_eq!(
-                    world.query::<&OilBarrel>().iter().count(),
+                    world.query::<&Explosive>().iter().count(),
                     barrels,
                     "seed {seed}: oil barrels survive"
                 );

@@ -296,7 +296,7 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(OnFire, "Fire and water", OnFire { remaining: 10.0 }),
             plain!(CausesBurning, "Fire and water", CausesBurning),
             plain!(OilPuddle, "Fire and water", OilPuddle),
-            plain!(OilBarrel, "Fire and water", OilBarrel),
+            plain!(Explosive, "Fire and water", Explosive),
             plain!(WetTile, "Fire and water", WetTile { remaining: 10.0 }),
             plain!(
                 RainCloud,
@@ -325,6 +325,7 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(SecretDoor, "Things", SecretDoor),
             plain!(GroundItemPile, "Things", GroundItemPile),
             plain!(Raisable, "Things", Raisable),
+            plain!(XpMultiplier, "Creature", XpMultiplier(2)),
             plain!(BarrelFuse, "Fire", BarrelFuse::new(3.0, FuseCause::Fire)),
             plain!(Equipment, "Creature", Equipment::empty()),
             plain!(Channel, "Creature", Channel {

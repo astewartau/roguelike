@@ -30,7 +30,7 @@ use rand::Rng;
 
 use crate::components::{
     AnimatedSprite, BarrelFuse, Burnout, CausesBurning, Combustible, Doused, EffectType, Topples,
-    Fuel, FuseCause, Health, Ignition, LightSource, OilBarrel, OilPuddle, OnFire, Position,
+    Fuel, FuseCause, Health, Ignition, LightSource, Explosive, OilPuddle, OnFire, Position,
     StatusEffects, WetTile,
 };
 use crate::constants::*;
@@ -123,7 +123,7 @@ pub fn tick_fire(
     //    break fuse here. Then every fuse burns down in game time, and the
     //    ones that run out blow (chain reactions resolve in the same pass).
     let to_fuse: Vec<Entity> = world
-        .query::<(&OilBarrel, &StatusEffects)>()
+        .query::<(&Explosive, &StatusEffects)>()
         .without::<&BarrelFuse>()
         .iter()
         .filter(|(_, (_, s))| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
@@ -133,7 +133,7 @@ pub fn tick_fire(
         let _ = world.insert_one(id, BarrelFuse::new(OIL_BARREL_FUSE_SECONDS, FuseCause::Fire));
     }
     let broken: Vec<Entity> = world
-        .query::<(&OilBarrel, &Health)>()
+        .query::<(&Explosive, &Health)>()
         .without::<&BarrelFuse>()
         .iter()
         .filter(|(_, (_, h))| h.current <= 0)
@@ -143,7 +143,7 @@ pub fn tick_fire(
         start_break_fuse(world, id, events);
     }
 
-    for (_, (_, fuse)) in world.query_mut::<(&OilBarrel, &mut BarrelFuse)>() {
+    for (_, (_, fuse)) in world.query_mut::<(&Explosive, &mut BarrelFuse)>() {
         fuse.remaining -= game_dt;
     }
     detonate_ready_barrels(world, grid, spatial_cache, events, rng);
@@ -542,7 +542,7 @@ pub fn splash_water(
     // barrels are soaked separately below, for longer.
     let soaked: Vec<(Entity, bool)> = world
         .query::<(&Position, &StatusEffects)>()
-        .without::<&OilBarrel>()
+        .without::<&Explosive>()
         .iter()
         .filter(|(_, (p, _))| in_radius(p.x, p.y))
         .map(|(id, (_, s))| (id, s.effects.iter().any(|e| e.effect_type == EffectType::Burning)))
@@ -574,7 +574,7 @@ pub fn splash_water(
     // that was broken open keeps its break fuse (damage still works on a
     // soaked barrel, and a broken one still blows).
     let barrels: Vec<(Entity, (i32, i32))> = world
-        .query::<(&Position, &OilBarrel)>()
+        .query::<(&Position, &Explosive)>()
         .iter()
         .filter(|(_, (p, _))| in_radius(p.x, p.y))
         .map(|(id, (p, _))| (id, (p.x, p.y)))
@@ -756,7 +756,7 @@ pub fn spill_fire_at(world: &mut World, grid: &Grid, x: i32, y: i32, events: &mu
 ///
 /// No-op for anything that is not an oil barrel.
 pub fn on_barrel_damaged(world: &mut World, barrel: Entity, events: &mut EventQueue) {
-    if world.get::<&OilBarrel>(barrel).is_err() {
+    if world.get::<&Explosive>(barrel).is_err() {
         return;
     }
     if let Ok(mut fuse) = world.get::<&mut BarrelFuse>(barrel) {
@@ -796,7 +796,7 @@ pub fn detonate_ready_barrels(
 ) {
     loop {
         let mut ready: Vec<Entity> = world
-            .query::<(&OilBarrel, &BarrelFuse)>()
+            .query::<(&Explosive, &BarrelFuse)>()
             .iter()
             .filter(|(_, (_, f))| f.remaining <= 0.0)
             .map(|(id, _)| id)
@@ -871,7 +871,7 @@ fn explode_barrel(
 
     // Chain reaction: other barrels in the blast start burning (fuse next tick).
     let chained: Vec<Entity> = world
-        .query::<(&Position, &OilBarrel)>()
+        .query::<(&Position, &Explosive)>()
         .iter()
         .filter(|(_, (p, _))| {
             (p.x - bx).abs() <= OIL_BARREL_EXPLOSION_RADIUS
