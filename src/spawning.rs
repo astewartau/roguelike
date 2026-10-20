@@ -1176,15 +1176,16 @@ pub mod vendors {
 /// Spawn a campfire, burning. It's fuel like any other (`Fuel::hearth`):
 /// rain puts it out, leaving its ring of stones, and a torch relights it.
 pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{Campfire, FlameLook, Fuel};
+    use crate::components::{AnimatedSprite, Campfire, Fuel, Name};
 
     let pos = Position::new(x, y);
     let fire = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::FIRE_PIT_UNLIT),
-        Fuel::hearth(FlameLook::FirePit),
+        Fuel::hearth(AnimatedSprite::fire_pit(), LightSource::campfire()),
         Campfire,
+        Name::new("Campfire"),
     ));
     crate::systems::fire::ignite_fuel(world, fire);
     fire
@@ -1210,17 +1211,18 @@ pub fn spawn_fire_patch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 }
 
 /// Spawn a brazier, burning. Fuel like a campfire (`Fuel::hearth`); a
-/// burning one can also be toppled (see `systems::fire::topple_brazier`).
+/// burning one can also be toppled (see `systems::fire::topple`).
 pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{Brazier, FlameLook, Fuel};
+    use crate::components::{AnimatedSprite, Fuel, Name, Topples};
 
     let pos = Position::new(x, y);
     let brazier = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::BRAZIER_UNLIT),
-        Fuel::hearth(FlameLook::Brazier),
-        Brazier { toppled: false },
+        Fuel::hearth(AnimatedSprite::brazier(), LightSource::brazier()),
+        Topples { toppled: false },
+        Name::new("Brazier"),
     ));
     crate::systems::fire::ignite_fuel(world, brazier);
     brazier
@@ -1322,14 +1324,14 @@ pub fn spawn_oil_drip(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 }
 
 /// Spawn a standing lantern of the given style: lit, blocks movement, and
-/// smashes into burning oil if knocked over (see `systems::fire::smash_lantern`).
+/// smashes into burning oil if knocked over (see `systems::fire::shatter`).
 pub fn spawn_lantern(
     world: &mut World,
     x: i32,
     y: i32,
     style: crate::components::LanternStyle,
 ) -> hecs::Entity {
-    use crate::components::{Attackable, Fuel, Health, Lantern, LanternStyle, Name, SpriteTint};
+    use crate::components::{Attackable, Fuel, Health, HitOnlyOnPurpose, LanternStyle, Name, Shatters, SpriteTint};
 
     // Fuel like a campfire (put out by hand, relit with a torch), but behind
     // glass; breaking that (`Health`) smashes it into burning oil.
@@ -1338,8 +1340,9 @@ pub fn spawn_lantern(
         pos,
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::LANTERN_UNLIT),
-        Fuel::lantern(),
-        Lantern { style },
+        Fuel::lantern(LightSource::lantern(style)),
+        Shatters,
+        HitOnlyOnPurpose,
         Name::new("Lantern"),
         Health::new(crate::constants::LANTERN_HEALTH),
         Attackable,

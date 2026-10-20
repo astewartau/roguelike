@@ -40,7 +40,7 @@ use std::collections::HashSet;
 use hecs::{Entity, World};
 
 use crate::components::{
-    AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Brazier,
+    AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Topples,
     CausesBurning, OnFire, ClassAbility, ClassKit, Container, ContainerType,
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, FurnitureKind, Health, Inventory, ItemType, LearnedAbilities, Name,
@@ -374,18 +374,16 @@ fn features_of(world: &World, player: Entity, e: Entity, visible: bool, out: &mu
         out.push(if one_use && f.used { format!("{name} (used)") } else { name.to_string() });
         return;
     }
-    if let Ok(b) = world.get::<&Brazier>(e) {
+    if let Ok(t) = world.get::<&Topples>(e) {
+        let name = world.get::<&Name>(e).map(|n| n.0.clone()).unwrap_or_else(|_| "Brazier".into());
         let burning = world.get::<&crate::components::OnFire>(e).is_ok();
-        out.push(
-            if b.toppled {
-                "Toppled brazier"
-            } else if burning {
-                "Brazier (lit)"
-            } else {
-                "Brazier (out)"
-            }
-            .to_string(),
-        );
+        out.push(if t.toppled {
+            format!("Toppled {}", name.to_lowercase())
+        } else if burning {
+            format!("{name} (lit)")
+        } else {
+            format!("{name} (out)")
+        });
         return;
     }
     if has::<OilPuddle>(world, e) {

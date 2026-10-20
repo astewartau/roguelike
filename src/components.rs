@@ -492,7 +492,7 @@ impl OverlaySprite {
 }
 
 /// Animated sprite component - cycles through frames in real-time
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnimatedSprite {
     pub sheet: SpriteSheet,
     /// First frame's tile ID
@@ -2279,7 +2279,7 @@ impl Vendor {
 /// something* rather than evenly lit: see `src/constants/lighting.rs` for the
 /// palette and the flicker shaping, and `Engine::render_light_map` for where the
 /// flicker is actually evaluated.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LightSource {
     /// Radius of light emission (in tiles)
     pub radius: f32,
@@ -2310,6 +2310,12 @@ fn random_light_phase() -> f32 {
 }
 
 impl LightSource {
+    /// The same light with its own flicker phase, so copies of one light
+    /// (every lantern lit from the same `Fuel`) don't flicker in step.
+    pub fn with_fresh_phase(self) -> Self {
+        Self { phase: random_light_phase(), ..self }
+    }
+
     /// Create a standard campfire light
     pub fn campfire() -> Self {
         Self {
@@ -2503,21 +2509,13 @@ pub struct Fuel {
     /// creatures around it. Almost everything that burns does; a dropped torch
     /// doesn't — it's a light and a thing to pick up, not a hazard.
     pub spreads: bool,
-    /// What its fire looks like, and how far it lights, while it burns.
-    pub flame: FlameLook,
-}
-
-/// The fire a fuel shows while it burns (with `Ignition::InPlace`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum FlameLook {
-    /// Open flames on the floor: oil, webs, grass.
-    Open,
-    /// A fire in a ring of stones: a campfire.
-    FirePit,
-    /// Coals in a standing bowl: a brazier.
-    Brazier,
-    /// A small flame behind glass, lit as its `Lantern` style says.
-    Lantern,
+    /// What it looks like while it burns (drawn over its own sprite).
+    pub lit_look: AnimatedSprite,
+    /// The light it gives while it burns.
+    pub lit_light: LightSource,
+    /// Whether someone standing at it can put it out safely by hand (Use):
+    /// a campfire, a brazier, a lantern. Loose fires on the floor can't be.
+    pub tended: bool,
 }
 
 /// How a fuel entity takes fire.
@@ -2570,7 +2568,9 @@ impl Fuel {
             doused: Doused::Despawn,
             burnout: Burnout::ScorchGrass,
             spreads: true,
-            flame: FlameLook::Open,
+            lit_look: AnimatedSprite::flames(),
+            lit_light: LightSource::brazier(),
+            tended: false,
         }
     }
 
@@ -2591,7 +2591,9 @@ impl Fuel {
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
             spreads: true,
-            flame: FlameLook::Open,
+            lit_look: AnimatedSprite::flames(),
+            lit_light: LightSource::brazier(),
+            tended: false,
         }
     }
 
@@ -2606,7 +2608,9 @@ impl Fuel {
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
             spreads: true,
-            flame: FlameLook::Open,
+            lit_look: AnimatedSprite::flames(),
+            lit_light: LightSource::brazier(),
+            tended: false,
         }
     }
 
@@ -2625,7 +2629,9 @@ impl Fuel {
             doused: Doused::LeavesItem(ItemType::UnlitTorch),
             burnout: Burnout::LeavesItem(ItemType::UnlitTorch),
             spreads: false,
-            flame: FlameLook::Open,
+            lit_look: AnimatedSprite::flames(),
+            lit_light: LightSource::brazier(),
+            tended: false,
         }
     }
 
@@ -2634,7 +2640,7 @@ impl Fuel {
     /// from a torch or from fire beside it, even on ground the rain left wet
     /// (while it's still raining, the next soaking puts it straight out).
     /// Its fire doesn't creep out across the floor; it's for warmth and light.
-    pub fn hearth(flame: FlameLook) -> Self {
+    pub fn hearth(lit_look: AnimatedSprite, lit_light: LightSource) -> Self {
         Self {
             catch_chance: crate::constants::HEARTH_RELIGHT_CHANCE,
             burn_time: f32::INFINITY,
@@ -2644,14 +2650,16 @@ impl Fuel {
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
             spreads: false,
-            flame,
+            lit_look,
+            lit_light,
+            tended: true,
         }
     }
 
-    /// A lantern: a hearth whose flame sits behind glass, so rain and
-    /// splashes don't reach it.
-    pub fn lantern() -> Self {
-        Self { doused: Doused::Sheltered, ..Self::hearth(FlameLook::Lantern) }
+    /// A lantern giving `light`: a hearth whose flame sits behind glass, so
+    /// rain and splashes don't reach it.
+    pub fn lantern(light: LightSource) -> Self {
+        Self { doused: Doused::Sheltered, ..Self::hearth(AnimatedSprite::lantern(), light) }
     }
 
     /// Glowing cave fungus: damp, slow to catch, consumed when it does.
@@ -2665,7 +2673,9 @@ impl Fuel {
             doused: Doused::Despawn,
             burnout: Burnout::Despawn,
             spreads: true,
-            flame: FlameLook::Open,
+            lit_look: AnimatedSprite::flames(),
+            lit_light: LightSource::brazier(),
+            tended: false,
         }
     }
 }
@@ -2772,15 +2782,17 @@ pub enum LanternStyle {
     Ghost,
 }
 
-/// A standing lantern: glass and oil. Blocks movement like any furniture.
-/// Interacting with one, or shoving something into it, smashes it into a
-/// puddle of burning oil (see `systems::fire::smash_lantern`).
+/// Breaks at 0 HP into a burning puddle of oil across its tile, setting
+/// whoever is there alight: glass and oil, a lantern. See
+/// `systems::fire::shatter`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Lantern {
-    /// Kept so a revisited floor restores the same light (see
-    /// `engine::floor_transition`).
-    pub style: LanternStyle,
-}
+pub struct Shatters;
+
+/// `Attackable`, but only on purpose (Shift+direction): clicking it or
+/// walking into it doesn't attack it. For things you'd never mean to smash
+/// by accident, like a lantern.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct HitOnlyOnPurpose;
 
 /// A torch carried by a creature (goblins). While `lit` the carrier has a
 /// `LightSource` and sets alight oil and webs it walks into; a soaking puts it
@@ -2791,13 +2803,11 @@ pub struct CarriedTorch {
     pub lit: bool,
 }
 
-/// A standing brazier (dungeon light source). Toppling a burning one
-/// (interaction or a knockback into it) snuffs it and spills fire onto
-/// nearby tiles, and a toppled brazier stays out for good. Whether it's
-/// burning otherwise is the fire system's business (`Fuel::hearth`): rain
-/// puts it out and a torch or nearby fire relights it.
+/// Tips over when something is knocked into it while it burns: its fire
+/// spills onto its tile and a neighbour, and it's out for good (no longer
+/// `Fuel`). A brazier. See `systems::fire::topple`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Brazier {
+pub struct Topples {
     pub toppled: bool,
 }
 

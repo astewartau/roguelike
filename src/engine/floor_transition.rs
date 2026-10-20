@@ -103,7 +103,10 @@ pub enum SavedEntityType {
     /// A room lantern still standing. Smashed lanterns are despawned, so
     /// they are never saved.
     Lantern {
-        style: crate::components::LanternStyle,
+        /// Its fuel, which holds the light it gives.
+        fuel: crate::components::Fuel,
+        lit: bool,
+        tint: Option<SpriteTint>,
     },
     /// An oil barrel that has not gone off yet. Exploded barrels are
     /// despawned, so they are simply never saved.
@@ -295,7 +298,7 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
 /// `load_floor` respawns them from `grid.water_positions`.
 fn save_scenery(world: &World, entities: &mut Vec<SavedEntity>) {
     use crate::components::{
-        BarrelFuse, Brazier, Campfire, CrystalCluster, Decoration, Fuel, GlowMushroom, OilBarrel,
+        BarrelFuse, Topples, Campfire, CrystalCluster, Decoration, Fuel, GlowMushroom, OilBarrel,
         OilPuddle, OnFire, Stalagmite, Web,
     };
 
@@ -306,15 +309,22 @@ fn save_scenery(world: &World, entities: &mut Vec<SavedEntity>) {
         });
     };
 
-    for (id, (pos, brazier)) in world.query::<(&Position, &Brazier)>().iter() {
+    for (id, (pos, brazier)) in world.query::<(&Position, &Topples)>().iter() {
         let lit = world.get::<&OnFire>(id).is_ok();
         push(pos, SavedEntityType::Brazier { lit, toppled: brazier.toppled });
     }
     for (id, (pos, _)) in world.query::<(&Position, &Campfire)>().iter() {
         push(pos, SavedEntityType::Campfire { lit: world.get::<&OnFire>(id).is_ok() });
     }
-    for (_, (pos, lantern)) in world.query::<(&Position, &crate::components::Lantern)>().iter() {
-        push(pos, SavedEntityType::Lantern { style: lantern.style });
+    for (id, (pos, fuel)) in world.query::<(&Position, &Fuel)>().with::<&crate::components::Shatters>().iter() {
+        push(
+            pos,
+            SavedEntityType::Lantern {
+                fuel: *fuel,
+                lit: world.get::<&OnFire>(id).is_ok(),
+                tint: world.get::<&SpriteTint>(id).ok().map(|t| *t),
+            },
+        );
     }
     for (_, (pos, health, fuse)) in world
         .query::<(&Position, &Health, Option<&BarrelFuse>)>()
@@ -542,7 +552,7 @@ pub fn load_floor(
             SavedEntityType::Brazier { lit, toppled } => {
                 let brazier = spawning::spawn_brazier(ctx.world, pos.x, pos.y);
                 if *toppled {
-                    crate::systems::fire::snuff_brazier(ctx.world, brazier);
+                    crate::systems::fire::knock_over(ctx.world, brazier);
                 } else if !*lit {
                     crate::systems::fire::douse_fuel(ctx.world, brazier);
                 }
@@ -553,8 +563,18 @@ pub fn load_floor(
                     crate::systems::fire::douse_fuel(ctx.world, fire);
                 }
             }
-            SavedEntityType::Lantern { style } => {
-                spawning::spawn_lantern(ctx.world, pos.x, pos.y, *style);
+            SavedEntityType::Lantern { fuel, lit, tint } => {
+                let lantern =
+                    spawning::spawn_lantern(ctx.world, pos.x, pos.y, crate::components::LanternStyle::Warm);
+                crate::systems::fire::extinguish(ctx.world, lantern);
+                let _ = ctx.world.insert_one(lantern, *fuel);
+                match tint {
+                    Some(t) => drop(ctx.world.insert_one(lantern, *t)),
+                    None => drop(ctx.world.remove_one::<SpriteTint>(lantern)),
+                }
+                if *lit {
+                    crate::systems::fire::ignite_fuel(ctx.world, lantern);
+                }
             }
             SavedEntityType::OilBarrel { health_current, health_max, fuse } => {
                 let barrel = spawning::spawn_oil_barrel(ctx.world, pos.x, pos.y);
@@ -837,7 +857,7 @@ mod tests {
     #[test]
     fn test_revisited_floor_keeps_scenery_in_its_left_state() {
         use crate::components::{
-            Brazier, CausesBurning, GlowMushroom, LightSource, OilBarrel,
+            Topples, CausesBurning, GlowMushroom, LightSource, OilBarrel,
         };
 
         let (mut world, grid, player) = setup();
@@ -846,7 +866,7 @@ mod tests {
 
         // One brazier toppled through the real topple path, one left standing.
         let toppled = spawning::spawn_brazier(&mut world, 5, 5);
-        assert!(crate::systems::fire::topple_brazier(
+        assert!(crate::systems::fire::topple(
             &mut world, &grid, toppled, &mut events, &mut rng
         ));
         spawning::spawn_brazier(&mut world, 9, 9);
@@ -862,7 +882,7 @@ mod tests {
         save_and_reload(&mut world, grid, player);
 
         let braziers: Vec<(Entity, (i32, i32), bool)> = world
-            .query::<(&Position, &Brazier)>()
+            .query::<(&Position, &Topples)>()
             .iter()
             .map(|(id, (p, b))| (id, (p.x, p.y), !b.toppled))
             .collect();
@@ -909,7 +929,7 @@ mod tests {
 
     #[test]
     fn test_revisited_floor_keeps_its_lanterns() {
-        use crate::components::{Lantern, LanternStyle};
+        use crate::components::{LanternStyle, LightSource, Shatters};
 
         let (mut world, grid, player) = setup();
         spawning::spawn_lantern(&mut world, 12, 5, LanternStyle::Ghost);
@@ -918,12 +938,14 @@ mod tests {
 
         save_and_reload(&mut world, grid, player);
 
-        let lanterns: Vec<((i32, i32), LanternStyle)> = world
-            .query::<(&Position, &Lantern)>()
+        let ghost = LightSource::lantern(LanternStyle::Ghost);
+        let lanterns: Vec<((i32, i32), (f32, f32, f32))> = world
+            .query::<(&Position, &LightSource)>()
+            .with::<&Shatters>()
             .iter()
-            .map(|(_, (p, l))| ((p.x, p.y), l.style))
+            .map(|(_, (p, l))| ((p.x, p.y), l.color))
             .collect();
-        assert_eq!(lanterns, vec![((12, 5), LanternStyle::Ghost)], "the standing one, in its style");
+        assert_eq!(lanterns, vec![((12, 5), ghost.color)], "the standing one, in its light");
     }
 
     #[test]

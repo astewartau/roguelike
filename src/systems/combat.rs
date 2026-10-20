@@ -285,15 +285,15 @@ pub(crate) fn try_knockback(
     if !grid.is_walkable(dest.0, dest.1) {
         return false;
     }
-    // Shoved into a lantern: the victim stays put, the lantern goes over and
-    // smashes, spilling burning oil where it stood.
-    let lantern_hit: Option<Entity> = world
-        .query::<(&Position, &crate::components::Lantern)>()
+    // Shoved into something that shatters (a lantern): the victim stays
+    // put, and it goes over and breaks, spilling burning oil where it stood.
+    let shatters: Option<Entity> = world
+        .query::<(&Position, &crate::components::Shatters)>()
         .iter()
         .find(|(_, (p, _))| (p.x, p.y) == dest)
         .map(|(id, _)| id);
-    if let Some(lantern) = lantern_hit {
-        crate::systems::fire::smash_lantern(world, grid, spatial_cache, lantern, events);
+    if let Some(it) = shatters {
+        crate::systems::fire::shatter(world, grid, spatial_cache, it, events);
         return false;
     }
     if crate::queries::is_position_blocked(spatial_cache, dest.0, dest.1, Some(target)) {
@@ -321,16 +321,16 @@ pub(crate) fn try_knockback(
     // Whatever the victim lands in acts on them: water, oil, fire, traps.
     crate::systems::tile_effects::on_enter_tile(world, grid, target, dest, events, rng);
 
-    // Knocked into a lit brazier? It topples onto the victim, spilling fire
-    // over the tile they just landed on (see systems::fire::topple_brazier).
+    // Knocked into something lit that topples (a brazier)? It goes over onto
+    // the victim, spilling fire over the tile they just landed on.
     let brazier_hit: Option<Entity> = world
-        .query::<(&Position, &crate::components::Brazier)>()
+        .query::<(&Position, &crate::components::Topples)>()
         .with::<&crate::components::OnFire>()
         .iter()
         .find(|(_, (p, b))| !b.toppled && p.x == dest.0 && p.y == dest.1)
         .map(|(id, _)| id);
     if let Some(brazier) = brazier_hit {
-        crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
+        crate::systems::fire::topple(world, grid, brazier, events, rng);
     }
     true
 }
@@ -591,10 +591,10 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // world, still attackable, while its break fuse runs, and then
         // detonates in the fire system (systems::fire::tick_fire) instead of
         // leaving bones.
-        // Broken lanterns likewise smash in the fire system.
+        // Things that shatter likewise break in the fire system.
         if world
             .entity(id)
-            .map(|e| e.has::<crate::components::OilBarrel>() || e.has::<crate::components::Lantern>())
+            .map(|e| e.has::<crate::components::OilBarrel>() || e.has::<crate::components::Shatters>())
             .unwrap_or(false)
         {
             continue;

@@ -205,8 +205,9 @@ pub fn entries() -> &'static [ComponentEntry] {
                 }
             ),
             plain!(LightSource, "Light", LightSource::torch()),
-            plain!(Lantern, "Light", Lantern { style: LanternStyle::Warm }),
-            plain!(Brazier, "Light", Brazier { toppled: false }),
+            plain!(Topples, "Fire", Topples { toppled: false }),
+            plain!(Shatters, "Fire", Shatters),
+            plain!(HitOnlyOnPurpose, "Combat", HitOnlyOnPurpose),
             plain!(Campfire, "Light", Campfire),
             plain!(CarriedTorch, "Light", CarriedTorch { lit: true }),
             plain!(GlowMushroom, "Light", GlowMushroom),

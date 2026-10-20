@@ -116,9 +116,9 @@ pub fn determine_action_type(
     // Check for attackable entity at target (but not your own tamed companions or sibling companions)
     for (id, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
         if id != entity && enemy_pos.x == target_x && enemy_pos.y == target_y {
-            // Walking into a lantern doesn't swing at it: breaking one takes
-            // a deliberate attack (AttackDirection) or a blast.
-            if world.get::<&crate::components::Lantern>(id).is_ok() {
+            // Walking into some things doesn't swing at them: breaking one
+            // takes a deliberate attack (AttackDirection) or a blast.
+            if world.get::<&crate::components::HitOnlyOnPurpose>(id).is_ok() {
                 continue;
             }
             // Skip if this is our own tamed companion (player walking into their pet)

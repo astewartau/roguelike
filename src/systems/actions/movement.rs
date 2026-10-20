@@ -401,7 +401,7 @@ pub fn resolve_interact_direction(
         return if open { ActionType::CloseDoor { door } } else { ActionType::OpenDoor { door } };
     }
     let brazier = world
-        .query::<(&Position, &crate::components::Brazier)>()
+        .query::<(&Position, &crate::components::Topples)>()
         .with::<&crate::components::OnFire>()
         .iter()
         .any(|(_, (p, b))| !b.toppled && p.x == tx && p.y == ty);

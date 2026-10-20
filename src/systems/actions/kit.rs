@@ -1429,7 +1429,7 @@ mod tests {
         assert!(!matches!(bump, ActionType::Attack { .. }), "walking into it isn't a swing: {bump:?}");
 
         arena.player_does(ActionType::AttackDirection { dx: 1, dy: 0 });
-        crate::systems::fire::smash_broken_lanterns(&mut arena.world, &arena.grid, &mut arena.cache, &mut arena.events);
+        crate::systems::fire::shatter_broken(&mut arena.world, &arena.grid, &mut arena.cache, &mut arena.events);
         assert!(!arena.world.contains(lantern), "a deliberate blow breaks it");
     }
 

@@ -723,7 +723,6 @@ fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
         (_, "sheet") => list(&["Tiles", "Rogues", "Monsters", "Items", "AnimatedTiles"]),
         ("ChaseAI", "state") => list(&["Unaware", "Idle", "Chasing", "Investigating"]),
         (_, "style") => list(&["Warm", "Ghost"]),
-        (_, "flame") => list(&["Open", "FirePit", "Brazier", "Lantern"]),
         (_, "ignition") => list(&["InPlace", "Replace"]),
         (_, "rarity") => list(&["Common", "Magic", "Rare", "Legendary"]),
         (_, "container_type") => list(&["Chest", "Coffin", "Barrel", "Corpse", "GroundPile"]),
@@ -740,8 +739,53 @@ fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
 
 /// Edit a JSON value in place: numbers, switches, text (a dropdown for an
 /// enum), and nested objects and lists. Returns whether it changed.
+/// The three channels of a colour, if `value` is one: a `color` tuple
+/// (serialised as `[r, g, b]`) or an `{r, g, b}` object like `SpriteTint`.
+fn as_rgb(key: &str, value: &serde_json::Value) -> Option<[f32; 3]> {
+    use serde_json::Value;
+    let num = |v: Option<&Value>| v.and_then(Value::as_f64).map(|f| f as f32);
+    match value {
+        Value::Array(items) if key.contains("color") && items.len() == 3 => {
+            Some([num(items.first())?, num(items.get(1))?, num(items.get(2))?])
+        }
+        Value::Object(fields) if fields.len() == 3 => {
+            Some([num(fields.get("r"))?, num(fields.get("g"))?, num(fields.get("b"))?])
+        }
+        _ => None,
+    }
+}
+
+/// A colour picker for a colour value, written back in the shape it came in.
+fn edit_rgb(ui: &mut egui::Ui, value: &mut serde_json::Value, mut rgb: [f32; 3]) -> bool {
+    use serde_json::Value;
+    let mut shown = rgb.map(|c| c.clamp(0.0, 1.0));
+    let mut changed = egui::color_picker::color_edit_button_rgb(ui, &mut shown).changed();
+    if changed {
+        rgb = shown;
+    }
+    for c in &mut rgb {
+        changed |= ui.add(egui::DragValue::new(c).speed(0.01).range(0.0..=4.0)).changed();
+    }
+    if changed {
+        let n = |c: f32| serde_json::Number::from_f64(c as f64).map(Value::Number).unwrap_or(Value::Null);
+        match value {
+            Value::Array(items) => *items = rgb.iter().map(|&c| n(c)).collect(),
+            Value::Object(fields) => {
+                for (k, c) in ["r", "g", "b"].iter().zip(rgb) {
+                    fields.insert(k.to_string(), n(c));
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
 fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
     use serde_json::Value;
+    if let Some(rgb) = as_rgb(key, value) {
+        return ui.horizontal(|ui| edit_rgb(ui, value, rgb)).inner;
+    }
     match value {
         Value::Null => {
             ui.colored_label(colors::TEXT_MUTED, "(a marker: no settings)");
@@ -807,7 +851,8 @@ fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_j
             let mut changed = false;
             for (name, field) in fields.iter_mut() {
                 ui.push_id(name.as_str(), |ui| {
-                    let scalar = !matches!(field, Value::Object(_) | Value::Array(_));
+                    let scalar = !matches!(field, Value::Object(_) | Value::Array(_))
+                        || as_rgb(name, field).is_some();
                     if scalar {
                         ui.horizontal(|ui| {
                             ui.label(name.as_str());
@@ -1007,5 +1052,19 @@ pub fn draw_cursor_ghost(
             let rect = tile_rect(camera, ppp, hover.0 as f32 + 0.5, hover.1 as f32 + 0.5);
             painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5_f32, colour));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::as_rgb;
+    use serde_json::json;
+
+    #[test]
+    fn colours_are_recognised_in_either_shape() {
+        assert_eq!(as_rgb("color", &json!([1.0, 0.5, 0.0])), Some([1.0, 0.5, 0.0]));
+        assert_eq!(as_rgb("value", &json!({"r": 0.2, "g": 0.3, "b": 0.4})), Some([0.2, 0.3, 0.4]));
+        assert_eq!(as_rgb("position", &json!([1.0, 2.0, 3.0])), None, "only a colour by name");
+        assert_eq!(as_rgb("value", &json!({"x": 1, "y": 2, "z": 3})), None);
     }
 }

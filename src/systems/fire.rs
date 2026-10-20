@@ -29,7 +29,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    AnimatedSprite, BarrelFuse, Brazier, Burnout, CausesBurning, Combustible, Doused, EffectType, FlameLook,
+    AnimatedSprite, BarrelFuse, Burnout, CausesBurning, Combustible, Doused, EffectType, Topples,
     Fuel, FuseCause, Health, Ignition, LightSource, OilBarrel, OilPuddle, OnFire, Position,
     StatusEffects, WetTile,
 };
@@ -63,7 +63,7 @@ pub fn tick_fire(
     // off this frame even if the clock did not move.
     detonate_ready_barrels(world, grid, spatial_cache, events, rng);
     // Likewise a lantern something broke smashes at once.
-    smash_broken_lanterns(world, grid, spatial_cache, events);
+    shatter_broken(world, grid, spatial_cache, events);
 
     if game_dt <= 0.0 {
         return;
@@ -385,21 +385,14 @@ pub fn ignite_fuel(world: &mut World, id: Entity) {
     }
     match fuel.ignition {
         Ignition::InPlace => {
-            let (flames, light) = match fuel.flame {
-                FlameLook::Open => (AnimatedSprite::flames(), LightSource::brazier()),
-                FlameLook::FirePit => (AnimatedSprite::fire_pit(), LightSource::campfire()),
-                FlameLook::Brazier => (AnimatedSprite::brazier(), LightSource::brazier()),
-                FlameLook::Lantern => {
-                    let style = world
-                        .get::<&crate::components::Lantern>(id)
-                        .map(|l| l.style)
-                        .unwrap_or(crate::components::LanternStyle::Warm);
-                    (AnimatedSprite::lantern(), LightSource::lantern(style))
-                }
-            };
             let _ = world.insert(
                 id,
-                (OnFire { remaining: fuel.burn_time }, CausesBurning, flames, light),
+                (
+                    OnFire { remaining: fuel.burn_time },
+                    CausesBurning,
+                    fuel.lit_look,
+                    fuel.lit_light.with_fresh_phase(),
+                ),
             );
         }
         Ignition::Replace => {
@@ -436,7 +429,7 @@ pub fn douse_fuel(world: &mut World, id: Entity) {
 /// Put a fire out and leave what was burning, ready to be lit again: its
 /// flames, light and burn on contact go. By hand (`put_out_by_hand`) or
 /// water (`douse_fuel`).
-fn extinguish(world: &mut World, id: Entity) {
+pub(crate) fn extinguish(world: &mut World, id: Entity) {
     // One at a time: as a bundle, one missing would keep them all.
     let _ = world.remove_one::<OnFire>(id);
     let _ = world.remove_one::<CausesBurning>(id);
@@ -444,24 +437,15 @@ fn extinguish(world: &mut World, id: Entity) {
     let _ = world.remove_one::<LightSource>(id);
 }
 
-/// Someone puts out a campfire, brazier or lantern they're standing at, the
-/// safe way: no spilled coals, no smashed glass. Returns false if there's
-/// nothing burning there of that kind.
+/// Someone puts out a tended fire they're standing at (a campfire, brazier
+/// or lantern: `Fuel::tended`), the safe way: no spilled coals, no smashed
+/// glass. Returns false if there's no such fire burning there.
 pub fn put_out_by_hand(world: &mut World, x: i32, y: i32, events: &mut EventQueue) -> bool {
     let hearth = world
         .query::<(&Position, &Fuel)>()
         .with::<&OnFire>()
         .iter()
-        .find(|(id, (p, f))| {
-            p.x == x
-                && p.y == y
-                && f.burn_time.is_infinite()
-                && world.entity(*id).is_ok_and(|e| {
-                    e.has::<crate::components::Campfire>()
-                        || e.has::<Brazier>()
-                        || e.has::<crate::components::Lantern>()
-                })
-        })
+        .find(|(_, (p, f))| p.x == x && p.y == y && f.tended)
         .map(|(id, _)| id);
     let Some(hearth) = hearth else {
         return false;
@@ -471,9 +455,9 @@ pub fn put_out_by_hand(world: &mut World, x: i32, y: i32, events: &mut EventQueu
     true
 }
 
-/// A lantern broken by damage (0 HP) smashes: called every frame alongside
+/// Anything that `Shatters` and is broken (0 HP) breaks: called every frame alongside
 /// the barrel detonations, which also need the spatial cache.
-pub fn smash_broken_lanterns(
+pub fn shatter_broken(
     world: &mut World,
     grid: &Grid,
     spatial_cache: &mut SpatialCache,
@@ -481,13 +465,13 @@ pub fn smash_broken_lanterns(
 ) {
     let broken: Vec<Entity> = world
         .query::<&Health>()
-        .with::<&crate::components::Lantern>()
+        .with::<&crate::components::Shatters>()
         .iter()
         .filter(|(_, h)| h.current <= 0)
         .map(|(id, _)| id)
         .collect();
-    for lantern in broken {
-        smash_lantern(world, grid, spatial_cache, lantern, events);
+    for it in broken {
+        shatter(world, grid, spatial_cache, it, events);
     }
 }
 
@@ -648,19 +632,19 @@ pub fn splash_water(
     doused
 }
 
-/// Topple a lit brazier: snuff its stand (light + hazard removed, sprite goes
+/// Topple something lit that `Topples` (a brazier): snuff it (light + hazard removed, sprite goes
 /// to the tipped/unlit frame) and spill its coals onto its own tile plus one
 /// random adjacent walkable tile — igniting grass and oil there and setting
 /// anything standing there alight. Returns false if the entity isn't a lit
 /// brazier.
-pub fn topple_brazier(
+pub fn topple(
     world: &mut World,
     grid: &Grid,
     brazier: Entity,
     events: &mut EventQueue,
     rng: &mut impl Rng,
 ) -> bool {
-    let standing = world.get::<&Brazier>(brazier).map(|b| !b.toppled).unwrap_or(false);
+    let standing = world.get::<&Topples>(brazier).map(|b| !b.toppled).unwrap_or(false);
     if !standing || world.get::<&OnFire>(brazier).is_err() {
         return false;
     }
@@ -668,7 +652,7 @@ pub fn topple_brazier(
         return false;
     };
 
-    snuff_brazier(world, brazier);
+    knock_over(world, brazier);
 
     events.push(GameEvent::BrazierToppled { position: (bx, by) });
 
@@ -688,17 +672,17 @@ pub fn topple_brazier(
     true
 }
 
-/// Smash a lantern: it's gone, and its oil spills burning across its tile
+/// Break something that `Shatters` (a lantern): it's gone, and its oil spills burning across its tile
 /// (and whoever is there is set alight). Returns false if the entity isn't a
 /// lantern.
-pub fn smash_lantern(
+pub fn shatter(
     world: &mut World,
     grid: &Grid,
     spatial_cache: &mut SpatialCache,
     lantern: Entity,
     events: &mut EventQueue,
 ) -> bool {
-    if world.get::<&crate::components::Lantern>(lantern).is_err() {
+    if world.get::<&crate::components::Shatters>(lantern).is_err() {
         return false;
     }
     let Some((x, y)) = crate::queries::get_entity_position(world, lantern) else {
@@ -718,11 +702,11 @@ pub fn smash_lantern(
     true
 }
 
-/// Put a brazier into its toppled state: put out, and no longer fuel, so
+/// Put something that `Topples` into its toppled state: put out, and no longer fuel, so
 /// nothing lights it again. Only the state change — no event, no spilled
 /// fire — so a revisited floor can restore a brazier that was toppled earlier.
-pub fn snuff_brazier(world: &mut World, brazier: Entity) {
-    if let Ok(mut b) = world.get::<&mut Brazier>(brazier) {
+pub fn knock_over(world: &mut World, brazier: Entity) {
+    if let Ok(mut b) = world.get::<&mut Topples>(brazier) {
         b.toppled = true;
     }
     douse_fuel(world, brazier);
@@ -1751,7 +1735,7 @@ mod tests {
         let mut cache = SpatialCache::rebuild_from_world(&world);
         assert!(cache.is_blocked((3, 3)));
 
-        assert!(smash_lantern(&mut world, &grid, &mut cache, lantern, &mut EventQueue::new()));
+        assert!(shatter(&mut world, &grid, &mut cache, lantern, &mut EventQueue::new()));
         assert!(!world.contains(lantern), "the lantern is gone");
         let burning_oil = world
             .query::<(&Position, &OilPuddle, &OnFire)>()
@@ -1770,12 +1754,12 @@ mod tests {
         let brazier = crate::spawning::spawn_brazier(&mut world, 2, 2);
         let victim = world.spawn((Position::new(2, 2), StatusEffects::new()));
 
-        assert!(topple_brazier(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
+        assert!(topple(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
 
         // Unlit: no more light or contact hazard, and a second topple is a no-op.
         assert!(world.get::<&LightSource>(brazier).is_err());
         assert!(world.get::<&CausesBurning>(brazier).is_err());
-        assert!(!topple_brazier(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
+        assert!(!topple(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
 
         // Whatever stood on the brazier tile is now burning.
         let burning = world
@@ -1813,7 +1797,7 @@ mod tests {
         assert!(!burning(&world, campfire), "the campfire is rained out");
         assert!(!burning(&world, brazier), "so is the brazier");
         assert!(burning(&world, lantern), "the lantern's flame is behind glass");
-        assert!(world.get::<&Brazier>(brazier).is_ok_and(|b| !b.toppled), "put out, not knocked over");
+        assert!(world.get::<&Topples>(brazier).is_ok_and(|b| !b.toppled), "put out, not knocked over");
 
         // A torch held to them lights them again, wet ground or not.
         let holder = world.spawn((
@@ -1840,7 +1824,7 @@ mod tests {
 
         assert!(put_out_by_hand(&mut world, 3, 3, &mut events));
         assert!(world.get::<&OnFire>(brazier).is_err(), "out");
-        assert!(world.get::<&Brazier>(brazier).is_ok_and(|b| !b.toppled), "and still standing");
+        assert!(world.get::<&Topples>(brazier).is_ok_and(|b| !b.toppled), "and still standing");
         assert!(world.query::<&OnFire>().iter().next().map(|(id, _)| id) == Some(lantern), "no fire spilled anywhere");
 
         assert!(put_out_by_hand(&mut world, 5, 3, &mut events));
@@ -1849,8 +1833,28 @@ mod tests {
 
         // A blow breaks it, though: glass and burning oil.
         crate::systems::combat::apply_damage(&mut world, &grid, lantern, 5, &mut rng, &mut events);
-        smash_broken_lanterns(&mut world, &grid, &mut cache, &mut events);
+        shatter_broken(&mut world, &grid, &mut cache, &mut events);
         assert!(!world.contains(lantern));
         assert!(world.query::<&crate::components::OilPuddle>().iter().next().is_some(), "its oil is spilled");
     }
+
+    #[test]
+    fn a_fire_lights_with_whatever_light_its_fuel_holds() {
+        let mut world = World::new();
+        let mut events = EventQueue::new();
+        let lantern = crate::spawning::spawn_lantern(&mut world, 2, 2, crate::components::LanternStyle::Warm);
+        assert!(put_out_by_hand(&mut world, 2, 2, &mut events), "a lantern is tended");
+
+        // Recolour it (what the inspector's colour picker does) and relight.
+        let purple = (0.6, 0.2, 0.9);
+        world.get::<&mut Fuel>(lantern).unwrap().lit_light.color = purple;
+        ignite_fuel(&mut world, lantern);
+        assert_eq!(world.get::<&LightSource>(lantern).map(|l| l.color).ok(), Some(purple));
+
+        // A loose fire on the floor isn't tended: no putting that out by hand.
+        let oil = crate::spawning::spawn_oil_puddle(&mut world, 4, 4);
+        ignite_fuel(&mut world, oil);
+        assert!(!put_out_by_hand(&mut world, 4, 4, &mut events));
+    }
 }
+
