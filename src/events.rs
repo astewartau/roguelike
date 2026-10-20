@@ -345,7 +345,12 @@ pub enum GameEvent {
     BarrelExploded {
         position: (i32, i32),
     },
-    /// A lantern was smashed (by interaction or knockback), spilling burning oil.
+    /// A lantern was smashed (broken by a blow, or knocked into), spilling
+    /// burning oil.
+    /// Someone put out a campfire, brazier or lantern by hand.
+    FirePutOut {
+        position: (i32, i32),
+    },
     LanternSmashed {
         position: (i32, i32),
     },

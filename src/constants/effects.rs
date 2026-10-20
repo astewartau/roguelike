@@ -220,3 +220,12 @@ pub const OIL_DRIP_BURN_DURATION: f32 = 4.0;
 
 /// Splash radius (Chebyshev) of a thrown water flask.
 pub const WATER_SPLASH_RADIUS: i32 = 1;
+
+/// Per fire step, the chance a campfire or brazier that has gone out (rained
+/// on, doused) catches again from fire on or next to it. A torch held to it
+/// relights it at once regardless.
+pub const HEARTH_RELIGHT_CHANCE: f64 = 0.3;
+
+/// Hit points of a standing lantern's glass: any real blow (or a blast)
+/// breaks it, spilling its oil burning.
+pub const LANTERN_HEALTH: i32 = 1;

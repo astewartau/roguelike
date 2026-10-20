@@ -91,12 +91,15 @@ pub enum SavedEntityType {
         kind: crate::components::FurnitureKind,
         used: bool,
     },
-    /// A brazier, standing (`lit`) or toppled.
+    /// A brazier: burning or gone out, or toppled for good.
     Brazier {
         lit: bool,
+        toppled: bool,
     },
-    /// The starting-room campfire.
-    Campfire,
+    /// The starting-room campfire, burning or rained out.
+    Campfire {
+        lit: bool,
+    },
     /// A room lantern still standing. Smashed lanterns are despawned, so
     /// they are never saved.
     Lantern {
@@ -302,11 +305,12 @@ fn save_scenery(world: &World, entities: &mut Vec<SavedEntity>) {
         });
     };
 
-    for (_, (pos, brazier)) in world.query::<(&Position, &Brazier)>().iter() {
-        push(pos, SavedEntityType::Brazier { lit: brazier.lit });
+    for (id, (pos, brazier)) in world.query::<(&Position, &Brazier)>().iter() {
+        let lit = world.get::<&OnFire>(id).is_ok();
+        push(pos, SavedEntityType::Brazier { lit, toppled: brazier.toppled });
     }
-    for (_, (pos, _)) in world.query::<(&Position, &Campfire)>().iter() {
-        push(pos, SavedEntityType::Campfire);
+    for (id, (pos, _)) in world.query::<(&Position, &Campfire)>().iter() {
+        push(pos, SavedEntityType::Campfire { lit: world.get::<&OnFire>(id).is_ok() });
     }
     for (_, (pos, lantern)) in world.query::<(&Position, &crate::components::Lantern)>().iter() {
         push(pos, SavedEntityType::Lantern { style: lantern.style });
@@ -534,14 +538,19 @@ pub fn load_floor(
                     crate::systems::furniture::mark_spent(ctx.world, piece);
                 }
             }
-            SavedEntityType::Brazier { lit } => {
+            SavedEntityType::Brazier { lit, toppled } => {
                 let brazier = spawning::spawn_brazier(ctx.world, pos.x, pos.y);
-                if !*lit {
+                if *toppled {
                     crate::systems::fire::snuff_brazier(ctx.world, brazier);
+                } else if !*lit {
+                    crate::systems::fire::douse_fuel(ctx.world, brazier);
                 }
             }
-            SavedEntityType::Campfire => {
-                spawning::spawn_campfire(ctx.world, pos.x, pos.y);
+            SavedEntityType::Campfire { lit } => {
+                let fire = spawning::spawn_campfire(ctx.world, pos.x, pos.y);
+                if !*lit {
+                    crate::systems::fire::douse_fuel(ctx.world, fire);
+                }
             }
             SavedEntityType::Lantern { style } => {
                 spawning::spawn_lantern(ctx.world, pos.x, pos.y, *style);
@@ -828,7 +837,7 @@ mod tests {
         let braziers: Vec<(Entity, (i32, i32), bool)> = world
             .query::<(&Position, &Brazier)>()
             .iter()
-            .map(|(id, (p, b))| (id, (p.x, p.y), b.lit))
+            .map(|(id, (p, b))| (id, (p.x, p.y), !b.toppled))
             .collect();
         assert_eq!(braziers.len(), 2, "both braziers come back");
         let (toppled, _, lit) = braziers

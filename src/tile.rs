@@ -353,12 +353,16 @@ pub mod tile_ids {
     pub const BRAZIER_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(1, 0, ANIMATED_TILES_COLS));
     /// Fire pit (lit) - first frame, row 4 in animated-tiles.png
     pub const FIRE_PIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(4, 0, ANIMATED_TILES_COLS));
+    /// Fire pit gone out: just the ring of stones (row 3)
+    pub const FIRE_PIT_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(3, 0, ANIMATED_TILES_COLS));
     /// Hand torch, lit - first frame, row 6 in animated-tiles.png (6 frames)
     pub const TORCH: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(6, 0, ANIMATED_TILES_COLS)); // 6. torch (lit)
     /// Hand torch, unlit (row 5)
     pub const TORCH_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(5, 0, ANIMATED_TILES_COLS)); // 5. torch (unlit)
     /// Standing lantern, lit - first frame, row 8 in animated-tiles.png (4 frames)
     pub const LANTERN: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(8, 0, ANIMATED_TILES_COLS)); // 8. lamp (lit)
+    /// Standing lantern, put out (row 7)
+    pub const LANTERN_UNLIT: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(7, 0, ANIMATED_TILES_COLS)); // 7. lamp (unlit)
     /// Animated water - first frame, row 11 in animated-tiles.png (11 frames)
     pub const WATER_ANIMATED: (SpriteSheet, u32) = (SpriteSheet::AnimatedTiles, rc(11, 0, ANIMATED_TILES_COLS));
     /// Fire effect - first frame, row 9 in animated-tiles.png (for burning

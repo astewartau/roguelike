@@ -504,6 +504,9 @@ impl MessageLog {
             GameEvent::TorchLit { entity } if *entity == me => {
                 self.push("Your torch catches.".to_string(), log_colors::INFO);
             }
+            GameEvent::FirePutOut { .. } => {
+                self.push("The flame goes out.".to_string(), log_colors::INFO);
+            }
             GameEvent::LanternSmashed { .. } => {
                 self.push(
                     "A lantern shatters, spilling burning oil!".to_string(),

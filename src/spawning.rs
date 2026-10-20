@@ -1173,19 +1173,21 @@ pub mod vendors {
     };
 }
 
-/// Spawn a campfire entity with light source and animated fire sprite
+/// Spawn a campfire, burning. It's fuel like any other (`Fuel::hearth`):
+/// rain puts it out, leaving its ring of stones, and a torch relights it.
 pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, Campfire, CausesBurning};
+    use crate::components::{Campfire, FlameLook, Fuel};
 
     let pos = Position::new(x, y);
-    world.spawn((
+    let fire = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        AnimatedSprite::fire_pit(),
-        LightSource::campfire(),
-        CausesBurning,
+        Sprite::from_ref(tile_ids::FIRE_PIT_UNLIT),
+        Fuel::hearth(FlameLook::FirePit),
         Campfire,
-    ))
+    ));
+    crate::systems::fire::ignite_fuel(world, fire);
+    fire
 }
 
 /// Spawn a fire patch at a tile — what burning tall grass (or consumed fungus)
@@ -1207,20 +1209,21 @@ pub fn spawn_fire_patch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     ))
 }
 
-/// Spawn a brazier entity with light source and animated fire sprite.
-/// Braziers can be toppled (see `systems::fire::topple_brazier`).
+/// Spawn a brazier, burning. Fuel like a campfire (`Fuel::hearth`); a
+/// burning one can also be toppled (see `systems::fire::topple_brazier`).
 pub fn spawn_brazier(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, Brazier, CausesBurning};
+    use crate::components::{Brazier, FlameLook, Fuel};
 
     let pos = Position::new(x, y);
-    world.spawn((
+    let brazier = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        AnimatedSprite::brazier(),
-        LightSource::brazier(),
-        CausesBurning,
-        Brazier { lit: true },
-    ))
+        Sprite::from_ref(tile_ids::BRAZIER_UNLIT),
+        Fuel::hearth(FlameLook::Brazier),
+        Brazier { toppled: false },
+    ));
+    crate::systems::fire::ignite_fuel(world, brazier);
+    brazier
 }
 
 /// Spawn a decorative blocking prop (shop jar, sack) wearing `sprite`.
@@ -1326,18 +1329,24 @@ pub fn spawn_lantern(
     y: i32,
     style: crate::components::LanternStyle,
 ) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, Lantern, LanternStyle, Name, SpriteTint};
+    use crate::components::{Attackable, Fuel, Health, Lantern, LanternStyle, Name, SpriteTint};
 
+    // Fuel like a campfire (put out by hand, relit with a torch), but behind
+    // glass; breaking that (`Health`) smashes it into burning oil.
     let pos = Position::new(x, y);
     let lantern = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        AnimatedSprite::lantern(),
-        LightSource::lantern(style),
+        Sprite::from_ref(tile_ids::LANTERN_UNLIT),
+        Fuel::lantern(),
         Lantern { style },
         Name::new("Lantern"),
+        Health::new(crate::constants::LANTERN_HEALTH),
+        Attackable,
+        StatusEffects::new(),
         BlocksMovement,
     ));
+    crate::systems::fire::ignite_fuel(world, lantern);
     if style == LanternStyle::Ghost {
         let (r, g, b) = crate::constants::GHOST_LANTERN_TINT;
         let _ = world.insert_one(lantern, SpriteTint { r, g, b });

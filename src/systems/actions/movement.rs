@@ -328,30 +328,11 @@ pub fn apply_interact_direction(
         return ActionResult::Completed;
     }
 
-    // Check for a lit brazier at target — interacting topples it, spilling
-    // fire onto its tile and one adjacent tile (see systems::fire).
-    let brazier: Option<hecs::Entity> = world
-        .query::<(&Position, &crate::components::Brazier)>()
-        .iter()
-        .find(|(_, (p, b))| b.lit && p.x == target_x && p.y == target_y)
-        .map(|(id, _)| id);
-    if let Some(brazier_id) = brazier {
-        if crate::systems::fire::topple_brazier(world, grid, brazier_id, events, rng) {
-            return ActionResult::Completed;
-        }
-    }
-
-    // A lantern at target — interacting knocks it over and it smashes,
-    // spilling burning oil (see systems::fire::smash_lantern).
-    let lantern: Option<hecs::Entity> = world
-        .query::<(&Position, &crate::components::Lantern)>()
-        .iter()
-        .find(|(_, (p, _))| p.x == target_x && p.y == target_y)
-        .map(|(id, _)| id);
-    if let Some(lantern_id) = lantern {
-        if crate::systems::fire::smash_lantern(world, grid, spatial_cache, lantern_id, events) {
-            return ActionResult::Completed;
-        }
+    // A burning campfire, brazier or lantern: using it puts it out, safely.
+    // (Knocking into a brazier still tips it over; breaking a lantern still
+    // spills its oil.)
+    if crate::systems::fire::put_out_by_hand(world, target_x, target_y, events) {
+        return ActionResult::Completed;
     }
 
     // Check for room furniture (fountain/altar/shrine) at target
@@ -422,8 +403,9 @@ pub fn resolve_interact_direction(
     }
     let brazier = world
         .query::<(&Position, &crate::components::Brazier)>()
+        .with::<&crate::components::OnFire>()
         .iter()
-        .any(|(_, (p, b))| b.lit && p.x == tx && p.y == ty);
+        .any(|(_, (p, b))| !b.toppled && p.x == tx && p.y == ty);
     let furniture = world
         .query::<(&Position, &crate::components::Furniture)>()
         .iter()

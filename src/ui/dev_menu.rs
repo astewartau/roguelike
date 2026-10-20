@@ -84,6 +84,8 @@ pub struct DevMenu {
     pub selected_tool: Option<DevTool>,
     /// Item to add to player inventory (set when an item is clicked)
     pub item_to_give: Option<ItemType>,
+    /// How Call Rain is drawn, while we choose between the looks
+    pub rain_style: super::vfx::RainStyle,
 }
 
 
@@ -218,6 +220,16 @@ pub fn draw_dev_menu(
                 .scroll([false, true])
         },
         |ui| {
+            // === RAIN STYLE (choosing between the looks) ===
+            style::panel_header(ui, "Call Rain look");
+            ui.horizontal(|ui| {
+                for rain in super::vfx::RainStyle::ALL {
+                    ui.selectable_value(&mut dev_menu.rain_style, rain, rain.name());
+                }
+            });
+            ui.add_space(8.0);
+            ui.separator();
+
             // === PLACEMENT TOOLS ===
             style::panel_header(ui, "Placement (click map)");
             for tool in DevTool::ALL {

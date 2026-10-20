@@ -384,7 +384,17 @@ fn features_of(world: &World, player: Entity, e: Entity, visible: bool, out: &mu
         return;
     }
     if let Ok(b) = world.get::<&Brazier>(e) {
-        out.push(if b.lit { "Brazier (lit)" } else { "Toppled brazier" }.to_string());
+        let burning = world.get::<&crate::components::OnFire>(e).is_ok();
+        out.push(
+            if b.toppled {
+                "Toppled brazier"
+            } else if burning {
+                "Brazier (lit)"
+            } else {
+                "Brazier (out)"
+            }
+            .to_string(),
+        );
         return;
     }
     if has::<OilPuddle>(world, e) {

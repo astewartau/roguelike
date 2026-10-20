@@ -905,12 +905,43 @@ pub fn get_rain_data(world: &World, grid: &Grid) -> Vec<RainPatch> {
         .collect()
 }
 
-/// Render Call Rain: rain (`tile_ids::RAIN`) falling on each tile of the
-/// patch under a cloud's shadow, for as long as the rain lasts. Animated in
-/// real time, so it keeps falling while the game waits on you.
-pub fn draw_rain(ctx: &egui::Context, camera: &Camera, icons: &UiIcons, patches: &[RainPatch], time: f32) {
-    let frames = icons.rain_uvs.len() as u32;
-    if frames == 0 || patches.is_empty() {
+/// How Call Rain is drawn. Three looks to choose between in play (the dev
+/// menu switches them); the winner stays and the rest go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RainStyle {
+    /// The pixel-art rain (`tile_ids::RAIN`), as it is.
+    #[default]
+    Sprite,
+    /// The same, much fainter, with a lighter cloud shadow.
+    FaintSprite,
+    /// Particles: thin falling streaks that splash into rings where they land.
+    Particles,
+}
+
+impl RainStyle {
+    pub const ALL: [RainStyle; 3] = [RainStyle::Sprite, RainStyle::FaintSprite, RainStyle::Particles];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RainStyle::Sprite => "Sprite",
+            RainStyle::FaintSprite => "Faint",
+            RainStyle::Particles => "Particles",
+        }
+    }
+}
+
+/// Render Call Rain falling on each tile of the patch, for as long as the
+/// rain lasts, in the chosen `style`. Animated in real time, so it keeps
+/// falling while the game waits on you.
+pub fn draw_rain(
+    ctx: &egui::Context,
+    camera: &Camera,
+    icons: &UiIcons,
+    patches: &[RainPatch],
+    time: f32,
+    style: RainStyle,
+) {
+    if patches.is_empty() {
         return;
     }
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -918,21 +949,58 @@ pub fn draw_rain(ctx: &egui::Context, camera: &Camera, icons: &UiIcons, patches:
         egui::Id::new("rain"),
     ));
     let ppp = ctx.pixels_per_point();
+    let frames = icons.rain_uvs.len() as u32;
+    let (shadow_alpha, rain_alpha) = match style {
+        RainStyle::Sprite => (70.0, 235.0),
+        RainStyle::FaintSprite => (35.0, 110.0),
+        RainStyle::Particles => (35.0, 0.0),
+    };
 
     for patch in patches {
         for &(x, y) in &patch.tiles {
             let rect = tile_rect(camera, ppp, x as f32 + 0.5, y as f32 + 0.5);
-            let shadow = egui::Color32::from_rgba_unmultiplied(20, 30, 50, (70.0 * patch.opacity) as u8);
+            let shadow = egui::Color32::from_rgba_unmultiplied(20, 30, 50, (shadow_alpha * patch.opacity) as u8);
             painter.rect_filled(rect, 0.0, shadow);
             // Neighbouring tiles a little out of step
             let phase = tile_hash(x, y);
-            let frame = ((time / RAIN_FRAME_DURATION) as u32).wrapping_add(phase) % frames;
-            painter.image(
-                icons.items_texture_id,
-                rect,
-                icons.rain_uvs[frame as usize],
-                egui::Color32::from_white_alpha((235.0 * patch.opacity) as u8),
-            );
+            if style == RainStyle::Particles {
+                rain_particles(&painter, rect, phase, time, patch.opacity);
+            } else if frames > 0 {
+                let frame = ((time / RAIN_FRAME_DURATION) as u32).wrapping_add(phase) % frames;
+                painter.image(
+                    icons.items_texture_id,
+                    rect,
+                    icons.rain_uvs[frame as usize],
+                    egui::Color32::from_white_alpha((rain_alpha * patch.opacity) as u8),
+                );
+            }
+        }
+    }
+}
+
+/// Raindrops over one tile: each falls on its own loop, slanting a little
+/// as if blown, and bursts into a widening ring where it hits the ground.
+fn rain_particles(painter: &egui::Painter, tile: egui::Rect, seed: u32, time: f32, opacity: f32) {
+    const DROPS: u32 = 7;
+    const FALL_SECONDS: f32 = 0.5;
+    let size = tile.width();
+    for i in 0..DROPS {
+        let h = seed.wrapping_add(i.wrapping_mul(0x9E37_79B9)).wrapping_mul(0x85EB_CA6B);
+        let unit = |shift: u32| ((h >> shift) & 0xff) as f32 / 255.0;
+        let t = (time / FALL_SECONDS + unit(0)).fract();
+        // Where it lands in the tile, and the slant it falls along
+        let ground = egui::pos2(tile.left() + unit(8) * size, tile.top() + (0.35 + 0.6 * unit(16)) * size);
+        let drift = egui::vec2(size * 0.18, -size * 0.9);
+        if t < 0.8 {
+            let k = t / 0.8;
+            let head = ground + drift * (1.0 - k);
+            let tail = head + egui::vec2(drift.x, drift.y) * 0.22;
+            let colour = egui::Color32::from_rgba_unmultiplied(185, 205, 240, (170.0 * opacity) as u8);
+            painter.line_segment([head, tail], egui::Stroke::new(1.2, colour));
+        } else {
+            let k = (t - 0.8) / 0.2;
+            let colour = egui::Color32::from_rgba_unmultiplied(200, 220, 250, (150.0 * opacity * (1.0 - k)) as u8);
+            painter.circle_stroke(ground, 1.0 + k * size * 0.12, egui::Stroke::new(1.0, colour));
         }
     }
 }

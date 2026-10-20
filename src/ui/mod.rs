@@ -535,7 +535,7 @@ pub fn run_ui(
         draw_explosions(ctx, vfx_effects, camera, icons);
 
         // Call Rain still falling
-        draw_rain(ctx, camera, icons, rain, real_time);
+        draw_rain(ctx, camera, icons, rain, real_time, dev_menu.rain_style);
 
         // Potion splash effects
         draw_potion_splashes(ctx, vfx_effects, camera);

@@ -2457,6 +2457,21 @@ pub struct Fuel {
     /// creatures around it. Almost everything that burns does; a dropped torch
     /// doesn't — it's a light and a thing to pick up, not a hazard.
     pub spreads: bool,
+    /// What its fire looks like, and how far it lights, while it burns.
+    pub flame: FlameLook,
+}
+
+/// The fire a fuel shows while it burns (with `Ignition::InPlace`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlameLook {
+    /// Open flames on the floor: oil, webs, grass.
+    Open,
+    /// A fire in a ring of stones: a campfire.
+    FirePit,
+    /// Coals in a standing bowl: a brazier.
+    Brazier,
+    /// A small flame behind glass, lit as its `Lantern` style says.
+    Lantern,
 }
 
 /// How a fuel entity takes fire.
@@ -2481,6 +2496,9 @@ pub enum Doused {
     /// The fire is gone and this item is left lying on its tile (a dropped
     /// torch leaves an unlit torch).
     LeavesItem(ItemType),
+    /// Water can't reach it (a flame behind glass). Only putting it out by
+    /// hand does.
+    Sheltered,
 }
 
 /// What a fuel entity leaves behind once it has burnt out.
@@ -2506,6 +2524,7 @@ impl Fuel {
             doused: Doused::Despawn,
             burnout: Burnout::ScorchGrass,
             spreads: true,
+            flame: FlameLook::Open,
         }
     }
 
@@ -2526,6 +2545,7 @@ impl Fuel {
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
             spreads: true,
+            flame: FlameLook::Open,
         }
     }
 
@@ -2540,6 +2560,7 @@ impl Fuel {
             doused: Doused::Extinguish,
             burnout: Burnout::Despawn,
             spreads: true,
+            flame: FlameLook::Open,
         }
     }
 
@@ -2558,7 +2579,33 @@ impl Fuel {
             doused: Doused::LeavesItem(ItemType::UnlitTorch),
             burnout: Burnout::LeavesItem(ItemType::UnlitTorch),
             spreads: false,
+            flame: FlameLook::Open,
         }
+    }
+
+    /// A campfire or a brazier: burns for as long as it's left alone, goes
+    /// out in the rain (or a thrown flask) and stays put, and lights again
+    /// from a torch or from fire beside it, even on ground the rain left wet
+    /// (while it's still raining, the next soaking puts it straight out).
+    /// Its fire doesn't creep out across the floor; it's for warmth and light.
+    pub fn hearth(flame: FlameLook) -> Self {
+        Self {
+            catch_chance: crate::constants::HEARTH_RELIGHT_CHANCE,
+            burn_time: f32::INFINITY,
+            dampable: false,
+            stand_ignite_chance: 0.0,
+            ignition: Ignition::InPlace,
+            doused: Doused::Extinguish,
+            burnout: Burnout::Despawn,
+            spreads: false,
+            flame,
+        }
+    }
+
+    /// A lantern: a hearth whose flame sits behind glass, so rain and
+    /// splashes don't reach it.
+    pub fn lantern() -> Self {
+        Self { doused: Doused::Sheltered, ..Self::hearth(FlameLook::Lantern) }
     }
 
     /// Glowing cave fungus: damp, slow to catch, consumed when it does.
@@ -2572,6 +2619,7 @@ impl Fuel {
             doused: Doused::Despawn,
             burnout: Burnout::Despawn,
             spreads: true,
+            flame: FlameLook::Open,
         }
     }
 }
@@ -2697,12 +2745,14 @@ pub struct CarriedTorch {
     pub lit: bool,
 }
 
-/// A standing brazier (dungeon light source). Toppling it (interaction or a
-/// knockback into it) snuffs the stand and spills fire onto nearby tiles;
-/// `lit` is false once toppled.
+/// A standing brazier (dungeon light source). Toppling a burning one
+/// (interaction or a knockback into it) snuffs it and spills fire onto
+/// nearby tiles, and a toppled brazier stays out for good. Whether it's
+/// burning otherwise is the fire system's business (`Fuel::hearth`): rain
+/// puts it out and a torch or nearby fire relights it.
 #[derive(Debug, Clone, Copy)]
 pub struct Brazier {
-    pub lit: bool,
+    pub toppled: bool,
 }
 
 /// Fire trap component - causes burning when stepped on (but not by owner or their pets)

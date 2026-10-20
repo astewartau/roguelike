@@ -2849,7 +2849,9 @@ mod tests {
         // behaviour (its oil spills plus Oiled creatures catching readily; it
         // recorded kills=18 on its own), not oil-drip trails (disabling drips
         // leaves kills=24) or torches. Two separate runs agreed.
-        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=f105d8ee";
+        // Roster re-recorded when lanterns got their (1 HP) glass: every
+        // scalar above it was unchanged.
+        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=a20b2b3e";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -2921,7 +2923,9 @@ mod tests {
         // the rise: kills=14 with fire unable to catch creatures). Roster
         // re-recorded when a fresh floor's enemies near the stairs started
         // being scheduled on arrival (they used to never act).
-        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=bcef1344";
+        // Roster re-recorded when lanterns got their (1 HP) glass: every
+        // scalar above it was unchanged.
+        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=3a9cd410";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

@@ -325,8 +325,9 @@ pub(crate) fn try_knockback(
     // over the tile they just landed on (see systems::fire::topple_brazier).
     let brazier_hit: Option<Entity> = world
         .query::<(&Position, &crate::components::Brazier)>()
+        .with::<&crate::components::OnFire>()
         .iter()
-        .find(|(_, (p, b))| b.lit && p.x == dest.0 && p.y == dest.1)
+        .find(|(_, (p, b))| !b.toppled && p.x == dest.0 && p.y == dest.1)
         .map(|(id, _)| id);
     if let Some(brazier) = brazier_hit {
         crate::systems::fire::topple_brazier(world, grid, brazier, events, rng);
@@ -589,7 +590,12 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // world, still attackable, while its break fuse runs, and then
         // detonates in the fire system (systems::fire::tick_fire) instead of
         // leaving bones.
-        if world.entity(id).map(|e| e.has::<crate::components::OilBarrel>()).unwrap_or(false) {
+        // Broken lanterns likewise smash in the fire system.
+        if world
+            .entity(id)
+            .map(|e| e.has::<crate::components::OilBarrel>() || e.has::<crate::components::Lantern>())
+            .unwrap_or(false)
+        {
             continue;
         }
         if id != player_entity && health.current <= 0 {
