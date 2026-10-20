@@ -32,8 +32,15 @@ impl DevArt<'_> {
     }
 }
 
+/// The run as the panel sees it (read only).
+pub struct DevView<'a> {
+    pub world: &'a World,
+    pub player: hecs::Entity,
+    pub game_time: f32,
+}
+
 /// Draw the panel (if open) and record its width for the camera.
-pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt) {
+pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView) {
     if !dev.visible {
         dev.panel_px = 0.0;
         return;
@@ -60,6 +67,8 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt) {
                         .show(ui, |ui| match dev.tab {
                             DevTab::Spawn => spawn_tab(ui, dev, art),
                             DevTab::Paint => paint_tab(ui, dev, art),
+                            DevTab::Player => player_tab(ui, dev, view),
+                            DevTab::World => world_tab(ui, dev, view),
                             DevTab::Effects => effects_tab(ui, dev),
                         });
                 });
@@ -270,6 +279,200 @@ fn paint_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     }
 }
 
+/// A tool button: armed while selected; clicking toggles it.
+fn tool_button(ui: &mut egui::Ui, dev: &mut DevTools, tool: CursorTool, label: &str, tip: &str) {
+    let armed = dev.tool == Some(tool);
+    if ui.selectable_label(armed, label).on_hover_text(tip).clicked() {
+        dev.tool = if armed { None } else { Some(tool) };
+    }
+}
+
+fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
+    use crate::components::{Experience, Fatigue, Health, Hunger, Inventory, LearnedAbilities, Stats, StatusEffects};
+    use crate::devtools::cheats::{ALL_EFFECTS, LEARNABLE};
+    let (world, player) = (view.world, view.player);
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut dev.god_mode, "God mode");
+        ui.checkbox(&mut dev.keep_fed, "Never hungry or tired");
+    });
+
+    style::panel_header(ui, "Health");
+    if let Ok(health) = world.get::<&Health>(player) {
+        let (mut current, mut max) = (health.current, health.max);
+        ui.horizontal(|ui| {
+            let a = ui.add(egui::DragValue::new(&mut current).range(0..=9999).prefix("HP "));
+            let b = ui.add(egui::DragValue::new(&mut max).range(1..=9999).prefix("max "));
+            if a.changed() || b.changed() {
+                dev.commands.push(DevCommand::SetHealth { current, max });
+            }
+            if ui.button("Full heal").clicked() {
+                dev.commands.push(DevCommand::FullHeal);
+            }
+        });
+    }
+
+    style::panel_header(ui, "Stats");
+    if let Ok(stats) = world.get::<&Stats>(player) {
+        let (mut strength, mut intelligence, mut agility) = (stats.strength, stats.intelligence, stats.agility);
+        ui.horizontal(|ui| {
+            let a = ui.add(egui::DragValue::new(&mut strength).range(1..=99).prefix("STR "));
+            let b = ui.add(egui::DragValue::new(&mut intelligence).range(1..=99).prefix("INT "));
+            let c = ui.add(egui::DragValue::new(&mut agility).range(1..=99).prefix("AGI "));
+            if a.changed() || b.changed() || c.changed() {
+                dev.commands.push(DevCommand::SetStats { strength, intelligence, agility });
+            }
+        });
+    }
+
+    style::panel_header(ui, "Experience and gold");
+    let level = world.get::<&Experience>(player).map(|e| (e.level, e.current)).ok();
+    let gold = world.get::<&Inventory>(player).map(|i| i.gold).unwrap_or(0);
+    if let Some((level, xp)) = level {
+        ui.label(format!("Level {level}, {xp} XP, {gold} gold"));
+    }
+    ui.horizontal(|ui| {
+        for amount in [100, 1000] {
+            if ui.button(format!("+{amount} XP")).clicked() {
+                dev.commands.push(DevCommand::AddXp(amount));
+            }
+        }
+        for amount in [100, 1000] {
+            if ui.button(format!("+{amount} gold")).clicked() {
+                dev.commands.push(DevCommand::AddGold(amount));
+            }
+        }
+    });
+
+    style::panel_header(ui, "Hunger and fatigue");
+    let hunger = world.get::<&Hunger>(player).map(|h| h.value).ok();
+    let fatigue = world.get::<&Fatigue>(player).map(|f| f.value).ok();
+    if let (Some(mut hunger), Some(mut fatigue)) = (hunger, fatigue) {
+        let a = ui.add(egui::Slider::new(&mut hunger, 0.0..=crate::constants::HUNGER_MAX).text("fullness"));
+        let b = ui.add(egui::Slider::new(&mut fatigue, 0.0..=crate::constants::FATIGUE_MAX).text("fatigue"));
+        if a.changed() || b.changed() {
+            dev.commands.push(DevCommand::SetMeters { hunger, fatigue });
+        }
+    }
+
+    style::panel_header(ui, "Spells and cooldowns");
+    let known = world.get::<&LearnedAbilities>(player).ok();
+    ui.horizontal_wrapped(|ui| {
+        for ability in LEARNABLE {
+            let has = known.as_ref().is_some_and(|k| k.knows(ability));
+            if ui.add_enabled(!has, egui::Button::new(ability.name())).clicked() {
+                dev.commands.push(DevCommand::Learn(ability));
+            }
+        }
+    });
+    drop(known);
+    if ui.button("Reset all cooldowns").clicked() {
+        dev.commands.push(DevCommand::ResetCooldowns);
+    }
+
+    style::panel_header(ui, "Status effects");
+    ui.horizontal(|ui| {
+        ui.label("Add for");
+        ui.add(egui::DragValue::new(&mut dev.effect_seconds).range(1.0..=600.0).suffix(" s"));
+        if ui.button("Clear all").clicked() {
+            dev.commands.push(DevCommand::ClearEffects);
+        }
+    });
+    let active: Vec<(crate::components::EffectType, f32)> = world
+        .get::<&StatusEffects>(player)
+        .map(|s| s.effects.iter().map(|e| (e.effect_type, e.remaining_duration)).collect())
+        .unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        for effect in ALL_EFFECTS {
+            let on = active.iter().find(|(e, _)| *e == effect);
+            let label = match on {
+                Some((_, left)) if *left > 1.0e5 => format!("{effect:?} (on)"),
+                Some((_, left)) => format!("{effect:?} {left:.0}s"),
+                None => format!("{effect:?}"),
+            };
+            if ui.selectable_label(on.is_some(), label).on_hover_text("Click to add, again to remove").clicked() {
+                dev.commands.push(if on.is_some() {
+                    DevCommand::RemoveEffect(effect)
+                } else {
+                    DevCommand::AddEffect(effect, dev.effect_seconds)
+                });
+            }
+        }
+    });
+}
+
+fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
+    style::panel_header(ui, "Click tools");
+    ui.horizontal_wrapped(|ui| {
+        tool_button(ui, dev, CursorTool::Teleport, "Teleport", "Move yourself to the clicked tile");
+        tool_button(ui, dev, CursorTool::Ignite, "Ignite", "Set the tile alight, and whoever is on it");
+        tool_button(ui, dev, CursorTool::Douse, "Douse", "Splash water over the tile and its neighbours");
+        tool_button(ui, dev, CursorTool::Blast, "Blast", "A fireball's blast there (it can hurt you)");
+        tool_button(ui, dev, CursorTool::Kill, "Kill", "Whatever has health there drops to none");
+        tool_button(ui, dev, CursorTool::Delete, "Delete", "Remove everything on the tile but you");
+    });
+
+    style::panel_header(ui, "Map");
+    ui.horizontal(|ui| {
+        if ui.button("Reveal map").clicked() {
+            dev.commands.push(DevCommand::RevealMap);
+        }
+        ui.checkbox(&mut dev.no_fog, "See everything");
+    });
+
+    style::panel_header(ui, "Creatures");
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Kill visible").clicked() {
+            dev.commands.push(DevCommand::KillHostiles { visible_only: true });
+        }
+        if ui.button("Kill all hostiles").clicked() {
+            dev.commands.push(DevCommand::KillHostiles { visible_only: false });
+        }
+        let mut frozen = dev.ai_frozen;
+        if ui.checkbox(&mut frozen, "Freeze AI").changed() {
+            dev.commands.push(DevCommand::FreezeAi(frozen));
+        }
+        if ui.button("Wake all").clicked() {
+            dev.commands.push(DevCommand::WakeAll);
+        }
+    });
+
+    style::panel_header(ui, "Floors");
+    ui.horizontal(|ui| {
+        ui.label(format!("On floor {}.", dev.floor));
+        ui.add(egui::DragValue::new(&mut dev.target_floor).range(0..=99).prefix("floor "));
+        if ui.button("Go").clicked() {
+            dev.commands.push(DevCommand::GoToFloor(dev.target_floor));
+        }
+        if ui.button("Reroll this floor").on_hover_text("Regenerate it from a fresh seed").clicked() {
+            dev.commands.push(DevCommand::RerollFloor);
+        }
+    });
+
+    style::panel_header(ui, "Time");
+    ui.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut dev.advance_seconds).range(0.5..=600.0).suffix(" s"));
+        if ui.button("Let it pass").on_hover_text("You wait while game time runs on").clicked() {
+            dev.commands.push(DevCommand::AdvanceTime(dev.advance_seconds));
+        }
+    });
+    ui.add(egui::Slider::new(&mut dev.anim_speed, 0.05..=2.0).text("animation speed"));
+
+    style::panel_header(ui, "Run");
+    ui.horizontal(|ui| {
+        ui.label(format!("Seed {}", dev.seed));
+        if ui.small_button("Copy").clicked() {
+            ui.ctx().copy_text(dev.seed.to_string());
+        }
+    });
+    ui.label(format!(
+        "Game time {:.1} s, {} entities, {:.0} fps",
+        view.game_time,
+        view.world.len(),
+        dev.fps
+    ));
+}
+
 fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
     style::panel_header(ui, "Call Rain look");
     ui.horizontal(|ui| {
@@ -323,9 +526,16 @@ pub fn draw_cursor_ghost(
             let edge = if ok { egui::Color32::from_rgb(120, 220, 140) } else { egui::Color32::from_rgb(230, 90, 80) };
             painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5_f32, edge));
         }
-        CursorTool::ParticleFire => {
-            let rect = tile_rect(camera, ppp, hover.0 as f32 + 0.5, hover.1 as f32 + 0.5);
-            painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 170, 80)));
+        CursorTool::Blast => {
+            let r = crate::constants::FIREBALL_RADIUS as f32;
+            let low = tile_rect(camera, ppp, hover.0 as f32 - r + 0.5, hover.1 as f32 - r + 0.5);
+            let high = tile_rect(camera, ppp, hover.0 as f32 + r + 0.5, hover.1 as f32 + r + 0.5);
+            painter.rect_stroke(low.union(high), 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 120, 60)));
+        }
+        CursorTool::Douse => {
+            let low = tile_rect(camera, ppp, hover.0 as f32 - 0.5, hover.1 as f32 - 0.5);
+            let high = tile_rect(camera, ppp, hover.0 as f32 + 1.5, hover.1 as f32 + 1.5);
+            painter.rect_stroke(low.union(high), 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(110, 170, 240)));
         }
         CursorTool::Paint(tile) => {
             let b = dev.brush as f32;
@@ -340,6 +550,15 @@ pub fn draw_cursor_ghost(
                 }
             }
             painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(240, 220, 140)));
+        }
+        other => {
+            let colour = match other {
+                CursorTool::Teleport => egui::Color32::from_rgb(150, 200, 255),
+                CursorTool::Ignite | CursorTool::ParticleFire => egui::Color32::from_rgb(255, 170, 80),
+                _ => egui::Color32::from_rgb(230, 90, 80),
+            };
+            let rect = tile_rect(camera, ppp, hover.0 as f32 + 0.5, hover.1 as f32 + 0.5);
+            painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5_f32, colour));
         }
     }
 }

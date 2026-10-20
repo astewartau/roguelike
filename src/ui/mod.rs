@@ -23,7 +23,7 @@ mod vfx;
 
 // Re-export public items from submodules
 pub use altar_window::{draw_altar_window, get_altar_window_data};
-pub use devtools::{draw_cursor_ghost, draw_devtools, DevArt};
+pub use devtools::{draw_cursor_ghost, draw_devtools, DevArt, DevView};
 pub use dialogue::{draw_dialogue_window, get_dialogue_window_data};
 pub use game_over_screen::{run_game_over_screen, GameOverChoice, GameOverStats};
 pub use hotbar::{
@@ -556,7 +556,12 @@ pub fn run_ui(
         draw_channel_progress(ctx, camera, channels);
 
         // Developer menu
-        draw_devtools(ctx, dev, &DevArt { icons, tileset });
+        draw_devtools(
+            ctx,
+            dev,
+            &DevArt { icons, tileset },
+            &DevView { world, player: player_entity, game_time },
+        );
 
         // Loot window (if chest is open)
         if let Some(ref data) = loot_data {

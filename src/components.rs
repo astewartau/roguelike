@@ -1500,6 +1500,11 @@ pub enum AIState {
 #[derive(Debug, Clone, Copy)]
 pub struct Asleep;
 
+/// Held still by the developer tools' Freeze AI: the creature only waits
+/// (staying scheduled, so it carries on as soon as it's unfrozen).
+#[derive(Debug, Clone, Copy)]
+pub struct DevFrozen;
+
 /// Marker: this actor was just stunned and must drop whatever action it is in
 /// the middle of. Set by `add_effect_to_entity`, which cannot reach the
 /// scheduler; `time_system::apply_stun_interrupts` cancels the action and

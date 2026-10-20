@@ -18,7 +18,7 @@ pub mod initialization;
 mod simulation;
 
 pub use context::{ActorCtx, EffectCtx, SimCtx};
-pub use floor_transition::{can_transition_floor, handle_floor_transition};
+pub use floor_transition::{can_transition_floor, handle_floor_transition, transition_to_floor};
 pub use game_state::GameState;
 pub use initialization::initialize_single_ai_actor;
 pub use simulation::*;
@@ -537,7 +537,8 @@ impl GameEngine {
         profile_function!();
 
         // Accumulate real time for animations
-        self.real_time += dt;
+        // Developer slow motion stretches animation time too.
+        self.real_time += dt * self.dev.anim_speed;
 
         // Light flicker only advances while the dungeon is live, so the lit
         // scene behind a menu is as frozen as the simulation. See the field's
@@ -612,7 +613,7 @@ impl GameEngine {
         // freezing it (systems::hitstop; fed by last frame's events). Only
         // visuals ride on it — the simulation is event-driven and the camera
         // shake keeps real time so the knock still rattles through a freeze.
-        let anim_dt = self.vfx.hitstop.visual_dt(dt);
+        let anim_dt = self.vfx.hitstop.visual_dt(dt) * self.dev.anim_speed;
 
         // Update animations
         {
@@ -720,6 +721,9 @@ impl GameEngine {
         camera.set_right_inset(self.dev.panel_px);
         camera.update(dt, self.input.mouse_down);
 
+        // God mode and full meters from the dev tools.
+        self.dev.maintain(state);
+
         // A dev tool held down and dragged (painting) applies on each new
         // tile under the cursor.
         if self.dev.is_held() {
@@ -813,8 +817,9 @@ impl GameEngine {
             }
         }
 
-        // Update visibility based on LOS and illumination (only when game state changed)
-        if state.fov_dirty {
+        // Update visibility based on LOS and illumination (only when game
+        // state changed, or every frame while the dev tools lift the fog)
+        if state.fov_dirty || self.dev.no_fog {
             {
                 profile_scope!("fov_update");
                 systems::update_fov(
@@ -824,6 +829,13 @@ impl GameEngine {
                     crate::constants::FOV_RADIUS,
                     state.game_clock.time,
                 );
+            }
+
+            if self.dev.no_fog {
+                for tile in &mut state.grid.tiles {
+                    tile.visible = true;
+                    tile.explored = true;
+                }
             }
 
             // Calculate per-tile illumination (must be after FOV update)
@@ -884,7 +896,10 @@ impl GameEngine {
             process_ui_actions(&mut ctx, actions)
         };
         if let Some(state) = self.state.as_mut() {
-            self.dev.apply_commands(state, &mut self.vfx);
+            self.dev.apply_commands(state, &mut self.events, &mut self.vfx);
+        }
+        for request in self.dev.take_requests() {
+            self.handle_dev_request(request);
         }
 
         // Handle ability activation from a hotbar slot
@@ -905,15 +920,7 @@ impl GameEngine {
         // A freshly studied spell goes straight onto the first free hotbar
         // slot (main bar first, then shift bar) so it's immediately usable.
         if let Some(ability) = ui_result.learned_ability {
-            let entry = Some(crate::ui::HotbarEntry::Ability(ability));
-            if let Some(slot) = ui_state
-                .hotbar_main
-                .iter_mut()
-                .chain(ui_state.hotbar_shift.iter_mut())
-                .find(|s| s.is_none())
-            {
-                *slot = entry;
-            }
+            put_on_hotbar(ui_state, ability);
         }
         if ui_result.close_inventory {
             ui_state.show_inventory = false;
@@ -1923,6 +1930,95 @@ impl GameEngine {
             result.player_visual_pos.0 + 0.5,
             result.player_visual_pos.1 + 0.5,
         ));
+    }
+}
+
+/// Put an ability on the first free hotbar slot (main bar first, then the
+/// shift bar), so a newly learned one is usable at once.
+fn put_on_hotbar(ui_state: &mut GameUiState, ability: AbilityType) {
+    let entry = Some(crate::ui::HotbarEntry::Ability(ability));
+    let already = ui_state.hotbar_main.iter().chain(ui_state.hotbar_shift.iter()).any(|s| *s == entry);
+    if already {
+        return;
+    }
+    if let Some(slot) = ui_state.hotbar_main.iter_mut().chain(ui_state.hotbar_shift.iter_mut()).find(|s| s.is_none()) {
+        *slot = entry;
+    }
+}
+
+impl GameEngine {
+    /// Do what a dev tools command needed the engine for.
+    fn handle_dev_request(&mut self, request: crate::devtools::EngineRequest) {
+        use crate::devtools::EngineRequest;
+        match request {
+            EngineRequest::GoToFloor(floor) => self.dev_change_floor(floor, false),
+            EngineRequest::RerollFloor => {
+                let floor = self.state.as_ref().map(|s| s.current_floor).unwrap_or(0);
+                self.dev_change_floor(floor, true);
+            }
+            EngineRequest::AdvanceTime(seconds) => self.dev_advance_time(seconds),
+            EngineRequest::Learned(ability) => {
+                if let Some(ui_state) = self.ui_state.as_mut() {
+                    put_on_hotbar(ui_state, ability);
+                }
+            }
+            EngineRequest::ClearPath => self.input.clear_path(),
+        }
+    }
+
+    /// Jump to `floor` (restored if visited, else generated from the run's
+    /// seed), or with `reroll` regenerate the current floor from a fresh seed.
+    fn dev_change_floor(&mut self, floor: u32, reroll: bool) {
+        use crate::events::StairDirection;
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let current = state.current_floor;
+        if floor == current && !reroll {
+            return;
+        }
+        let seed = if reroll {
+            rand::random::<u64>()
+        } else {
+            game_state::floor_seed(state.seed, floor)
+        };
+        let direction = if floor >= current { StairDirection::Down } else { StairDirection::Up };
+        let mut floors = std::mem::take(&mut state.floors);
+        if reroll {
+            floors.remove(&floor);
+        }
+        let result =
+            transition_to_floor(&mut state.actor_ctx(&mut self.events), &mut floors, current, floor, seed, direction);
+        state.floors = floors;
+        state.current_floor = result.new_floor;
+        state.fov_dirty = true;
+        self.input.clear_path();
+        self.dev.status = Some(if reroll { format!("Rerolled floor {floor}") } else { format!("Went to floor {floor}") });
+    }
+
+    /// Let `seconds` of game time pass, the player waiting throughout
+    /// (whatever happens meanwhile).
+    fn dev_advance_time(&mut self, seconds: f32) {
+        let Some(start) = self.state.as_ref().map(|s| s.game_clock.time) else {
+            return;
+        };
+        let steps = (seconds / crate::constants::ACTION_WAIT_DURATION).ceil().max(1.0) as usize;
+        for _ in 0..steps {
+            let Some(mut ctx) = self.sim_ctx() else {
+                return;
+            };
+            let result = execute_player_intent(&mut ctx, crate::systems::player_input::PlayerIntent::Wait);
+            for &(x, y) in &result.raised_skeletons {
+                spawn_raised_skeleton(&mut ctx.actors(), x, y);
+            }
+            if result.turn_result != simulation::TurnResult::Started {
+                break;
+            }
+        }
+        if let Some(state) = self.state.as_mut() {
+            state.fov_dirty = true;
+            self.dev.status = Some(format!("{:.1} s passed", state.game_clock.time - start));
+        }
     }
 }
 

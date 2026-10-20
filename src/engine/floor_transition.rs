@@ -603,10 +603,6 @@ pub fn handle_floor_transition(
     direction: crate::events::StairDirection,
 ) -> FloorTransitionResult {
     use crate::events::StairDirection;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
-
-    let player_entity = ctx.player;
 
     let target_floor = match direction {
         StairDirection::Down => current_floor + 1,
@@ -619,8 +615,36 @@ pub fn handle_floor_transition(
     // The target floor's layout, loot and AI-initialization rolls all come from
     // a per-floor rng derived from the run seed, so the same seed produces the
     // same floor regardless of visit order.
-    let mut floor_rng =
-        StdRng::seed_from_u64(super::game_state::floor_seed(run_seed, target_floor));
+    transition_to_floor(
+        ctx,
+        floors,
+        current_floor,
+        target_floor,
+        super::game_state::floor_seed(run_seed, target_floor),
+        direction,
+    )
+}
+
+/// Move the player to `target_floor` (restoring it if it was visited, else
+/// generating it from `floor_seed`), arriving at its up stairs when going
+/// `Down` and its down stairs when going `Up`. Stairs only ever go one floor;
+/// the developer tools jump anywhere, and pass the current floor itself with
+/// a fresh seed to reroll it (the floor being left is then dropped, not
+/// saved).
+pub fn transition_to_floor(
+    ctx: &mut ActorCtx,
+    floors: &mut HashMap<u32, SavedFloor>,
+    current_floor: u32,
+    target_floor: u32,
+    floor_seed: u64,
+    direction: crate::events::StairDirection,
+) -> FloorTransitionResult {
+    use crate::events::StairDirection;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    let player_entity = ctx.player;
+    let mut floor_rng = StdRng::seed_from_u64(floor_seed);
 
     // Resolve the target floor first - a revisit restores its saved grid and
     // entities, a first visit generates a fresh grid. `target_floor` is never
@@ -647,7 +671,9 @@ pub fn handle_floor_transition(
     // Save the floor we are leaving, then clear its entities.
     let current_grid = std::mem::replace(ctx.grid, new_grid);
     let saved_floor = save_floor(ctx.world, current_grid, player_entity);
-    floors.insert(current_floor, saved_floor);
+    if target_floor != current_floor {
+        floors.insert(current_floor, saved_floor);
+    }
     clear_floor_entities(ctx.world, player_entity, ctx.scheduler);
 
     // Populate the new floor from the per-floor rng rather than the run rng.

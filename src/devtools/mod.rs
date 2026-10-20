@@ -10,6 +10,7 @@
 //! Dev randomness comes from its own entropy-seeded rng: placing things by
 //! hand must never shift a seeded run's stream.
 
+pub mod cheats;
 pub mod paint;
 pub mod spawn;
 
@@ -17,7 +18,7 @@ use hecs::{Entity, World};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::components::{Inventory, ItemInstance, ItemType};
+use crate::components::{AbilityType, EffectType, Inventory, ItemInstance, ItemType, Stats};
 use crate::engine::GameState;
 use crate::events::EventQueue;
 use crate::tile::TileType;
@@ -32,16 +33,20 @@ pub enum DevTab {
     #[default]
     Spawn,
     Paint,
+    Player,
+    World,
     Effects,
 }
 
 impl DevTab {
-    pub const ALL: [DevTab; 3] = [DevTab::Spawn, DevTab::Paint, DevTab::Effects];
+    pub const ALL: [DevTab; 5] = [DevTab::Spawn, DevTab::Paint, DevTab::Player, DevTab::World, DevTab::Effects];
 
     pub fn name(self) -> &'static str {
         match self {
             DevTab::Spawn => "Spawn",
             DevTab::Paint => "Paint",
+            DevTab::Player => "Player",
+            DevTab::World => "World",
             DevTab::Effects => "Effects",
         }
     }
@@ -56,6 +61,18 @@ pub enum CursorTool {
     Paint(TileType),
     /// A looping particle fire on the tile: purely visual, nothing burns.
     ParticleFire,
+    /// Move the player there.
+    Teleport,
+    /// Set the tile alight, and whatever stands on it.
+    Ignite,
+    /// Splash water over the tile and those around it.
+    Douse,
+    /// A fireball's blast, centred on the tile (it can hurt you).
+    Blast,
+    /// Whatever on the tile has health drops to none.
+    Kill,
+    /// Remove everything on the tile but you.
+    Delete,
 }
 
 impl CursorTool {
@@ -64,6 +81,12 @@ impl CursorTool {
             CursorTool::Place(what) => format!("Place {}", what.name()),
             CursorTool::Paint(tile) => format!("Paint {tile:?}"),
             CursorTool::ParticleFire => "Particle fire (visual only)".into(),
+            CursorTool::Teleport => "Teleport".into(),
+            CursorTool::Ignite => "Ignite".into(),
+            CursorTool::Douse => "Douse".into(),
+            CursorTool::Blast => "Blast".into(),
+            CursorTool::Kill => "Kill".into(),
+            CursorTool::Delete => "Delete".into(),
         }
     }
 
@@ -81,6 +104,37 @@ pub enum DevCommand {
     GiveItem { kind: ItemType, count: u32 },
     /// Remove every particle fire placed with `CursorTool::ParticleFire`.
     ClearParticleFires,
+    FullHeal,
+    SetHealth { current: i32, max: i32 },
+    SetStats { strength: i32, intelligence: i32, agility: i32 },
+    AddXp(u32),
+    AddGold(u32),
+    SetMeters { hunger: f32, fatigue: f32 },
+    Learn(AbilityType),
+    ResetCooldowns,
+    AddEffect(EffectType, f32),
+    RemoveEffect(EffectType),
+    ClearEffects,
+    RevealMap,
+    KillHostiles { visible_only: bool },
+    FreezeAi(bool),
+    WakeAll,
+    GoToFloor(u32),
+    RerollFloor,
+    /// Let `n` game seconds pass (the player waits).
+    AdvanceTime(f32),
+}
+
+/// What a command needs the engine itself for, beyond the `GameState`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EngineRequest {
+    GoToFloor(u32),
+    RerollFloor,
+    AdvanceTime(f32),
+    /// A spell was learned: put it on the hotbar.
+    Learned(AbilityType),
+    /// The player moved: drop any path they were following.
+    ClearPath,
 }
 
 /// Everything the developer tools remember between frames.
@@ -103,6 +157,32 @@ pub struct DevTools {
     pub panel_px: f32,
     /// One line of feedback for the panel ("Placed 3 Goblins").
     pub status: Option<String>,
+    /// The player can't be hurt (Invulnerable, kept topped up).
+    pub god_mode: bool,
+    /// Hunger stays full and fatigue at nothing.
+    pub keep_fed: bool,
+    /// Every tile is seen, fog of war or not.
+    pub no_fog: bool,
+    /// Multiplies how fast animations and effects play (1 is normal), for
+    /// watching them slowly. Game time is unaffected.
+    pub anim_speed: f32,
+    /// Creatures are held still (`DevFrozen`).
+    pub ai_frozen: bool,
+    /// Frames per second, smoothed, for the run info.
+    pub fps: f32,
+    last_frame: Option<std::time::Instant>,
+    /// The run's floor and seed, refreshed every frame for the panel.
+    pub floor: u32,
+    pub seed: u64,
+    /// The panel's working values: seconds for an added status effect, the
+    /// floor to jump to, and how long to let pass.
+    pub effect_seconds: f32,
+    pub target_floor: u32,
+    pub advance_seconds: f32,
+    /// Asked for by commands, handled by the engine (`take_requests`).
+    requests: Vec<EngineRequest>,
+    /// God mode as last applied, to notice it being switched off.
+    god_mode_applied: bool,
     /// Tile the mouse button went down on (and has dragged to), while a
     /// tool is held down.
     held_at: Option<(i32, i32)>,
@@ -122,6 +202,20 @@ impl Default for DevTools {
             commands: Vec::new(),
             panel_px: 0.0,
             status: None,
+            god_mode: false,
+            keep_fed: false,
+            no_fog: false,
+            anim_speed: 1.0,
+            ai_frozen: false,
+            fps: 0.0,
+            last_frame: None,
+            floor: 0,
+            seed: 0,
+            effect_seconds: 30.0,
+            target_floor: 1,
+            advance_seconds: 10.0,
+            requests: Vec::new(),
+            god_mode_applied: false,
             held_at: None,
             rng: StdRng::from_entropy(),
         }
@@ -199,11 +293,47 @@ impl DevTools {
                 }
             }
             CursorTool::ParticleFire => vfx.spawn_fire(at.0 as f32 + 0.5, at.1 as f32 + 0.5),
+            CursorTool::Teleport => match cheats::teleport(state, at) {
+                Ok(()) => {
+                    self.requests.push(EngineRequest::ClearPath);
+                    self.status = None;
+                }
+                Err(why) => self.status = Some(format!("Can't teleport there: {why}")),
+            },
+            CursorTool::Ignite => {
+                crate::systems::fire::spill_fire_at(&mut state.world, &state.grid, at.0, at.1, events)
+            }
+            CursorTool::Douse => {
+                crate::systems::fire::splash_water(&mut state.world, &state.grid, at.0, at.1, 1, events);
+            }
+            CursorTool::Blast => {
+                use crate::constants::{FIREBALL_DAMAGE, FIREBALL_RADIUS};
+                let player = state.player_entity;
+                crate::systems::actions::detonate_fireball(
+                    &mut state.world,
+                    &state.grid,
+                    player,
+                    at,
+                    FIREBALL_DAMAGE,
+                    events,
+                    &mut self.rng,
+                );
+                events.push(crate::events::GameEvent::FireballExplosion { x: at.0, y: at.1, radius: FIREBALL_RADIUS });
+            }
+            CursorTool::Kill => {
+                let n = cheats::kill_at(state, at);
+                self.status = Some(format!("Killed {n}"));
+            }
+            CursorTool::Delete => {
+                let n = cheats::delete_at(state, at);
+                self.status = Some(format!("Deleted {n}"));
+            }
         }
     }
 
     /// Carry out everything the panel queued this frame.
-    pub fn apply_commands(&mut self, state: &mut GameState, vfx: &mut VfxManager) {
+    pub fn apply_commands(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager) {
+        let player = state.player_entity;
         for command in std::mem::take(&mut self.commands) {
             match command {
                 DevCommand::GiveItem { kind, count } => {
@@ -214,8 +344,83 @@ impl DevTools {
                     self.status = Some(format!("Gave {count} x {name}"));
                 }
                 DevCommand::ClearParticleFires => vfx.fires.clear(),
+                DevCommand::FullHeal => {
+                    if let Ok(mut health) = state.world.get::<&mut crate::components::Health>(player) {
+                        health.current = health.max;
+                    }
+                }
+                DevCommand::SetHealth { current, max } => cheats::set_health(&mut state.world, player, current, max),
+                DevCommand::SetStats { strength, intelligence, agility } => {
+                    cheats::set_stats(&mut state.world, player, Stats { strength, intelligence, agility })
+                }
+                DevCommand::AddXp(n) => cheats::add_xp(&mut state.world, player, n, events),
+                DevCommand::AddGold(n) => cheats::add_gold(&mut state.world, player, n),
+                DevCommand::SetMeters { hunger, fatigue } => {
+                    cheats::set_meters(&mut state.world, player, hunger, fatigue)
+                }
+                DevCommand::Learn(ability) => {
+                    if cheats::learn(&mut state.world, player, ability) {
+                        self.requests.push(EngineRequest::Learned(ability));
+                        self.status = Some(format!("Learned {}", ability.name()));
+                    }
+                }
+                DevCommand::ResetCooldowns => cheats::reset_cooldowns(&mut state.world, player),
+                DevCommand::AddEffect(effect, seconds) => {
+                    crate::systems::effects::add_effect_to_entity(&mut state.world, player, effect, seconds);
+                }
+                DevCommand::RemoveEffect(effect) => {
+                    crate::systems::effects::remove_effect_from_entity(&mut state.world, player, effect)
+                }
+                DevCommand::ClearEffects => cheats::clear_effects(&mut state.world, player),
+                DevCommand::RevealMap => {
+                    crate::systems::rendering::reveal_entire_map(&mut state.grid);
+                    state.fov_dirty = true;
+                }
+                DevCommand::KillHostiles { visible_only } => {
+                    let n = cheats::kill_hostiles(state, visible_only);
+                    self.status = Some(format!("Killed {n}"));
+                }
+                DevCommand::FreezeAi(frozen) => {
+                    cheats::freeze_ai(&mut state.world, frozen);
+                    self.ai_frozen = frozen;
+                }
+                DevCommand::WakeAll => {
+                    let n = cheats::wake_all(&mut state.world);
+                    self.status = Some(format!("Woke {n}"));
+                }
+                DevCommand::GoToFloor(floor) => self.requests.push(EngineRequest::GoToFloor(floor)),
+                DevCommand::RerollFloor => self.requests.push(EngineRequest::RerollFloor),
+                DevCommand::AdvanceTime(seconds) => self.requests.push(EngineRequest::AdvanceTime(seconds)),
             }
         }
+    }
+}
+
+impl DevTools {
+    /// Every frame: keep god mode and full meters going, and let go of god
+    /// mode's Invulnerable once it's switched off.
+    pub fn maintain(&mut self, state: &mut GameState) {
+        cheats::maintain(state, self.god_mode, self.keep_fed);
+        if self.god_mode_applied && !self.god_mode {
+            cheats::end_god_mode(state);
+        }
+        self.god_mode_applied = self.god_mode;
+        self.floor = state.current_floor;
+        self.seed = state.seed;
+        // Measured here from the wall clock: the frame time the engine gets
+        // is clamped for animation.
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_frame.replace(now) {
+            let dt = (now - last).as_secs_f32();
+            if dt > 0.0 {
+                self.fps += (1.0 / dt - self.fps) * 0.05;
+            }
+        }
+    }
+
+    /// What commands asked the engine to do (floor jumps, waiting, hotbar).
+    pub fn take_requests(&mut self) -> Vec<EngineRequest> {
+        std::mem::take(&mut self.requests)
     }
 }
 
@@ -318,7 +523,7 @@ mod tests {
         let state = engine.state.as_mut().unwrap();
         let mut dev = DevTools::new();
         dev.commands.push(DevCommand::GiveItem { kind: ItemType::ScrollOfFireball, count: 3 });
-        dev.apply_commands(state, &mut vfx);
+        dev.apply_commands(state, &mut EventQueue::new(), &mut vfx);
         let carried = state
             .world
             .get::<&Inventory>(state.player_entity)
@@ -328,5 +533,96 @@ mod tests {
             .filter(|i| i.kind == ItemType::ScrollOfFireball)
             .count();
         assert!(carried >= 3);
+    }
+
+    /// A free floor tile near the player.
+    fn free_tile_near(state: &GameState) -> (i32, i32) {
+        let p = state.world.get::<&Position>(state.player_entity).map(|p| (p.x, p.y)).unwrap();
+        (1..8)
+            .flat_map(|r| [(p.0 + r, p.1), (p.0 - r, p.1), (p.0, p.1 + r), (p.0, p.1 - r)])
+            .find(|&t| state.grid.is_walkable(t.0, t.1) && !state.spatial_cache.is_blocked(t))
+            .expect("open floor near the start")
+    }
+
+    #[test]
+    fn cheats_do_what_they_say() {
+        use crate::components::{Experience, Health};
+        let mut engine = live_run();
+        let mut events = EventQueue::new();
+        let mut vfx = VfxManager::new();
+        let state = engine.state.as_mut().unwrap();
+        let player = state.player_entity;
+        let mut dev = DevTools::new();
+        dev.visible = true;
+
+        // God mode: no damage gets through, and it lets go when switched off.
+        dev.god_mode = true;
+        dev.maintain(state);
+        let before = state.world.get::<&Health>(player).unwrap().current;
+        let mut rng = <StdRng as SeedableRng>::seed_from_u64(1);
+        crate::systems::combat::apply_damage(&mut state.world, &state.grid, player, 50, &mut rng, &mut events);
+        assert_eq!(state.world.get::<&Health>(player).unwrap().current, before);
+        dev.god_mode = false;
+        dev.maintain(state);
+        assert!(!crate::systems::effects::entity_has_effect(&state.world, player, EffectType::Invulnerable));
+
+        // XP levels you up, announced.
+        dev.commands.push(DevCommand::AddXp(5000));
+        dev.apply_commands(state, &mut events, &mut vfx);
+        assert!(state.world.get::<&Experience>(player).unwrap().level > 1);
+        assert!(events.drain().any(|e| matches!(e, crate::events::GameEvent::LevelUp { .. })));
+
+        // Teleport, then a spawned rat killed and another deleted; the cache
+        // keeps up throughout.
+        let to = free_tile_near(state);
+        dev.tool = Some(CursorTool::Teleport);
+        dev.use_tool(state, &mut events, &mut vfx, to);
+        assert_eq!(state.world.get::<&Position>(player).map(|p| (p.x, p.y)).unwrap(), to);
+        assert_eq!(dev.take_requests(), vec![EngineRequest::ClearPath]);
+        let spot = free_tile_near(state);
+        dev.tool = Some(CursorTool::Place(Spawnable::Enemy(0)));
+        dev.use_tool(state, &mut events, &mut vfx, spot);
+        let rats = |w: &World| w.query::<&crate::components::ChaseAI>().iter().count();
+        let with_rat = rats(&state.world);
+        dev.tool = Some(CursorTool::Delete);
+        dev.use_tool(state, &mut events, &mut vfx, spot);
+        assert_eq!(rats(&state.world), with_rat - 1, "the rat is gone");
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after teleport and delete");
+
+        // Freezing holds every creature; unfreezing lets them go.
+        dev.commands.push(DevCommand::FreezeAi(true));
+        dev.apply_commands(state, &mut events, &mut vfx);
+        let frozen = state.world.query::<&crate::components::DevFrozen>().iter().count();
+        assert!(frozen > 0 && dev.ai_frozen);
+        dev.commands.push(DevCommand::FreezeAi(false));
+        dev.apply_commands(state, &mut events, &mut vfx);
+        assert_eq!(state.world.query::<&crate::components::DevFrozen>().iter().count(), 0);
+    }
+
+    #[test]
+    fn floor_jumps_rerolls_and_waiting_go_through_the_engine() {
+        let mut engine = live_run();
+        let start_time = engine.state.as_ref().unwrap().game_clock.time;
+
+        engine.dev.commands.push(DevCommand::GoToFloor(4));
+        engine.process_ui_actions(&crate::ui::UiActions::default());
+        let state = engine.state.as_ref().unwrap();
+        assert_eq!(state.current_floor, 4);
+        let at = state.world.get::<&Position>(state.player_entity).map(|p| (p.x, p.y)).unwrap();
+        assert!(state.grid.is_walkable(at.0, at.1), "landed on floor");
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after floor jump");
+        let layout: Vec<_> = state.grid.tiles.iter().map(|t| t.tile_type).collect();
+
+        engine.dev.commands.push(DevCommand::RerollFloor);
+        engine.process_ui_actions(&crate::ui::UiActions::default());
+        let state = engine.state.as_ref().unwrap();
+        assert_eq!(state.current_floor, 4);
+        let rerolled: Vec<_> = state.grid.tiles.iter().map(|t| t.tile_type).collect();
+        assert_ne!(layout, rerolled, "a fresh layout");
+        assert!(!state.floors.contains_key(&4), "the old floor 4 isn't kept");
+
+        engine.dev.commands.push(DevCommand::AdvanceTime(10.0));
+        engine.process_ui_actions(&crate::ui::UiActions::default());
+        assert!(engine.state.as_ref().unwrap().game_clock.time - start_time >= 10.0);
     }
 }

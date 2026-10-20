@@ -328,6 +328,12 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
         return;
     }
 
+    // Frozen by the developer tools: wait, and check again after.
+    if world.get::<&crate::components::DevFrozen>(entity).is_ok() {
+        let _ = time_system::start_action_with_events(world, entity, ActionType::Wait, clock, scheduler, Some(events));
+        return;
+    }
+
     // Check if entity has AI (ChaseAI for enemies, CompanionAI for tamed animals)
     let has_chase_ai = world.get::<&ChaseAI>(entity).is_ok();
     let companion_ai = world.get::<&CompanionAI>(entity).ok().map(|ai| (ai.owner, ai.follow_distance));
