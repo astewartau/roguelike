@@ -41,7 +41,7 @@ use hecs::{Entity, World};
 
 use crate::components::{
     AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Topples,
-    CausesBurning, OnFire, ClassAbility, ClassKit, Container, ContainerType,
+    CausesBurning, OnFire, ClassAbility, ClassKit, Container, GroundItemPile,
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, FurnitureKind, Health, Inventory, ItemType, LearnedAbilities, Name,
     OilBarrel, OilPuddle, Player, Trap, Position, Summoned,
@@ -318,27 +318,22 @@ fn container_feature(world: &World, e: Entity, c: &Container) -> Option<String> 
             "open".to_string()
         }
     };
-    Some(match c.container_type {
-        ContainerType::Chest => format!("Chest ({})", state("closed")),
-        ContainerType::Coffin => format!("Coffin ({})", state("sealed")),
-        ContainerType::Barrel => format!("Barrel ({})", state("unopened")),
-        ContainerType::Corpse => {
-            let whose = world
-                .get::<&Name>(e)
-                .map(|n| format!("{} corpse", n.0))
-                .unwrap_or_else(|_| "Corpse".to_string());
-            if c.is_looted() {
-                format!("{whose} (searched)")
-            } else {
-                whose
-            }
+    // Loose items are described by what they are.
+    if has::<GroundItemPile>(world, e) {
+        if c.is_empty() {
+            return None;
         }
-        ContainerType::GroundPile => {
-            if c.is_empty() {
-                return None;
-            }
-            format!("Items: {}", item_list(c))
-        }
+        return Some(format!("Items: {}", item_list(c)));
+    }
+    let name = world.get::<&Name>(e).map(|n| n.0.clone()).unwrap_or_else(|_| "Container".to_string());
+    // Something standing (a chest) is opened; something lying there (remains)
+    // is searched.
+    Some(if has::<BlocksMovement>(world, e) || !c.is_open && c.open_sprite.is_some() {
+        format!("{name} ({})", state("closed"))
+    } else if c.is_looted() {
+        format!("{name} (searched)")
+    } else {
+        name
     })
 }
 
@@ -699,7 +694,7 @@ pub fn context_actions(
     let pushable = if visible { crate::systems::push::pushable_at(world, x, y) } else { None };
     let corpse = if visible {
         here.iter().copied().find(|&e| {
-            world.get::<&Container>(e).map(|c| c.container_type == ContainerType::Corpse).unwrap_or(false)
+            world.get::<&crate::components::Raisable>(e).is_ok()
         })
     } else {
         None
@@ -765,30 +760,22 @@ pub fn context_actions(
     for &e in &here {
         let Ok(c) = world.get::<&Container>(e) else { continue };
         let blocks = has::<BlocksMovement>(world, e);
-        let label = match c.container_type {
-            ContainerType::Chest | ContainerType::Coffin | ContainerType::Barrel => {
-                if !blocks || c.is_looted() || (c.is_open && c.is_empty()) {
-                    continue;
-                }
-                let noun = match c.container_type {
-                    ContainerType::Chest => "chest",
-                    ContainerType::Coffin => "coffin",
-                    _ => "barrel",
-                };
-                if c.is_open { format!("Loot {noun}") } else { format!("Open {noun}") }
+        let noun = world.get::<&Name>(e).map(|n| n.0.to_lowercase()).unwrap_or_else(|_| "container".to_string());
+        let label = if has::<GroundItemPile>(world, e) {
+            if c.is_empty() {
+                continue;
             }
-            ContainerType::Corpse => {
-                if c.is_looted() {
-                    continue;
-                }
-                "Search corpse".to_string()
+            "Pick up items".to_string()
+        } else if blocks {
+            if c.is_looted() || (c.is_open && c.is_empty()) {
+                continue;
             }
-            ContainerType::GroundPile => {
-                if c.is_empty() {
-                    continue;
-                }
-                "Pick up items".to_string()
+            if c.is_open { format!("Loot {noun}") } else { format!("Open {noun}") }
+        } else {
+            if c.is_looted() {
+                continue;
             }
+            format!("Search {noun}")
         };
         offers_loot = true;
         let entry = if blocks && dist == 1 {
@@ -1320,6 +1307,7 @@ mod tests {
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::CHEST_CLOSED),
             Container::chest(Vec::new(), 5),
+            crate::components::Name::new("Chest"),
             BlocksMovement,
         ));
         arena.cache.rebuild_in_place(&arena.world);

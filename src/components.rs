@@ -1204,27 +1204,22 @@ impl Inventory {
     }
 }
 
-/// Type of container (affects sprite and behavior)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ContainerType {
-    Chest,
-    Coffin,
-    Barrel,
-    /// Dead enemy corpse/bones
-    Corpse,
-    /// Items dropped on the ground
-    GroundPile,
-}
+/// The dead can be raised from it, and it can be detonated (Corpse
+/// Explosion): the bones and remains a creature leaves behind.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Raisable;
 
 /// Container component (for chests, coffins, barrels)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Container {
-    pub container_type: ContainerType,
     pub items: Vec<ItemInstance>,
     pub gold: u32,
     pub is_open: bool,
-    /// Chance to spawn enemy when opened (for coffins, 0.0-1.0)
+    /// Chance a skeleton climbs out when it's opened (0.0-1.0): a coffin.
     pub spawn_chance: f32,
+    /// What it looks like once opened (a chest with its lid up), if that
+    /// changes.
+    pub open_sprite: Option<Sprite>,
 }
 
 // =============================================================================
@@ -1694,55 +1689,55 @@ impl Container {
     /// Create a chest container
     pub fn chest(items: Vec<ItemInstance>, gold: u32) -> Self {
         Self {
-            container_type: ContainerType::Chest,
             items,
             gold,
             is_open: false,
             spawn_chance: 0.0,
+            open_sprite: Some(Sprite::from_ref(tile_ids::CHEST_OPEN)),
         }
     }
 
     /// Create a coffin (may spawn enemy when opened)
     pub fn coffin(items: Vec<ItemInstance>, gold: u32, spawn_chance: f32) -> Self {
         Self {
-            container_type: ContainerType::Coffin,
             items,
             gold,
             is_open: false,
             spawn_chance,
+            open_sprite: Some(Sprite::from_ref(tile_ids::COFFIN_OPEN)),
         }
     }
 
     /// Create a barrel (contains food)
     pub fn barrel(items: Vec<ItemInstance>) -> Self {
         Self {
-            container_type: ContainerType::Barrel,
             items,
             gold: 0,
             is_open: false,
             spawn_chance: 0.0,
+            open_sprite: None,
         }
     }
 
     /// Create a corpse/bones container (from dead enemies)
     pub fn corpse(items: Vec<ItemInstance>, gold: u32) -> Self {
         Self {
-            container_type: ContainerType::Corpse,
             items,
             gold,
             is_open: false,
             spawn_chance: 0.0,
+            open_sprite: None,
         }
     }
 
     /// Create a ground item pile
     pub fn ground_pile(items: Vec<ItemInstance>) -> Self {
         Self {
-            container_type: ContainerType::GroundPile,
             items,
             gold: 0,
             is_open: false,
             spawn_chance: 0.0,
+            open_sprite: None,
         }
     }
 

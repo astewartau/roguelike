@@ -161,18 +161,22 @@ pub fn take_all_from_sources(
 /// then corpses, then loose items, so the sections do not reshuffle between
 /// frames.
 pub fn loot_sources(world: &World, primary: Option<Entity>, tile: (i32, i32)) -> Vec<Entity> {
-    use crate::components::ContainerType;
-
-    let rank = |t: ContainerType| match t {
-        ContainerType::Chest | ContainerType::Coffin | ContainerType::Barrel => 0,
-        ContainerType::Corpse => 1,
-        ContainerType::GroundPile => 2,
+    // Standing containers first, then whatever lies on the tile, loose items
+    // last.
+    let rank = |id: Entity| {
+        if world.get::<&BlocksMovement>(id).is_ok() {
+            0
+        } else if world.get::<&crate::components::GroundItemPile>(id).is_err() {
+            1
+        } else {
+            2
+        }
     };
 
     let mut sources: Vec<(u8, u32, Entity)> = Vec::new();
     if let Some(primary) = primary {
-        if let Ok(container) = world.get::<&Container>(primary) {
-            sources.push((rank(container.container_type), primary.id(), primary));
+        if world.get::<&Container>(primary).is_ok() {
+            sources.push((rank(primary), primary.id(), primary));
         }
     }
     for (id, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
@@ -182,7 +186,7 @@ pub fn loot_sources(world: &World, primary: Option<Entity>, tile: (i32, i32)) ->
         if world.get::<&BlocksMovement>(id).is_ok() {
             continue;
         }
-        sources.push((rank(container.container_type), id.id(), id));
+        sources.push((rank(id), id.id(), id));
     }
     sources.sort_unstable_by_key(|&(rank, id, _)| (rank, id));
     sources.into_iter().map(|(_, _, e)| e).collect()
@@ -192,21 +196,15 @@ pub fn loot_sources(world: &World, primary: Option<Entity>, tile: (i32, i32)) ->
 /// "On the ground". A corpse is named for whatever died, which is what tells
 /// two corpses on one tile apart.
 pub fn loot_source_label(world: &World, container_entity: Entity) -> String {
-    use crate::components::{ContainerType, Name};
+    use crate::components::{GroundItemPile, Name};
 
-    let Ok(container) = world.get::<&Container>(container_entity) else {
+    if world.get::<&Container>(container_entity).is_err() {
         return "Loot".to_string();
-    };
-    match container.container_type {
-        ContainerType::Chest => "Chest".to_string(),
-        ContainerType::Coffin => "Coffin".to_string(),
-        ContainerType::Barrel => "Barrel".to_string(),
-        ContainerType::GroundPile => "On the ground".to_string(),
-        ContainerType::Corpse => world
-            .get::<&Name>(container_entity)
-            .map(|n| format!("{}'s corpse", n.0))
-            .unwrap_or_else(|_| "Remains".to_string()),
     }
+    if world.get::<&GroundItemPile>(container_entity).is_ok() {
+        return "On the ground".to_string();
+    }
+    world.get::<&Name>(container_entity).map(|n| n.0.clone()).unwrap_or_else(|_| "Remains".to_string())
 }
 
 /// Take gold from a container
@@ -608,7 +606,7 @@ mod tests {
     fn corpses_are_labelled_by_what_died() {
         use crate::components::Name;
         let mut world = World::new();
-        let named = world.spawn((Position::new(0, 0), Container::corpse(Vec::new(), 0), Name::new("Goblin")));
+        let named = world.spawn((Position::new(0, 0), Container::corpse(Vec::new(), 0), Name::new("Goblin's corpse")));
         let anon = world.spawn((Position::new(0, 0), Container::corpse(Vec::new(), 0)));
         assert_eq!(loot_source_label(&world, named), "Goblin's corpse");
         assert_eq!(loot_source_label(&world, anon), "Remains");

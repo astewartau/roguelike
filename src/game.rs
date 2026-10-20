@@ -48,10 +48,9 @@ pub fn handle_enter_key_container(
     }
 
     if let Some(container_id) = crate::systems::find_container_at_player(world, player_entity) {
-        let container_type = world
+        let was_closed = world
             .get::<&crate::components::Container>(container_id)
-            .ok()
-            .map(|c| c.container_type);
+            .is_ok_and(|c| !c.is_open);
         let position = world
             .get::<&crate::components::Position>(container_id)
             .map(|p| (p.x, p.y))
@@ -59,7 +58,7 @@ pub fn handle_enter_key_container(
         events.push(crate::events::GameEvent::ContainerOpened {
             container: container_id,
             opener: player_entity,
-            container_type,
+            was_closed,
             position,
         });
         return ContainerAction::Opened(container_id);

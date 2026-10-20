@@ -5,7 +5,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    Container, ContainerType, EffectType, Position, Sprite, VisualPosition,
+    Container, EffectType, Position, Sprite, VisualPosition,
 };
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
@@ -113,10 +113,10 @@ pub fn apply_open_chest(
     chest: Entity,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // Check if this is a coffin that might spawn a skeleton
+    // Something might climb out of it (a coffin) the first time it's opened.
     let spawn_skeleton = {
         if let Ok(container) = world.get::<&Container>(chest) {
-            if container.container_type == ContainerType::Coffin && !container.is_open {
+            if container.spawn_chance > 0.0 && !container.is_open {
                 // Roll for skeleton spawn
                 let roll: f32 = rand::random();
                 roll < container.spawn_chance
@@ -135,13 +135,8 @@ pub fn apply_open_chest(
         None
     };
 
-    // Mark container as open and get type
-    let container_type = if let Ok(mut container) = world.get::<&mut Container>(chest) {
-        container.is_open = true;
-        Some(container.container_type)
-    } else {
-        None
-    };
+    // Mark container as open, noting whether it was shut
+    let was_closed = world.get::<&mut Container>(chest).is_ok_and(|mut c| !std::mem::replace(&mut c.is_open, true));
 
     // Get container position for audio
     let container_pos = world
@@ -154,11 +149,11 @@ pub fn apply_open_chest(
     if let Some(position) = spawn_pos {
         // Skeleton spawning - emit spawn event but skip loot UI
         // Still emit ContainerOpened for sprite change, but skeleton takes priority
-        events.push(GameEvent::ContainerOpened { container: chest, opener, container_type, position: container_pos });
+        events.push(GameEvent::ContainerOpened { container: chest, opener, was_closed, position: container_pos });
         events.push(GameEvent::CoffinSkeletonSpawn { position });
     } else {
         // No skeleton - normal loot behavior
-        events.push(GameEvent::ContainerOpened { container: chest, opener, container_type, position: container_pos });
+        events.push(GameEvent::ContainerOpened { container: chest, opener, was_closed, position: container_pos });
     }
 
     ActionResult::Completed

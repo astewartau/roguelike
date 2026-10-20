@@ -1415,10 +1415,9 @@ impl GameEngine {
                                 &state.world,
                                 state.player_entity,
                             ) {
-                                let container_type = state.world
+                                let was_closed = state.world
                                     .get::<&crate::components::Container>(container_id)
-                                    .ok()
-                                    .map(|c| c.container_type);
+                                    .is_ok_and(|c| !c.is_open);
                                 let position = state.world
                                     .get::<&crate::components::Position>(container_id)
                                     .map(|p| (p.x, p.y))
@@ -1426,7 +1425,7 @@ impl GameEngine {
                                 self.events.push(crate::events::GameEvent::ContainerOpened {
                                     container: container_id,
                                     opener: state.player_entity,
-                                    container_type,
+                                    was_closed,
                                     position,
                                 });
                             }
@@ -2970,7 +2969,7 @@ mod tests {
         // leaves kills=24) or torches. Two separate runs agreed.
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=9af38260";
+        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=170d890e";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -3044,7 +3043,7 @@ mod tests {
         // being scheduled on arrival (they used to never act).
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=68160604";
+        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=0b53bf79";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -3128,7 +3127,7 @@ mod tests {
     /// crypts were decorated rooms with nothing in them.
     #[test]
     fn coffins_spawn_on_floors_below_the_first() {
-        use crate::components::{Container, ContainerType};
+        use crate::components::Container;
 
         let mut deep_floors_with_coffins = 0;
         let mut deep_floors_rolling_coffins = 0;
@@ -3153,7 +3152,7 @@ mod tests {
                     .world
                     .query::<&Container>()
                     .iter()
-                    .filter(|(_, c)| c.container_type == ContainerType::Coffin)
+                    .filter(|(_, c)| c.spawn_chance > 0.0)
                     .count();
                 if coffins > 0 {
                     deep_floors_with_coffins += 1;
@@ -3182,30 +3181,35 @@ mod tests {
     /// loot came back as a blocking chest.
     #[test]
     fn container_kinds_survive_a_floor_round_trip() {
-        use crate::components::{Container, ContainerType, GroundItemPile, ItemInstance, ItemType, Position};
+        use crate::components::{Container, GroundItemPile, ItemInstance, ItemType, Name, Position, Raisable};
 
-        /// Counts per container kind, in a fixed order so two censuses compare
-        /// directly. `ContainerType` is not `Hash`, and this is not a reason to
-        /// make it so.
-        const KINDS: [ContainerType; 5] = [
-            ContainerType::Chest,
-            ContainerType::Coffin,
-            ContainerType::Barrel,
-            ContainerType::Corpse,
-            ContainerType::GroundPile,
-        ];
-        fn census(world: &hecs::World) -> [usize; 5] {
-            let mut counts = [0usize; 5];
-            for (_, container) in world.query::<&Container>().iter() {
-                if let Some(i) = KINDS.iter().position(|k| *k == container.container_type) {
-                    counts[i] += 1;
-                }
+        /// What each container is, as the player would tell them apart: its
+        /// name, whether something may climb out, whether it's remains or a
+        /// loose pile, and whether it stands in the way. Sorted, so two
+        /// censuses compare directly.
+        const KINDS: [&str; 5] = ["Chest", "Coffin", "Barrel", "corpse", "pile"];
+        fn kind(world: &hecs::World, id: hecs::Entity) -> &'static str {
+            if world.get::<&GroundItemPile>(id).is_ok() {
+                return "pile";
             }
-            counts
+            if world.get::<&Raisable>(id).is_ok() {
+                return "corpse";
+            }
+            let name = world.get::<&Name>(id).map(|n| n.0.clone()).unwrap_or_default();
+            KINDS.iter().copied().find(|k| *k == name).unwrap_or("other")
         }
-        let kind_index = |kind: ContainerType| {
-            KINDS.iter().position(|k| *k == kind).expect("known kind")
-        };
+        fn census(world: &hecs::World) -> Vec<(&'static str, bool, bool)> {
+            let mut rows: Vec<_> = world
+                .query::<&Container>()
+                .iter()
+                .map(|(id, c)| {
+                    let blocks = world.get::<&crate::components::BlocksMovement>(id).is_ok();
+                    (kind(world, id), c.spawn_chance > 0.0, blocks)
+                })
+                .collect();
+            rows.sort();
+            rows
+        }
 
         let mut checked_coffins = 0;
         let mut checked_piles = 0;
@@ -3247,12 +3251,11 @@ mod tests {
 
             assert_eq!(
                 before, after,
-                "seed {seed}: container kinds changed across a floor round trip \
-                 (counts in order {KINDS:?})"
+                "seed {seed}: container kinds changed across a floor round trip"
             );
 
-            checked_coffins += before[kind_index(ContainerType::Coffin)];
-            checked_piles += before[kind_index(ContainerType::GroundPile)];
+            checked_coffins += before.iter().filter(|r| r.0 == "Coffin" && r.1).count();
+            checked_piles += before.iter().filter(|r| r.0 == "pile").count();
 
             // The restored pile must still be walkable and still be findable as
             // a pile, not a blocking chest.
@@ -3262,8 +3265,7 @@ mod tests {
                 .iter()
                 .count();
             assert!(piles > 0, "seed {seed}: the dropped pile came back as something else");
-            for (id, (container, _)) in state.world.query::<(&Container, &GroundItemPile)>().iter() {
-                assert_eq!(container.container_type, ContainerType::GroundPile);
+            for (id, _) in state.world.query::<(&Container, &GroundItemPile)>().iter() {
                 assert!(
                     state.world.get::<&crate::components::BlocksMovement>(id).is_err(),
                     "seed {seed}: a dropped pile must not block movement"

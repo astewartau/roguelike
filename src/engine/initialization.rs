@@ -214,6 +214,7 @@ fn spawn_coffins(
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::COFFIN_CLOSED),
             Container::coffin(items, gold, spawn_chance),
+            crate::components::Name::new("Coffin"),
             BlocksMovement,
         ));
     }
@@ -472,6 +473,7 @@ fn spawn_barrels(
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::BARREL),
             Container::barrel(items),
+            crate::components::Name::new("Barrel"),
             BlocksMovement,
             crate::components::Pushable,
         ));
@@ -653,6 +655,7 @@ fn spawn_boss_encounter(
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::CHEST_CLOSED),
             Container::chest(items, gold),
+            crate::components::Name::new("Chest"),
             BlocksMovement,
         ));
     }

@@ -324,6 +324,7 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(OverlaySprite, "Looks", OverlaySprite::from_ref(tile_ids::BOW)),
             plain!(SecretDoor, "Things", SecretDoor),
             plain!(GroundItemPile, "Things", GroundItemPile),
+            plain!(Raisable, "Things", Raisable),
             plain!(BarrelFuse, "Fire", BarrelFuse::new(3.0, FuseCause::Fire)),
             plain!(Equipment, "Creature", Equipment::empty()),
             plain!(Channel, "Creature", Channel {

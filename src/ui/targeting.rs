@@ -113,11 +113,8 @@ pub fn get_ability_targeting_overlay_data(
             }
         }
         AbilityType::RaiseDead | AbilityType::CorpseExplosion => {
-            use crate::components::{Container, ContainerType};
-            for (_, (pos, container)) in world.query::<(&Position, &Container)>().iter() {
-                if !matches!(container.container_type, ContainerType::Corpse) {
-                    continue;
-                }
+            use crate::components::{Container, Raisable};
+            for (_, (pos, _)) in world.query::<(&Position, &Container)>().with::<&Raisable>().iter() {
                 let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
                 if dist <= targeting.max_range {
                     tameable_positions.push((pos.x, pos.y));

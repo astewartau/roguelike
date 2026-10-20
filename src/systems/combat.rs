@@ -512,22 +512,11 @@ fn absorb_with_bone_ward(
     true
 }
 
-/// Handle a ContainerOpened event - update sprite for containers
+/// Handle a ContainerOpened event: it takes on its open look, if it has one.
 pub fn handle_container_opened(world: &mut World, container_id: Entity) {
-    if let Ok(mut sprite) = world.get::<&mut Sprite>(container_id) {
-        let current = (sprite.sheet, sprite.tile_id);
-
-        // Handle chest opening
-        if current == tile_ids::CHEST_CLOSED {
-            sprite.sheet = tile_ids::CHEST_OPEN.0;
-            sprite.tile_id = tile_ids::CHEST_OPEN.1;
-        }
-        // Handle coffin opening
-        else if current == tile_ids::COFFIN_CLOSED {
-            sprite.sheet = tile_ids::COFFIN_OPEN.0;
-            sprite.tile_id = tile_ids::COFFIN_OPEN.1;
-        }
-        // Barrels don't change sprite when opened (they stay as barrel sprite)
+    let open = world.get::<&Container>(container_id).ok().and_then(|c| c.open_sprite);
+    if let Some(open) = open {
+        let _ = world.insert_one(container_id, open);
     }
 }
 
@@ -731,7 +720,13 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
             }
         }
 
-        let _ = world.insert_one(id, Container::corpse(loot_items, gold));
+        // What's left keeps the creature's name ("Goblin's corpse"), and the
+        // dead can be raised from it.
+        let name = world.get::<&crate::components::Name>(id).map(|n| n.0.clone()).ok();
+        let _ = world.insert(id, (Container::corpse(loot_items, gold), crate::components::Raisable));
+        if let Some(name) = name {
+            let _ = world.insert_one(id, crate::components::Name::new(format!("{name}'s corpse")));
+        }
     }
 
     // Ally-death morale: living enemies near a fresh corpse may panic and flee.

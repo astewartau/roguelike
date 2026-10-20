@@ -555,7 +555,7 @@ pub fn apply_boss_ground_slam(ctx: &mut EffectCtx, boss: Entity) -> ActionResult
 pub(super) mod tests {
     use super::*;
     use crate::components::{
-        Actor, Container, ContainerType, Experience, Sprite, Stats, StatusEffects, VisualPosition,
+        Actor, Container, Experience, Sprite, Stats, StatusEffects, VisualPosition,
         Weapon,
     };
     use crate::grid::Grid;
@@ -662,7 +662,7 @@ pub(super) mod tests {
         let sprite = world.get::<&Sprite>(rat).map(|s| (s.sheet, s.tile_id)).unwrap();
         assert_eq!(sprite, tile_ids::BONES_4, "corpse renders as bones");
         let container = world.get::<&Container>(rat).expect("bones are a container");
-        assert!(matches!(container.container_type, ContainerType::Corpse));
+        assert!(world.get::<&crate::components::Raisable>(rat).is_ok(), "the dead can be raised from it");
         assert!(
             (crate::constants::ENEMY_GOLD_DROP_MIN..=crate::constants::ENEMY_GOLD_DROP_MAX)
                 .contains(&container.gold),

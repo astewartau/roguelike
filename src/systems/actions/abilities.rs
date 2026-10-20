@@ -5,7 +5,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    AbilityType, Attackable, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container, ContainerType,
+    AbilityType, Attackable, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container,
     EffectType, Equipment, EquippedWeapon, Health, Inventory, ItemType, LearnedAbilities,
     Player, Position, Projectile, ProjectileMarker,
     SecondaryAbility, Sprite, Follower, VisualPosition,
@@ -459,10 +459,7 @@ pub fn apply_start_raise_dead(
     events: &mut EventQueue,
 ) -> ActionResult {
     // Verify the target is still a bones/corpse container
-    let is_bones = world
-        .get::<&Container>(target)
-        .map(|c| matches!(c.container_type, ContainerType::Corpse))
-        .unwrap_or(false);
+    let is_bones = world.get::<&crate::components::Raisable>(target).is_ok();
     if !is_bones {
         return ActionResult::Invalid;
     }
@@ -681,9 +678,7 @@ fn advance_channel(
 fn channel_target_still_fits(world: &World, channel: &Channel, target: Entity) -> bool {
     match channel.effect {
         ChannelEffect::Tame => world.get::<&crate::components::Tameable>(target).is_ok(),
-        ChannelEffect::RaiseDead => world
-            .get::<&Container>(target)
-            .is_ok_and(|c| matches!(c.container_type, ContainerType::Corpse)),
+        ChannelEffect::RaiseDead => world.get::<&crate::components::Raisable>(target).is_ok(),
         ChannelEffect::LifeDrain { .. } => world.get::<&Health>(target).is_ok_and(|h| h.current > 0),
         ChannelEffect::Shout { .. } => true,
     }
@@ -1115,6 +1110,7 @@ mod tests {
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::BONES_4),
             container,
+            crate::components::Raisable,
         ))
     }
 

@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{AbilityType, Attackable, BlocksMovement, Container, ContainerType, Door, Health, ItemType, Player, Position, Follower, Tameable};
+use crate::components::{AbilityType, Attackable, BlocksMovement, Container, Door, Health, ItemType, Player, Position, Follower, Tameable};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -876,13 +876,12 @@ pub fn process_frame(
                         AbilityType::RaiseDead => {
                             // Raise Dead: needs a bones/corpse container at the tile.
                             let mut bones_target = None;
-                            for (entity, (cpos, container)) in
-                                world.query::<(&Position, &Container)>().iter()
+                            for (entity, (cpos, _)) in world
+                                .query::<(&Position, &Container)>()
+                                .with::<&crate::components::Raisable>()
+                                .iter()
                             {
-                                if cpos.x == target_x
-                                    && cpos.y == target_y
-                                    && matches!(container.container_type, ContainerType::Corpse)
-                                {
+                                if cpos.x == target_x && cpos.y == target_y {
                                     bones_target = Some(entity);
                                     break;
                                 }
@@ -922,12 +921,9 @@ pub fn process_frame(
                             // A corpse (bones container) on that tile.
                             let corpse = world
                                 .query::<(&Position, &Container)>()
+                                .with::<&crate::components::Raisable>()
                                 .iter()
-                                .find(|(_, (p, c))| {
-                                    p.x == target_x
-                                        && p.y == target_y
-                                        && matches!(c.container_type, ContainerType::Corpse)
-                                })
+                                .find(|(_, (p, _))| p.x == target_x && p.y == target_y)
                                 .map(|(e, _)| e);
                             if let Some(corpse) = corpse {
                                 input.cancel_targeting();

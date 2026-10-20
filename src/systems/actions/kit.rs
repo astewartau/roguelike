@@ -16,7 +16,7 @@
 use hecs::Entity;
 
 use crate::components::{
-    AbilityType, ActionType, Actor, BoneWard, ChaseAI, Container, ContainerType, EffectType,
+    AbilityType, ActionType, Actor, BoneWard, ChaseAI, Container, EffectType,
     Health, Player, Position, Summoned, Follower, VisualPosition,
 };
 use crate::constants::*;
@@ -347,11 +347,9 @@ pub fn apply_grave_bolt(
 pub fn bone_ward_charges(world: &hecs::World, center: (i32, i32)) -> u32 {
     let corpses = world
         .query::<(&Position, &Container)>()
+        .with::<&crate::components::Raisable>()
         .iter()
-        .filter(|(_, (p, c))| {
-            matches!(c.container_type, ContainerType::Corpse)
-                && (p.x - center.0).abs().max((p.y - center.1).abs()) <= BONE_WARD_CORPSE_RADIUS
-        })
+        .filter(|(_, (p, _))| (p.x - center.0).abs().max((p.y - center.1).abs()) <= BONE_WARD_CORPSE_RADIUS)
         .count() as u32;
     (1 + corpses).min(BONE_WARD_MAX_CHARGES)
 }
@@ -453,10 +451,7 @@ fn start_sacrifice(ctx: &mut EffectCtx, caster: Entity, skeleton: Entity) {
 
 /// Whether `corpse` is a corpse within `CORPSE_EXPLOSION_RANGE` of `caster`.
 pub fn is_valid_corpse_target(world: &hecs::World, caster: Entity, corpse: Entity) -> bool {
-    let is_corpse = world
-        .get::<&Container>(corpse)
-        .map(|c| matches!(c.container_type, ContainerType::Corpse))
-        .unwrap_or(false);
+    let is_corpse = world.get::<&crate::components::Raisable>(corpse).is_ok();
     let (Some(a), Some(b)) = (
         queries::get_entity_position(world, caster),
         queries::get_entity_position(world, corpse),
@@ -674,6 +669,7 @@ mod tests {
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::BONES_4),
             container,
+            crate::components::Raisable,
         ))
     }
 

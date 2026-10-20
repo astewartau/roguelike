@@ -726,7 +726,6 @@ fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
         (_, "style") => list(&["Warm", "Ghost"]),
         (_, "ignition") => list(&["InPlace", "Replace"]),
         (_, "rarity") => list(&["Common", "Magic", "Rare", "Legendary"]),
-        (_, "container_type") => list(&["Chest", "Coffin", "Barrel", "Corpse", "GroundPile"]),
         ("Furniture", "kind") => list(&["Fountain", "Altar", "Shrine"]),
         ("Container", "kind") => Some(
             crate::systems::item_defs::ITEM_DEFS.iter().map(|d| format!("{:?}", d.item_type)).collect(),

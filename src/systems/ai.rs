@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, Channel, ChannelEffect, Asleep, Boss, BossAbility, Summoned, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, Follower, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, Channel, ChannelEffect, Asleep, Boss, BossAbility, Summoned, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, Follower, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -955,11 +955,9 @@ fn try_boss_ability(
             // the scheduler — same path as coffin skeletons).
             let bones: Option<(Entity, (i32, i32))> = world
                 .query::<(&Position, &crate::components::Container)>()
+                .with::<&crate::components::Raisable>()
                 .iter()
-                .filter(|(_, (pos, container))| {
-                    container.container_type == ContainerType::Corpse
-                        && cheb(entity_pos, (pos.x, pos.y)) <= BOSS_RAISE_RANGE
-                })
+                .filter(|(_, (pos, _))| cheb(entity_pos, (pos.x, pos.y)) <= BOSS_RAISE_RANGE)
                 .min_by_key(|(_, (pos, _))| cheb(entity_pos, (pos.x, pos.y)))
                 .map(|(id, (pos, _))| (id, (pos.x, pos.y)));
             let (bones_id, bones_pos) = bones?;

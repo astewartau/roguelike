@@ -160,7 +160,8 @@ pub enum GameEvent {
     ContainerOpened {
         container: Entity,
         opener: Entity,
-        container_type: Option<crate::components::ContainerType>,
+        /// Whether it was shut until now (a chest's lid, not a corpse).
+        was_closed: bool,
         position: (i32, i32),
     },
     /// An entity picked up an item, or a stack of one kind of item
