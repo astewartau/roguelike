@@ -89,6 +89,12 @@ pub struct UiIcons {
     /// Badges for the items that have one (`item_defs::badge`). Items-sheet
     /// UVs, like the icons they're drawn over.
     item_badge_uvs: std::collections::HashMap<ItemType, egui::Rect>,
+    /// Frames of one tile of an explosion (`tile_ids::EXPLOSION`), every
+    /// variant's in turn, on the items texture. Empty on a sheet too old to
+    /// have them.
+    pub explosion_uvs: Vec<egui::Rect>,
+    /// Frames of falling rain (`tile_ids::RAIN`), likewise.
+    pub rain_uvs: Vec<egui::Rect>,
 }
 
 impl UiIcons {
@@ -172,6 +178,23 @@ impl UiIcons {
                     tileset.has_tile(sheet, id).then(|| (def.item_type, tileset.get_egui_uv(sheet, id)))
                 })
                 .collect(),
+            explosion_uvs: Self::frames(
+                tileset,
+                tile_ids::EXPLOSION,
+                tile_ids::EXPLOSION_FRAMES * tile_ids::EXPLOSION_VARIANTS,
+            ),
+            rain_uvs: Self::frames(tileset, tile_ids::RAIN, tile_ids::RAIN_FRAMES),
+        }
+    }
+
+    /// UVs of an animation's `count` consecutive cells from `first`, or none
+    /// at all if the sheet stops short of them.
+    fn frames(tileset: &MultiTileset, first: (SpriteSheet, u32), count: u32) -> Vec<egui::Rect> {
+        let ids = first.1..first.1 + count;
+        if ids.clone().all(|id| tileset.has_tile(first.0, id)) {
+            ids.map(|id| tileset.get_egui_uv(first.0, id)).collect()
+        } else {
+            Vec::new()
         }
     }
 

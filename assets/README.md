@@ -29,7 +29,7 @@ wrong sprite for everything rather than failing loudly.
 | `tiles.png` | 17 | 544×832 (17×26) | terrain, walls, doors, stairs, traps |
 | `rogues.png` | 7 | 224×224 (7×7) | player characters |
 | `monsters.png` | 12 | 384×416 (12×13) | enemies |
-| `items.png` | 11 | 352×960 (11×30) | weapons, armour, potions, food, ability icons |
+| `items.png` | 11 | 352×1280 (11×40) | weapons, armour, potions, food, ability icons |
 | `animated-tiles.png` | 11 | 352×384 (11×12) | fire pits, torches, braziers |
 
 The `.txt` files that ship alongside each sheet are 32rogues' own row/column
@@ -43,9 +43,10 @@ why the sheets are not committed here.
 
 ### `items.png` must be extended past stock
 
-This is the one file a fresh clone gets wrong. The sheet must be **30 rows
-tall (960 px)**, because the ability and HUD icons, the held torch, the item
-badges and a few world sprites live in slots the stock pack does not have. [src/tile.rs](../src/tile.rs) addresses them through `rc(row, col, cols)`,
+This is the one file a fresh clone gets wrong. The sheet must be **40 rows
+tall (1280 px)**, because the ability and HUD icons, the held torch, the item
+badges, a few world sprites and the projectile and spell effects live in
+slots the stock pack does not have. [src/tile.rs](../src/tile.rs) addresses them through `rc(row, col, cols)`,
 where **`row` is 1-based** and `col` is 0-based:
 
 - row 26, columns f–g — `raise dead`, `life drain`
@@ -64,6 +65,11 @@ where **`row` is 1-based** and `col` is 0-based:
 - row 29, columns j–k — the spider web and the fountain, which no sheet has
 - row 30, column a — the pressure plate, **copied** from `tiles.png` (17.j)
   as the fire trap item's inventory icon
+- rows 31–36 — arrows, grave bolts and fireballs in flight, sixteen headings
+  each (31.a, 33.a and 35.a onward), so a projectile faces where it's going
+- rows 37–39 — explosion frames: three differently-shaped blasts of eight
+  frames each, 37.a to 39.b
+- row 40, columns a–d — Call Rain falling
 
 [`tools/make_tiles.py`](../tools/make_tiles.py) draws all of these in the
 32rogues palette. It is **tracked in the repository** — unlike everything else
@@ -72,7 +78,7 @@ from a fresh clone rather than something you have to obtain from the author.
 
 With `--paste` it writes every icon into its slot in `items.png` itself
 (and copies in the stock sprites listed in its `COPIES` table),
-growing a stock 26-row sheet to 30 rows. Re-running it is harmless: each slot
+growing a stock 26-row sheet to 40 rows. Re-running it is harmless: each slot
 is overwritten with the same pixels. Without `--paste` it writes individual
 32×32 PNGs to `$OUTDIR` (default `/tmp`) plus a magnified `contact.png`
 preview, for looking at the art without touching the sheet.
@@ -158,7 +164,7 @@ assets/
 │   ├── tiles.png                 ** 544×832
 │   ├── rogues.png                ** 224×224
 │   ├── monsters.png              ** 384×416
-│   ├── items.png                 ** 352×960, extended past stock
+│   ├── items.png                 ** 352×1280, extended past stock
 │   ├── animated-tiles.png        ** 352×384, flames repainted
 │   ├── animated-tiles.stock.png  (the stock sheet, kept by make_tiles.py)
 │   ├── *.txt                     (sheet documentation, unread)

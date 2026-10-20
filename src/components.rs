@@ -2103,6 +2103,9 @@ pub enum ProjectileKind {
     Missile,
     /// The Necromancer's Grave Bolt: no weapon affixes, nothing to recover.
     GraveBolt,
+    /// A fireball: flies over creatures to the tile it was aimed at (or the
+    /// last open tile before a wall) and bursts there.
+    Fireball,
 }
 
 /// Marker component for projectiles (for queries)

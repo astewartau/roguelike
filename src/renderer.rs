@@ -1245,6 +1245,7 @@ impl Renderer {
                     crate::vfx::VfxType::Alert => continue, // Rendered via egui
                     crate::vfx::VfxType::Explosion { .. } => continue, // Rendered via egui
                     crate::vfx::VfxType::PotionSplash { .. } => continue, // Rendered via egui
+                    crate::vfx::VfxType::Rain { .. } => continue, // Rendered via egui
                 };
 
                 // Center the effect on the tile (effect.x/y is already centered)

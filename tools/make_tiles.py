@@ -54,6 +54,12 @@ PAL = {
     '2': '#ffc93c',
     '3': '#ffe680',
     '4': '#fffbe6',
+    # arrow tips and rain
+    'a': '#a5b5d4',
+    # smoke, light to dark
+    '5': '#5a5875',
+    '6': '#31314b',
+    '7': '#222034',
 }
 
 def hex2rgba(s):
@@ -756,6 +762,178 @@ def repaint_animated_tiles(sheet_dir):
     print(f'repainted the flames in {path} (stock sheet kept as {stock})')
 
 
+# ================= PROJECTILES IN FLIGHT =================
+# One cell per direction of travel, FLIGHT_DIRECTIONS of them going
+# anticlockwise from due east (screen right), so the renderer can turn a
+# projectile to face where it's going. Drawn by code along the direction
+# rather than by hand, so all sixteen stay alike.
+import math
+
+FLIGHT_DIRECTIONS = 16
+
+def _along(k):
+    """Unit vector of direction k in sheet pixels (y down), and its
+    perpendicular."""
+    a = 2 * math.pi * k / FLIGHT_DIRECTIONS
+    u = (math.cos(a), -math.sin(a))
+    return u, (-u[1], u[0])
+
+def _at(c, u, v, t, w=0.0):
+    """The pixel t along u and w along v from the cell centre c."""
+    return round(c[0] + u[0] * t + v[0] * w), round(c[1] + u[1] * t + v[1] * w)
+
+def _stroke(g, c, u, v, t0, t1, w, col, step=0.25):
+    t = t0
+    while t <= t1 + 1e-9:
+        px(g, *_at(c, u, v, t, w), col)
+        t += step
+
+def arrow_flight(k):
+    """The stock arrow (items 24.a), at any heading: a thin shaft, a steel
+    tip, green fletching."""
+    g = new_grid()
+    u, v = _along(k)
+    c = (15.5, 15.5)
+    _stroke(g, c, u, v, -8, 6, 0, 't')
+    for side in (-1, 1):
+        _stroke(g, c, u, v, -9, -6.5, side * 1.0, 'g' if side > 0 else 'V')
+    px(g, *_at(c, u, v, 7), 'a')
+    px(g, *_at(c, u, v, 8), 'c')
+    px(g, *_at(c, u, v, 7, 0.9), 'a')
+    return g
+
+def grave_bolt_flight(k):
+    """A shard of bone with a wisp of grave-green trailing behind it."""
+    g = new_grid()
+    u, v = _along(k)
+    c = (15.5, 15.5)
+    # the wisp: a wavering line that fades out behind
+    t = -3.0
+    while t >= -13:
+        w = 1.4 * math.sin(t * 0.9)
+        col = 'G' if t > -6 else ('g' if t > -9.5 else 'e')
+        px(g, *_at(c, u, v, t, w), col)
+        t -= 0.35
+    for t, w in [(-7, -1.6), (-10.5, 1.8), (-12.5, -1.0)]:
+        px(g, *_at(c, u, v, t, w), 'g')
+    # the shard: a long sliver, widest behind its point
+    for t10 in range(-40, 71):
+        t = t10 / 10
+        half = 1.1 if -2.5 <= t <= 3.5 else (0.6 if t < 5.5 else 0.0)
+        _stroke(g, c, u, v, t, t, 0, 'B')
+        if half > 0.9:
+            px(g, *_at(c, u, v, t, half), 'b')
+            px(g, *_at(c, u, v, t, -half), 'B')
+    px(g, *_at(c, u, v, 7), 'c')
+    return g
+
+def fireball_flight(k):
+    """A ball of fire with its flames streaming out behind."""
+    g = new_grid()
+    u, v = _along(k)
+    c = (15.5, 15.5)
+    head = (c[0] + u[0] * 4, c[1] + u[1] * 4)
+    # tail: tapering, cooling from yellow to red as it trails off
+    for t10 in range(-10, -140, -2):
+        t = t10 / 10
+        half = max(0.0, 3.0 + t * 0.25)
+        heat = '3' if t > -3 else ('2' if t > -5.5 else ('1' if t > -8 else ('f' if t > -10.5 else 'r')))
+        w = -half
+        while w <= half + 1e-9:
+            px(g, *_at(head, u, v, t, w + 0.6 * math.sin(t * 1.3)), heat)
+            w += 0.5
+    for t, w, col in [(-9, 3.2, 'f'), (-12, -2.4, 'r'), (-6.5, -3.4, '1'), (-14, 0.8, 'r')]:
+        px(g, *_at(head, u, v, t, w), col)
+    # the ball, hottest toward the front
+    for y in range(32):
+        for x in range(32):
+            dx, dy = x + 0.5 - head[0], y + 0.5 - head[1]
+            d = math.hypot(dx, dy)
+            if d <= 3.6:
+                front = (dx * u[0] + dy * u[1]) / 3.6
+                heat = 3.6 - d + front * 1.2
+                px(g, x, y, '4' if heat > 2.6 else ('3' if heat > 1.6 else ('2' if heat > 0.7 else '1')))
+    return g
+
+
+# ================= EXPLOSION =================
+# A blast, one tile of it: the renderer plays it on every tile the blast
+# covers, later the further out, so it rolls outward from the centre. A flash,
+# a ball of fire that swells and breaks up, then smoke.
+EXPLOSION_FRAMES = 8
+# Differently-shaped blasts, so neighbouring tiles don't match: cells run
+# variant by variant, EXPLOSION_FRAMES each.
+EXPLOSION_VARIANTS = 3
+
+def _noise(x, y, seed):
+    """Cheap deterministic value noise in [0, 1)."""
+    n = (x * 374761393 + y * 668265263 + seed * 1442695041) & 0xffffffff
+    n = ((n ^ (n >> 13)) * 1274126177) & 0xffffffff
+    return (n & 0xffff) / 65536
+
+def _smooth_noise(x, y, seed, scale):
+    x0, y0 = math.floor(x / scale), math.floor(y / scale)
+    fx, fy = x / scale - x0, y / scale - y0
+    def n(i, j): return _noise(x0 + i, y0 + j, seed)
+    top = n(0, 0) * (1 - fx) + n(1, 0) * fx
+    bot = n(0, 1) * (1 - fx) + n(1, 1) * fx
+    return top * (1 - fy) + bot * fy
+
+# fire colours by heat, coldest first (below the first is smoke)
+EXPLOSION_RAMP = [(0.48, 'r'), (0.58, 'f'), (0.68, '1'), (0.78, '2'), (0.88, '3'), (9.0, '4')]
+FIRE_FLOOR = 0.38
+
+def explosion(frame, variant=0):
+    g = new_grid()
+    v = variant * 101                         # reseeds every noise below
+    p = frame / (EXPLOSION_FRAMES - 1)        # 0 .. 1 through the blast
+    radius = 4 + 11 * min(1.0, p * 2.2)       # swells fast, then holds
+    cool = max(0.0, p - 0.3) * 1.6            # how far it has burnt out
+    rise = max(0.0, p - 0.45) * 10            # the smoke drifts up
+    for y in range(32):
+        for x in range(32):
+            dx, dy = x + 0.5 - 16, y + 0.5 - 16 + rise
+            wobble = (_smooth_noise(x, y, 7 + v, 5) - 0.5) * 7 * min(1.0, p * 3)
+            d = math.hypot(dx, dy) + wobble
+            if d > radius:
+                continue
+            heat = (1.15 - d / radius * 0.7) - cool + (_smooth_noise(x, y, 11 + v + frame, 3) - 0.5) * 0.35
+            if heat >= FIRE_FLOOR:
+                px(g, x, y, next(col for top, col in EXPLOSION_RAMP if heat < top))
+                continue
+            # smoke, thinning into tatters as it ages
+            if p < 0.4:
+                continue
+            puff = _smooth_noise(x, y, 23 + v + frame, 4)
+            if puff < 0.2 + p * 0.5:
+                continue
+            px(g, x, y, '5' if puff > 0.78 else ('6' if puff > 0.6 else '7'))
+    return g
+
+
+# ================= RAIN =================
+# Call Rain: streaks falling across a tile, and drops splashing where they
+# land. RAIN_FRAMES loop; streaks wrap top to bottom, so tiles side by side
+# make one sheet of rain.
+RAIN_FRAMES = 4
+
+def rain(frame):
+    g = new_grid()
+    for i in range(18):
+        x0 = int(_noise(i, 1, 3) * 32)
+        y0 = int(_noise(i, 2, 3) * 32) + frame * 8
+        length = 4 + int(_noise(i, 3, 3) * 3)
+        for j in range(length):
+            # slanting a pixel left every other row, as if blown
+            px(g, (x0 - (y0 + j) // 2) % 32, (y0 + j) % 32, 'c' if j >= length - 2 else 'a')
+    for i in range(4):
+        sx = 3 + int(_noise(i, frame, 9) * 26)
+        sy = 4 + int(_noise(i, frame + 7, 9) * 24)
+        px(g, sx - 1, sy, 'a'); px(g, sx + 1, sy, 'a'); px(g, sx, sy - 1, 'c')
+        px(g, sx - 2, sy + 1, 'S'); px(g, sx + 2, sy + 1, 'S')
+    return g
+
+
 # ================= ITEM BADGES (what a potion or scroll does) =================
 # Every scroll shares one sprite and the potions differ only in colour, so
 # each gets a small glyph drawn over its icon. A badge is a whole 32x32 cell
@@ -960,6 +1138,15 @@ ICONS = [
     ('badge_slow', badge_slow),
     ('web', web),
     ('fountain', fountain),
+] + [
+    (f'{name}_{k}', (lambda fn=fn, k=k: fn(k)))
+    for name, fn, n in [('arrow_flight', arrow_flight, FLIGHT_DIRECTIONS),
+                        ('grave_bolt_flight', grave_bolt_flight, FLIGHT_DIRECTIONS),
+                        ('fireball_flight', fireball_flight, FLIGHT_DIRECTIONS),
+                        ('explosion', lambda k: explosion(k % EXPLOSION_FRAMES, k // EXPLOSION_FRAMES),
+                         EXPLOSION_VARIANTS * EXPLOSION_FRAMES),
+                        ('rain', rain, RAIN_FRAMES)]
+    for k in range(n)
 ]
 
 # Where each icon lives in assets/32rogues/items.png, as (1-based row, 0-based
@@ -1001,6 +1188,18 @@ SLOTS = {
     'web': (29, 9),               # 29.j
     'fountain': (29, 10),         # 29.k
 }
+
+def _run(name, first_row, n):
+    """Slots for an n-cell run starting at a row's first column, wrapping
+    onto the rows below: the renderer adds the frame or direction to the
+    first cell's id, so a run's cells have to be consecutive."""
+    return {f'{name}_{k}': (first_row + k // 11, k % 11) for k in range(n)}
+
+SLOTS.update(_run('arrow_flight', 31, FLIGHT_DIRECTIONS))       # 31.a-32.e
+SLOTS.update(_run('grave_bolt_flight', 33, FLIGHT_DIRECTIONS))  # 33.a-34.e
+SLOTS.update(_run('fireball_flight', 35, FLIGHT_DIRECTIONS))    # 35.a-36.e
+SLOTS.update(_run('explosion', 37, EXPLOSION_VARIANTS * EXPLOSION_FRAMES))  # 37.a-39.b
+SLOTS.update(_run('rain', 40, RAIN_FRAMES))                     # 40.a-d
 
 # Stock sprites copied into items.png rather than drawn: the inventory and HUD
 # draw from the items sheet only, so a sprite that lives on another sheet has

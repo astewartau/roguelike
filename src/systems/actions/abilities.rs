@@ -93,15 +93,17 @@ pub fn scaled_blink_range(world: &World, caster: Entity) -> i32 {
     ((BLINK_RANGE as f32 * queries::int_power(world, caster)).round() as i32).max(1)
 }
 
-/// Apply fireball action - AoE damage at target location
+/// Cast a fireball at a tile: it flies there as a projectile (over anyone in
+/// the way) and bursts on landing, in `detonate_fireball`. Damage is fixed at
+/// launch from the caster's effective INT (gear counts).
 pub fn apply_fireball(
     world: &mut World,
     grid: &Grid,
     caster: Entity,
-    target_x: i32,
-    target_y: i32,
+    (target_x, target_y): (i32, i32),
     events: &mut EventQueue,
     rng: &mut impl Rng,
+    current_time: f32,
 ) -> ActionResult {
     let caster_pos = match queries::get_entity_position(world, caster) {
         Some(p) => p,
@@ -114,16 +116,61 @@ pub fn apply_fireball(
         return ActionResult::Blocked;
     }
 
-    // Fireball damage scales with the caster's effective INT (gear counts).
     let damage = ((FIREBALL_DAMAGE as f32 * queries::int_power(world, caster)).round() as i32).max(1);
 
-    // Emit explosion VFX event
-    events.push(GameEvent::FireballExplosion {
-        x: target_x,
-        y: target_y,
-        radius: FIREBALL_RADIUS,
-    });
+    let path = super::calculate_throw_path(caster_pos.0, caster_pos.1, target_x, target_y, FIREBALL_SPEED);
+    if path.is_empty() {
+        // Cast at your own feet: nothing to fly, it goes off where you stand.
+        detonate_fireball(world, grid, caster, caster_pos, damage, events, rng);
+        events.push(GameEvent::FireballExplosion {
+            x: caster_pos.0,
+            y: caster_pos.1,
+            radius: FIREBALL_RADIUS,
+        });
+        return ActionResult::Completed;
+    }
 
+    let (dx, dy) = ((target_x - caster_pos.0) as f32, (target_y - caster_pos.1) as f32);
+    let len = (dx * dx + dy * dy).sqrt().max(0.001);
+    let pos = Position::new(caster_pos.0, caster_pos.1);
+    let fireball = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(tile_ids::FIREBALL_FLIGHT),
+        Projectile {
+            source: caster,
+            damage,
+            path,
+            path_index: 0,
+            direction: (dx / len, dy / len),
+            spawn_time: current_time,
+            finished: None,
+            potion_type: None,
+            on_hit_effect: None,
+            hit_enemy: false,
+            incendiary: false,
+            kind: crate::components::ProjectileKind::Fireball,
+        },
+        ProjectileMarker,
+    ));
+    events.push(GameEvent::ProjectileSpawned { projectile: fireball, source: caster });
+
+    ActionResult::Completed
+}
+
+/// A fireball bursts at (x, y): `damage` to everything attackable within
+/// `FIREBALL_RADIUS`, and a noise that wakes the area. The blast you see and
+/// hear (`GameEvent::FireballExplosion`) is sent once the fireball visibly
+/// gets there, not from here (see `systems::projectile`).
+pub fn detonate_fireball(
+    world: &mut World,
+    grid: &Grid,
+    caster: Entity,
+    (target_x, target_y): (i32, i32),
+    damage: i32,
+    events: &mut EventQueue,
+    rng: &mut impl Rng,
+) {
     // A fireball is very loud — wake sleeping enemies over a wide area.
     crate::systems::noise::make_noise(world, grid, (target_x, target_y), EXPLOSION_NOISE_RADIUS);
 
@@ -157,8 +204,6 @@ pub fn apply_fireball(
             killed: crate::systems::combat::is_dead(world, entity),
         });
     }
-
-    ActionResult::Completed
 }
 
 /// Apply sprint activation - applies speed boost effect to entity
@@ -418,6 +463,7 @@ pub fn apply_cast_learned_spell(
     spatial_cache: &mut crate::spatial_cache::SpatialCache,
     events: &mut EventQueue,
     rng: &mut impl Rng,
+    current_time: f32,
 ) -> ActionResult {
     use crate::systems::effects::{add_effect_to_entity, apply_effect_to_visible_enemies};
 
@@ -428,7 +474,7 @@ pub fn apply_cast_learned_spell(
             apply_blink(world, grid, caster, (target_x, target_y), spatial_cache, events, rng)
         }
         AbilityType::LearnedFireball => {
-            apply_fireball(world, grid, caster, target_x, target_y, events, rng)
+            apply_fireball(world, grid, caster, (target_x, target_y), events, rng, current_time)
         }
         AbilityType::LearnedFear => match queries::get_entity_position(world, caster) {
             Some(pos) => {

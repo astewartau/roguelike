@@ -650,8 +650,19 @@ impl GameEngine {
         }
 
         // Projectile cleanup
-        let (finished, arrow_recovery_info) = systems::cleanup_finished_projectiles(&state.world);
+        let (finished, landings) = systems::cleanup_finished_projectiles(&state.world);
         systems::despawn_projectiles(&mut state.world, finished);
+        let arrow_recovery_info = landings.arrows;
+
+        // A fireball's blast is seen and heard as it visibly lands (its
+        // damage was dealt when it came down in game time).
+        for (x, y) in landings.fireballs {
+            self.events.push(crate::events::GameEvent::FireballExplosion {
+                x,
+                y,
+                radius: crate::constants::FIREBALL_RADIUS,
+            });
+        }
 
         // Spawn recoverable arrows on the ground
         // Missed arrows are always recovered; arrows that hit have 50% chance
@@ -1103,6 +1114,7 @@ impl GameEngine {
                     &state.world,
                     &self.vfx.taming_beams,
                 );
+                let channels = crate::ui::get_channel_data(&state.world);
 
                 crate::ui::run_ui(
                     egui_glow,
@@ -1121,6 +1133,8 @@ impl GameEngine {
                             resting_bubble: self.vfx.resting_bubble.as_ref(),
                             life_drain_beams: &life_drain_beams,
                             taming_beams: &taming_beams,
+                            channels: &channels,
+                            real_time: self.real_time,
                             targeting_mode: self.input.targeting_mode.as_ref(),
                             ability_targeting_mode: self.input.ability_targeting_mode.as_ref(),
                         },

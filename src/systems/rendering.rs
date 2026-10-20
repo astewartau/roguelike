@@ -1,7 +1,7 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Container, Door, EffectType, GroundItemPile, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
-use crate::constants::{FIRE_FRAME_DURATION, HELD_TORCH_FRAME_DURATION, INVISIBLE_PLAYER_ALPHA};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Container, Door, EffectType, GroundItemPile, OverlaySprite, PlacedFireTrap, Position, Projectile, ProjectileKind, Sprite, SpriteTint, StatusEffects, VisualPosition};
+use crate::constants::{FIRE_FRAME_DURATION, HELD_TORCH_FRAME_DURATION, INVISIBLE_PLAYER_ALPHA, PROJECTILE_TRAIL};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
 use crate::fov::Fov;
@@ -84,6 +84,52 @@ fn held_torch_overlay(carrier: Entity, sprite: &Sprite, lit: bool, real_time: f3
         offset,
         mirrored: hand.mirrored,
     }
+}
+
+/// The cell a projectile is drawn with in flight, turned to face its heading:
+/// arrows, grave bolts and fireballs have art for every heading. A thrown
+/// potion keeps its own sprite.
+fn flight_sprite(projectile: &Projectile, own: Sprite) -> Sprite {
+    let first = match projectile.kind {
+        ProjectileKind::Missile if projectile.potion_type.is_some() => return own,
+        ProjectileKind::Missile => tile_ids::ARROW_FLIGHT,
+        ProjectileKind::GraveBolt => tile_ids::GRAVE_BOLT_FLIGHT,
+        ProjectileKind::Fireball => tile_ids::FIREBALL_FLIGHT,
+    };
+    Sprite::new(first.0, first.1 + tile_ids::flight_heading(projectile.direction))
+}
+
+/// A projectile as drawn: faded copies trailing behind it while it is still
+/// moving (`PROJECTILE_TRAIL`, a motion blur), then the projectile itself.
+fn projectile_renders(
+    projectile: &Projectile,
+    pos: &Position,
+    vis: &VisualPosition,
+    sprite: Sprite,
+    brightness: f32,
+    tint: (f32, f32, f32),
+) -> Vec<RenderEntity> {
+    let at = |x: f32, y: f32, alpha: f32| RenderEntity {
+        x,
+        y,
+        sprite,
+        brightness,
+        alpha,
+        effects: effects::NONE,
+        overlays: Vec::new(),
+        tint,
+    };
+    let moving = (pos.x as f32 - vis.x).hypot(pos.y as f32 - vis.y) > 0.05;
+    let (dx, dy) = projectile.direction;
+    let mut out: Vec<RenderEntity> = Vec::new();
+    if moving {
+        // Furthest back first, so nearer copies draw over it.
+        for &(behind, alpha) in PROJECTILE_TRAIL.iter().rev() {
+            out.push(at(vis.x - dx * behind, vis.y - dy * behind, alpha));
+        }
+    }
+    out.push(at(vis.x, vis.y, 1.0));
+    out
 }
 
 /// Update visibility based on illumination and line-of-sight.
@@ -330,6 +376,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     // Separate entities by render layer
     let mut ground_layer: Vec<RenderEntity> = Vec::new();  // Bones, items on ground, campfires
     let mut actor_layer: Vec<RenderEntity> = Vec::new();   // Enemies and NPCs
+    let mut air_layer: Vec<RenderEntity> = Vec::new();     // Projectiles in flight
     let mut player_render: Option<RenderEntity> = None;
 
     // Process entities with static Sprite component
@@ -387,6 +434,23 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         let tint = super::animation::hit_flash_tint(world, id, id == player_entity, base_tint);
 
         let entity_effects = effects::NONE;
+
+        // Projectiles fly over everyone's heads, facing where they're going.
+        // Spells carry their own light; an arrow is as lit as where it is.
+        if let Ok(projectile) = world.get::<&Projectile>(id) {
+            if is_visible {
+                let brightness = match projectile.kind {
+                    ProjectileKind::GraveBolt | ProjectileKind::Fireball => 1.0,
+                    ProjectileKind::Missile => grid
+                        .illumination
+                        .get(pos.y as usize * grid.width + pos.x as usize)
+                        .map_or(0.5, |b| (b + 0.1).min(1.0)),
+                };
+                let sprite = flight_sprite(&projectile, *sprite);
+                air_layer.extend(projectile_renders(&projectile, pos, vis_pos, sprite, brightness, tint));
+            }
+            continue;
+        }
 
         if id == player_entity {
             // Check if player is invisible for transparency effect
@@ -501,12 +565,14 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         }
     }
 
-    // Combine layers: ground first, then actors, then player on top
+    // Combine layers: ground first, then actors, then player, then anything
+    // in the air
     let mut entities_to_render = ground_layer;
     entities_to_render.append(&mut actor_layer);
     if let Some(player) = player_render {
         entities_to_render.push(player);
     }
+    entities_to_render.append(&mut air_layer);
 
     // Add fire overlays for burning entities (rendered on top)
     let mut fire_overlays: Vec<RenderEntity> = Vec::new();
@@ -651,6 +717,59 @@ mod tests {
             tile.explored = true;
         }
         grid
+    }
+
+    #[test]
+    fn an_arrow_faces_its_heading_and_trails_only_while_it_moves() {
+        use crate::components::{Projectile, ProjectileMarker};
+        let mut world = World::new();
+        let grid = lit_grid();
+        let at = Position::new(0, 0);
+        let player = world.spawn((at, VisualPosition::from_position(&at), Sprite::from_ref(tile_ids::FIGHTER)));
+        // Flying straight up the screen (+y), past a rat it should draw over.
+        world.spawn((Position::new(2, 4), VisualPosition { x: 2.0, y: 4.0 }, Sprite::from_ref(tile_ids::RAT), Actor::new(1.0)));
+        let arrow = world.spawn((
+            Position::new(2, 6),
+            VisualPosition { x: 2.0, y: 4.0 },
+            Sprite::from_ref(tile_ids::ARROW),
+            Projectile {
+                source: player,
+                damage: 1,
+                path: vec![],
+                path_index: 0,
+                direction: (0.0, 1.0),
+                spawn_time: 0.0,
+                finished: None,
+                potion_type: None,
+                on_hit_effect: None,
+                hit_enemy: false,
+                incendiary: false,
+                kind: ProjectileKind::Missile,
+            },
+            ProjectileMarker,
+        ));
+        let north = tile_ids::ARROW_FLIGHT.1 + tile_ids::FLIGHT_DIRECTIONS / 4;
+        let arrows = |world: &World| -> Vec<(usize, f32)> {
+            collect_renderables(world, &grid, player, 0.0)
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.sprite.tile_id == north && e.sprite.sheet == tile_ids::ARROW_FLIGHT.0)
+                .map(|(i, e)| (i, e.alpha))
+                .collect()
+        };
+
+        let drawn = arrows(&world);
+        assert_eq!(drawn.len(), 1 + PROJECTILE_TRAIL.len(), "the arrow and its blur, all facing up");
+        assert_eq!(drawn.last().map(|d| d.1), Some(1.0), "the arrow itself is drawn last, solid");
+        let rat_at = collect_renderables(&world, &grid, player, 0.0)
+            .iter()
+            .position(|e| (e.sprite.sheet, e.sprite.tile_id) == tile_ids::RAT)
+            .unwrap();
+        assert!(drawn.iter().all(|&(i, _)| i > rat_at), "it flies over the rat, not under it");
+
+        // Arrived: no blur.
+        *world.get::<&mut VisualPosition>(arrow).unwrap() = VisualPosition { x: 2.0, y: 6.0 };
+        assert_eq!(arrows(&world).len(), 1);
     }
 
     #[test]

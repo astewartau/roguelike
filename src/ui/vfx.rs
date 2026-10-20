@@ -9,8 +9,11 @@ use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, It
 use crate::constants::{
     DAMAGE_NUMBER_BIG_SCALE, DAMAGE_NUMBER_CRIT_SCALE, DAMAGE_NUMBER_FONT_SIZE,
     DAMAGE_NUMBER_OUTLINE_OFFSET, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
-    DAMAGE_NUMBER_TAKEN_SCALE, MISS_TEXT_SCALE, POTION_SPLASH_RADIUS,
+    DAMAGE_NUMBER_TAKEN_SCALE, EXPLOSION_FLASH_DURATION, EXPLOSION_RING_DELAY,
+    EXPLOSION_PUFF_SPILL, EXPLOSION_SHOCKWAVE_DURATION, EXPLOSION_TILE_DURATION, MISS_TEXT_SCALE,
+    POTION_SPLASH_RADIUS, RAIN_FRAME_DURATION,
 };
+use super::icons::UiIcons;
 use crate::ease;
 use crate::grid::Grid;
 use crate::systems::effects;
@@ -773,8 +776,26 @@ pub fn draw_enemy_status_indicators(
     }
 }
 
-/// Render explosion effects (fireballs)
-pub fn draw_explosions(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera) {
+/// The on-screen rect of the tile whose centre is at world (`cx`, `cy`).
+fn tile_rect(camera: &Camera, ppp: f32, cx: f32, cy: f32) -> egui::Rect {
+    let tile = camera.zoom / ppp;
+    // World y points up: this is the tile's bottom-left corner on screen.
+    let (sx, sy) = camera.world_to_screen(cx - 0.5, cy - 0.5);
+    egui::Rect::from_min_size(egui::pos2(sx / ppp, sy / ppp - tile), egui::vec2(tile, tile))
+}
+
+/// A cheap, stable hash of a tile offset, for per-tile variety that doesn't
+/// flicker from frame to frame.
+fn tile_hash(dx: i32, dy: i32) -> u32 {
+    let h = (dx as u32).wrapping_mul(0x9E37_79B9) ^ (dy as u32).wrapping_mul(0x85EB_CA6B);
+    (h ^ (h >> 15)).wrapping_mul(0x2C1B_3C6D)
+}
+
+/// Render explosions: a flash and a shockwave ring from the centre, and for
+/// a fiery one a blast of fire and smoke (`tile_ids::EXPLOSION`) on every
+/// tile it covers, starting later the further out, so it rolls outward.
+/// Tiles are flipped and nudged at random so the grid doesn't show.
+pub fn draw_explosions(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera, icons: &UiIcons) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("explosions"),
@@ -784,64 +805,115 @@ pub fn draw_explosions(ctx: &egui::Context, effects: &[VisualEffect], camera: &C
     let tile_size = camera.zoom / ppp;
 
     for effect in effects {
-        let VfxType::Explosion { radius } = &effect.effect_type else {
+        let VfxType::Explosion { radius, fiery } = effect.effect_type else {
             continue;
         };
+        // Seconds since it went off
+        let t = effect.progress() * effect.duration;
+        let (cx, cy) = camera.world_to_screen(effect.x, effect.y);
+        let centre = egui::pos2(cx / ppp, cy / ppp);
+        let reach = (radius as f32 + 0.5) * tile_size;
 
-        let progress = effect.progress();
+        if t < EXPLOSION_FLASH_DURATION {
+            let k = 1.0 - t / EXPLOSION_FLASH_DURATION;
+            let flash = egui::Color32::from_rgba_unmultiplied(255, 244, 214, (140.0 * k) as u8);
+            painter.circle_filled(centre, reach * (1.0 - 0.4 * k), flash);
+        }
 
-        // Explosion expands outward then fades
-        let expand = if progress < 0.3 {
-            progress / 0.3
-        } else {
-            1.0
-        };
+        if t < EXPLOSION_SHOCKWAVE_DURATION {
+            let k = t / EXPLOSION_SHOCKWAVE_DURATION;
+            let r = tile_size * 0.3 + (reach + tile_size * 0.5) * ease::out_cubic(k);
+            let (red, green, blue) = if fiery { (255, 205, 130) } else { (205, 185, 150) };
+            let ring = egui::Color32::from_rgba_unmultiplied(red, green, blue, (190.0 * (1.0 - k)) as u8);
+            painter.circle_stroke(centre, r, egui::Stroke::new(tile_size * 0.12 * (1.0 - k) + 1.0, ring));
+        }
 
-        let alpha = if progress > 0.5 {
-            ((1.0 - progress) / 0.5 * 200.0) as u8
-        } else {
-            200
-        };
+        let frames = crate::tile::tile_ids::EXPLOSION_FRAMES as usize;
+        let variants = icons.explosion_uvs.len() / frames;
+        if !fiery || variants == 0 {
+            continue;
+        }
+        // Outermost ring first, so the hotter middle draws over its smoke.
+        for ring in (0..=radius).rev() {
+            let local = t - ring as f32 * EXPLOSION_RING_DELAY;
+            if !(0.0..EXPLOSION_TILE_DURATION).contains(&local) {
+                continue;
+            }
+            // Further out, the blast arrives already burning rather than
+            // as a flash of its own, which would read as a grid of dots.
+            let skip = (ring as usize).min(2).min(frames - 1);
+            let ring_frame = skip + (local / EXPLOSION_TILE_DURATION * (frames - skip) as f32) as usize;
 
-        // Draw expanding circles for the explosion
-        for r in 0..=*radius {
-            let r_progress = r as f32 / (*radius as f32).max(1.0);
-            let current_expand = expand * (1.0 - r_progress * 0.3);
-
-            // Calculate color: orange/red gradient
-            let red = 255;
-            let green = (150.0 * (1.0 - r_progress)) as u8;
-            let blue = (50.0 * (1.0 - r_progress)) as u8;
-            let ring_alpha = (alpha as f32 * (1.0 - r_progress * 0.5)) as u8;
-
-            let color = egui::Color32::from_rgba_unmultiplied(red, green, blue, ring_alpha);
-
-            // Draw tiles in this ring
-            for dx in -r..=r {
-                for dy in -r..=r {
-                    let dist = dx.abs().max(dy.abs());
-                    if dist != r {
-                        continue;
-                    }
-
-                    let world_x = effect.x + dx as f32;
-                    let world_y = effect.y + dy as f32;
-
-                    let screen_pos = camera.world_to_screen(world_x - 0.5, world_y - 0.5);
-                    let egui_x = screen_pos.0 / ppp;
-                    let egui_y = screen_pos.1 / ppp;
-
-                    let size = tile_size * current_expand;
-                    let offset = (tile_size - size) / 2.0;
-
-                    let rect = egui::Rect::from_min_size(
-                        egui::pos2(egui_x + offset, egui_y - tile_size + offset),
-                        egui::vec2(size, size),
-                    );
-                    painter.rect_filled(rect, size / 4.0, color);
+            for (dx, dy) in ring_tiles(ring) {
+                let h = tile_hash(dx, dy);
+                // Each tile its own shape of blast, some a frame ahead of
+                // their neighbours: no two side by side quite alike.
+                let lead = if ring > 0 { (h >> 24) as usize % 2 } else { 0 };
+                let frame = (ring_frame + lead).min(frames - 1);
+                // The smoke thins away over the last two frames.
+                let left = frames - 1 - frame;
+                let opacity = if left < 2 { 0.45 + 0.3 * left as f32 } else { 1.0 };
+                let variant = (h >> 4) as usize % variants;
+                let nudge = |bits: u32| ((bits & 0xff) as f32 / 255.0 - 0.5) * 0.2 * tile_size;
+                // Half again as big as a tile, so neighbouring puffs merge
+                // into one cloud instead of sitting in their own squares.
+                let rect = tile_rect(camera, ppp, effect.x + dx as f32, effect.y + dy as f32)
+                    .expand(tile_size * EXPLOSION_PUFF_SPILL)
+                    .translate(egui::vec2(nudge(h >> 8), nudge(h >> 16)));
+                let mut uv = icons.explosion_uvs[variant * frames + frame];
+                if h & 1 == 1 {
+                    uv = egui::Rect::from_min_max(egui::pos2(uv.max.x, uv.min.y), egui::pos2(uv.min.x, uv.max.y));
                 }
+                painter.image(
+                    icons.items_texture_id,
+                    rect,
+                    uv,
+                    egui::Color32::from_white_alpha((255.0 * opacity) as u8),
+                );
             }
         }
+    }
+}
+
+/// The tile offsets exactly `ring` steps (Chebyshev) from the centre.
+fn ring_tiles(ring: i32) -> impl Iterator<Item = (i32, i32)> {
+    (-ring..=ring)
+        .flat_map(move |dy| (-ring..=ring).map(move |dx| (dx, dy)))
+        .filter(move |(dx, dy)| dx.abs().max(dy.abs()) == ring)
+}
+
+/// Render Call Rain: rain (`tile_ids::RAIN`) falling on each tile of the
+/// patch under a passing cloud's shadow, fading in and out.
+pub fn draw_rain(ctx: &egui::Context, effects: &[VisualEffect], camera: &Camera, icons: &UiIcons) {
+    let frames = icons.rain_uvs.len() as u32;
+    if frames == 0 {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("rain"),
+    ));
+    let ppp = ctx.pixels_per_point();
+
+    for effect in effects {
+        let VfxType::Rain { phase } = effect.effect_type else {
+            continue;
+        };
+        let t = effect.progress() * effect.duration;
+        let fade_in = (t / 0.15).min(1.0);
+        let fade_out = ((effect.duration - t) / 0.35).min(1.0);
+        let opacity = fade_in.min(fade_out).max(0.0);
+
+        let rect = tile_rect(camera, ppp, effect.x, effect.y);
+        let shadow = egui::Color32::from_rgba_unmultiplied(20, 30, 50, (70.0 * opacity) as u8);
+        painter.rect_filled(rect, 0.0, shadow);
+        let frame = ((t / RAIN_FRAME_DURATION) as u32).wrapping_add(phase) % frames;
+        painter.image(
+            icons.items_texture_id,
+            rect,
+            icons.rain_uvs[frame as usize],
+            egui::Color32::from_white_alpha((235.0 * opacity) as u8),
+        );
     }
 }
 
@@ -1322,5 +1394,183 @@ pub fn draw_taming_beams(ctx: &egui::Context, camera: &Camera, beams: &[TamingBe
         let tamer_glow_alpha = (80.0 * pulse) as u8;
         let tamer_glow_color = egui::Color32::from_rgba_unmultiplied(220, 200, 110, tamer_glow_alpha);
         painter.circle_filled(tamer_pos, 6.0 * pulse, tamer_glow_color);
+    }
+}
+
+// =============================================================================
+// CHANNELS (Tame, Raise Dead)
+// =============================================================================
+
+/// Which channel is under way, for its colours and its label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelKind {
+    Tame,
+    RaiseDead,
+}
+
+impl ChannelKind {
+    fn label(self) -> &'static str {
+        match self {
+            ChannelKind::Tame => "Taming",
+            ChannelKind::RaiseDead => "Raising",
+        }
+    }
+
+    fn colour(self) -> egui::Color32 {
+        match self {
+            ChannelKind::Tame => egui::Color32::from_rgb(130, 200, 105),
+            ChannelKind::RaiseDead => egui::Color32::from_rgb(120, 230, 170),
+        }
+    }
+}
+
+/// A channel in progress: who is channeling into what, and how far along.
+pub struct ChannelData {
+    pub kind: ChannelKind,
+    /// Tile centres, from the visual positions
+    pub caster: (f32, f32),
+    pub target: (f32, f32),
+    /// 0 to 1
+    pub fraction: f32,
+}
+
+/// Every Tame and Raise Dead channel under way whose two ends still exist.
+pub fn get_channel_data(world: &World) -> Vec<ChannelData> {
+    use crate::components::{RaiseDeadInProgress, TamingInProgress};
+    let centre = |e: Entity| world.get::<&VisualPosition>(e).ok().map(|v| (v.x + 0.5, v.y + 0.5));
+    let mut out = Vec::new();
+    let mut add = |kind, caster: Entity, target: Entity, progress: f32, required: f32| {
+        if let (Some(caster), Some(target)) = (centre(caster), centre(target)) {
+            let fraction = if required > 0.0 { (progress / required).clamp(0.0, 1.0) } else { 1.0 };
+            out.push(ChannelData { kind, caster, target, fraction });
+        }
+    };
+    for (id, t) in world.query::<&TamingInProgress>().iter() {
+        add(ChannelKind::Tame, id, t.target, t.progress, t.required);
+    }
+    for (id, r) in world.query::<&RaiseDeadInProgress>().iter() {
+        add(ChannelKind::RaiseDead, id, r.target, r.progress, r.required);
+    }
+    out
+}
+
+/// A bar over the channeler's head saying how far along the channel is
+/// ("Taming 40%"), so you can see how much longer to keep waiting.
+pub fn draw_channel_progress(ctx: &egui::Context, camera: &Camera, channels: &[ChannelData]) {
+    if channels.is_empty() {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("channel_progress"),
+    ));
+    let ppp = ctx.pixels_per_point();
+    let (bar_width, bar_height) = (30.0, 5.0);
+
+    for channel in channels {
+        // Just above the caster's head (world y points up)
+        let (sx, sy) = camera.world_to_screen(channel.caster.0, channel.caster.1 + 0.62);
+        let at = egui::pos2(sx / ppp, sy / ppp);
+
+        let back = egui::Rect::from_center_size(at, egui::vec2(bar_width + 2.0, bar_height + 2.0));
+        painter.rect_filled(back, 1.5, egui::Color32::from_rgb(15, 12, 20));
+        let inner = back.shrink(1.0);
+        let fill = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width() * channel.fraction, inner.height()));
+        painter.rect_filled(fill, 1.0, channel.kind.colour());
+
+        let text = format!("{} {}%", channel.kind.label(), (channel.fraction * 100.0).round() as i32);
+        let font = egui::FontId::proportional(11.0);
+        let label_at = at - egui::vec2(0.0, bar_height + 3.0);
+        painter.text(label_at + egui::vec2(1.0, 1.0), egui::Align2::CENTER_BOTTOM, &text, font.clone(), egui::Color32::BLACK);
+        painter.text(label_at, egui::Align2::CENTER_BOTTOM, &text, font, egui::Color32::WHITE);
+    }
+}
+
+/// Raise Dead being channeled: a ring of grave-light turning on the bones,
+/// souls rising off them, and a wavering tether back to the necromancer.
+pub fn draw_raise_dead_channels(ctx: &egui::Context, camera: &Camera, channels: &[ChannelData], time: f32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("raise_dead_channels"),
+    ));
+    let ppp = ctx.pixels_per_point();
+    let tile = camera.zoom / ppp;
+    let screen = |(x, y): (f32, f32)| {
+        let (sx, sy) = camera.world_to_screen(x, y);
+        egui::pos2(sx / ppp, sy / ppp)
+    };
+
+    for channel in channels.iter().filter(|c| c.kind == ChannelKind::RaiseDead) {
+        let bones = screen(channel.target);
+        let caster = screen(channel.caster);
+        // Stronger as the ritual nears its end
+        let strength = 0.55 + 0.45 * channel.fraction;
+        let pulse = 0.8 + 0.2 * (time * 5.0).sin();
+
+        // Tether: a wavering line of motes from caster to bones
+        let along = bones - caster;
+        let len = along.length();
+        if len > 4.0 {
+            let side = egui::vec2(-along.y, along.x) / len;
+            let steps = ((len / 5.0) as usize).max(4);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let wave = (t * 9.0 - time * 7.0).sin() * 2.5 * (1.0 - (2.0 * t - 1.0).abs());
+                let p = caster + along * t + side * wave;
+                let alpha = (150.0 * strength * pulse) as u8;
+                painter.circle_filled(p, 1.6, egui::Color32::from_rgba_unmultiplied(120, 240, 170, alpha));
+            }
+        }
+
+        // A turning ring of grave-light at the foot of the bones
+        let foot = bones + egui::vec2(0.0, tile * 0.28);
+        for i in 0..12 {
+            let a = time * 1.8 + i as f32 * std::f32::consts::TAU / 12.0;
+            let p = foot + egui::vec2(a.cos() * tile * 0.42, a.sin() * tile * 0.16);
+            let alpha = (170.0 * strength * (0.6 + 0.4 * (a * 2.0).sin().abs())) as u8;
+            painter.circle_filled(p, 1.8, egui::Color32::from_rgba_unmultiplied(150, 255, 190, alpha));
+        }
+
+        // Souls drifting up off the bones and fading
+        for i in 0..6 {
+            let rise = (time * 0.7 + i as f32 / 6.0).fract();
+            let drift = ((time * 2.0 + i as f32 * 1.7).sin()) * tile * 0.18;
+            let p = foot + egui::vec2(drift + (i as f32 - 2.5) * tile * 0.08, -rise * tile * 0.9);
+            let alpha = (200.0 * strength * (1.0 - rise)) as u8;
+            painter.circle_filled(p, 2.4 * (1.0 - rise * 0.5), egui::Color32::from_rgba_unmultiplied(190, 255, 215, alpha));
+        }
+
+        // The necromancer's hands glow with it
+        painter.circle_filled(caster, tile * 0.18 * pulse, egui::Color32::from_rgba_unmultiplied(90, 200, 140, (70.0 * strength) as u8));
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+    use crate::components::{Position, RaiseDeadInProgress, TamingInProgress};
+
+    #[test]
+    fn a_channel_reports_how_far_along_it_is() {
+        let mut world = World::new();
+        let at = |x, y| (Position::new(x, y), VisualPosition { x: x as f32, y: y as f32 });
+        let wolf = world.spawn(at(5, 5));
+        let druid = world.spawn(at(4, 5));
+        world.insert_one(druid, TamingInProgress { target: wolf, progress: 1.5, required: 6.0 }).unwrap();
+        let bones = world.spawn(at(1, 1));
+        let necro = world.spawn(at(2, 1));
+        world.insert_one(necro, RaiseDeadInProgress { target: bones, progress: 3.0, required: 4.0 }).unwrap();
+        // A channel whose target is gone draws nothing.
+        let gone = world.spawn(at(9, 9));
+        let orphan = world.spawn(at(8, 9));
+        world.insert_one(orphan, TamingInProgress { target: gone, progress: 0.0, required: 1.0 }).unwrap();
+        world.despawn(gone).unwrap();
+
+        let mut channels: Vec<_> = get_channel_data(&world).into_iter().map(|c| (c.kind, c.caster, c.fraction)).collect();
+        channels.sort_by(|a, b| a.2.total_cmp(&b.2));
+        assert_eq!(channels, vec![
+            (ChannelKind::Tame, (4.5, 5.5), 0.25),
+            (ChannelKind::RaiseDead, (2.5, 1.5), 0.75),
+        ]);
     }
 }

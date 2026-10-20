@@ -42,9 +42,10 @@ pub use tile_info::{TileMenu, TileMenuOutcome};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
 pub use vfx::{
     draw_alert_indicators, draw_attack_telegraphs, draw_damage_numbers, draw_enemy_health_bars, draw_loot_indicators,
-    draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras,
+    draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras, draw_rain,
     draw_resting_indicators,
-    draw_potion_splashes, draw_taming_beams, get_buff_aura_data, get_enemy_health_data,
+    draw_channel_progress, draw_potion_splashes, draw_raise_dead_channels, draw_taming_beams,
+    get_buff_aura_data, get_channel_data, get_enemy_health_data, ChannelData,
     get_attack_telegraph_data, get_enemy_status_data, get_life_drain_beam_data, get_loot_indicator_data, get_taming_beam_data, LifeDrainBeamData,
     TamingBeamData,
 };
@@ -352,6 +353,10 @@ pub struct UiOverlays<'a> {
     pub resting_bubble: Option<&'a crate::vfx::RestingBubble>,
     pub life_drain_beams: &'a [LifeDrainBeamData],
     pub taming_beams: &'a [TamingBeamData],
+    /// Tame and Raise Dead channels under way
+    pub channels: &'a [ChannelData],
+    /// Real seconds since the engine started, for looping animations
+    pub real_time: f32,
     pub targeting_mode: Option<&'a TargetingMode>,
     pub ability_targeting_mode: Option<&'a AbilityTargetingMode>,
 }
@@ -381,6 +386,8 @@ pub fn run_ui(
         resting_bubble,
         life_drain_beams,
         taming_beams,
+        channels,
+        real_time,
         targeting_mode,
         ability_targeting_mode,
     } = overlays;
@@ -521,8 +528,11 @@ pub fn run_ui(
         // Enemy status effect indicators (fear, slow, confusion)
         draw_enemy_status_indicators(ctx, camera, &enemy_status_data);
 
-        // Explosion effects (fireball)
-        draw_explosions(ctx, vfx_effects, camera);
+        // Explosions (fireballs, barrels, corpse explosions, ground slams)
+        draw_explosions(ctx, vfx_effects, camera, icons);
+
+        // Call Rain
+        draw_rain(ctx, vfx_effects, camera, icons);
 
         // Potion splash effects
         draw_potion_splashes(ctx, vfx_effects, camera);
@@ -532,6 +542,10 @@ pub fn run_ui(
 
         // Taming channels
         draw_taming_beams(ctx, camera, taming_beams);
+
+        // Raise Dead channels, and how far along every channel is
+        draw_raise_dead_channels(ctx, camera, channels, real_time);
+        draw_channel_progress(ctx, camera, channels);
 
         // Developer menu
         draw_dev_menu(ctx, dev_menu, icons, tileset);

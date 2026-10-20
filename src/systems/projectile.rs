@@ -78,10 +78,12 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
         for i in projectile.path_index..current_tile_index.min(projectile.path.len()) {
             let (tile_x, tile_y, _) = projectile.path[i];
 
-            // Check for wall collision first
+            // Check for wall collision first. A fireball doesn't hit the
+            // wall; it bursts in front of it (below).
             let tile = grid.get(tile_x, tile_y);
             let is_wall = tile.map(|t| !t.tile_type.is_walkable()).unwrap_or(true);
-            if is_wall {
+            let fireball = projectile.kind == ProjectileKind::Fireball;
+            if is_wall && !fireball {
                 hits.push((
                     projectile_entity,
                     None,
@@ -92,6 +94,8 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
                     projectile.potion_type,
                     projectile.kind,
                 ));
+            }
+            if is_wall {
                 // Mark as finished at wall position (one tile before the wall)
                 let final_pos = if i > 0 {
                     let (px, py, _) = projectile.path[i - 1];
@@ -110,8 +114,9 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
                 break;
             }
 
-            // Check for enemy collision at this tile
-            for (target_entity, target_x, target_y) in &attackables {
+            // Check for enemy collision at this tile (a fireball flies over
+            // everyone to where it was aimed)
+            for (target_entity, target_x, target_y) in attackables.iter().filter(|_| !fireball) {
                 // Don't hit the shooter
                 if *target_entity == projectile.source {
                     continue;
@@ -234,13 +239,23 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
     // Mark projectiles as finished (don't despawn yet - wait for visual catch-up)
     // Also apply potion splash effects for potion projectiles
     for (entity, final_x, final_y, potion_type, incendiary) in finished_projectiles {
+        let mut fireball = None;
         if let Ok(mut projectile) = world.get::<&mut Projectile>(entity) {
             projectile.finished = Some((final_x, final_y, current_time));
+            if projectile.kind == ProjectileKind::Fireball {
+                fireball = Some((projectile.source, projectile.damage));
+            }
         }
         // Update logical position to final position
         if let Ok(mut pos) = world.get::<&mut Position>(entity) {
             pos.x = final_x;
             pos.y = final_y;
+        }
+
+        // A fireball bursts where it came down (and makes its own noise).
+        if let Some((caster, damage)) = fireball {
+            crate::systems::actions::detonate_fireball(world, grid, caster, (final_x, final_y), damage, events, rng);
+            continue;
         }
 
         // Whatever lands makes a noise there: a bottle shattering, an arrow
@@ -310,13 +325,23 @@ pub fn lerp_projectiles_realtime(world: &mut World, real_time_elapsed: f32, arro
 /// Where a spent arrow came to rest, and whether it hit an enemy on the way.
 pub type ArrowRecovery = ((i32, i32), bool);
 
+/// What a projectile left behind once it visibly arrived.
+#[derive(Default)]
+pub struct Landings {
+    /// Spent arrows that may be picked up again (see `ArrowRecovery`).
+    pub arrows: Vec<ArrowRecovery>,
+    /// Where fireballs came down. Their blast was dealt when they landed in
+    /// game time; this is when it is seen and heard.
+    pub fireballs: Vec<(i32, i32)>,
+}
+
 /// Clean up finished projectiles whose visuals have caught up.
-/// Returns (entities to despawn, arrow recovery info).
+/// Returns the entities to despawn and what they left behind.
 /// Arrows that missed are always recoverable; arrows that hit have a chance
 /// (rolled by the caller, see `ARROW_RECOVERY_CHANCE_ON_HIT`).
-pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<ArrowRecovery>) {
+pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Landings) {
     let mut to_despawn = Vec::new();
-    let mut arrow_recovery_info = Vec::new();
+    let mut landings = Landings::default();
 
     for (entity, (pos, vis_pos, projectile)) in
         world.query::<(&Position, &VisualPosition, &Projectile)>().iter()
@@ -341,12 +366,52 @@ pub fn cleanup_finished_projectiles(world: &World) -> (Vec<Entity>, Vec<ArrowRec
                 && !projectile.incendiary
                 && projectile.kind == ProjectileKind::Missile
             {
-                arrow_recovery_info.push(((pos.x, pos.y), projectile.hit_enemy));
+                landings.arrows.push(((pos.x, pos.y), projectile.hit_enemy));
+            }
+            if projectile.kind == ProjectileKind::Fireball {
+                landings.fireballs.push((pos.x, pos.y));
             }
         }
     }
 
-    (to_despawn, arrow_recovery_info)
+    (to_despawn, landings)
+}
+
+/// Seconds until a projectile's sprite reaches where it came down. Its
+/// landing is settled in game time, usually the moment it is fired, while
+/// the sprite flies there at `ARROW_SPEED` in real time.
+fn visual_arrival(vis: &VisualPosition, (x, y): (i32, i32)) -> f32 {
+    (x as f32 - vis.x).hypot(y as f32 - vis.y) / crate::constants::ARROW_SPEED
+}
+
+/// How long to hold back what `event` shows (numbers, splashes) so it
+/// appears when the projectile behind it visibly lands rather than while it
+/// is still in the air. Zero for anything else.
+pub fn impact_delay(world: &World, event: &GameEvent) -> f32 {
+    let at = match event {
+        GameEvent::ProjectileHit { projectile, .. } => {
+            return world
+                .get::<&VisualPosition>(*projectile)
+                .ok()
+                .zip(world.get::<&Projectile>(*projectile).ok().and_then(|p| p.finished))
+                .map_or(0.0, |(vis, (x, y, _))| visual_arrival(&vis, (x, y)));
+        }
+        GameEvent::PotionSplash { x, y, .. } => (*x, *y),
+        GameEvent::AttackHit { kind: crate::events::DamageKind::Fireball, target_pos, .. } => {
+            (target_pos.0.floor() as i32, target_pos.1.floor() as i32)
+        }
+        _ => return 0.0,
+    };
+    // The projectile that came down over `at`, still flying on screen.
+    world
+        .query::<(&Projectile, &VisualPosition)>()
+        .iter()
+        .filter_map(|(_, (p, vis))| {
+            let (x, y, _) = p.finished?;
+            let reach = if p.kind == ProjectileKind::Fireball { crate::constants::FIREBALL_RADIUS } else { 0 };
+            ((at.0 - x).abs().max((at.1 - y).abs()) <= reach).then(|| visual_arrival(vis, (x, y)))
+        })
+        .fold(0.0, f32::max)
 }
 
 /// Despawn projectile entities

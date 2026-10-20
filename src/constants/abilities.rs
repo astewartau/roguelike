@@ -201,8 +201,6 @@ pub const GRAVE_BOLT_COOLDOWN: f32 = 5.0;
 pub const GRAVE_BOLT_CAST_DURATION: f32 = 1.2;
 /// Flight speed of the bone shard, in tiles per game second.
 pub const GRAVE_BOLT_SPEED: f32 = 12.0;
-/// Pale bone-green tint on the bolt's sprite (and its hotbar icon).
-pub const GRAVE_BOLT_TINT: (f32, f32, f32) = (0.7, 1.0, 0.65);
 /// Fatigue effort for one Grave Bolt.
 pub const GRAVE_BOLT_ENERGY_COST: f32 = 15.0;
 

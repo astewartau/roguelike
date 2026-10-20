@@ -104,16 +104,18 @@ pub enum VfxType {
     Fire { seed: f32 },
     /// Alert indicator "!" when enemy spots player
     Alert,
-    /// Explosion effect (fireball impact)
-    Explosion { radius: i32 },
+    /// A blast over every tile within `radius`: rolling fire and smoke when
+    /// `fiery` (fireballs, barrels, corpse explosions), just the shockwave
+    /// otherwise (a boss's ground slam).
+    Explosion { radius: i32, fiery: bool },
+    /// Rain falling on one tile (Call Rain); `phase` desyncs neighbours.
+    Rain { phase: u32 },
     /// Potion splash effect
     PotionSplash { potion_type: crate::components::ItemType },
 }
 
 /// Duration for alert indicator
 const ALERT_DURATION: f32 = 0.8;
-/// Duration for explosion effect
-const EXPLOSION_DURATION: f32 = 0.5;
 /// Duration for potion splash effect
 const POTION_SPLASH_DURATION: f32 = 0.4;
 
@@ -126,7 +128,11 @@ impl VfxType {
             VfxType::MissText { .. } => DAMAGE_NUMBER_DURATION,
             VfxType::Fire { .. } => f32::INFINITY, // Fire loops forever
             VfxType::Alert => ALERT_DURATION,
-            VfxType::Explosion { .. } => EXPLOSION_DURATION,
+            // the outermost ring starts last
+            VfxType::Explosion { radius, .. } => {
+                EXPLOSION_TILE_DURATION + *radius as f32 * EXPLOSION_RING_DELAY
+            }
+            VfxType::Rain { .. } => RAIN_VFX_DURATION,
             VfxType::PotionSplash { .. } => POTION_SPLASH_DURATION,
         }
     }
@@ -194,6 +200,13 @@ pub struct RestingBubble {
 /// Manager for all active visual effects
 pub struct VfxManager {
     pub effects: Vec<VisualEffect>,
+    /// Effects waiting to start, with the seconds left until they do: the
+    /// splash or numbers of a projectile that has landed in game time but
+    /// is still flying on screen.
+    pending: Vec<(f32, VisualEffect)>,
+    /// Delay `spawn` gives new effects; set around one event's handling by
+    /// `handle_event_after`.
+    spawn_delay: f32,
     pub fires: Vec<FireEffect>,
     pub life_drain_beams: Vec<LifeDrainBeam>,
     pub taming_beams: Vec<TamingBeam>,
@@ -213,6 +226,8 @@ impl VfxManager {
     pub fn new() -> Self {
         Self {
             effects: Vec::new(),
+            pending: Vec::new(),
+            spawn_delay: 0.0,
             fires: Vec::new(),
             life_drain_beams: Vec::new(),
             taming_beams: Vec::new(),
@@ -234,9 +249,14 @@ impl VfxManager {
         std::mem::take(&mut self.shake_requests)
     }
 
-    /// Spawn a new effect
+    /// Spawn a new effect (held back while `spawn_delay` is set)
     pub fn spawn(&mut self, x: f32, y: f32, effect_type: VfxType) {
-        self.effects.push(VisualEffect::new(x, y, effect_type));
+        let effect = VisualEffect::new(x, y, effect_type);
+        if self.spawn_delay > 0.0 {
+            self.pending.push((self.spawn_delay, effect));
+        } else {
+            self.effects.push(effect);
+        }
     }
 
     /// Spawn a slash effect at target position
@@ -288,9 +308,9 @@ impl VfxManager {
         self.resting_bubble = None;
     }
 
-    /// Spawn an explosion effect (fireball)
+    /// Spawn a fiery explosion (fireball, barrel, corpse)
     pub fn spawn_explosion(&mut self, x: f32, y: f32, radius: i32) {
-        self.spawn(x, y, VfxType::Explosion { radius });
+        self.spawn(x, y, VfxType::Explosion { radius, fiery: true });
     }
 
     /// Spawn a potion splash effect
@@ -331,6 +351,13 @@ impl VfxManager {
     /// Update all effects, removing finished ones
     pub fn update(&mut self, dt: f32) {
         self.effects.retain_mut(|effect| effect.update(dt));
+        for (wait, _) in &mut self.pending {
+            *wait -= dt;
+        }
+        let (ready, waiting): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.pending).into_iter().partition(|(wait, _)| *wait <= 0.0);
+        self.pending = waiting;
+        self.effects.extend(ready.into_iter().map(|(_, effect)| effect));
         // Update fire animation times
         for fire in &mut self.fires {
             fire.update(dt);
@@ -347,6 +374,14 @@ impl VfxManager {
         if let Some(bubble) = &mut self.resting_bubble {
             bubble.time += dt;
         }
+    }
+
+    /// `handle_event`, with the effects it spawns held back for `delay`
+    /// seconds (see `systems::projectile::impact_delay`).
+    pub fn handle_event_after(&mut self, event: &GameEvent, grid: &Grid, player: hecs::Entity, delay: f32) {
+        self.spawn_delay = delay;
+        self.handle_event(event, grid, player);
+        self.spawn_delay = 0.0;
     }
 
     /// Handle a game event, spawning appropriate VFX.
@@ -470,16 +505,13 @@ impl VfxManager {
                     damage_tier(Some(*entity), player, *damage, false),
                 );
             }
-            // Rain falls on every tile of the patch: the water-flask splash,
-            // reused rather than a new effect.
+            // Rain falls on every tile of the patch, each a little out of
+            // step with its neighbours. Thread rng: presentation only.
             GameEvent::RainCalled { tiles, .. } => {
                 for &(x, y) in tiles {
                     if grid.get(x, y).map(|t| t.visible).unwrap_or(false) {
-                        self.spawn_potion_splash(
-                            x as f32 + 0.5,
-                            y as f32 + 0.5,
-                            crate::components::ItemType::WaterFlaskFull,
-                        );
+                        let phase = rand::random::<u32>();
+                        self.spawn(x as f32 + 0.5, y as f32 + 0.5, VfxType::Rain { phase });
                     }
                 }
             }
@@ -534,10 +566,10 @@ impl VfxManager {
                 if *ability == crate::components::BossAbility::GroundSlam
                     && grid.get(position.0, position.1).map(|t| t.visible).unwrap_or(false)
                 => {
-                    self.spawn_explosion(
+                    self.spawn(
                         position.0 as f32 + 0.5,
                         position.1 as f32 + 0.5,
-                        crate::constants::BOSS_SLAM_RADIUS,
+                        VfxType::Explosion { radius: crate::constants::BOSS_SLAM_RADIUS, fiery: false },
                     );
                 }
             GameEvent::LifeDrainTick { target, target_pos, caster_pos, damage, healed, .. } => {
@@ -562,5 +594,32 @@ impl VfxManager {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_held_back_effect_starts_when_its_delay_runs_out() {
+        let mut grid = Grid::filled(5, 5, crate::tile::TileType::Floor);
+        for tile in &mut grid.tiles {
+            tile.visible = true;
+        }
+        let player = hecs::World::new().spawn(());
+        let mut vfx = VfxManager::new();
+        let splash = GameEvent::PotionSplash { x: 2, y: 2, potion_type: crate::components::ItemType::HealthPotion };
+
+        vfx.handle_event_after(&splash, &grid, player, 0.3);
+        assert!(vfx.effects.is_empty(), "nothing shows while the bottle is still in the air");
+        vfx.update(0.2);
+        assert!(vfx.effects.is_empty());
+        vfx.update(0.2);
+        assert_eq!(vfx.effects.len(), 1, "it splashes when the bottle lands");
+
+        // Without a delay it shows at once, as before.
+        vfx.handle_event(&splash, &grid, player);
+        assert_eq!(vfx.effects.len(), 2);
     }
 }

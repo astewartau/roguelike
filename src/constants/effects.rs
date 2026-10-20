@@ -48,6 +48,13 @@ pub const FIREBALL_RANGE: i32 = 10;
 pub const FIREBALL_RADIUS: i32 = 2;
 /// Damage dealt by Fireball scroll
 pub const FIREBALL_DAMAGE: i32 = 25;
+/// How fast a fireball flies, in tiles per game-time second. Fast enough to
+/// land inside the caster's Recover pause even at full range on a diagonal
+/// (`FIREBALL_RANGE` x 1.42 / `ACTION_RECOVER_DURATION` is about 57): game
+/// time only moves while someone acts, so a slower one would hang in the air
+/// until the caster's next move. What you see flies at the projectile
+/// animation speed whatever this is.
+pub const FIREBALL_SPEED: f32 = 60.0;
 /// Duration of Scroll of Reveal effect (game-time seconds)
 pub const REVEAL_DURATION: f32 = 10.0;
 /// Radius around each enemy revealed by Scroll of Reveal

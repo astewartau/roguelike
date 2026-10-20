@@ -239,3 +239,35 @@ pub const FIRE_FRAME_DURATION: f32 = 0.1;
 /// torch lying burning on the floor (`AnimatedSprite::torch`). Lower flickers
 /// faster.
 pub const HELD_TORCH_FRAME_DURATION: f32 = 0.12;
+
+/// Motion blur behind a projectile in flight: faded copies of it, as (tiles
+/// behind it, opacity), nearest first. More entries or larger gaps make a
+/// longer smear; it shows only while the projectile is moving, so a landed
+/// arrow sits still and crisp.
+pub const PROJECTILE_TRAIL: [(f32, f32); 2] = [(0.22, 0.4), (0.44, 0.16)];
+
+// =============================================================================
+// EXPLOSIONS AND RAIN
+// =============================================================================
+
+/// How long one tile of an explosion plays (`tile_ids::EXPLOSION`: flash,
+/// fireball, smoke), in seconds. Longer lingers on the smoke.
+pub const EXPLOSION_TILE_DURATION: f32 = 0.55;
+/// How much later each ring of tiles out from the centre starts its blast,
+/// in seconds: what makes it roll outward. Zero is one flat flash.
+pub const EXPLOSION_RING_DELAY: f32 = 0.06;
+/// How far each tile's puff of an explosion spills past its tile, as a
+/// fraction of a tile per side: 0.25 draws it half again as big. Enough
+/// overlap and neighbouring puffs merge into one cloud; too much and the
+/// pixel art turns blocky.
+pub const EXPLOSION_PUFF_SPILL: f32 = 0.25;
+/// How long the shockwave ring takes to reach the edge of the blast, in
+/// seconds.
+pub const EXPLOSION_SHOCKWAVE_DURATION: f32 = 0.3;
+/// How long the white flash at the heart of a blast lasts, in seconds.
+pub const EXPLOSION_FLASH_DURATION: f32 = 0.1;
+/// How long Call Rain is seen falling on a tile, in seconds (its effect on
+/// the world is immediate).
+pub const RAIN_VFX_DURATION: f32 = 1.4;
+/// Seconds per frame of falling rain (`tile_ids::RAIN`). Lower falls faster.
+pub const RAIN_FRAME_DURATION: f32 = 0.08;

@@ -286,8 +286,8 @@ pub fn grave_bolt_damage(world: &hecs::World, caster: Entity) -> i32 {
     ((GRAVE_BOLT_DAMAGE as f32 * queries::int_power(world, caster)).round() as i32).max(1)
 }
 
-/// Loose a Grave Bolt at `(tx, ty)`: a bone shard (pale-green tinted bone
-/// sprite) flies through the projectile system along the same line an arrow
+/// Loose a Grave Bolt at `(tx, ty)`: a bone shard trailing grave-light
+/// (`tile_ids::GRAVE_BOLT_FLIGHT`) flies through the projectile system along the same line an arrow
 /// would, stopping at walls and at `GRAVE_BOLT_RANGE`. It hits the first
 /// creature or oil barrel in its path for [`grave_bolt_damage`] (no crits,
 /// no weapon affixes; threat as for any projectile hit).
@@ -298,7 +298,7 @@ pub fn apply_grave_bolt(
     ty: i32,
     current_time: f32,
 ) -> ActionResult {
-    use crate::components::{Projectile, ProjectileKind, ProjectileMarker, Sprite, SpriteTint};
+    use crate::components::{Projectile, ProjectileKind, ProjectileMarker, Sprite};
     if !can_grave_bolt(ctx.world, ctx.grid, caster, (tx, ty)) {
         return ActionResult::Blocked;
     }
@@ -313,12 +313,10 @@ pub fn apply_grave_bolt(
     let (dx, dy) = ((tx - start.0) as f32, (ty - start.1) as f32);
     let len = (dx * dx + dy * dy).sqrt().max(0.001);
     let pos = Position::new(start.0, start.1);
-    let (r, g, b) = GRAVE_BOLT_TINT;
     let bolt = ctx.world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        Sprite::from_ref(crate::tile::tile_ids::GRAVE_BOLT),
-        SpriteTint { r, g, b },
+        Sprite::from_ref(crate::tile::tile_ids::GRAVE_BOLT_FLIGHT),
         Projectile {
             source: caster,
             damage: grave_bolt_damage(ctx.world, caster),
@@ -1363,7 +1361,28 @@ mod tests {
             GameEvent::ProjectileHit { kind: DamageKind::GraveBolt, target: Some(t), .. } if *t == target)));
         // Nothing to pick up afterwards.
         let (_, recover) = crate::systems::cleanup_finished_projectiles(&arena.world);
-        assert!(recover.is_empty());
+        assert!(recover.arrows.is_empty());
+    }
+
+    #[test]
+    fn a_fireball_flies_over_whoever_is_in_the_way_and_bursts_where_aimed() {
+        let mut arena = Arena::new((3, 5));
+        let in_the_way = dummy(&mut arena, 6, 5, 100);
+        let aimed_at = dummy(&mut arena, 12, 5, 100);
+        arena.player_does(ActionType::CastFireball { target_x: 12, target_y: 5 });
+
+        // It comes down inside the cast's own pause, without a Wait.
+        assert_eq!(arena.hp(in_the_way), 100, "it flew over the near one");
+        assert!(arena.hp(aimed_at) < 100, "and burst on the far one");
+
+        // The blast is seen and heard when the fireball visibly gets there.
+        let explosion = |e: &GameEvent| matches!(e, GameEvent::FireballExplosion { .. });
+        assert!(!arena.seen.iter().any(explosion), "not before it's seen to land");
+        let (_, landings) = crate::systems::cleanup_finished_projectiles(&arena.world);
+        assert!(landings.fireballs.is_empty(), "still in the air on screen");
+        crate::systems::lerp_projectiles_realtime(&mut arena.world, 10.0, crate::constants::ARROW_SPEED);
+        let (_, landings) = crate::systems::cleanup_finished_projectiles(&arena.world);
+        assert_eq!(landings.fireballs, vec![(12, 5)]);
     }
 
     #[test]

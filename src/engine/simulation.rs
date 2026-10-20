@@ -331,7 +331,10 @@ pub fn process_events(ctx: &mut SimCtx) -> TurnExecutionResult {
     let mut shake_requests = Vec::new();
 
     for event in event_list {
-        vfx.handle_event(&event, grid, player_entity);
+        // A projectile's hit shows when it visibly lands, not when it was
+        // settled in game time.
+        let delay = systems::projectile::impact_delay(&*world, &event);
+        vfx.handle_event_after(&event, grid, player_entity, delay);
         vfx.hitstop.on_event(&*world, player_entity, &event);
         ui_state.handle_event(&event);
         ui_state.message_log.record_event(&event, &*world);

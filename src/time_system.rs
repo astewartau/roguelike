@@ -314,6 +314,8 @@ pub fn complete_action(ctx: &mut ActorCtx, entity: Entity) -> ActionResult {
         ActionType::ShootBow { .. }
             | ActionType::ShootCripplingShot { .. }
             | ActionType::GraveBolt { .. }
+            | ActionType::CastFireball { .. }
+            | ActionType::CastLearnedSpell { ability: crate::components::AbilityType::LearnedFireball, .. }
     );
 
     // Apply action effects
@@ -392,7 +394,7 @@ fn apply_action_effects(
             actions::apply_blink(world, grid, entity, (*target_x, *target_y), spatial_cache, events, rng)
         }
         ActionType::CastFireball { target_x, target_y } => {
-            actions::apply_fireball(world, grid, entity, *target_x, *target_y, events, rng)
+            actions::apply_fireball(world, grid, entity, (*target_x, *target_y), events, rng, current_time)
         }
         ActionType::EquipWeapon { item_index } => {
             actions::apply_equip_weapon(world, entity, *item_index, events)
@@ -445,6 +447,7 @@ fn apply_action_effects(
         ActionType::CastLearnedSpell { ability, target_x, target_y } => {
             actions::apply_cast_learned_spell(
                 world, grid, entity, *ability, *target_x, *target_y, spatial_cache, events, rng,
+                current_time,
             )
         }
         ActionType::StartRaiseDead { target } => {

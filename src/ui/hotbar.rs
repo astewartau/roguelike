@@ -209,8 +209,6 @@ pub fn ability_icon_tint(ability: AbilityType) -> egui::Color32 {
         AbilityType::CallRain => egui::Color32::from_rgb(110, 160, 255),
         // Warm steel, so the bash shield doesn't read as Guard's buckler.
         AbilityType::ShieldBash => egui::Color32::from_rgb(255, 200, 150),
-        // Same pale bone-green as the bolt in flight (GRAVE_BOLT_TINT).
-        AbilityType::GraveBolt => egui::Color32::from_rgb(179, 255, 166),
         _ => egui::Color32::WHITE,
     }
 }

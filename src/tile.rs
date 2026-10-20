@@ -21,7 +21,7 @@ const fn rc(row: u32, col: u32, columns: u32) -> u32 {
 /// - Tiles: 17 columns (tiles.png 544x864)
 /// - Rogues: 7 columns (rogues.png 224x224)
 /// - Monsters: 12 columns (monsters.png 384x416)
-/// - Items: 11 columns (items.png 352x960: stock is 26 rows, tools/make_tiles.py adds 27-30)
+/// - Items: 11 columns (items.png 352x1280: stock is 26 rows, tools/make_tiles.py adds 27-40)
 // A catalogue of what the sprite sheets contain, not a list of what the game
 // currently draws. Entries for art nothing spawns yet (and alternates like
 // SKELETON_ARCHER, superseded by SKELETON plus a BOW overlay) are kept so the
@@ -254,6 +254,32 @@ pub mod tile_ids {
     /// Pixels along each side of a sheet cell.
     pub const CELL_PX: i32 = 32;
 
+    // Projectiles in flight, one cell per heading: `FLIGHT_DIRECTIONS`
+    // consecutive cells going anticlockwise from due east, picked by
+    // `flight_heading` so a projectile faces where it's going (custom,
+    // tools/make_tiles.py).
+    pub const FLIGHT_DIRECTIONS: u32 = 16;
+    pub const ARROW_FLIGHT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(31, 0, ITEMS_COLS)); // 31.a-32.e arrow in flight (custom)
+    pub const GRAVE_BOLT_FLIGHT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(33, 0, ITEMS_COLS)); // 33.a-34.e grave bolt in flight (custom)
+    pub const FIREBALL_FLIGHT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(35, 0, ITEMS_COLS)); // 35.a-36.e fireball in flight (custom)
+    /// One tile of a blast: flash, fireball, smoke, `EXPLOSION_FRAMES`
+    /// frames, in `EXPLOSION_VARIANTS` differently-shaped versions one after
+    /// another. Played on every tile an explosion covers (custom).
+    pub const EXPLOSION: (SpriteSheet, u32) = (SpriteSheet::Items, rc(37, 0, ITEMS_COLS)); // 37.a-39.b explosion, 3 variants (custom)
+    pub const EXPLOSION_FRAMES: u32 = 8;
+    pub const EXPLOSION_VARIANTS: u32 = 3;
+    /// Call Rain falling on one tile, `RAIN_FRAMES` looping frames (custom).
+    pub const RAIN: (SpriteSheet, u32) = (SpriteSheet::Items, rc(40, 0, ITEMS_COLS)); // 40.a-d rain (custom)
+    pub const RAIN_FRAMES: u32 = 4;
+
+    /// Which of the `FLIGHT_DIRECTIONS` cells faces along `direction`, a
+    /// heading on the grid (x right, y up the screen).
+    pub fn flight_heading(direction: (f32, f32)) -> u32 {
+        let step = std::f32::consts::TAU / FLIGHT_DIRECTIONS as f32;
+        let k = (direction.1.atan2(direction.0) / step).round() as i32;
+        k.rem_euclid(FLIGHT_DIRECTIONS as i32) as u32
+    }
+
     // Item badges: a glyph in the top-right corner of an otherwise empty
     // cell, drawn over a potion or scroll to say what it does, since every
     // scroll shares one sprite (custom, tools/make_tiles.py). Whole cells so
@@ -282,9 +308,9 @@ pub mod tile_ids {
     pub const ENTANGLE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat (tinted vine green)
     pub const CALL_RAIN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(23, 3, TILES_COLS)); // 23.d slime large (tinted rain blue: a puddle)
     pub const SHIELD_BASH: (SpriteSheet, u32) = (SpriteSheet::Items, rc(12, 1, ITEMS_COLS)); // 12.b kite shield (tinted steel-orange)
-    /// Grave Bolt: the hotbar icon and the bone shard in flight (tinted pale
-    /// green via `GRAVE_BOLT_TINT`).
-    pub const GRAVE_BOLT: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(11, 2, TILES_COLS)); // 11.c bone 2 (tinted pale green)
+    /// Grave Bolt's hotbar icon: the bolt in flight, heading up and right.
+    /// (It was the bone decal 11.c, which carries the floor behind it.)
+    pub const GRAVE_BOLT: (SpriteSheet, u32) = (SpriteSheet::Items, rc(33, 2, ITEMS_COLS)); // 33.c grave bolt in flight, NE (custom)
 
     // ===== TILES SHEET - TRAPS =====
 
