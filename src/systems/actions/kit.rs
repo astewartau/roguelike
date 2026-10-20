@@ -26,7 +26,7 @@ use crate::queries;
 use crate::systems::effects;
 use crate::tile::TileType;
 
-use super::{consume_corpse, interrupt_life_drain_on_damage, ActionResult};
+use super::{consume_corpse, ActionResult};
 
 /// The kit ability a *targeted* action belongs to, so the cooldown can be
 /// started when the action starts (targeted abilities are activated by a click,
@@ -229,7 +229,6 @@ fn bash_hit(
         return;
     };
     let dealt = crate::systems::combat::apply_damage(ctx.world, ctx.grid, target, raw, ctx.rng, ctx.events);
-    interrupt_life_drain_on_damage(ctx.world, target, ctx.events);
     let threat = dealt as f32 * THREAT_PER_DAMAGE;
     crate::systems::ai::generate_threat(ctx.world, target, basher, threat);
     crate::systems::ai::generate_companion_threat(ctx.world, target, basher, threat);
@@ -512,7 +511,6 @@ pub fn apply_corpse_explosion(ctx: &mut EffectCtx, caster: Entity, corpse: Entit
     for &(victim, (x, y)) in &victims {
         let dealt =
             crate::systems::combat::apply_damage(ctx.world, ctx.grid, victim, damage, ctx.rng, ctx.events);
-        interrupt_life_drain_on_damage(ctx.world, victim, ctx.events);
         let threat = dealt as f32 * THREAT_PER_DAMAGE;
         crate::systems::ai::generate_threat(ctx.world, victim, caster, threat);
         ctx.events.push(GameEvent::AttackHit {
@@ -567,7 +565,6 @@ pub fn reflect_thorns(ctx: &mut EffectCtx, attacker: Entity, defender: Entity) {
     }
     let dealt =
         crate::systems::combat::apply_damage(ctx.world, ctx.grid, attacker, THORNS_DAMAGE, ctx.rng, ctx.events);
-    interrupt_life_drain_on_damage(ctx.world, attacker, ctx.events);
     crate::systems::ai::generate_threat(ctx.world, attacker, defender, dealt as f32 * THREAT_PER_DAMAGE);
     ctx.events.push(GameEvent::AttackHit {
         attacker: defender,

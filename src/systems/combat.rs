@@ -440,8 +440,9 @@ fn apply_damage_inner(
         crate::systems::fire::on_barrel_damaged(world, target, events);
     }
 
-    // Taking a hit cancels any alarm shout and wakes an unaware victim.
-    crate::systems::ai::interrupt_shout_on_damage(world, target);
+    // Taking a hit breaks a channel that a hit breaks (a shout, a drain)
+    // and wakes an unaware victim.
+    crate::systems::actions::break_channel_on_damage(world, target, events);
     crate::systems::ai::wake_on_attacked(world, target);
 
     // A pack rat that is hit alerts its packmates.

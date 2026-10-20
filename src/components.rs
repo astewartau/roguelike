@@ -1525,12 +1525,53 @@ pub struct LastDamageSource(pub String);
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CanOpenDoors;
 
-/// Active alarm-shout channel. While present the enemy is busy shouting; when
-/// `remaining` reaches zero it wakes nearby unaware allies. Interruptible —
-/// removed if the shouter takes damage.
-#[derive(Debug, Clone, Copy)]
-pub struct AlarmInProgress {
-    pub remaining: f32,
+/// What finishing (or, for life drain, keeping up) a channel does.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ChannelEffect {
+    /// The target becomes a companion.
+    Tame,
+    /// The target's remains rise as a skeleton companion.
+    RaiseDead,
+    /// Every `LIFE_DRAIN_TICK_INTERVAL` of focus, damage the target and heal
+    /// by part of it. Runs until broken or the target dies.
+    LifeDrain { since_tick: f32 },
+    /// A shout that wakes everything within `radius` when it finishes.
+    Shout { radius: i32 },
+}
+
+/// Something being done by standing still and keeping at it: taming, raising
+/// the dead, draining life, raising the alarm. Each Wait adds to `elapsed`;
+/// it finishes at `required`, and the rules for what breaks it are data.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Channel {
+    pub effect: ChannelEffect,
+    /// What it's aimed at, if anything.
+    #[serde(skip)]
+    pub target: Option<Entity>,
+    /// Seconds of focus so far.
+    pub elapsed: f32,
+    /// Seconds of focus it needs. Infinite for one that runs until broken.
+    pub required: f32,
+    /// It fails if the target is further than this (Chebyshev). Ignored
+    /// without a target.
+    pub range: i32,
+    /// Stepping away breaks it.
+    pub breaks_on_move: bool,
+    /// Taking damage breaks it.
+    pub breaks_on_damage: bool,
+}
+
+impl Channel {
+    /// How far along it is, 0 to 1 (0 for one with no end).
+    pub fn fraction(&self) -> f32 {
+        if !self.required.is_finite() {
+            return 0.0;
+        }
+        if self.required <= 0.0 {
+            return 1.0;
+        }
+        (self.elapsed / self.required).clamp(0.0, 1.0)
+    }
 }
 
 /// A single entry in an entity's threat table.
@@ -2994,42 +3035,10 @@ pub struct BoneWard {
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Tameable;
 
-/// Tracks active taming progress for a player
-#[derive(Debug, Clone, Copy)]
-pub struct TamingInProgress {
-    /// The entity being tamed
-    pub target: Entity,
-    /// Current taming progress in seconds
-    pub progress: f32,
-    /// Required time to complete taming
-    pub required: f32,
-}
-
-/// Tracks an active Raise Dead channel (Necromancer). Mirrors the Tame
-/// channel: progress accrues while the caster Waits in range of the bones.
-#[derive(Debug, Clone, Copy)]
-pub struct RaiseDeadInProgress {
-    /// The bones/corpse container being raised
-    pub target: Entity,
-    /// Current channel progress in seconds
-    pub progress: f32,
-    /// Required channel time to complete
-    pub required: f32,
-}
-
 /// Marks a skeleton companion created by Raise Dead (counts against the
 /// caster's INT-scaled control cap while alive).
 #[derive(Debug, Clone, Copy)]
 pub struct RaisedUndead;
-
-/// Tracks active life drain channeling for the Necromancer
-#[derive(Debug, Clone, Copy)]
-pub struct LifeDrainInProgress {
-    /// The entity being drained
-    pub target: Entity,
-    /// Time until next tick of damage/healing
-    pub tick_timer: f32,
-}
 
 /// Marks an animal as tamed
 #[derive(Debug, Clone, Copy)]

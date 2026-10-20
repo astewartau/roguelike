@@ -5,7 +5,7 @@
 
 use super::style;
 use crate::camera::Camera;
-use crate::components::{AlarmInProgress, Asleep, ChaseAI, EffectType, Health, ItemType, StatusEffects, VisualPosition};
+use crate::components::{Asleep, Channel, ChannelEffect, ChaseAI, EffectType, Health, ItemType, StatusEffects, VisualPosition};
 use crate::constants::{
     DAMAGE_NUMBER_BIG_SCALE, DAMAGE_NUMBER_CRIT_SCALE, DAMAGE_NUMBER_FONT_SIZE,
     DAMAGE_NUMBER_OUTLINE_OFFSET, DAMAGE_NUMBER_POP_SIZE_STEP, DAMAGE_NUMBER_RISE,
@@ -99,7 +99,7 @@ pub fn get_buff_aura_data(world: &World, player_entity: Entity) -> Option<Player
 /// Extract enemy status effect data from the world
 pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData> {
     world
-        .query::<(&VisualPosition, &ChaseAI, &StatusEffects, Option<&Asleep>, Option<&AlarmInProgress>)>()
+        .query::<(&VisualPosition, &ChaseAI, &StatusEffects, Option<&Asleep>, Option<&Channel>)>()
         .iter()
         // An invisible enemy is not drawn, so neither are its status icons.
         .filter(|(_, (_, _, status_effects, _, _))| {
@@ -111,7 +111,7 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
                 .map(|t| t.visible)
                 .unwrap_or(false)
         })
-        .map(|(_, (pos, ai, status_effects, asleep, alarm))| {
+        .map(|(_, (pos, ai, status_effects, asleep, channel))| {
             let stirring = ai.state == crate::components::AIState::Unaware && ai.alertness > 0.0;
             EnemyStatusData {
                 x: pos.x,
@@ -123,7 +123,7 @@ pub fn get_enemy_status_data(world: &World, grid: &Grid) -> Vec<EnemyStatusData>
                 is_rooted: effects::has_effect(status_effects, EffectType::Rooted),
                 // Show "stirring" instead of "asleep" once the meter starts rising.
                 is_asleep: asleep.is_some() && !stirring,
-                is_shouting: alarm.is_some(),
+                is_shouting: channel.is_some_and(|c| matches!(c.effect, ChannelEffect::Shout { .. })),
                 is_stirring: stirring,
             }
         })
@@ -1383,7 +1383,7 @@ pub struct TamingBeamData {
 }
 
 /// Extract taming beam data from the world. Only emits a beam while the tamer is
-/// still channeling (has a `TamingInProgress` component) and both ends exist.
+/// still channeling a tame and both ends exist.
 pub fn get_taming_beam_data(
     world: &World,
     beams: &[crate::vfx::TamingBeam],
@@ -1391,9 +1391,7 @@ pub fn get_taming_beam_data(
     beams
         .iter()
         .filter_map(|beam| {
-            world
-                .get::<&crate::components::TamingInProgress>(beam.tamer)
-                .ok()?;
+            world.get::<&Channel>(beam.tamer).ok().filter(|c| c.effect == ChannelEffect::Tame)?;
             let tamer_pos = world.get::<&VisualPosition>(beam.tamer).ok()?;
             let target_pos = world.get::<&VisualPosition>(beam.target).ok()?;
             Some(TamingBeamData {
@@ -1524,22 +1522,20 @@ pub struct ChannelData {
 
 /// Every Tame and Raise Dead channel under way whose two ends still exist.
 pub fn get_channel_data(world: &World) -> Vec<ChannelData> {
-    use crate::components::{RaiseDeadInProgress, TamingInProgress};
     let centre = |e: Entity| world.get::<&VisualPosition>(e).ok().map(|v| (v.x + 0.5, v.y + 0.5));
-    let mut out = Vec::new();
-    let mut add = |kind, caster: Entity, target: Entity, progress: f32, required: f32| {
-        if let (Some(caster), Some(target)) = (centre(caster), centre(target)) {
-            let fraction = if required > 0.0 { (progress / required).clamp(0.0, 1.0) } else { 1.0 };
-            out.push(ChannelData { kind, caster, target, fraction });
-        }
-    };
-    for (id, t) in world.query::<&TamingInProgress>().iter() {
-        add(ChannelKind::Tame, id, t.target, t.progress, t.required);
-    }
-    for (id, r) in world.query::<&RaiseDeadInProgress>().iter() {
-        add(ChannelKind::RaiseDead, id, r.target, r.progress, r.required);
-    }
-    out
+    world
+        .query::<&Channel>()
+        .iter()
+        .filter(|(_, c)| c.required.is_finite())
+        .filter_map(|(id, c)| {
+            let kind = match c.effect {
+                ChannelEffect::Tame => ChannelKind::Tame,
+                ChannelEffect::RaiseDead => ChannelKind::RaiseDead,
+                _ => return None,
+            };
+            Some(ChannelData { kind, caster: centre(id)?, target: centre(c.target?)?, fraction: c.fraction() })
+        })
+        .collect()
 }
 
 /// A bar over the channeler's head saying how far along the channel is
@@ -1636,7 +1632,11 @@ pub fn draw_raise_dead_channels(ctx: &egui::Context, camera: &Camera, channels: 
 #[cfg(test)]
 mod channel_tests {
     use super::*;
-    use crate::components::{Position, RaiseDeadInProgress, TamingInProgress};
+    use crate::components::Position;
+
+    fn channel(effect: ChannelEffect, target: Entity, elapsed: f32, required: f32) -> Channel {
+        Channel { effect, target: Some(target), elapsed, required, range: 1, breaks_on_move: true, breaks_on_damage: false }
+    }
 
     #[test]
     fn a_channel_reports_how_far_along_it_is() {
@@ -1644,14 +1644,14 @@ mod channel_tests {
         let at = |x, y| (Position::new(x, y), VisualPosition { x: x as f32, y: y as f32 });
         let wolf = world.spawn(at(5, 5));
         let druid = world.spawn(at(4, 5));
-        world.insert_one(druid, TamingInProgress { target: wolf, progress: 1.5, required: 6.0 }).unwrap();
+        world.insert_one(druid, channel(ChannelEffect::Tame, wolf, 1.5, 6.0)).unwrap();
         let bones = world.spawn(at(1, 1));
         let necro = world.spawn(at(2, 1));
-        world.insert_one(necro, RaiseDeadInProgress { target: bones, progress: 3.0, required: 4.0 }).unwrap();
+        world.insert_one(necro, channel(ChannelEffect::RaiseDead, bones, 3.0, 4.0)).unwrap();
         // A channel whose target is gone draws nothing.
         let gone = world.spawn(at(9, 9));
         let orphan = world.spawn(at(8, 9));
-        world.insert_one(orphan, TamingInProgress { target: gone, progress: 0.0, required: 1.0 }).unwrap();
+        world.insert_one(orphan, channel(ChannelEffect::Tame, gone, 0.0, 1.0)).unwrap();
         world.despawn(gone).unwrap();
 
         let mut channels: Vec<_> = get_channel_data(&world).into_iter().map(|c| (c.kind, c.caster, c.fraction)).collect();

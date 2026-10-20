@@ -188,8 +188,6 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
                 crate::systems::combat::apply_damage(world, grid, target_entity, actual_damage, rng, events);
 
             if actual_damage > 0 {
-                // Interrupt life drain if target was channeling
-                crate::systems::actions::interrupt_life_drain_on_damage(world, target_entity, events);
 
                 // Generate threat on the target for the projectile source
                 use crate::constants::THREAT_PER_DAMAGE;

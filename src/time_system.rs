@@ -715,8 +715,8 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
 
     // Emit burn damage events and interrupt channeling
     for (entity, position, damage) in burn_events {
-        // Interrupt life drain if entity was channeling
-        actions::interrupt_life_drain_on_damage(world, entity, events);
+        // Burning bypasses `apply_damage`, so break a channel here too.
+        actions::break_channel_on_damage(world, entity, events);
         events.push(GameEvent::BurnDamage {
             entity,
             position,
@@ -785,7 +785,6 @@ pub fn tick_dot_damage(
         if dealt <= 0 {
             continue;
         }
-        actions::interrupt_life_drain_on_damage(world, entity, events);
         events.push(GameEvent::DotDamage { entity, position, damage: dealt, kind });
 
         // Dead enemies are swept (and announced) by `remove_dead_entities`;

@@ -5,10 +5,10 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::components::{
-    AbilityType, Attackable, BlocksMovement, ChaseAI, ClassAbility, Container, ContainerType,
+    AbilityType, Attackable, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container, ContainerType,
     EffectType, Equipment, EquippedWeapon, Health, Inventory, ItemType, LearnedAbilities,
-    LifeDrainInProgress, Player, Position, Projectile, ProjectileMarker, RaiseDeadInProgress,
-    SecondaryAbility, Sprite, TamedBy, TamingInProgress, VisualPosition,
+    Player, Position, Projectile, ProjectileMarker,
+    SecondaryAbility, Sprite, TamedBy, VisualPosition,
 };
 use crate::constants::*;
 use crate::engine::EffectCtx;
@@ -189,8 +189,6 @@ pub fn detonate_fireball(
     for (entity, x, y) in damaged {
         // Apply damage (handles invulnerability, armor defense, Protected/Barkskin)
         crate::systems::combat::apply_damage(world, grid, entity, damage, rng, events);
-        // Interrupt life drain if entity was channeling
-        interrupt_life_drain_on_damage(world, entity, events);
         // Generate threat on fireball targets
         crate::systems::ai::generate_threat(world, entity, caster, damage as f32 * THREAT_PER_DAMAGE);
         crate::systems::ai::generate_companion_threat(world, entity, caster, damage as f32 * THREAT_PER_DAMAGE);
@@ -277,10 +275,15 @@ pub fn apply_start_life_drain(
         _ => return ActionResult::Invalid,
     }
 
-    // Add LifeDrainInProgress component to start channeling
-    let _ = world.insert_one(caster, LifeDrainInProgress {
-        target,
-        tick_timer: 0.0, // Tick immediately on first wait
+    // Ticks on the first Wait (the interval is one Wait long).
+    let _ = world.insert_one(caster, Channel {
+        effect: ChannelEffect::LifeDrain { since_tick: 0.0 },
+        target: Some(target),
+        elapsed: 0.0,
+        required: f32::INFINITY,
+        range: LIFE_DRAIN_RANGE,
+        breaks_on_move: false,
+        breaks_on_damage: true,
     });
 
     // Emit event to show VFX
@@ -342,7 +345,7 @@ pub fn apply_activate_fear(
     ActionResult::Completed
 }
 
-/// Apply wait action - handles taming and life drain progress if applicable
+/// Apply wait action: a Wait is also what keeps a channel going.
 ///
 /// Takes the full effect context because completing a tame drops the target's
 /// `BlocksMovement`, which has to be mirrored into the `SpatialCache`.
@@ -351,96 +354,7 @@ pub fn apply_wait(ctx: &mut EffectCtx, entity: Entity) -> ActionResult {
     let (world, grid) = (&mut **world, &**grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
-    // Check if entity is taming something
-    let taming_info = world.get::<&TamingInProgress>(entity)
-        .ok()
-        .map(|t| (t.target, t.progress, t.required));
-
-    if let Some((target, progress, required)) = taming_info {
-        // Check if target still exists and is in range
-        let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
-        let target_pos = world.get::<&Position>(target).ok().map(|p| (p.x, p.y));
-
-        match (entity_pos, target_pos) {
-            (Some((ex, ey)), Some((tx, ty))) => {
-                let dist = (ex - tx).abs().max((ey - ty).abs());
-                if dist <= TAME_RANGE {
-                    // Add progress (wait duration is 0.5s)
-                    let new_progress = progress + ACTION_WAIT_DURATION;
-
-                    if new_progress >= required {
-                        // Taming complete!
-                        complete_taming(world, spatial_cache, entity, target, events);
-                    } else {
-                        // Update progress
-                        if let Ok(mut taming) = world.get::<&mut TamingInProgress>(entity) {
-                            taming.progress = new_progress;
-                        }
-                        events.push(GameEvent::TamingProgress {
-                            tamer: entity,
-                            target,
-                            progress: new_progress,
-                            required,
-                        });
-                    }
-                } else {
-                    // Too far away - taming failed
-                    let _ = world.remove_one::<TamingInProgress>(entity);
-                    events.push(GameEvent::TamingFailed { tamer: entity, target });
-                }
-            }
-            _ => {
-                // Target no longer exists - remove taming state
-                let _ = world.remove_one::<TamingInProgress>(entity);
-            }
-        }
-    }
-
-    // Check if entity is channeling Raise Dead (mirrors the taming channel)
-    let raise_info = world.get::<&RaiseDeadInProgress>(entity)
-        .ok()
-        .map(|r| (r.target, r.progress, r.required));
-
-    if let Some((target, progress, required)) = raise_info {
-        let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
-        let target_pos = world.get::<&Position>(target).ok().map(|p| (p.x, p.y));
-        let target_is_bones = world
-            .get::<&Container>(target)
-            .map(|c| matches!(c.container_type, ContainerType::Corpse))
-            .unwrap_or(false);
-
-        match (entity_pos, target_pos) {
-            (Some((ex, ey)), Some((tx, ty))) if target_is_bones => {
-                let dist = (ex - tx).abs().max((ey - ty).abs());
-                if dist <= RAISE_DEAD_RANGE {
-                    let new_progress = progress + ACTION_WAIT_DURATION;
-                    if new_progress >= required {
-                        complete_raise_dead(world, entity, target, events);
-                    } else if let Ok(mut raise) = world.get::<&mut RaiseDeadInProgress>(entity) {
-                        raise.progress = new_progress;
-                    }
-                } else {
-                    // Wandered out of range - ritual fails
-                    let _ = world.remove_one::<RaiseDeadInProgress>(entity);
-                    events.push(GameEvent::RaiseDeadFailed { caster: entity });
-                }
-            }
-            _ => {
-                // Bones no longer exist (looted?) - ritual fails
-                let _ = world.remove_one::<RaiseDeadInProgress>(entity);
-                events.push(GameEvent::RaiseDeadFailed { caster: entity });
-            }
-        }
-    }
-
-    // Check if entity is channeling life drain
-    let drain_info = world.get::<&LifeDrainInProgress>(entity)
-        .ok()
-        .map(|d| (d.target, d.tick_timer));
-
-    if let Some((target, tick_timer)) = drain_info {
-        tick_life_drain(world, grid, entity, target, tick_timer, events, rng);
-    }
+    advance_channel(world, grid, spatial_cache, entity, ACTION_WAIT_DURATION, events, rng);
 
     ActionResult::Completed
 }
@@ -572,10 +486,14 @@ pub fn apply_start_raise_dead(
         return ActionResult::Invalid;
     }
 
-    let _ = world.insert_one(caster, RaiseDeadInProgress {
-        target,
-        progress: 0.0,
+    let _ = world.insert_one(caster, Channel {
+        effect: ChannelEffect::RaiseDead,
+        target: Some(target),
+        elapsed: 0.0,
         required: RAISE_DEAD_CHANNEL_DURATION,
+        range: RAISE_DEAD_RANGE,
+        breaks_on_move: true,
+        breaks_on_damage: false,
     });
 
     // Start the long cooldown (lives in the caster's spell list)
@@ -588,14 +506,6 @@ pub fn apply_start_raise_dead(
     ActionResult::Completed
 }
 
-/// Interrupt an in-progress Raise Dead channel (e.g. the caster moved).
-pub fn interrupt_raise_dead(world: &mut World, entity: Entity, events: &mut EventQueue) {
-    if world.get::<&RaiseDeadInProgress>(entity).is_ok() {
-        let _ = world.remove_one::<RaiseDeadInProgress>(entity);
-        events.push(GameEvent::RaiseDeadFailed { caster: entity });
-    }
-}
-
 /// Complete Raise Dead: consume the bones container (its loot drops to a
 /// ground pile on the same tile) and emit `SkeletonRaised` so the engine can
 /// spawn and schedule the skeleton companion (it needs the action scheduler,
@@ -606,8 +516,6 @@ fn complete_raise_dead(
     target: Entity,
     events: &mut EventQueue,
 ) {
-    let _ = world.remove_one::<RaiseDeadInProgress>(caster);
-
     let Some((x, y)) = queries::get_entity_position(world, target) else {
         events.push(GameEvent::RaiseDeadFailed { caster });
         return;
@@ -650,47 +558,22 @@ pub(super) fn consume_corpse(world: &mut World, corpse: Entity, pos: (i32, i32))
     }
 }
 
-/// Tick life drain channeling - applies damage and healing
-fn tick_life_drain(
+/// One pulse of Life Drain: damage the target and heal by part of it.
+/// Returns whether the target died of it.
+fn drain_tick(
     world: &mut World,
     grid: &Grid,
     caster: Entity,
     target: Entity,
-    tick_timer: f32,
     events: &mut EventQueue,
     rng: &mut impl Rng,
-) {
-    // Check if target still exists and is alive
-    let target_alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(false);
-    if !target_alive {
-        // Target died - end drain and start cooldown
-        end_life_drain(world, caster, target, events, false);
-        return;
-    }
-
-    // Check range and get positions for VFX
-    let caster_pos = queries::get_entity_position(world, caster);
-    let target_pos = queries::get_entity_position(world, target);
-    let (cx, cy, tx, ty) = match (caster_pos, target_pos) {
-        (Some((cx, cy)), Some((tx, ty))) => {
-            let dist = (cx - tx).abs().max((cy - ty).abs());
-            if dist > LIFE_DRAIN_RANGE {
-                // Out of range - end drain and start cooldown
-                end_life_drain(world, caster, target, events, false);
-                return;
-            }
-            (cx, cy, tx, ty)
-        }
-        _ => {
-            // Invalid positions - end drain
-            end_life_drain(world, caster, target, events, false);
-            return;
-        }
+) -> bool {
+    let (Some((cx, cy)), Some((tx, ty))) =
+        (queries::get_entity_position(world, caster), queries::get_entity_position(world, target))
+    else {
+        return false;
     };
-
-    // Update tick timer
-    let new_timer = tick_timer + ACTION_WAIT_DURATION;
-    if new_timer >= LIFE_DRAIN_TICK_INTERVAL {
+    {
         // Time to tick! Per-tick damage (and thus the heal derived from it)
         // scales with the caster's effective INT — gear counts.
         let damage = ((LIFE_DRAIN_DAMAGE_PER_TICK as f32 * queries::int_power(world, caster))
@@ -724,69 +607,144 @@ fn tick_life_drain(
             healed: heal_amount,
         });
 
-        // Reset timer (or end if target died)
-        if target_died {
-            end_life_drain(world, caster, target, events, false);
-        } else {
-            // Reset tick timer
-            if let Ok(mut drain) = world.get::<&mut LifeDrainInProgress>(caster) {
-                drain.tick_timer = 0.0;
+        target_died
+    }
+}
+
+/// Keep a channel going for `step` seconds of focus: check its target is
+/// still there and in reach, then advance it, finishing it if it's done.
+fn advance_channel(
+    world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut SpatialCache,
+    entity: Entity,
+    step: f32,
+    events: &mut EventQueue,
+    rng: &mut impl Rng,
+) {
+    let Some(channel) = world.get::<&Channel>(entity).ok().map(|c| *c) else {
+        return;
+    };
+    if let Some(target) = channel.target {
+        let in_reach = match (queries::get_entity_position(world, entity), queries::get_entity_position(world, target)) {
+            (Some((ex, ey)), Some((tx, ty))) => (ex - tx).abs().max((ey - ty).abs()) <= channel.range,
+            _ => false,
+        };
+        if !in_reach || !channel_target_still_fits(world, &channel, target) {
+            end_channel(world, entity, events, false);
+            return;
+        }
+    }
+
+    let elapsed = channel.elapsed + step;
+    match channel.effect {
+        ChannelEffect::LifeDrain { since_tick } => {
+            let Some(target) = channel.target else {
+                end_channel(world, entity, events, false);
+                return;
+            };
+            let mut since_tick = since_tick + step;
+            if since_tick >= LIFE_DRAIN_TICK_INTERVAL {
+                since_tick = 0.0;
+                if drain_tick(world, grid, entity, target, events, rng) {
+                    end_channel(world, entity, events, false);
+                    return;
+                }
+            }
+            if let Ok(mut c) = world.get::<&mut Channel>(entity) {
+                c.elapsed = elapsed;
+                c.effect = ChannelEffect::LifeDrain { since_tick };
             }
         }
-    } else {
-        // Just update timer
-        if let Ok(mut drain) = world.get::<&mut LifeDrainInProgress>(caster) {
-            drain.tick_timer = new_timer;
+        _ if elapsed >= channel.required => {
+            let _ = world.remove_one::<Channel>(entity);
+            finish_channel(world, grid, spatial_cache, entity, &channel, events);
+        }
+        effect => {
+            if let Ok(mut c) = world.get::<&mut Channel>(entity) {
+                c.elapsed = elapsed;
+            }
+            if let (ChannelEffect::Tame, Some(target)) = (effect, channel.target) {
+                events.push(GameEvent::TamingProgress {
+                    tamer: entity,
+                    target,
+                    progress: elapsed,
+                    required: channel.required,
+                });
+            }
         }
     }
 }
 
-/// Interrupt life drain if the caster takes damage
-/// Call this when an entity takes damage to check if they should stop channeling
-pub fn interrupt_life_drain_on_damage(
+/// Whether the target is still the kind of thing the channel works on: a
+/// creature for a tame or a drain, remains for raising the dead.
+fn channel_target_still_fits(world: &World, channel: &Channel, target: Entity) -> bool {
+    match channel.effect {
+        ChannelEffect::Tame => world.get::<&crate::components::Tameable>(target).is_ok(),
+        ChannelEffect::RaiseDead => world
+            .get::<&Container>(target)
+            .is_ok_and(|c| matches!(c.container_type, ContainerType::Corpse)),
+        ChannelEffect::LifeDrain { .. } => world.get::<&Health>(target).is_ok_and(|h| h.current > 0),
+        ChannelEffect::Shout { .. } => true,
+    }
+}
+
+/// A channel reached its full time: do what it was for.
+fn finish_channel(
     world: &mut World,
+    grid: &Grid,
+    spatial_cache: &mut SpatialCache,
     entity: Entity,
+    channel: &Channel,
     events: &mut EventQueue,
 ) {
-    // Check if this entity is channeling life drain (extract target to avoid borrow conflict)
-    let target = world.get::<&LifeDrainInProgress>(entity).ok().map(|d| d.target);
-    if let Some(target) = target {
-        end_life_drain(world, entity, target, events, true);
+    match (channel.effect, channel.target) {
+        (ChannelEffect::Tame, Some(target)) => complete_taming(world, spatial_cache, entity, target, events),
+        (ChannelEffect::RaiseDead, Some(target)) => complete_raise_dead(world, entity, target, events),
+        (ChannelEffect::Shout { radius }, _) => {
+            if let Some(pos) = queries::get_entity_position(world, entity) {
+                crate::systems::noise::make_noise(world, grid, pos, radius);
+            }
+        }
+        _ => {}
     }
 }
 
-/// End life drain channeling and start cooldown
-fn end_life_drain(
-    world: &mut World,
-    caster: Entity,
-    target: Entity,
-    events: &mut EventQueue,
-    was_interrupted: bool,
-) {
-    // Remove the channeling component
-    let _ = world.remove_one::<LifeDrainInProgress>(caster);
-
-    // Start cooldown
-    if let Ok(mut ability) = world.get::<&mut ClassAbility>(caster) {
-        ability.start_cooldown();
-    }
-
-    // Emit appropriate event
-    if was_interrupted {
-        events.push(GameEvent::LifeDrainInterrupted { caster, target });
-    } else {
-        events.push(GameEvent::LifeDrainEnded { caster, target });
+/// Stop a channel short. `broken` is for being interrupted (moving, a hit)
+/// rather than running out (target gone, out of reach, drained dry).
+fn end_channel(world: &mut World, entity: Entity, events: &mut EventQueue, broken: bool) {
+    let Ok(channel) = world.remove_one::<Channel>(entity) else {
+        return;
+    };
+    match (channel.effect, channel.target) {
+        (ChannelEffect::Tame, Some(target)) => events.push(GameEvent::TamingFailed { tamer: entity, target }),
+        (ChannelEffect::RaiseDead, _) => events.push(GameEvent::RaiseDeadFailed { caster: entity }),
+        (ChannelEffect::LifeDrain { .. }, Some(target)) => {
+            if let Ok(mut ability) = world.get::<&mut ClassAbility>(entity) {
+                ability.start_cooldown();
+            }
+            events.push(if broken {
+                GameEvent::LifeDrainInterrupted { caster: entity, target }
+            } else {
+                GameEvent::LifeDrainEnded { caster: entity, target }
+            });
+        }
+        _ => {}
     }
 }
 
-/// Interrupt an in-progress taming channel (e.g. the tamer moved). Removes the
-/// channeling state and emits TamingFailed so the visual stops. The druid must
-/// stand still (keep waiting) to tame.
-pub fn interrupt_taming(world: &mut World, entity: Entity, events: &mut EventQueue) {
-    let target = world.get::<&TamingInProgress>(entity).ok().map(|t| t.target);
-    if let Some(target) = target {
-        let _ = world.remove_one::<TamingInProgress>(entity);
-        events.push(GameEvent::TamingFailed { tamer: entity, target });
+/// `entity` stepped away: a channel that needs it to stand still is broken.
+pub fn break_channel_on_move(world: &mut World, entity: Entity, events: &mut EventQueue) {
+    if world.get::<&Channel>(entity).is_ok_and(|c| c.breaks_on_move) {
+        end_channel(world, entity, events, true);
+    }
+}
+
+/// `entity` took damage: a channel a hit breaks is broken. Called from the
+/// damage chokepoint, so every source of harm counts.
+pub fn break_channel_on_damage(world: &mut World, entity: Entity, events: &mut EventQueue) {
+    if world.get::<&Channel>(entity).is_ok_and(|c| c.breaks_on_damage) {
+        end_channel(world, entity, events, true);
     }
 }
 
@@ -819,9 +777,6 @@ fn complete_taming(
         threat_table: Vec::new(),
     });
 
-    // Remove taming state from player
-    let _ = world.remove_one::<TamingInProgress>(tamer);
-
     // Emit event
     events.push(GameEvent::TamingCompleted { tamer, target });
 }
@@ -838,11 +793,14 @@ pub fn apply_start_taming(
         return ActionResult::Invalid;
     }
 
-    // Add TamingInProgress component to the tamer
-    let _ = world.insert_one(tamer, TamingInProgress {
-        target,
-        progress: 0.0,
+    let _ = world.insert_one(tamer, Channel {
+        effect: ChannelEffect::Tame,
+        target: Some(target),
+        elapsed: 0.0,
         required: TAME_DURATION,
+        range: TAME_RANGE,
+        breaks_on_move: true,
+        breaks_on_damage: false,
     });
 
     // Start the ability cooldown
@@ -1182,7 +1140,7 @@ mod tests {
             apply_start_raise_dead(&mut world, caster, bones, &mut events),
             ActionResult::Invalid
         );
-        assert!(world.get::<&RaiseDeadInProgress>(caster).is_err());
+        assert!(world.get::<&Channel>(caster).is_err());
 
         // The skeleton falls -> a slot frees up and the channel starts.
         world.get::<&mut Health>(undead).unwrap().current = 0;
@@ -1191,7 +1149,7 @@ mod tests {
             apply_start_raise_dead(&mut world, caster, bones, &mut events),
             ActionResult::Completed
         );
-        assert!(world.get::<&RaiseDeadInProgress>(caster).is_ok());
+        assert!(world.get::<&Channel>(caster).is_ok_and(|c| c.effect == ChannelEffect::RaiseDead));
     }
 
     /// Out-of-range bones can't be raised (chebyshev range check).
@@ -1223,11 +1181,18 @@ mod tests {
             ActionResult::Completed
         );
 
-        complete_raise_dead(&mut world, caster, bones, &mut events);
+        // Keep waiting until the channel completes.
+        let grid = Grid::filled(12, 12, crate::tile::TileType::Floor);
+        let mut spatial = SpatialCache::rebuild_from_world(&world);
+        let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(3);
+        let waits = (RAISE_DEAD_CHANNEL_DURATION / ACTION_WAIT_DURATION).ceil() as usize;
+        for _ in 0..waits {
+            advance_channel(&mut world, &grid, &mut spatial, caster, ACTION_WAIT_DURATION, &mut events, &mut rng);
+        }
 
         // Bones consumed; channel state cleared.
         assert!(!world.contains(bones), "bones are consumed by the raise");
-        assert!(world.get::<&RaiseDeadInProgress>(caster).is_err());
+        assert!(world.get::<&Channel>(caster).is_err());
 
         // The corpse's loot survives as a ground pile on the same tile.
         let pile: Vec<(i32, i32, u32, usize)> = world
@@ -1285,5 +1250,37 @@ mod tests {
             &world,
             "a tamed companion must not drag a blocked tile around with it",
         );
+    }
+
+    #[test]
+    fn a_hit_breaks_only_the_channels_a_hit_breaks() {
+        use crate::components::{Attackable, StatusEffects};
+        let mut world = World::new();
+        let mut events = EventQueue::new();
+        let grid = Grid::filled(8, 8, crate::tile::TileType::Floor);
+        let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(5);
+        let channel = |effect, breaks_on_damage| Channel {
+            effect,
+            target: None,
+            elapsed: 0.0,
+            required: 3.0,
+            range: 0,
+            breaks_on_move: true,
+            breaks_on_damage,
+        };
+        let body = || (Position::new(2, 2), Health::new(50), StatusEffects::new(), Attackable);
+        let shouter = world.spawn(body());
+        world.insert_one(shouter, channel(ChannelEffect::Shout { radius: 5 }, true)).unwrap();
+        let tamer = world.spawn(body());
+        world.insert_one(tamer, channel(ChannelEffect::Tame, false)).unwrap();
+
+        for who in [shouter, tamer] {
+            crate::systems::combat::apply_damage(&mut world, &grid, who, 3, &mut rng, &mut events);
+        }
+        assert!(world.get::<&Channel>(shouter).is_err(), "a hit stops a shout");
+        assert!(world.get::<&Channel>(tamer).is_ok(), "taming shrugs off a hit");
+
+        break_channel_on_move(&mut world, tamer, &mut events);
+        assert!(world.get::<&Channel>(tamer).is_err(), "but not a step");
     }
 }

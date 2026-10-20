@@ -12,7 +12,7 @@ use crate::constants::*;
 use crate::events::{EventQueue, GameEvent, MissReason};
 use crate::queries;
 
-use super::{interrupt_life_drain_on_damage, ActionResult};
+use super::ActionResult;
 
 /// Whether a melee attack from `attacker` on `target` connects *now*: the
 /// target still exists, is still attackable and alive, and stands within
@@ -229,9 +229,6 @@ pub fn apply_melee_blow(
     // Hit-and-run attackers (bats) break off after the swing.
     crate::systems::ai::begin_hit_and_run_retreat(world, attacker);
 
-    // Interrupt life drain if target was channeling
-    interrupt_life_drain_on_damage(world, target, events);
-
     // Generate threat on the target for the attacker (enemy gains threat on whoever hit it)
     let threat_amount = damage as f32 * THREAT_PER_DAMAGE;
     crate::systems::ai::generate_threat(world, target, attacker, threat_amount);
@@ -397,8 +394,6 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
             damage,
         );
 
-        // Interrupt life drain if target was channeling
-        interrupt_life_drain_on_damage(world, *target, events);
 
         // Generate threat on cleave targets
         let cleave_threat = damage as f32 * THREAT_PER_DAMAGE;

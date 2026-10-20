@@ -13,7 +13,7 @@ use hecs::{Entity, World};
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, AlarmInProgress, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, TamingInProgress, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, Channel, ChannelEffect, Asleep, Boss, BossAbility, BossMinion, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, ContainerType, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, TamedBy, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -175,38 +175,20 @@ pub(crate) fn investigate_noise(world: &mut World, entity: Entity, player: Entit
     }
 }
 
-/// Advance alarm-shout channels and shout cooldowns each frame. When a shout
-/// finishes it wakes nearby unaware allies; an interrupted shout (component
-/// removed on damage) simply never completes.
-pub fn tick_alarms(world: &mut World, grid: &Grid, elapsed: f32) {
+/// Count down shout cooldowns in game time. The shout itself is a `Channel`,
+/// advanced by the shouter's Waits.
+pub fn tick_shout_cooldowns(world: &mut World, elapsed: f32) {
     // Decrement shout cooldowns.
     for (_, ai) in world.query_mut::<&mut ChaseAI>() {
         if ai.shout_cooldown > 0.0 {
             ai.shout_cooldown = (ai.shout_cooldown - elapsed).max(0.0);
         }
     }
-    // Advance active shouts; collect completed ones.
-    let mut completed: Vec<(Entity, (i32, i32))> = Vec::new();
-    for (id, (pos, alarm)) in world.query_mut::<(&Position, &mut AlarmInProgress)>() {
-        alarm.remaining -= elapsed;
-        if alarm.remaining <= 0.0 {
-            completed.push((id, (pos.x, pos.y)));
-        }
-    }
-    for (id, pos) in completed {
-        let _ = world.remove_one::<AlarmInProgress>(id);
-        crate::systems::noise::make_noise(world, grid, pos, SHOUT_WAKE_RADIUS);
-    }
-}
-
-/// Cancel an entity's in-progress alarm shout (e.g. when it takes damage).
-pub fn interrupt_shout_on_damage(world: &mut World, entity: Entity) {
-    let _ = world.remove_one::<AlarmInProgress>(entity);
 }
 
 /// Advance the role-specific ability cooldowns (shaman support casts, spider
 /// web-laying, boss unique abilities). Ticked in game-time alongside
-/// `tick_alarms`.
+/// `tick_shout_cooldowns`.
 pub fn tick_role_cooldowns(world: &mut World, elapsed: f32) {
     if elapsed <= 0.0 {
         return;
@@ -428,8 +410,8 @@ fn determine_action(
         return action_dispatch::determine_action_type(world, grid, entity, dx, dy);
     }
 
-    // Busy raising an alarm shout — keep channeling (advanced by tick_alarms).
-    if world.get::<&AlarmInProgress>(entity).is_ok() {
+    // Busy channeling (raising the alarm) — keep at it: each Wait advances it.
+    if world.get::<&Channel>(entity).is_ok() {
         return ActionType::Wait;
     }
 
@@ -655,7 +637,7 @@ fn determine_action(
 
     // Raise an alarm shout: a smart, aware enemy with a sleeping ally nearby and
     // no shout on cooldown begins a channeled shout (interruptible). It wakes
-    // nearby unaware allies on completion (see tick_alarms).
+    // nearby unaware allies on completion (a `Channel`, see `actions::advance_channel`).
     //
     // Support casters (Goblin Shaman) have a distinct alert behavior: they
     // shout the moment they spot the player, whether or not anyone nearby is
@@ -668,7 +650,15 @@ fn determine_action(
         let wants_shout = unaware_ally_near(world, entity_pos, SHOUT_WAKE_RADIUS, entity)
             || (is_support && just_spotted);
         if ready && wants_shout {
-            let _ = world.insert_one(entity, AlarmInProgress { remaining: SHOUT_DURATION });
+            let _ = world.insert_one(entity, Channel {
+                effect: ChannelEffect::Shout { radius: SHOUT_WAKE_RADIUS },
+                target: None,
+                elapsed: 0.0,
+                required: SHOUT_DURATION,
+                range: 0,
+                breaks_on_move: true,
+                breaks_on_damage: true,
+            });
             if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
                 ai.shout_cooldown = SHOUT_COOLDOWN;
             }
@@ -1133,7 +1123,11 @@ fn determine_companion_action(
     let blocking = ai_pathfinding_blocked(world, spatial_cache, true);
 
     // Don't attack an animal the owner is currently taming — let the channel finish.
-    let taming_target = world.get::<&TamingInProgress>(owner).ok().map(|t| t.target);
+    let taming_target = world
+        .get::<&Channel>(owner)
+        .ok()
+        .filter(|c| c.effect == ChannelEffect::Tame)
+        .and_then(|c| c.target);
 
     // Priority 1: Fight highest-threat entry in our own threat table
     // (enemies that attacked us or our owner)

@@ -8,7 +8,7 @@ use crate::events::{EventQueue, GameEvent, StairDirection};
 use crate::queries;
 use crate::spatial_cache::SpatialCache;
 
-use super::{apply_open_chest, interrupt_raise_dead, interrupt_taming, ActionResult};
+use super::{apply_open_chest, ActionResult};
 
 /// Apply movement effect
 pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> ActionResult {
@@ -16,10 +16,9 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
     let (world, grid) = (&mut **world, &mut **grid);
     let (spatial_cache, events, rng) = (&mut **spatial_cache, &mut **events, &mut **rng);
 
-    // Moving breaks any taming channel - the druid must stand still to tame.
-    interrupt_taming(world, entity, events);
-    // Likewise, moving breaks a Raise Dead channel.
-    interrupt_raise_dead(world, entity, events);
+    // Moving breaks a channel that needs you to stand still (taming,
+    // raising the dead).
+    super::break_channel_on_move(world, entity, events);
 
     // Get current position
     let current_pos = match queries::get_entity_position(world, entity) {

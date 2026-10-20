@@ -243,7 +243,7 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
         time_system::tick_ability_cooldowns(ctx.world, elapsed);
         time_system::tick_ranged_cooldowns(ctx.world, elapsed);
         systems::ai::tick_threat_decay(ctx.world, ctx.grid, ctx.spatial, elapsed);
-        systems::ai::tick_alarms(ctx.world, ctx.grid, elapsed);
+        systems::ai::tick_shout_cooldowns(ctx.world, elapsed);
         systems::ai::tick_role_cooldowns(ctx.world, elapsed);
 
         time_system::complete_action(ctx, next_entity);

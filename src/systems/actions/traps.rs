@@ -12,7 +12,7 @@ use crate::events::{EventQueue, GameEvent};
 use crate::systems::effects;
 use crate::tile::tile_ids;
 
-use super::{interrupt_life_drain_on_damage, ActionResult};
+use super::ActionResult;
 
 /// Whatever steps on a trap sets it off, and the trap is used up. A trap
 /// someone set spares them and their companions, and credits them with the
@@ -50,7 +50,6 @@ pub(crate) fn check_trap_trigger(
     match trap.effect {
         TrapEffect::Spike { damage: amount } | TrapEffect::Fire { damage: amount } => {
             damage = crate::systems::combat::apply_damage(world, grid, victim, amount, rng, events);
-            interrupt_life_drain_on_damage(world, victim, events);
             crate::systems::ai::wake_on_attacked(world, victim);
             if let Some(owner) = trap.owner {
                 let threat = damage as f32 * THREAT_PER_DAMAGE;
