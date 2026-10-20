@@ -102,6 +102,7 @@ pub fn draw_altar_window(
                             let odds =
                                 altar_blessing_chance(altar_item_value(instance)) * 100.0;
                             let response = ui.add(egui::ImageButton::new(image).frame(false));
+                            icons.paint_item_badge(ui.painter(), response.rect, item_type, egui::Color32::WHITE);
                             if response
                                 .on_hover_text(format!(
                                     "{} ({})\nChance of blessing: {:.0}%\n\n{}",

@@ -117,7 +117,8 @@ pub fn draw_shop_window(
                                     ))
                                     .uv(uv)
                                     .bg_fill(style::colors::PANEL_BG);
-                                    ui.add(image);
+                                    let icon = ui.add(image).rect;
+                                    icons.paint_item_badge(ui.painter(), icon, *item_type, egui::Color32::WHITE);
 
                                     // Item name and stock
                                     ui.vertical(|ui| {
@@ -174,7 +175,8 @@ pub fn draw_shop_window(
                                     ))
                                     .uv(uv)
                                     .bg_fill(style::colors::PANEL_BG);
-                                    ui.add(image);
+                                    let icon = ui.add(image).rect;
+                                    icons.paint_item_badge(ui.painter(), icon, *item_type, egui::Color32::WHITE);
 
                                     // Item name (stacks sell one at a time)
                                     if *count > 1 {

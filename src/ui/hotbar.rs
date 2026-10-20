@@ -444,6 +444,7 @@ fn draw_bar(
                 let count = count_of(item);
                 usable = count > 0;
                 paint_icon(ui, rect, icons.items_texture_id, icons.get_item_uv(item), slot_tint(usable), 1.0);
+                icons.paint_item_badge(ui.painter(), rect, item, slot_tint(usable));
                 if count > 1 {
                     draw_count_badge(ui, rect, count);
                 }
@@ -664,6 +665,9 @@ pub fn draw_drag_ghost(ctx: &egui::Context, icons: &UiIcons) {
             ));
             let ghost = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200);
             painter.image(tex, rect, uv, mul_tint(ghost, tint));
+            if let HotbarEntry::Item(item) = drag.entry {
+                icons.paint_item_badge(&painter, rect, item, ghost);
+            }
         }
     }
 }

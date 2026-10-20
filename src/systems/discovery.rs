@@ -80,16 +80,19 @@ pub fn roll_player_discovery(
     }
 }
 
-/// Mark a trap revealed and give it a visible, kind-tinted sprite.
+/// Mark a trap revealed and give it a visible, kind-tinted sprite: spikes for
+/// a spike trap, and for the rest a trap door (which keeps them apart from
+/// the pressure plates of the traps you set yourself).
 pub fn reveal_trap(world: &mut World, trap: Entity, kind: DungeonTrapKind) {
     if let Ok(mut t) = world.get::<&mut DungeonTrap>(trap) {
         t.revealed = true;
     }
+    let sprite = match kind {
+        DungeonTrapKind::Spike => tile_ids::SPIKES,
+        DungeonTrapKind::Fire | DungeonTrapKind::Snare | DungeonTrapKind::Alarm => tile_ids::TRAP_DOOR,
+    };
     let (r, g, b) = trap_tint(kind);
-    let _ = world.insert(
-        trap,
-        (Sprite::from_ref(tile_ids::TRAP_DOOR), SpriteTint { r, g, b }),
-    );
+    let _ = world.insert(trap, (Sprite::from_ref(sprite), SpriteTint { r, g, b }));
 }
 
 /// Convert a secret door into a normal closed (openable) door with a distinct
@@ -139,6 +142,11 @@ mod tests {
 
         assert!(world.get::<&Sprite>(trap).is_ok(), "revealed traps render");
         assert!(world.get::<&DungeonTrap>(trap).expect("trap comp").revealed);
+
+        let spikes = crate::spawning::spawn_dungeon_trap(&mut world, 4, 3, DungeonTrapKind::Spike);
+        reveal_trap(&mut world, spikes, DungeonTrapKind::Spike);
+        let sprite = world.get::<&Sprite>(spikes).map(|s| (s.sheet, s.tile_id)).ok();
+        assert_eq!(sprite, Some(tile_ids::SPIKES), "a spike trap shows its spikes");
     }
 
     #[test]

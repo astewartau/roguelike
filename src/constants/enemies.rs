@@ -229,8 +229,6 @@ pub const WEB_ROOT_DURATION: f32 = 2.0;
 pub const WEB_IGNITE_CHANCE: f64 = 0.8;
 /// How long an ignited web burns before it (and the web) are consumed.
 pub const WEB_BURN_DURATION: f32 = 3.0;
-/// White gauze tint for web sprites (repurposed tall-grass sprite).
-pub const WEB_TINT: (f32, f32, f32) = (1.6, 1.6, 1.8);
 
 // BOSSES (every 3rd floor — see spawning::bosses)
 /// Boss max-health multiplier over its base enemy.

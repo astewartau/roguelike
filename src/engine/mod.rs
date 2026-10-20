@@ -2478,7 +2478,7 @@ mod tests {
                 let mut batches = 0;
                 let mut last = None;
                 for e in &ents {
-                    for sheet in std::iter::once(e.sprite.sheet).chain(e.overlay.map(|o| o.sheet)) {
+                    for sheet in std::iter::once(e.sprite.sheet).chain(e.overlays.iter().map(|o| o.sprite.sheet)) {
                         if last != Some(sheet) {
                             batches += 1;
                             last = Some(sheet);

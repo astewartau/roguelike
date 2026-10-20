@@ -47,6 +47,8 @@ pub struct UiIcons {
     pub bread_uv: egui::Rect,
     pub apple_uv: egui::Rect,
     pub fire_trap_uv: egui::Rect,
+    /// The flames burning creatures wear (animated tiles), for Burning.
+    pub fire_uv: egui::Rect,
     /// Corner rivet for panel chrome (see `style::dungeon_window`)
     pub panel_rivet_uv: egui::Rect,
     pub arrow_uv: egui::Rect,
@@ -84,6 +86,9 @@ pub struct UiIcons {
     pub blood_uv: egui::Rect,
     /// Grabbed: the zombie's own face says who has hold of you.
     pub zombie_uv: egui::Rect,
+    /// Badges for the items that have one (`item_defs::badge`). Items-sheet
+    /// UVs, like the icons they're drawn over.
+    item_badge_uvs: std::collections::HashMap<ItemType, egui::Rect>,
 }
 
 impl UiIcons {
@@ -124,6 +129,7 @@ impl UiIcons {
             bread_uv: tileset.get_egui_uv(tile_ids::BREAD.0, tile_ids::BREAD.1),
             apple_uv: tileset.get_egui_uv(tile_ids::APPLE.0, tile_ids::APPLE.1),
             fire_trap_uv: tileset.get_egui_uv(tile_ids::FIRE_TRAP.0, tile_ids::FIRE_TRAP.1),
+            fire_uv: tileset.get_egui_uv(tile_ids::FIRE_EFFECT.0, tile_ids::FIRE_EFFECT.1),
             panel_rivet_uv: tileset.get_egui_uv(tile_ids::PANEL_RIVET.0, tile_ids::PANEL_RIVET.1),
             arrow_uv: tileset.get_egui_uv(tile_ids::ARROW.0, tile_ids::ARROW.1),
             water_flask_uv: tileset.get_egui_uv(tile_ids::BOTTLE_WATER.0, tile_ids::BOTTLE_WATER.1),
@@ -157,6 +163,29 @@ impl UiIcons {
             oil_puddle_uv: tileset.get_egui_uv(tile_ids::OIL_PUDDLE.0, tile_ids::OIL_PUDDLE.1),
             blood_uv: tileset.get_egui_uv(tile_ids::BLOOD_1.0, tile_ids::BLOOD_1.1),
             zombie_uv: tileset.get_egui_uv(tile_ids::ZOMBIE.0, tile_ids::ZOMBIE.1),
+            item_badge_uvs: crate::systems::item_defs::ITEM_DEFS
+                .iter()
+                .filter_map(|def| {
+                    let (sheet, id) = crate::systems::item_defs::badge(def.item_type)?;
+                    debug_assert_eq!(sheet, SpriteSheet::Items, "badges are drawn with the items texture");
+                    // No badges at all on an items.png older than them.
+                    tileset.has_tile(sheet, id).then(|| (def.item_type, tileset.get_egui_uv(sheet, id)))
+                })
+                .collect(),
+        }
+    }
+
+    /// Paint `item`'s badge, if it has one, over its icon painted in `rect`.
+    /// The badge is a whole cell, so it takes the icon's own rect and tint.
+    pub fn paint_item_badge(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        item: ItemType,
+        tint: egui::Color32,
+    ) {
+        if let Some(uv) = self.item_badge_uvs.get(&item) {
+            painter.image(self.items_texture_id, rect, *uv, tint);
         }
     }
 
@@ -228,7 +257,7 @@ impl UiIcons {
             E::Barkskin => (self.items_texture_id, self.barkskin_uv),
             E::Confused => (self.items_texture_id, self.blue_potion_uv),
             E::Feared => (self.tiles_texture_id, self.fear_uv),
-            E::Burning => (self.items_texture_id, self.fire_trap_uv),
+            E::Burning => (self.animated_tiles_texture_id, self.fire_uv),
             E::Rooted => (self.tiles_texture_id, self.snare_trap_uv),
             E::Stunned => (self.items_texture_id, self.stun_uv),
             E::Guarding => (self.texture_for_sheet(tile_ids::GUARD.0), self.guard_uv),

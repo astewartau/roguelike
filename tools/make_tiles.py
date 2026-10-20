@@ -43,6 +43,17 @@ PAL = {
     'K': '#7e3a1c',  # meat shadow
     'j': '#e8a060',  # meat highlight
     'u': '#e0a526',  # gold shade
+    # held torch: the stock torch's own handle colour (animated-tiles row 6)
+    't': '#e17b50',  # torch handle; skin shade on badges
+    # item badges
+    'O': '#1c1429',  # badge outline
+    's': '#fb9b72',  # skin
+    'i': '#d77bba',  # pink
+    # fire, from the rim of a flame (1) to its core (4): see FIRE_SHADES
+    '1': '#ff9a1f',
+    '2': '#ffc93c',
+    '3': '#ffe680',
+    '4': '#fffbe6',
 }
 
 def hex2rgba(s):
@@ -524,6 +535,396 @@ def light_sun():
     blob(g, disc, fill, 'A')
     return g
 
+# ================= HELD TORCH (drawn over its carrier) =================
+# The stock torch (animated-tiles row 6) is a floor sprite as long as a person
+# is tall: laid over a goblin or the player it hid their face and read as a
+# torch lying across them. This is a short one held up in the off hand.
+#
+# The renderer shifts the whole cell so HELD_TORCH_GRIP lands on the
+# carrier's hand (`tile_ids::off_hand_anchor` in src/tile.rs, which keeps a
+# copy of this point), so the grip is set at a typical hand position and the
+# art leans up and out from it.
+HELD_TORCH_GRIP = (23, 21)
+
+# Flame frames, bottom row resting on the torch head, drawn as a silhouette
+# ('Y') and coloured by `flame_shades` like every other flame. The sway and
+# the odd spark are what make it read as burning.
+TORCH_FLAMES = [
+    ["..Y..",
+     "..YY.",
+     ".YYY.",
+     ".YYYY",
+     "YYYYY",
+     ".YYY."],
+    ["...Y.",
+     "..YY.",
+     ".YYYY",
+     ".YYYY",
+     "YYYYY",
+     ".YYY."],
+    ["..Y..",
+     "..Y..",
+     ".YYY.",
+     ".YYY.",
+     "YYYYY",
+     "YYYYY",
+     ".YYY."],
+    [".Y...",
+     ".YY..",
+     ".YYY.",
+     "YYYY.",
+     "YYYYY",
+     ".YYY."],
+    ["Y....",
+     ".....",
+     "..Y..",
+     ".YYY.",
+     "YYYYY",
+     ".YYY."],
+    ["..Y..",
+     ".YY..",
+     ".YYY.",
+     "YYYY.",
+     "YYYYY",
+     ".YYY."],
+]
+
+def _held_torch_body(g):
+    """Handle and head. The handle leans out one pixel every three rows and
+    skips the two rows at the grip, so the carrier's own fist shows across it
+    instead of being painted over."""
+    gx, gy = HELD_TORCH_GRIP
+    for y in range(gy - 7, gy + 3):
+        if y in (gy, gy - 1):
+            continue
+        px(g, gx + round((gy - y) / 3), y, 't')
+    # head: pitch-soaked rag, the stock unlit torch's gray and navy
+    hline(g, gy - 8, gx + 1, gx + 3, 'd')
+    px(g, gx + 3, gy - 8, 'N')
+    return gx + 2, gy - 9  # where the flame's bottom-centre sits
+
+def held_torch(frame):
+    g = new_grid()
+    fx, fy = _held_torch_body(g)
+    rows = TORCH_FLAMES[frame]
+    flame = set()
+    for i, row in enumerate(rows):
+        y = fy - (len(rows) - 1) + i
+        for j, c in enumerate(row):
+            if c != '.':
+                flame.add((fx - 2 + j, y))
+    for (x, y), c in flame_shades(flame).items():
+        px(g, x, y, c)
+    return g
+
+def held_torch_unlit():
+    g = new_grid()
+    fx, fy = _held_torch_body(g)
+    # charred tip where the flame was
+    hline(g, fy, fx - 1, fx, 'N')
+    return g
+
+
+# ================= WORLD SPRITES =================
+# Things lying in the dungeon that the pack has no sprite for. They're drawn
+# over the floor, so they keep it showing through.
+
+def line(g, x0, y0, x1, y1, c):
+    """One-pixel line, by sampling (fine at this size)."""
+    n = max(abs(x1 - x0), abs(y1 - y0), 1)
+    for k in range(n + 1):
+        t = k / n
+        px(g, round(x0 + (x1 - x0) * t), round(y0 + (y1 - y0) * t), c)
+
+def sagging(g, x0, y0, x1, y1, toward, sag, c):
+    """A thread from (x0, y0) to (x1, y1) that sags `sag` pixels toward the
+    point `toward`, the way a web's spiral droops between its spokes."""
+    mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+    dx, dy = toward[0] - mx, toward[1] - my
+    d = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+    qx, qy = mx + dx / d * sag, my + dy / d * sag
+    n = int(max(abs(x1 - x0), abs(y1 - y0))) * 2 + 2
+    for k in range(n + 1):
+        t = k / n
+        x = (1 - t) ** 2 * x0 + 2 * (1 - t) * t * qx + t * t * x1
+        y = (1 - t) ** 2 * y0 + 2 * (1 - t) * t * qy + t * t * y1
+        px(g, round(x), round(y), c)
+
+# ---------------- WEB ----------------
+# Was a white-tinted wheat sheaf. Spokes out to the edges of the tile and a
+# spiral sagging between them; thin enough that the floor shows through.
+def web():
+    cx, cy = 16, 15
+    # spoke ends, a little irregular so it reads as spun rather than ruled
+    ends = [(16, 0), (29, 2), (31, 15), (28, 29), (15, 31), (3, 28), (0, 14), (4, 2)]
+    g = new_grid()
+    for frac, c in ((0.84, 'b'), (0.6, 'b'), (0.36, 'b')):
+        pts = [(cx + (ex - cx) * frac, cy + (ey - cy) * frac) for ex, ey in ends]
+        for i in range(len(pts)):
+            (x0, y0), (x1, y1) = pts[i], pts[(i + 1) % len(pts)]
+            sagging(g, x0, y0, x1, y1, (cx, cy), 1.5 * frac + 0.5, c)
+    for ex, ey in ends:
+        line(g, cx, cy, ex, ey, 'B')
+    return g
+
+# ---------------- FOUNTAIN ----------------
+# Was the pack's pit, tinted blue, which read as a hole in the floor. A stone
+# basin of water, seen from the front like the fire pit, with a spout.
+def fountain():
+    g = new_grid()
+    cx, cy = 15.5, 19.5
+    outer = ellipse_set(cx, cy, 14.2, 8.2)
+    inner = ellipse_set(cx, cy - 0.5, 11.2, 5.6)
+    # front face of the basin wall, below the rim
+    for (x, y) in list(outer):
+        if y >= cy:
+            for k in range(1, 4):
+                if (x, y + k) not in outer:
+                    px(g, x, y + k, 'd' if k < 3 else 'N')
+    # rim: lit from above, darker toward the front
+    for (x, y) in outer - inner:
+        px(g, x, y, 'B' if y < cy - 3 else ('b' if y < cy + 4 else 'C'))
+    # mortar joints
+    for (x, y) in [(3, 18), (28, 18), (8, 25), (16, 27), (23, 25), (9, 13), (22, 13)]:
+        if (x, y) in outer - inner:
+            px(g, x, y, 'd')
+    # water: deeper under the far rim, ripples toward the front
+    for (x, y) in inner:
+        px(g, x, y, 'N' if y < cy - 4 else 'S')
+    for (x, y) in [(7, 20), (8, 20), (12, 22), (13, 22), (20, 21), (21, 21), (23, 19), (10, 18)]:
+        px(g, x, y, 'c')
+    # spout: a stone post in the middle, water falling either side of it
+    rect(g, 15, 9, 16, 18, 'b')
+    vline(g, 16, 9, 18, 'C')
+    hline(g, 8, 14, 17, 'B')
+    hline(g, 9, 14, 17, 'b')
+    for (x, y) in [(13, 9), (12, 10), (12, 11), (11, 12), (11, 13), (11, 15),
+                   (18, 9), (19, 10), (19, 11), (20, 12), (20, 13), (20, 15)]:
+        px(g, x, y, 'c')
+    px(g, 15, 6, 'c'); px(g, 16, 5, 'c'); px(g, 15, 7, 'S'); px(g, 16, 7, 'S')
+    return g
+
+
+# ================= FIRE COLOURS =================
+# The pack draws every flame (fires, braziers, fire pits, torches, lanterns)
+# in one flat #fafa82, a pale yellow that leans green. They're repainted in
+# amber: a flame is coloured by how deep inside it each pixel sits, deepest
+# being the shortest run of flame to its left, right or above. Not below, so
+# a flame is hottest at its base, and its tips and edges are the rim colour.
+
+STOCK_FLAME = (250, 250, 130)  # #fafa82
+FIRE_SHADES = '1234'           # PAL keys, rim to core
+
+def flame_shades(flame):
+    """Palette key for every pixel of a flame, a set of (x, y)."""
+    def run(x, y, dx, dy):
+        n = 0
+        while (x, y) in flame:
+            n += 1
+            x += dx
+            y += dy
+        return n
+    return {
+        (x, y): FIRE_SHADES[min(run(x, y, -1, 0), run(x, y, 1, 0), run(x, y, 0, -1), len(FIRE_SHADES)) - 1]
+        for (x, y) in flame
+    }
+
+def repaint_flames(sheet):
+    """Repaint every stock-flame pixel of a sheet, a cell at a time (no
+    flame crosses a cell), leaving everything else as it was."""
+    out = sheet.copy()
+    pix = out.load()
+    for cy in range(0, sheet.height, 32):
+        for cx in range(0, sheet.width, 32):
+            flame = {(x, y) for y in range(cy, cy + 32) for x in range(cx, cx + 32)
+                     if pix[x, y][3] and pix[x, y][:3] == STOCK_FLAME}
+            for (x, y), c in flame_shades(flame).items():
+                pix[x, y] = hex2rgba(PAL[c])
+    return out
+
+def repaint_animated_tiles(sheet_dir):
+    """Write animated-tiles.png with its flames repainted, always from the
+    stock sheet, which is kept beside it as animated-tiles.stock.png (saved
+    the first time). So re-running redoes it from scratch, and putting the
+    stock file back undoes it."""
+    import os, shutil
+    path = os.path.join(sheet_dir, 'animated-tiles.png')
+    stock = os.path.join(sheet_dir, 'animated-tiles.stock.png')
+    if not os.path.exists(stock):
+        shutil.copyfile(path, stock)
+    repaint_flames(Image.open(stock).convert('RGBA')).save(path)
+    print(f'repainted the flames in {path} (stock sheet kept as {stock})')
+
+
+# ================= ITEM BADGES (what a potion or scroll does) =================
+# Every scroll shares one sprite and the potions differ only in colour, so
+# each gets a small glyph drawn over its icon. A badge is a whole 32x32 cell
+# with the glyph in the top-right corner (the hotbar's key label is top-left
+# and stack counts are bottom-right), so it lines up with the item sprite
+# under it at any size: the inventory, hotbar and the ground all draw it over
+# the item's own cell. A dark outline keeps it legible over the item.
+
+def badge(rows):
+    """Stamp `rows` (palette chars, '.' clear) into the top-right corner of
+    a fresh cell and ring it with a one-pixel outline."""
+    g = new_grid()
+    w = max(len(r) for r in rows)
+    x0, y0 = 31 - w, 1
+    filled = set()
+    for j, row in enumerate(rows):
+        for i, c in enumerate(row):
+            if c != '.':
+                px(g, x0 + i, y0 + j, c)
+                filled.add((x0 + i, y0 + j))
+    for (x, y) in filled:
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if (x + dx, y + dy) not in filled:
+                    px(g, x + dx, y + dy, 'O')
+    return g
+
+def badge_heal():          # Health Potion: a heart
+    return badge([".RRR.RRR.",
+                  "RRhRRRRRr",
+                  "RhRRRRRRr",
+                  "RRRRRRRRr",
+                  ".RRRRRRr.",
+                  "..RRRRr..",
+                  "...RRr...",
+                  "....r...."])
+
+def badge_regen():         # Regeneration Potion: a green cross
+    return badge(["...GGG...",
+                  "...GGg...",
+                  "...GGg...",
+                  "GGGGGGGGG",
+                  "GGGGGGGGg",
+                  "GgggGgggg",
+                  "...GGg...",
+                  "...GGg...",
+                  "...ggg..."])
+
+def badge_strength():      # Strength Potion: a flexed arm
+    return badge(["......ss.",
+                  ".....ssss",
+                  ".....ssss",
+                  "......sss",
+                  "..ss..sss",
+                  ".shss.sss",
+                  "sssssssss",
+                  "ssssssstt",
+                  ".ttttttt."])
+
+def badge_confusion():     # Confusion Potion: a swirl
+    return badge(["..iiiii..",
+                  ".i.....i.",
+                  "i..iii..i",
+                  "i.i...i.i",
+                  "i.i.i.i.i",
+                  "i.i..i..i",
+                  "i..i...i.",
+                  ".i..iii..",
+                  "..i......"])
+
+def badge_invisibility():  # Scroll of Invisibility: an eye, struck out
+    # the Reveal eye, faded and struck through; the strike is cut into the
+    # eye with the outline colour so it stays a line, not a smear
+    eye = ["..........",
+           "..ccccc...",
+           ".ccCCCcc..",
+           "ccCNNNCcc.",
+           ".ccCCCcc..",
+           "..ccccc...",
+           ".........."]
+    g = [list(r) for r in eye]
+    for k in range(7):
+        x, y = 8 - k, k
+        g[y][x] = 'R'
+        if x + 1 < 10 and g[y][x + 1] != '.':
+            g[y][x + 1] = 'O'
+    return badge([''.join(r) for r in g])
+
+def badge_speed():         # Scroll of Speed: a lightning bolt
+    return badge(["...YYYY",
+                  "..YYYY.",
+                  ".YYYY..",
+                  "YYYYYYY",
+                  "..YYYY.",
+                  ".YYYu..",
+                  ".YYu...",
+                  "YYu....",
+                  "Yu....."])
+
+def badge_protection():    # Scroll of Protection: a shield
+    return badge(["ccccccccC",
+                  "cSSSSSSSC",
+                  "cSSyySSSC",
+                  "cSSyySSSC",
+                  ".cSSSSSC.",
+                  ".cSSSSSC.",
+                  "..cSSSC..",
+                  "...cSC...",
+                  "....C...."])
+
+def badge_blink():         # Scroll of Blink: a dotted leap, landing
+    # a sparkle where you land, two motes trailing back to where you were
+    return badge(["......l...",
+                  "......P...",
+                  ".....lPl..",
+                  "...lPPcPPl",
+                  ".....lPl..",
+                  "..l...P...",
+                  "......l...",
+                  "l........."])
+
+def badge_fear():          # Scroll of Fear: a skull
+    return badge([".BBBBBBB.",
+                  "BBBBBBBBb",
+                  "BBDDBDDBb",
+                  "BBDDBDDBb",
+                  "BBBBDBBBb",
+                  ".BBBBBBb.",
+                  "..BbBbB..",
+                  "..B.B.B.."])
+
+def badge_fireball():      # Scroll of Fireball: a flame
+    return badge(["....f....",
+                  "...ff..f.",
+                  "..fff.ff.",
+                  "..fYfff..",
+                  ".ffYYff.f",
+                  ".fYYyYff.",
+                  "ffYyyyYff",
+                  ".fYyyyYf.",
+                  "..fffff.."])
+
+def badge_reveal():        # Scroll of Reveal: an open eye
+    return badge(["..ccccc..",
+                  ".ccSSScc.",
+                  "ccSNNNScc",
+                  ".ccSSScc.",
+                  "..ccccc.."])
+
+def badge_mapping():       # Scroll of Mapping: a folded map, X marks the spot
+    return badge(["TyyyTyyyT",
+                  "TywyTyyyT",
+                  "TyywTRyRT",
+                  "TyyyTwRyT",
+                  "TyyyTRyRT",
+                  "TyyyTyyyT",
+                  "TTTTTTTTT"])
+
+def badge_slow():          # Scroll of Slow: an hourglass
+    return badge(["wwwwwwwww",
+                  ".cyyyyyC.",
+                  "..cyyyC..",
+                  "...cyC...",
+                  "....y....",
+                  "...c.C...",
+                  "..c.y.C..",
+                  ".cyyyyyC.",
+                  "wwwwwwwww"])
+
 ICONS = [
     ('raise_dead', raise_dead),
     ('life_drain', life_drain),
@@ -540,12 +941,31 @@ ICONS = [
     ('xp_star', xp_star),
     ('hunger_drumstick', hunger_drumstick),
     ('light_sun', light_sun),
+] + [
+    (f'held_torch_{i}', (lambda i=i: held_torch(i))) for i in range(len(TORCH_FLAMES))
+] + [
+    ('held_torch_unlit', held_torch_unlit),
+    ('badge_heal', badge_heal),
+    ('badge_regen', badge_regen),
+    ('badge_strength', badge_strength),
+    ('badge_confusion', badge_confusion),
+    ('badge_invisibility', badge_invisibility),
+    ('badge_speed', badge_speed),
+    ('badge_protection', badge_protection),
+    ('badge_blink', badge_blink),
+    ('badge_fear', badge_fear),
+    ('badge_fireball', badge_fireball),
+    ('badge_reveal', badge_reveal),
+    ('badge_mapping', badge_mapping),
+    ('badge_slow', badge_slow),
+    ('web', web),
+    ('fountain', fountain),
 ]
 
 # Where each icon lives in assets/32rogues/items.png, as (1-based row, 0-based
 # column): the same convention as `rc()` in src/tile.rs, and items.txt's
 # "row.letter" notation (26.h is row 26, column 7). Stock items.png is 26 rows;
-# these fill the free end of row 26 and a 27th row added for them.
+# these fill the free end of row 26 and rows added after it.
 SLOTS = {
     'raise_dead': (26, 5),        # 26.f
     'life_drain': (26, 6),        # 26.g
@@ -562,6 +982,24 @@ SLOTS = {
     'tumble': (27, 6),            # 27.g
     'crippling_shot': (27, 7),    # 27.h
     'stun': (27, 8),              # 27.i
+    # held torch: six lit frames in a row (tile_ids::HELD_TORCH), then unlit
+    **{f'held_torch_{i}': (28, i) for i in range(len(TORCH_FLAMES))},  # 28.a-f
+    'held_torch_unlit': (28, 6),  # 28.g
+    'badge_heal': (28, 7),        # 28.h
+    'badge_regen': (28, 8),       # 28.i
+    'badge_strength': (28, 9),    # 28.j
+    'badge_confusion': (28, 10),  # 28.k
+    'badge_invisibility': (29, 0),  # 29.a
+    'badge_speed': (29, 1),       # 29.b
+    'badge_protection': (29, 2),  # 29.c
+    'badge_blink': (29, 3),       # 29.d
+    'badge_fear': (29, 4),        # 29.e
+    'badge_fireball': (29, 5),    # 29.f
+    'badge_reveal': (29, 6),      # 29.g
+    'badge_mapping': (29, 7),     # 29.h
+    'badge_slow': (29, 8),        # 29.i
+    'web': (29, 9),               # 29.j
+    'fountain': (29, 10),         # 29.k
 }
 
 # Stock sprites copied into items.png rather than drawn: the inventory and HUD
@@ -571,6 +1009,7 @@ SLOTS = {
 COPIES = {
     (27, 9): ('animated-tiles.png', 6, 0),   # 27.j torch, lit (first frame)
     (27, 10): ('animated-tiles.png', 5, 0),  # 27.k torch, unlit
+    (30, 0): ('tiles.png', 17, 9),           # 30.a pressure plate (the fire trap item)
 }
 
 def to_image(g):
@@ -582,11 +1021,16 @@ def to_image(g):
     return im
 
 def paste_into(sheet_path):
-    """Write every icon into its slot in items.png, growing a stock 26-row
-    sheet to 27 rows. Each slot is cleared first, so re-running is harmless
-    and a redrawn icon replaces the old one."""
+    """Write every icon into its slot in items.png, growing the sheet (stock
+    is 26 rows) to as many rows as SLOTS and COPIES reach, after repainting
+    the flames in animated-tiles.png beside it. Each slot is cleared first,
+    so re-running is harmless and a redrawn icon replaces the old one."""
+    import os
+    sheet_dir = os.path.dirname(sheet_path)
+    # First, so the torch copied into COPIES below is already amber.
+    repaint_animated_tiles(sheet_dir)
     sheet = Image.open(sheet_path).convert('RGBA')
-    rows = max(r for r, _ in SLOTS.values())
+    rows = max(r for r, _ in list(SLOTS.values()) + list(COPIES))
     if sheet.height < rows * 32:
         grown = Image.new('RGBA', (sheet.width, rows * 32), (0, 0, 0, 0))
         grown.paste(sheet, (0, 0))
@@ -595,8 +1039,6 @@ def paste_into(sheet_path):
         row, col = SLOTS[name]
         box = (col * 32, (row - 1) * 32, col * 32 + 32, row * 32)
         sheet.paste(to_image(fn()), box)  # plain paste: replaces the slot, alpha and all
-    import os
-    sheet_dir = os.path.dirname(sheet_path)
     for (row, col), (source, src_row, src_col) in COPIES.items():
         src = Image.open(os.path.join(sheet_dir, source)).convert('RGBA')
         tile = src.crop((src_col * 32, (src_row - 1) * 32, src_col * 32 + 32, src_row * 32))

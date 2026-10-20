@@ -388,7 +388,7 @@ pub fn ignite_fuel(world: &mut World, id: Entity) {
                 (
                     OnFire { remaining: fuel.burn_time },
                     CausesBurning,
-                    AnimatedSprite::fire_pit(),
+                    AnimatedSprite::flames(),
                     LightSource::brazier(),
                 ),
             );
@@ -1717,5 +1717,17 @@ mod tests {
             .map(|s| s.effects.iter().any(|e| e.effect_type == EffectType::Burning))
             .unwrap_or(false);
         assert!(burning, "entity on the spill tile catches fire");
+    }
+
+    #[test]
+    fn burning_fuel_shows_open_flames_not_a_fire_pit() {
+        let mut world = World::new();
+        let oil = crate::spawning::spawn_oil_puddle(&mut world, 2, 2);
+        ignite_fuel(&mut world, oil);
+        let grass = crate::spawning::spawn_fire_patch(&mut world, 3, 2);
+        for burning in [oil, grass] {
+            let anim = *world.get::<&AnimatedSprite>(burning).unwrap();
+            assert_eq!((anim.sheet, anim.base_tile_id), crate::tile::tile_ids::FIRE_EFFECT);
+        }
     }
 }

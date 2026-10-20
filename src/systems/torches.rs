@@ -24,11 +24,10 @@ use hecs::{Entity, World};
 
 use crate::components::{
     CarriedTorch, Container, Equipment, GroundItemPile, ItemInstance, ItemType, LightSource,
-    OnFire, OverlaySprite, Position,
+    OnFire, Position,
 };
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
-use crate::tile::tile_ids;
 
 fn lit_torch(world: &World, entity: Entity) -> bool {
     world.get::<&CarriedTorch>(entity).map(|t| t.lit).unwrap_or(false)
@@ -44,30 +43,27 @@ fn held_kind(world: &World, entity: Entity) -> Option<ItemType> {
 /// Make an entity's carried light match what is in its off hand: a `Torch`
 /// burns (light, lit torch drawn in hand), an `UnlitTorch` is carried dark,
 /// anything else means no torch at all. Call after any change to the off-hand
-/// slot or the torch in it.
+/// slot or the torch in it. The torch in hand is drawn from the
+/// `CarriedTorch` itself (see `systems::rendering`).
 pub fn sync_held_torch(world: &mut World, entity: Entity) {
     match held_kind(world, entity) {
         Some(ItemType::Torch) => {
-            let _ = world.insert(
-                entity,
-                (
-                    CarriedTorch { lit: true },
-                    LightSource::torch(),
-                    OverlaySprite::from_ref(tile_ids::TORCH),
-                ),
-            );
+            let _ = world.insert(entity, (CarriedTorch { lit: true }, LightSource::torch()));
         }
         Some(ItemType::UnlitTorch) => {
             let _ = world.remove_one::<LightSource>(entity);
-            let _ = world.insert(
-                entity,
-                (CarriedTorch { lit: false }, OverlaySprite::from_ref(tile_ids::TORCH_UNLIT)),
-            );
+            let _ = world.insert_one(entity, CarriedTorch { lit: false });
         }
-        _ => {
-            let _ = world.remove::<(CarriedTorch, LightSource, OverlaySprite)>(entity);
-        }
+        _ => stop_carrying(world, entity),
     }
+}
+
+/// Take away an entity's torch and its light. One at a time: removing them
+/// as a bundle removes nothing at all from a carrier of an unlit torch, which
+/// has no light to remove.
+fn stop_carrying(world: &mut World, entity: Entity) {
+    let _ = world.remove_one::<CarriedTorch>(entity);
+    let _ = world.remove_one::<LightSource>(entity);
 }
 
 /// Put out an entity's torch, if it carries a lit one: no more light, and the
@@ -89,7 +85,6 @@ pub fn douse_torch(world: &mut World, entity: Entity, events: &mut EventQueue) {
             torch.lit = false;
         }
         let _ = world.remove_one::<LightSource>(entity);
-        let _ = world.insert_one(entity, OverlaySprite::from_ref(tile_ids::TORCH_UNLIT));
     }
     events.push(GameEvent::TorchDoused { entity });
 }
@@ -226,7 +221,7 @@ pub fn drop_torch(world: &mut World, entity: Entity) {
         return;
     };
     let pos = world.get::<&Position>(entity).map(|p| (p.x, p.y)).ok();
-    let _ = world.remove::<(CarriedTorch, LightSource, OverlaySprite)>(entity);
+    stop_carrying(world, entity);
     if let (true, Some((x, y))) = (torch.lit, pos) {
         crate::spawning::spawn_dropped_torch(world, x, y);
     }
@@ -439,6 +434,25 @@ mod tests {
         assert!(world.get::<&CarriedTorch>(p).is_err());
         let stowed = events.drain().filter(|e| matches!(e, GameEvent::ItemStowed { .. })).count();
         assert_eq!(stowed, 2, "a bow stowed for the torch, then the torch for the bow");
+    }
+
+    #[test]
+    fn putting_away_or_dying_with_an_unlit_torch_leaves_nothing_in_hand() {
+        // An unlit torch has no light. Clearing the hand used to remove the
+        // torch and its light as one bundle, which removes nothing at all
+        // when one is missing, so the torch stayed drawn in the hand.
+        let mut world = World::new();
+        let p = holder(&mut world, &[ItemType::Bow, ItemType::UnlitTorch]);
+        let mut events = EventQueue::new();
+        equip(&mut world, p, ItemType::UnlitTorch, &mut events);
+        assert!(world.get::<&CarriedTorch>(p).is_ok_and(|t| !t.lit), "carried dark");
+        equip(&mut world, p, ItemType::Bow, &mut events);
+        assert!(world.get::<&CarriedTorch>(p).is_err(), "the bow took both hands");
+
+        let g = goblin(&mut world, 2, 2);
+        douse_torch(&mut world, g, &mut events);
+        drop_torch(&mut world, g);
+        assert!(world.get::<&CarriedTorch>(g).is_err(), "a corpse holds no torch");
     }
 
     #[test]

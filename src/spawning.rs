@@ -69,7 +69,8 @@ pub struct EnemyDef {
     pub sees_in_dark: bool,
     /// Carries a lit torch: lights its surroundings (and you, when close),
     /// sets an oiled target alight with a swing, and drops it burning on
-    /// death. See `systems::torches`.
+    /// death. See `systems::torches`. Drawn in its off hand without an
+    /// `overlay_sprite` (see `tile_ids::off_hand_anchor`).
     pub torch: bool,
     /// Airborne (bats): flies over furniture and ground hazards (`Flying`)
     pub flying: bool,
@@ -395,7 +396,7 @@ pub mod enemies {
     pub const GOBLIN: EnemyDef = EnemyDef {
         name: "Goblin",
         sprite: tile_ids::GOBLIN,
-        overlay_sprite: Some(tile_ids::TORCH), // carried, lit
+        overlay_sprite: None,
         health: GOBLIN_HEALTH,
         speed: GOBLIN_SPEED,
         sight_radius: GOBLIN_SIGHT_RADIUS,
@@ -555,7 +556,7 @@ pub mod enemies {
     pub const GOBLIN_SHAMAN: EnemyDef = EnemyDef {
         name: "Goblin Shaman",
         sprite: tile_ids::GOBLIN_SHAMAN,
-        overlay_sprite: Some(tile_ids::TORCH), // carried, lit
+        overlay_sprite: None,
         health: GOBLIN_SHAMAN_HEALTH,
         speed: GOBLIN_SHAMAN_SPEED,
         sight_radius: GOBLIN_SHAMAN_SIGHT_RADIUS,
@@ -1198,7 +1199,7 @@ pub fn spawn_fire_patch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        AnimatedSprite::fire_pit(),
+        AnimatedSprite::flames(),
         LightSource::brazier(),
         CausesBurning,
         Fuel::grass_fire(),
@@ -1395,24 +1396,29 @@ pub fn spawn_furniture(
     kind: crate::components::FurnitureKind,
 ) -> hecs::Entity {
     use crate::components::{Furniture, FurnitureKind, Name, SpriteTint};
-    use crate::constants::{ALTAR_TINT, FOUNTAIN_TINT, SHRINE_TINT};
+    use crate::constants::{ALTAR_TINT, SHRINE_TINT};
 
+    // The fountain is drawn in its own colours; the others are stock
+    // sprites tinted to suit.
     let (sprite, tint, name) = match kind {
-        FurnitureKind::Fountain => (tile_ids::FOUNTAIN, FOUNTAIN_TINT, "Fountain"),
-        FurnitureKind::Altar => (tile_ids::ALTAR, ALTAR_TINT, "Altar"),
-        FurnitureKind::Shrine => (tile_ids::SHRINE, SHRINE_TINT, "Shrine"),
+        FurnitureKind::Fountain => (tile_ids::FOUNTAIN, None, "Fountain"),
+        FurnitureKind::Altar => (tile_ids::ALTAR, Some(ALTAR_TINT), "Altar"),
+        FurnitureKind::Shrine => (tile_ids::SHRINE, Some(SHRINE_TINT), "Shrine"),
     };
 
     let pos = Position::new(x, y);
-    world.spawn((
+    let entity = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         Sprite::from_ref(sprite),
-        SpriteTint { r: tint.0, g: tint.1, b: tint.2 },
         Name::new(name),
         Furniture { kind, used: false },
         BlocksMovement,
-    ))
+    ));
+    if let Some((r, g, b)) = tint {
+        let _ = world.insert_one(entity, SpriteTint { r, g, b });
+    }
+    entity
 }
 
 /// Spawn a secret door sealing a hidden room: renders as the given wall
@@ -1446,16 +1452,13 @@ pub fn spawn_web(
     y: i32,
     spinner: Option<hecs::Entity>,
 ) -> hecs::Entity {
-    use crate::components::{Fuel, SpriteTint, Web};
-    use crate::constants::WEB_TINT;
+    use crate::components::{Fuel, Web};
 
     let pos = Position::new(x, y);
-    let (r, g, b) = WEB_TINT;
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         Sprite::from_ref(tile_ids::WEB),
-        SpriteTint { r, g, b },
         Web { spinner },
         Fuel::web(),
     ))

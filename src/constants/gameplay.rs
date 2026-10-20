@@ -163,7 +163,6 @@ pub const TRAP_TINT_SPIKE: (f32, f32, f32) = (0.85, 0.85, 1.0);
 pub const TRAP_TINT_FIRE: (f32, f32, f32) = (1.0, 0.45, 0.3);
 pub const TRAP_TINT_SNARE: (f32, f32, f32) = (0.5, 0.95, 0.5);
 pub const TRAP_TINT_ALARM: (f32, f32, f32) = (1.0, 0.9, 0.3);
-pub const FOUNTAIN_TINT: (f32, f32, f32) = (0.45, 0.7, 1.0);
 pub const ALTAR_TINT: (f32, f32, f32) = (1.0, 0.55, 0.55);
 pub const SHRINE_TINT: (f32, f32, f32) = (1.0, 0.9, 0.5);
 /// Grey tint for spent one-use furniture (dry fountain, inert shrine)

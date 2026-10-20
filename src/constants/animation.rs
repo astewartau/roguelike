@@ -226,3 +226,16 @@ pub const HITSTOP_HEAVY: f32 = 0.1;
 /// hit-stop. 0.0 is a dead freeze; a little above zero is a slow-motion
 /// crawl instead.
 pub const HITSTOP_TIME_SCALE: f32 = 0.0;
+
+// =============================================================================
+// SPRITE ANIMATION
+// =============================================================================
+
+/// Seconds each frame of the open-flames animation (animated-tiles row 9) is
+/// shown: fuel burning on the floor and the fire on a burning creature.
+/// Lower flickers faster; much above 0.15 it stops reading as fire.
+pub const FIRE_FRAME_DURATION: f32 = 0.1;
+/// Seconds each frame of a held torch's flame is shown, the same pace as a
+/// torch lying burning on the floor (`AnimatedSprite::torch`). Lower flickers
+/// faster.
+pub const HELD_TORCH_FRAME_DURATION: f32 = 0.12;

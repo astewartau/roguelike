@@ -423,6 +423,7 @@ fn draw_inventory_column(
                         .uv(uv)
                         .tint(UiIcons::item_ui_tint(slot.item_type));
                         image.paint_at(ui, rect);
+                        icons.paint_item_badge(ui.painter(), rect, slot.item_type, egui::Color32::WHITE);
 
                         // Draw stack count if more than 1
                         if slot.count > 1 {

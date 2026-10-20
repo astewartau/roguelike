@@ -206,6 +206,16 @@ impl MultiTileset {
             .texture
     }
 
+    /// Whether the loaded sheet is big enough to hold `tile_id`. The custom
+    /// rows at the bottom of items.png exist only once tools/make_tiles.py
+    /// has been run on it; past the end, a UV clamps to the sheet's last row
+    /// and draws a smear.
+    pub fn has_tile(&self, sheet: SpriteSheet, tile_id: u32) -> bool {
+        self.sheets
+            .get(&sheet)
+            .is_some_and(|s| tile_id < s.columns * s.rows)
+    }
+
     /// Get row count for a sheet
     #[allow(dead_code)]
     pub fn rows(&self, sheet: SpriteSheet) -> u32 {

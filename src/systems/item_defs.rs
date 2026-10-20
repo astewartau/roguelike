@@ -131,6 +131,30 @@ pub enum ArmorSlot {
     OffHand,
 }
 
+/// The badge drawn over an item's icon to say what it does, for the items
+/// whose sprite doesn't: every scroll shares one, a potion's colour alone has
+/// to be learned, and a fire trap is a plain pressure plate. `None` for
+/// everything else.
+pub fn badge(item: ItemType) -> Option<(SpriteSheet, u32)> {
+    Some(match item {
+        ItemType::HealthPotion => tile_ids::BADGE_HEAL,
+        ItemType::RegenerationPotion => tile_ids::BADGE_REGEN,
+        ItemType::StrengthPotion => tile_ids::BADGE_STRENGTH,
+        ItemType::ConfusionPotion => tile_ids::BADGE_CONFUSION,
+        ItemType::ScrollOfInvisibility => tile_ids::BADGE_INVISIBILITY,
+        ItemType::ScrollOfSpeed => tile_ids::BADGE_SPEED,
+        ItemType::ScrollOfProtection => tile_ids::BADGE_PROTECTION,
+        ItemType::ScrollOfBlink => tile_ids::BADGE_BLINK,
+        ItemType::ScrollOfFear => tile_ids::BADGE_FEAR,
+        ItemType::ScrollOfFireball => tile_ids::BADGE_FIREBALL,
+        ItemType::ScrollOfReveal => tile_ids::BADGE_REVEAL,
+        ItemType::ScrollOfMapping => tile_ids::BADGE_MAPPING,
+        ItemType::ScrollOfSlow => tile_ids::BADGE_SLOW,
+        ItemType::FireTrap => tile_ids::BADGE_FIREBALL,
+        _ => return None,
+    })
+}
+
 /// Minimum effective Intelligence required to Study this scroll into a
 /// permanent ability. `None` for anything that isn't a learnable scroll
 /// (Reveal/Mapping stay consumable utility).
@@ -964,6 +988,21 @@ mod tests {
         for item in all_items {
             let def = get_def(item);
             assert_eq!(def.item_type, item);
+        }
+    }
+
+    #[test]
+    fn every_potion_and_scroll_has_its_own_badge() {
+        let mut seen = std::collections::HashSet::new();
+        for def in ITEM_DEFS {
+            // Water flasks file under potions, but their bottle of water says
+            // what they are already.
+            let flask = matches!(def.item_type, ItemType::WaterFlaskEmpty | ItemType::WaterFlaskFull);
+            if flask || !matches!(def.category, ItemCategory::Potion | ItemCategory::Scroll) {
+                continue;
+            }
+            let b = badge(def.item_type).unwrap_or_else(|| panic!("{} has no badge", def.name));
+            assert!(seen.insert(b), "{} shares its badge", def.name);
         }
     }
 

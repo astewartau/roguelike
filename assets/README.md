@@ -29,7 +29,7 @@ wrong sprite for everything rather than failing loudly.
 | `tiles.png` | 17 | 544×832 (17×26) | terrain, walls, doors, stairs, traps |
 | `rogues.png` | 7 | 224×224 (7×7) | player characters |
 | `monsters.png` | 12 | 384×416 (12×13) | enemies |
-| `items.png` | 11 | 352×864 (11×27) | weapons, armour, potions, food, ability icons |
+| `items.png` | 11 | 352×960 (11×30) | weapons, armour, potions, food, ability icons |
 | `animated-tiles.png` | 11 | 352×384 (11×12) | fire pits, torches, braziers |
 
 The `.txt` files that ship alongside each sheet are 32rogues' own row/column
@@ -43,9 +43,9 @@ why the sheets are not committed here.
 
 ### `items.png` must be extended past stock
 
-This is the one file a fresh clone gets wrong. The sheet must be **27 rows
-tall (864 px)**, because the ability and HUD icons live in slots the stock
-pack does not have. [src/tile.rs](../src/tile.rs) addresses them through `rc(row, col, cols)`,
+This is the one file a fresh clone gets wrong. The sheet must be **30 rows
+tall (960 px)**, because the ability and HUD icons, the held torch, the item
+badges and a few world sprites live in slots the stock pack does not have. [src/tile.rs](../src/tile.rs) addresses them through `rc(row, col, cols)`,
 where **`row` is 1-based** and `col` is 0-based:
 
 - row 26, columns f–g — `raise dead`, `life drain`
@@ -56,15 +56,23 @@ where **`row` is 1-based** and `col` is 0-based:
 - row 27, columns j–k — the torch item, lit and unlit: not drawn but
   **copied** from `animated-tiles.png` (rows 6 and 5), because the inventory
   only draws from the items sheet
+- row 28, columns a–g — the torch a creature holds, drawn over its sprite:
+  six lit frames, then unlit
+- row 28 columns h–k and row 29 columns a–i — item badges: a small glyph in
+  the top-right corner of an otherwise empty cell, drawn over each potion and
+  scroll to say what it does
+- row 29, columns j–k — the spider web and the fountain, which no sheet has
+- row 30, column a — the pressure plate, **copied** from `tiles.png` (17.j)
+  as the fire trap item's inventory icon
 
-[`tools/make_tiles.py`](../tools/make_tiles.py) draws these fifteen icons in the
+[`tools/make_tiles.py`](../tools/make_tiles.py) draws all of these in the
 32rogues palette. It is **tracked in the repository** — unlike everything else
 under `assets/` — and needs nothing but Pillow, so the icons are reproducible
 from a fresh clone rather than something you have to obtain from the author.
 
 With `--paste` it writes every icon into its slot in `items.png` itself
 (and copies in the stock sprites listed in its `COPIES` table),
-growing a stock 26-row sheet to 27 rows. Re-running it is harmless: each slot
+growing a stock 26-row sheet to 30 rows. Re-running it is harmless: each slot
 is overwritten with the same pixels. Without `--paste` it writes individual
 32×32 PNGs to `$OUTDIR` (default `/tmp`) plus a magnified `contact.png`
 preview, for looking at the art without touching the sheet.
@@ -78,7 +86,18 @@ OUTDIR=assets/custom python3 tools/make_tiles.py   # previews only
 If you skip this, the UV lookup runs off the bottom of the texture. Because the
 textures use `CLAMP_TO_EDGE`, that does not error — the affected abilities just
 draw a smear of the sheet's last row. Silent, so it is worth checking the
-hotbar icons after a first build.
+hotbar icons after a first build. (World sprites, held torches and item
+badges check the sheet's size first and are simply left out.)
+
+### `--paste` also repaints the fire in `animated-tiles.png`
+
+The pack draws every flame — fires, braziers, fire pits, torches, lanterns —
+in one flat `#fafa82`, a pale yellow that leans green. `--paste` repaints
+those pixels in amber, rim to core (`FIRE_SHADES` in the script), and leaves
+the rest of the sheet alone. It always works from the stock sheet, which it
+saves beside it as `animated-tiles.stock.png` the first time, so re-running
+redoes it from scratch. To go back to the stock flames, copy that file over
+`animated-tiles.png`. Skip the step and the game just shows the stock fire.
 
 ## Required for sound: `assets/sounds/`
 
@@ -139,8 +158,9 @@ assets/
 │   ├── tiles.png                 ** 544×832
 │   ├── rogues.png                ** 224×224
 │   ├── monsters.png              ** 384×416
-│   ├── items.png                 ** 352×864, extended past stock
-│   ├── animated-tiles.png        ** 352×384
+│   ├── items.png                 ** 352×960, extended past stock
+│   ├── animated-tiles.png        ** 352×384, flames repainted
+│   ├── animated-tiles.stock.png  (the stock sheet, kept by make_tiles.py)
 │   ├── *.txt                     (sheet documentation, unread)
 │   └── LICENSE.txt
 ├── custom/

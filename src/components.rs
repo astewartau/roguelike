@@ -472,8 +472,9 @@ impl Sprite {
     }
 }
 
-/// Overlay sprite component - rendered on top of the main sprite
-/// Used for displaying equipped weapons on enemies
+/// Overlay sprite component - rendered on top of the main sprite (an archer's
+/// bow). A carried torch is drawn from `CarriedTorch` instead, since it moves
+/// to the hand, and a ground item's badge from the pile's top item.
 #[derive(Debug, Clone, Copy)]
 pub struct OverlaySprite {
     pub sheet: SpriteSheet,
@@ -525,6 +526,21 @@ impl AnimatedSprite {
             base_tile_id: tile_ids::FIRE_PIT.1,
             frame_count: 6,
             frame_duration: 0.15, // ~6.7 FPS, full cycle in 0.9 seconds
+            phase_offset: rand::random(),
+            z_order: 1,
+        }
+    }
+
+    /// Open flames on the floor, with random phase: burning oil, grass,
+    /// webs. The same fire burning creatures wear, not the fire pit, which
+    /// is a ring of stones and read as a campfire wherever oil caught.
+    pub fn flames() -> Self {
+        use crate::tile::tile_ids;
+        Self {
+            sheet: SpriteSheet::AnimatedTiles,
+            base_tile_id: tile_ids::FIRE_EFFECT.1,
+            frame_count: 6,
+            frame_duration: crate::constants::FIRE_FRAME_DURATION,
             phase_offset: rand::random(),
             z_order: 1,
         }

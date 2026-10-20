@@ -1,7 +1,7 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, Door, EffectType, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
-use crate::constants::INVISIBLE_PLAYER_ALPHA;
+use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Container, Door, EffectType, GroundItemPile, OverlaySprite, PlacedFireTrap, Position, Sprite, SpriteTint, StatusEffects, VisualPosition};
+use crate::constants::{FIRE_FRAME_DURATION, HELD_TORCH_FRAME_DURATION, INVISIBLE_PLAYER_ALPHA};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
 use crate::fov::Fov;
@@ -37,9 +37,53 @@ pub struct RenderEntity {
     pub alpha: f32, // Transparency (1.0 = opaque, 0.0 = invisible)
     #[allow(dead_code)] // Reserved for shader effect flags
     pub effects: u32, // Bitfield of active effects
-    pub overlay: Option<Sprite>, // Optional overlay sprite (e.g., weapon)
+    /// Drawn over the sprite, in order: an archer's bow or a ground item's
+    /// badge, then a carried torch.
+    pub overlays: Vec<Overlay>,
     /// RGB color tint multiplied with the sprite texture (1,1,1 = untinted)
     pub tint: (f32, f32, f32),
+}
+
+/// A sprite drawn over an entity's own, untinted.
+#[derive(Debug, Clone, Copy)]
+pub struct Overlay {
+    pub sprite: Sprite,
+    /// Shift from the entity's position, in tiles (world y points up). A held
+    /// torch moves to its carrier's hand.
+    pub offset: (f32, f32),
+    /// Flipped left to right.
+    pub mirrored: bool,
+}
+
+impl Overlay {
+    /// Drawn square over the entity, as it is on the sheet.
+    pub fn in_place(sprite: Sprite) -> Self {
+        Self { sprite, offset: (0.0, 0.0), mirrored: false }
+    }
+}
+
+/// The torch a creature carries, in the off hand of the sprite it's drawn
+/// with: the lit one flickers (frames desynced per carrier so a band of
+/// goblins doesn't pulse in step), the unlit one doesn't.
+fn held_torch_overlay(carrier: Entity, sprite: &Sprite, lit: bool, real_time: f32) -> Overlay {
+    let hand = tile_ids::off_hand_anchor((sprite.sheet, sprite.tile_id));
+    let (grip_x, grip_y) = tile_ids::HELD_TORCH_GRIP;
+    // Mirroring the cell mirrors where the grip sits in it.
+    let grip_x = if hand.mirrored { tile_ids::CELL_PX - 1 - grip_x } else { grip_x };
+    let cell = tile_ids::CELL_PX as f32;
+    // Sheet pixels count down from the top; world y counts up.
+    let offset = ((hand.x - grip_x) as f32 / cell, (grip_y - hand.y) as f32 / cell);
+    let tile_id = if lit {
+        let frame = (real_time / HELD_TORCH_FRAME_DURATION) as u32 + carrier.id();
+        tile_ids::HELD_TORCH.1 + frame % tile_ids::HELD_TORCH_FRAMES
+    } else {
+        tile_ids::HELD_TORCH_UNLIT.1
+    };
+    Overlay {
+        sprite: Sprite::new(tile_ids::HELD_TORCH.0, tile_id),
+        offset,
+        mirrored: hand.mirrored,
+    }
 }
 
 /// Update visibility based on illumination and line-of-sight.
@@ -309,8 +353,29 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         // Check if this is an open door (render darker)
         let is_open_door = world.get::<&Door>(id).map(|door| door.is_open).unwrap_or(false);
 
-        // Check for overlay sprite (e.g., weapon)
-        let overlay = world.get::<&OverlaySprite>(id).ok().map(|o| Sprite::new(o.sheet, o.tile_id));
+        // A pile of items shows whatever is on top of it, badge and all, so
+        // taking that item uncovers the next rather than leaving its picture
+        // behind. (A pile of nothing but gold keeps its coins.)
+        let pile_top = if world.get::<&GroundItemPile>(id).is_ok() {
+            world.get::<&Container>(id).ok().and_then(|c| c.items.first().map(|i| i.kind))
+        } else {
+            None
+        };
+        let sprite = &pile_top
+            .map(|kind| Sprite::from_ref(crate::systems::item_defs::get_def(kind).sprite))
+            .unwrap_or(*sprite);
+
+        // Overlays: a bow on an archer, a ground item's badge, a carried torch.
+        let mut overlays: Vec<Overlay> = Vec::new();
+        if let Ok(o) = world.get::<&OverlaySprite>(id) {
+            overlays.push(Overlay::in_place(Sprite::new(o.sheet, o.tile_id)));
+        }
+        if let Some(badge) = pile_top.and_then(crate::systems::item_defs::badge) {
+            overlays.push(Overlay::in_place(Sprite::from_ref(badge)));
+        }
+        if let Ok(torch) = world.get::<&CarriedTorch>(id) {
+            overlays.push(held_torch_overlay(id, sprite, torch.lit, real_time));
+        }
 
         // Per-entity color tint (e.g., fire arrows), lifted toward the
         // hit-flash colour while this entity is still flashing from a hit.
@@ -338,7 +403,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 brightness: 1.0,
                 alpha,
                 effects: effects::NONE,
-                overlay,
+                overlays,
                 tint,
             });
         } else if is_visible {
@@ -359,7 +424,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 brightness,
                 alpha: 1.0,
                 effects: entity_effects,
-                overlay,
+                overlays,
                 tint,
             };
             // Actors go on top layer, everything else on ground layer
@@ -378,7 +443,9 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 brightness: FOG_BRIGHTNESS,
                 alpha: 1.0,
                 effects: effects::NONE,
-                overlay: None, // Don't show overlays in fog
+                // Only non-actors are remembered in fog: a ground item keeps
+                // its badge there.
+                overlays,
                 tint,
             });
         }
@@ -416,7 +483,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 brightness: tile_brightness,
                 alpha: 1.0,
                 effects: effects::NONE,
-                overlay: None,
+                overlays: Vec::new(),
                 tint: NO_TINT,
             });
         } else if is_explored {
@@ -428,7 +495,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 brightness: FOG_BRIGHTNESS,
                 alpha: 1.0,
                 effects: effects::NONE,
-                overlay: None,
+                overlays: Vec::new(),
                 tint: NO_TINT,
             });
         }
@@ -456,8 +523,8 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 .unwrap_or(false);
 
             if is_visible {
-                // Calculate fire animation frame (row 9 has 6 frames at 0.1s each)
-                let frame_duration = 0.1;
+                // Calculate fire animation frame (row 9 has 6 frames)
+                let frame_duration = FIRE_FRAME_DURATION;
                 let frame_count = 6;
                 let adjusted_time = real_time + (pos.x as f32 * 0.1 + pos.y as f32 * 0.07); // Phase offset
                 let frame = ((adjusted_time / frame_duration) as u32) % frame_count;
@@ -475,7 +542,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                     brightness: (tile_brightness + 0.2).min(1.0), // Fire is bright
                     alpha: 0.8, // Slightly transparent so entity shows through
                     effects: effects::BURNING, // Mark for third-pass rendering
-                    overlay: None,
+                    overlays: Vec::new(),
                     tint: NO_TINT,
                 });
             }
@@ -493,7 +560,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
 
         if is_visible {
             // Calculate fire animation frame (same as burning entities)
-            let frame_duration = 0.1;
+            let frame_duration = FIRE_FRAME_DURATION;
             let frame_count = 6;
             let adjusted_time = real_time + (pos.x as f32 * 0.1 + pos.y as f32 * 0.07);
             let frame = ((adjusted_time / frame_duration) as u32) % frame_count;
@@ -511,7 +578,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 brightness: (tile_brightness + 0.3).min(1.2), // Trap fire is bright
                 alpha: 0.9,
                 effects: effects::BURNING,
-                overlay: None,
+                overlays: Vec::new(),
                 tint: NO_TINT,
             });
         }
@@ -552,6 +619,95 @@ pub fn reveal_enemies(world: &World, grid: &mut Grid, current_time: f32) {
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spawning::enemies::{GOBLIN, GOBLIN_SHAMAN};
+    use crate::tile::TileType;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    /// The held torch drawn on whichever entity wears `sprite`, at `real_time`.
+    fn torch_on(world: &World, grid: &Grid, player: Entity, sprite: (SpriteSheet, u32), real_time: f32) -> Overlay {
+        let drawn = collect_renderables(world, grid, player, real_time);
+        let carrier = drawn
+            .iter()
+            .find(|e| (e.sprite.sheet, e.sprite.tile_id) == sprite)
+            .expect("the carrier is drawn");
+        *carrier
+            .overlays
+            .iter()
+            .find(|o| o.sprite.sheet == tile_ids::HELD_TORCH.0)
+            .expect("with a torch")
+    }
+
+    fn lit_grid() -> Grid {
+        let mut grid = Grid::filled(9, 9, TileType::Floor);
+        for tile in &mut grid.tiles {
+            tile.visible = true;
+            tile.explored = true;
+        }
+        grid
+    }
+
+    #[test]
+    fn a_pile_shows_its_top_item_and_that_items_badge() {
+        use crate::components::{Container, ItemInstance, ItemType};
+        let mut world = World::new();
+        let grid = lit_grid();
+        let at = Position::new(0, 0);
+        let player = world.spawn((at, VisualPosition::from_position(&at), Sprite::from_ref(tile_ids::FIGHTER)));
+        let pile = crate::systems::inventory::spawn_ground_item(
+            &mut world,
+            3,
+            3,
+            ItemInstance::plain(ItemType::ScrollOfFireball),
+        );
+        crate::systems::inventory::spawn_ground_item(&mut world, 3, 3, ItemInstance::plain(ItemType::Sword));
+        let drawn = |world: &World| {
+            let all = collect_renderables(world, &grid, player, 0.0);
+            let e = all.iter().find(|e| (e.x, e.y) == (3.0, 3.0)).expect("the pile is drawn");
+            let badges: Vec<_> = e.overlays.iter().map(|o| (o.sprite.sheet, o.sprite.tile_id)).collect();
+            ((e.sprite.sheet, e.sprite.tile_id), badges)
+        };
+
+        assert_eq!(drawn(&world), (tile_ids::SCROLL, vec![tile_ids::BADGE_FIREBALL]));
+        world.get::<&mut Container>(pile).unwrap().items.remove(0);
+        assert_eq!(drawn(&world), (tile_ids::SWORD, vec![]), "taking the scroll uncovers the sword");
+    }
+
+    #[test]
+    fn a_carried_torch_is_drawn_in_the_hand_and_flickers_while_lit() {
+        let mut world = World::new();
+        let grid = lit_grid();
+        let at = Position::new(0, 0);
+        let player = world.spawn((at, VisualPosition::from_position(&at), Sprite::from_ref(tile_ids::FIGHTER)));
+        let mut rng = StdRng::seed_from_u64(1);
+        let goblin = GOBLIN.spawn(&mut world, 4, 4, &mut rng);
+        GOBLIN_SHAMAN.spawn(&mut world, 6, 4, &mut rng);
+
+        // The grip (23, 21) goes to the goblin's hand at (20, 22): three
+        // pixels left and one down, and down is -y in the world.
+        let lit = torch_on(&world, &grid, player, tile_ids::GOBLIN, 0.0);
+        assert_eq!(lit.offset, (-3.0 / 32.0, -1.0 / 32.0));
+        assert!(!lit.mirrored);
+        let later = torch_on(&world, &grid, player, tile_ids::GOBLIN, HELD_TORCH_FRAME_DURATION);
+        assert_ne!(lit.sprite.tile_id, later.sprite.tile_id, "the flame flickers");
+
+        // The shaman's staff fills its right hand, so it holds the torch
+        // mirrored in its left, where the mirrored grip (8, 21) already is.
+        let shaman = torch_on(&world, &grid, player, tile_ids::GOBLIN_SHAMAN, 0.0);
+        assert!(shaman.mirrored);
+        assert_eq!(shaman.offset, (0.0, -1.0 / 32.0));
+
+        let mut events = crate::events::EventQueue::new();
+        crate::systems::torches::douse_torch(&mut world, goblin, &mut events);
+        for t in [0.0, HELD_TORCH_FRAME_DURATION] {
+            let out = torch_on(&world, &grid, player, tile_ids::GOBLIN, t);
+            assert_eq!(out.sprite.tile_id, tile_ids::HELD_TORCH_UNLIT.1, "a doused torch is dark and still");
         }
     }
 }

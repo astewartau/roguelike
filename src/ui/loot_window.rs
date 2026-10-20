@@ -194,6 +194,7 @@ fn draw_loot_section(
                 item_name.clone()
             };
             let response = ui.add(egui::ImageButton::new(image).frame(false));
+            icons.paint_item_badge(ui.painter(), response.rect, item_type, egui::Color32::WHITE);
 
             // Affix lines for the hover tooltip. Unidentified gear
             // shows its rarity but hides components behind "???".

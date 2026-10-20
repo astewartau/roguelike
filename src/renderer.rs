@@ -1127,9 +1127,14 @@ impl Renderer {
                     continue;
                 }
 
-                let layers = std::iter::once((entity.sprite, entity.tint))
-                    .chain(entity.overlay.map(|o| (o, (1.0, 1.0, 1.0))));
-                for (sprite, tint) in layers {
+                let layers = std::iter::once((entity.sprite, entity.tint, (0.0, 0.0), false))
+                    .chain(entity.overlays.iter().map(|o| (o.sprite, (1.0, 1.0, 1.0), o.offset, o.mirrored)));
+                for (sprite, tint, (dx, dy), mirrored) in layers {
+                    // A held torch or a badge on a sheet that predates them
+                    // is left out rather than drawn as a smear.
+                    if !tileset.has_tile(sprite.sheet, sprite.tile_id) {
+                        continue;
+                    }
                     if batch_sheet != Some(sprite.sheet) {
                         if let Some(sheet) = batch_sheet {
                             self.draw_sprite_batch(sheet, &instance_data, tileset);
@@ -1139,12 +1144,14 @@ impl Renderer {
                     }
 
                     let uv = tileset.get_uv(sprite.sheet, sprite.tile_id);
+                    // Swapping the u ends draws the cell flipped left to right.
+                    let (u0, u1) = if mirrored { (uv.u1, uv.u0) } else { (uv.u0, uv.u1) };
                     instance_data.extend_from_slice(&[
-                        entity.x,
-                        entity.y,
-                        uv.u0,
+                        entity.x + dx,
+                        entity.y + dy,
+                        u0,
                         uv.v0,
-                        uv.u1,
+                        u1,
                         uv.v1,
                         entity.brightness,
                         entity.alpha,
