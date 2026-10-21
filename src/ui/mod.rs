@@ -406,6 +406,16 @@ pub fn run_ui(
 
     let mut actions = UiActions::default();
 
+    // With the developer tools shown this is an editor's view, not play:
+    // the player's own UI (the status window, the hotbars, the windows they
+    // open, aiming) is put away, and any of those windows that were open
+    // are closed. What shows the world (health bars over creatures, damage,
+    // the message log, what's under the cursor) stays.
+    let editing = dev.visible;
+    if editing {
+        while ui_state.close_open_menus() {}
+    }
+
     // Get status bar data
     let status_data = get_status_bar_data(world, player_entity, grid);
 
@@ -483,10 +493,12 @@ pub fn run_ui(
         draw_attack_telegraphs(ctx, camera, &attack_telegraph_data, player_idle);
 
         // Player buff auras (draw first so they're behind everything)
-        draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());
+        if !editing {
+            draw_player_buff_auras(ctx, camera, buff_aura_data.as_ref());
+        }
 
         // Targeting overlay (draw first so it's behind other UI)
-        if let Some(ref data) = targeting_data {
+        if let Some(ref data) = targeting_data.as_ref().filter(|_| !editing) {
             draw_targeting_overlay(ctx, camera, data);
         }
 
@@ -512,24 +524,30 @@ pub fn run_ui(
             tile_info::draw_tile_info_panel(ctx, &hover_info, hud_top, hud_right);
         }
 
-        // Status bar (always visible)
-        let status_rect = draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time, hud_top);
+        // Status bar (whenever playing)
+        let status_rect = if editing {
+            None
+        } else {
+            draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time, hud_top)
+        };
 
         // Scrolling combat/message log (bottom-left)
         draw_message_log(ctx, &ui_state.message_log);
 
         // Quick-use hotbars (items + abilities, bottom-center)
-        draw_hotbars(
-            ctx,
-            world,
-            player_entity,
-            icons,
-            &mut ui_state.hotbar_main,
-            &mut ui_state.hotbar_shift,
-            &mut ui_state.hotbar_qer,
-            &mut ui_state.hotbar_anim,
-            &mut actions,
-        );
+        if !editing {
+            draw_hotbars(
+                ctx,
+                world,
+                player_entity,
+                icons,
+                &mut ui_state.hotbar_main,
+                &mut ui_state.hotbar_shift,
+                &mut ui_state.hotbar_qer,
+                &mut ui_state.hotbar_anim,
+                &mut actions,
+            );
+        }
 
         // Floating damage numbers
         draw_damage_numbers(ctx, vfx_effects, camera);
@@ -625,7 +643,9 @@ pub fn run_ui(
         }
 
         // Drag preview icon under the cursor (drawn last so it's on top)
-        draw_drag_ghost(ctx, icons);
+        if !editing {
+            draw_drag_ghost(ctx, icons);
+        }
     });
 
     actions
