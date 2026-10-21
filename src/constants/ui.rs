@@ -252,13 +252,11 @@ pub const CONTEXT_MENU_MIN_WIDTH: f32 = 150.0;
 pub const CONTEXT_MENU_CURSOR_OFFSET: f32 = 4.0;
 
 /// Starting width of a developer tools panel (the one a rail icon opens), in
-/// egui points. It floats over the map beside the rail, and can be resized.
+/// egui points. It floats over the map beside the rail, as tall as what it
+/// shows, and can be made wider or narrower.
 pub const DEVTOOLS_PANEL_WIDTH: f32 = 340.0;
-/// Starting height of a developer tools panel, as a share of the screen's
-/// height (less the edge gaps). Lower leaves more map showing below it.
-pub const DEVTOOLS_PANEL_HEIGHT_SHARE: f32 = 0.8;
-/// The smallest a developer tools panel can be resized to, in egui points.
-pub const DEVTOOLS_PANEL_MIN_SIZE: [f32; 2] = [260.0, 220.0];
+/// The narrowest a developer tools panel can be made, in egui points.
+pub const DEVTOOLS_PANEL_MIN_WIDTH: f32 = 260.0;
 /// Gap between the developer tools' bars and panels and the screen's edge,
 /// and between each other, in egui points.
 pub const DEVTOOLS_EDGE_GAP: f32 = 8.0;

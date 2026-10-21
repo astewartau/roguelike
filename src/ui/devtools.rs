@@ -10,7 +10,7 @@
 use crate::camera::Camera;
 use crate::constants::{
     CAMERA_SHAKE_BOSS_ABILITY, CAMERA_SHAKE_EXPLOSION, CAMERA_SHAKE_MAX_AMPLITUDE, CAMERA_SHAKE_PLAYER_SWING,
-    DEVTOOLS_EDGE_GAP, DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_HEIGHT_SHARE, DEVTOOLS_PANEL_MIN_SIZE, DEVTOOLS_PANEL_WIDTH,
+    DEVTOOLS_EDGE_GAP, DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_MIN_WIDTH, DEVTOOLS_PANEL_WIDTH,
     DEVTOOLS_STATUS_MAX_WIDTH,
 };
 use crate::devtools::paint::PAINTABLE;
@@ -190,9 +190,11 @@ fn rail(ctx: &egui::Context, dev: &mut DevTools) -> egui::Rect {
 }
 
 /// The open tool's panel, `right` points in from the screen's right edge
-/// (beside the rail): its name, then its contents, scrolling when they're
-/// taller than the panel. Each tool's panel can be resized from its left
-/// and bottom edges, and keeps its own size. Returns where it was drawn.
+/// (beside the rail): its name, then its contents. It's as tall as what it
+/// shows (a floor tile's inspection is short, the spawn list long),
+/// scrolling once that's taller than the screen. Each tool's panel can be
+/// made wider or narrower from its left edge, and keeps its own width.
+/// Returns where it was drawn.
 fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, right: f32) -> Option<egui::Rect> {
     // Inspecting is a way of clicking the map: its panel only appears once
     // something has been picked.
@@ -202,17 +204,20 @@ fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, 
     let screen = ctx.screen_rect();
     let tallest = screen.height() - 2.0 * DEVTOOLS_EDGE_GAP;
     let mut open = true;
+    let frame = look::floating_frame(egui::Margin::same(14.0));
+    let chrome = frame.total_margin().sum().y;
     let shown = egui::Window::new(dev.tab.name())
         .id(egui::Id::new(("devtools_panel", dev.tab.name())))
         .title_bar(false)
-        .frame(look::floating_frame(egui::Margin::same(14.0)))
+        .frame(frame)
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-right, DEVTOOLS_EDGE_GAP))
-        .resizable(true)
-        .default_size([DEVTOOLS_PANEL_WIDTH, tallest * DEVTOOLS_PANEL_HEIGHT_SHARE])
-        .min_size(DEVTOOLS_PANEL_MIN_SIZE)
-        .max_height(tallest)
+        // Width by hand; height always follows the contents.
+        .resizable([true, false])
+        .default_width(DEVTOOLS_PANEL_WIDTH)
+        .min_width(DEVTOOLS_PANEL_MIN_WIDTH)
         .show(ctx, |ui| {
             look::apply(ui);
+            let top = ui.cursor().top();
             ui.horizontal(|ui| {
                 ui.heading(format!("{}  {}", dev.tab.icon(), dev.tab.name()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -231,16 +236,20 @@ fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, 
                 look::search_box(ui, &mut dev.search, "Search everything");
                 ui.add_space(4.0);
             }
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match dev.tab {
-                DevTab::Spawn if building => super::devtools_prefab::prefab_parts(ui, dev, art),
-                DevTab::Spawn => spawn_tab(ui, dev, art),
-                DevTab::Paint => paint_tab(ui, dev, art),
-                DevTab::Player => player_tab(ui, dev, view),
-                DevTab::World => world_tab(ui, dev, view),
-                DevTab::Inspect => inspect_tab(ui, dev, view, art),
-                DevTab::Overlays => overlays_tab(ui, dev),
-                DevTab::Effects => effects_tab(ui, dev),
-            });
+            let used = ui.cursor().top() - top;
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .max_height((tallest - chrome - used).max(0.0))
+                .show(ui, |ui| match dev.tab {
+                    DevTab::Spawn if building => super::devtools_prefab::prefab_parts(ui, dev, art),
+                    DevTab::Spawn => spawn_tab(ui, dev, art),
+                    DevTab::Paint => paint_tab(ui, dev, art),
+                    DevTab::Player => player_tab(ui, dev, view),
+                    DevTab::World => world_tab(ui, dev, view),
+                    DevTab::Inspect => inspect_tab(ui, dev, view, art),
+                    DevTab::Overlays => overlays_tab(ui, dev),
+                    DevTab::Effects => effects_tab(ui, dev),
+                });
         });
     if !open {
         dev.close_panel();
