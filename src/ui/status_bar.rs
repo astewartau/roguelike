@@ -548,7 +548,7 @@ pub fn draw_status_bar(
     // Points to keep below the top of the screen (clear of the developer
     // tools' toolbar).
     top: f32,
-) {
+) -> Option<egui::Rect> {
     let health_percent = if data.health_max > 0 {
         data.health_current as f32 / data.health_max as f32
     } else {
@@ -573,6 +573,7 @@ pub fn draw_status_bar(
 
     // The window sizes itself to its content: the rows below come and go, and
     // summing their heights by hand only ever drifts out of step with them.
+    // Where it landed is returned, for what has to keep clear of it.
     style::dungeon_window(
         ctx,
         icons,
@@ -768,5 +769,6 @@ pub fn draw_status_bar(
                 });
             }
         },
-    );
+    )
+    .map(|response| response.rect)
 }

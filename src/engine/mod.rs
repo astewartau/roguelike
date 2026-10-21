@@ -258,7 +258,7 @@ impl GameEngine {
     }
 
     /// Start a sandbox: an empty walled arena, nobody in it, the developer
-    /// tools open on the spawn tab with the fog lifted and the world clock
+    /// tools shown (no panel open) with the fog lifted and the world clock
     /// on Hold (Run sets it going). Placing a player there makes them
     /// `class`.
     pub fn start_sandbox(&mut self, class: PlayerClass, camera: &mut Camera) {
@@ -271,7 +271,6 @@ impl GameEngine {
         let ui_state = GameUiState::new(state.player_entity);
         self.begin(state, ui_state);
         self.dev.visible = true;
-        self.dev.open_panel(crate::devtools::DevTab::Spawn);
         self.dev.no_fog = true;
         self.dev.status = Some("An empty world. Place a player, or creatures, then Run the clock.".into());
     }

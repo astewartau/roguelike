@@ -513,7 +513,7 @@ pub fn run_ui(
         }
 
         // Status bar (always visible)
-        draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time, hud_top);
+        let status_rect = draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time, hud_top);
 
         // Scrolling combat/message log (bottom-left)
         draw_message_log(ctx, &ui_state.message_log);
@@ -575,7 +575,7 @@ pub fn run_ui(
             ctx,
             dev,
             &DevArt { icons, tileset },
-            &DevView { world, grid, player: player_entity, game_time },
+            &DevView { world, grid, player: player_entity, game_time, hud_left: status_rect.map_or(0.0, |r| r.max.x) },
         );
 
         // Loot window (if chest is open)

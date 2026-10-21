@@ -45,6 +45,9 @@ pub struct DevView<'a> {
     pub grid: &'a Grid,
     pub player: hecs::Entity,
     pub game_time: f32,
+    /// Right edge of the HUD's Status window at the top left (0 if it
+    /// isn't showing), for panels to open beside rather than over.
+    pub hud_left: f32,
 }
 
 /// Draw the tools (if shown) and record what they cover, for the camera and
@@ -63,8 +66,9 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
     let rail = rail(ctx, dev);
     let mut covered_left = rail.min.x;
     if dev.panel_open {
-        // A panel starts beside the rail, below the toolbar.
-        let home = egui::pos2(rail.min.x - DEVTOOLS_EDGE_GAP, toolbar.max.y + DEVTOOLS_EDGE_GAP);
+        // A panel starts near the top left, beside the HUD's Status window
+        // and below the toolbar.
+        let home = egui::pos2(view.hud_left + DEVTOOLS_EDGE_GAP, toolbar.max.y + DEVTOOLS_EDGE_GAP);
         if let Some(panel) = panel(ctx, dev, art, view, home) {
             // The HUD's top-right panel moves aside for it only while it's
             // still over that corner (it can be dragged anywhere).
@@ -197,7 +201,7 @@ fn rail(ctx: &egui::Context, dev: &mut DevTools) -> egui::Rect {
 }
 
 /// The open tool's panel: its name, then its contents. It starts with its
-/// top-right corner at `home` and can be dragged anywhere by its header (or
+/// top-left corner at `home` and can be dragged anywhere by its header (or
 /// any empty part of it). It's as tall as what it shows (a floor tile's
 /// inspection is short, the spawn list long), scrolling once that would
 /// run off the bottom of the screen, and can be made wider or narrower from
@@ -217,7 +221,6 @@ fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, 
         .id(egui::Id::new(("devtools_panel", dev.tab.name())))
         .title_bar(false)
         .frame(frame)
-        .pivot(egui::Align2::RIGHT_TOP)
         .default_pos(home)
         .movable(true)
         // Width by hand; height always follows the contents.
@@ -307,12 +310,18 @@ fn place_list(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, items: &[Spaw
     }
 }
 
+/// One group in the Spawn panel: folded away to start with, and open
+/// while searching so no result is hidden in a closed group.
+pub(super) fn spawn_group(dev: &DevTools, title: &str) -> egui::CollapsingHeader {
+    egui::CollapsingHeader::new(title).default_open(false).open((!dev.search.is_empty()).then_some(true))
+}
+
 /// Everything there is to place: your own prefabs first, then what's built
 /// in. Right-click a built-in to make a prefab from it.
 fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     super::devtools_prefab::my_prefabs(ui, dev, art);
 
-    egui::CollapsingHeader::new("You").default_open(true).show(ui, |ui| {
+    spawn_group(dev, "You").show(ui, |ui| {
         ui.label(
             egui::RichText::new("A fresh character on the clicked tile, in place of the one there is.")
                 .small()
@@ -325,7 +334,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         });
     });
 
-    egui::CollapsingHeader::new("Creatures").default_open(true).show(ui, |ui| {
+    spawn_group(dev, "Creatures").show(ui, |ui| {
         let options = &mut dev.spawn_options;
         ui.horizontal(|ui| {
             use crate::components::{Disposition, Faction};
@@ -371,7 +380,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         place_list(ui, dev, art, &creatures);
     });
 
-    egui::CollapsingHeader::new("Items").default_open(false).show(ui, |ui| {
+    spawn_group(dev, "Items").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label("Gear rarity");
             for (rarity, label) in [
@@ -404,7 +413,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         }
     });
 
-    egui::CollapsingHeader::new("Fire and light").default_open(false).show(ui, |ui| {
+    spawn_group(dev, "Fire and light").show(ui, |ui| {
         place_list(
             ui,
             dev,
@@ -424,7 +433,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         );
     });
 
-    egui::CollapsingHeader::new("Furniture and traps").default_open(false).show(ui, |ui| {
+    spawn_group(dev, "Furniture and traps").show(ui, |ui| {
         look::toggle(ui, &mut dev.spawn_options.revealed, "Traps start revealed");
         place_list(
             ui,
@@ -442,7 +451,7 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         );
     });
 
-    egui::CollapsingHeader::new("Doors, chests and scenery").default_open(false).show(ui, |ui| {
+    spawn_group(dev, "Doors, chests and scenery").show(ui, |ui| {
         place_list(
             ui,
             dev,

@@ -98,7 +98,7 @@ pub(super) fn offer_as_prefab(response: &egui::Response, dev: &mut DevTools, wha
 /// start a new one.
 pub(super) fn my_prefabs(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     let search = dev.search.to_lowercase();
-    egui::CollapsingHeader::new("My prefabs").default_open(true).show(ui, |ui| {
+    super::devtools::spawn_group(dev, "My prefabs").show(ui, |ui| {
         if dev.prefabs.is_empty() {
             ui.label(
                 egui::RichText::new(
