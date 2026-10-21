@@ -9,6 +9,7 @@ mod devtools;
 mod devtools_look;
 mod devtools_overlays;
 mod devtools_prefab;
+mod devtools_tiles;
 mod dialogue;
 mod game_over_screen;
 mod hotbar;

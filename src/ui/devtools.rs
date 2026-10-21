@@ -21,6 +21,7 @@ use hecs::World;
 
 use super::icons::UiIcons;
 use super::devtools_look as look;
+use super::devtools_tiles as tiles;
 use super::vfx::{tile_rect, RainStyle};
 
 /// What the panel needs to draw icons.
@@ -628,7 +629,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                             }
                         });
                     });
-                    if !value.is_null() && edit_value(ui, entry.name, "", &mut value) {
+                    if !value.is_null() && ui.push_id(entry.name, |ui| edit_value(ui, art, entry.name, "", &mut value)).inner {
                         dev.commands.push(DevCommand::SetComponent { entity: e, name: entry.name, value });
                     }
                     if let Some(why) = error {
@@ -725,10 +726,15 @@ fn edit_rgb(ui: &mut egui::Ui, value: &mut serde_json::Value, mut rgb: [f32; 3])
 /// lines up.
 const NUMBER_WIDTH: f32 = 72.0;
 
-pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
+pub(super) fn edit_value(ui: &mut egui::Ui, art: &DevArt, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
     use serde_json::Value;
     if let Some(rgb) = as_rgb(key, value) {
         return ui.horizontal(|ui| edit_rgb(ui, value, rgb)).inner;
+    }
+    // A picture (a door's `[sheet, tile]`): shown, with a picker.
+    let picture = tiles::as_tile(value).is_some();
+    if picture && value.is_array() {
+        return tiles::tile_field(ui, art, value);
     }
     match value {
         Value::Null => {
@@ -779,7 +785,7 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
                         if look::cross_button(ui).clicked() {
                             remove = Some(i);
                         }
-                        ui.vertical(|ui| changed |= edit_value(ui, component, key, item));
+                        ui.vertical(|ui| changed |= edit_value(ui, art, component, key, item));
                     });
                 });
             }
@@ -789,6 +795,25 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
             }
             if items.is_empty() {
                 ui.colored_label(look::pal(ui).muted, "(empty)");
+            }
+            changed
+        }
+        Value::Object(_) if picture => {
+            // A picture with other settings (an animation's frames): the
+            // picture with its picker, then the rest.
+            let mut changed = tiles::tile_field(ui, art, value);
+            if let Value::Object(fields) = value {
+                let mut rest: serde_json::Map<String, Value> =
+                    fields.iter().filter(|(k, _)| !tiles::is_tile_key(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+                if !rest.is_empty() {
+                    let mut rest_value = Value::Object(std::mem::take(&mut rest));
+                    if edit_value(ui, art, component, key, &mut rest_value) {
+                        if let Value::Object(edited) = rest_value {
+                            fields.extend(edited);
+                        }
+                        changed = true;
+                    }
+                }
             }
             changed
         }
@@ -816,7 +841,7 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
                                 look::hint(ui, doc);
                             }
                         });
-                        ui.push_id(name.as_str(), |ui| changed |= edit_value(ui, component, name, field));
+                        ui.push_id(name.as_str(), |ui| changed |= edit_value(ui, art, component, name, field));
                         ui.end_row();
                     }
                 });
@@ -829,7 +854,7 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
                 ui.push_id(name.as_str(), |ui| {
                     let title = egui::RichText::new(field_docs::label(name)).color(look::pal(ui).muted);
                     let header = egui::CollapsingHeader::new(title).id_salt(name.as_str()).default_open(false);
-                    let shown = header.show(ui, |ui| changed |= edit_value(ui, component, name, field));
+                    let shown = header.show(ui, |ui| changed |= edit_value(ui, art, component, name, field));
                     if let Some(doc) = field_docs::doc(component, name) {
                         shown.header_response.on_hover_text(doc);
                     }

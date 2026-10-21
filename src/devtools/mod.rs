@@ -324,10 +324,6 @@ pub struct DevTools {
     pub inspect_picker_open: bool,
     pub picker_search: String,
     pub picker_internal: bool,
-    /// The prefab component whose sprite is being picked, and the sheet the
-    /// picker shows.
-    pub sprite_pick: Option<usize>,
-    pub sprite_sheet: crate::tile::SpriteSheet,
     /// Which prefab each placed entity came from (by name), so the
     /// inspector can offer to update it from a tweaked copy.
     pub placed_from: std::collections::HashMap<Entity, String>,
@@ -380,8 +376,6 @@ impl Default for DevTools {
             inspect_picker_open: false,
             picker_search: String::new(),
             picker_internal: false,
-            sprite_pick: None,
-            sprite_sheet: crate::tile::SpriteSheet::Monsters,
             placed_from: std::collections::HashMap::new(),
             prefab_path: std::path::PathBuf::from(prefab::PREFAB_FILE),
             last_prefab_save: None,

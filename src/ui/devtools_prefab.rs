@@ -13,20 +13,10 @@ use crate::component_registry as registry;
 use crate::devtools::catalog::{self, BLOCKS, GROUPS};
 use crate::devtools::prefab::{self, Prefab};
 use crate::devtools::{spawn, CursorTool, DevTools};
-use crate::tile::SpriteSheet;
 
 use super::devtools::{edit_value, row, DevArt};
 use super::devtools_look as look;
 
-/// Side of one tile in the sprite picker, in points.
-const PICKER_TILE: f32 = 28.0;
-const SHEETS: [(SpriteSheet, &str); 5] = [
-    (SpriteSheet::Monsters, "Monsters"),
-    (SpriteSheet::Rogues, "People"),
-    (SpriteSheet::Items, "Items"),
-    (SpriteSheet::Tiles, "Tiles"),
-    (SpriteSheet::AnimatedTiles, "Animated"),
-];
 
 pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     library(ui, dev, art);
@@ -58,7 +48,6 @@ pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         }
     }
     changed |= cards(ui, dev, art, i);
-    changed |= sprite_picker(ui.ctx(), dev, art, i);
     if changed {
         dev.prefabs_dirty = true;
     }
@@ -118,7 +107,6 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
             };
             if clicked {
                 dev.selected_prefab = if selected { None } else { Some(i) };
-                dev.sprite_pick = None;
             }
         });
     }
@@ -131,7 +119,6 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     if let Some(i) = delete {
         dev.prefabs.remove(i);
         dev.selected_prefab = None;
-        dev.sprite_pick = None;
         if matches!(dev.tool, Some(CursorTool::PlacePrefab(_))) {
             dev.disarm();
         }
@@ -408,40 +395,12 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
                                         {
                                             remove = Some(n);
                                         }
-                                        if name == "Sprite" || name == "AnimatedSprite" {
-                                            let picking = dev.sprite_pick == Some(n);
-                                            if ui.selectable_label(picking, "Pick…").clicked() {
-                                                dev.sprite_pick =
-                                                    if picking { None } else { Some(n) };
-                                                if let Some(sheet) = dev.prefabs[i].components[n]
-                                                    .value
-                                                    .get("sheet")
-                                                    .and_then(|s| {
-                                                        serde_json::from_value(s.clone()).ok()
-                                                    })
-                                                {
-                                                    dev.sprite_sheet = sheet;
-                                                }
-                                            }
-                                            if let Some(sprite) = dev.prefabs[i].sprite() {
-                                                let (tex, uv) = art.icon(sprite);
-                                                ui.add(
-                                                    egui::Image::new(
-                                                        egui::load::SizedTexture::new(
-                                                            tex,
-                                                            egui::vec2(20.0, 20.0),
-                                                        ),
-                                                    )
-                                                    .uv(uv),
-                                                );
-                                            }
-                                        }
                                     },
                                 );
                             });
                             let value = &mut dev.prefabs[i].components[n].value;
                             if !value.is_null() {
-                                changed |= edit_value(ui, &name, "", value);
+                                changed |= ui.push_id(("part", n), |ui| edit_value(ui, art, &name, "", value)).inner;
                             }
                         });
                 }
@@ -450,86 +409,7 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
     }
     if let Some(n) = remove {
         dev.prefabs[i].components.remove(n);
-        dev.sprite_pick = None;
         changed = true;
-    }
-    changed
-}
-
-/// A window showing a whole sprite sheet: click a tile and the component
-/// being picked for takes it.
-fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize) -> bool {
-    let Some(n) = dev
-        .sprite_pick
-        .filter(|n| *n < dev.prefabs[i].components.len())
-    else {
-        dev.sprite_pick = None;
-        return false;
-    };
-    let mut open = true;
-    let mut chosen: Option<(SpriteSheet, u32)> = None;
-    egui::Window::new("Pick a sprite")
-        .open(&mut open)
-        .default_size(egui::vec2(420.0, 480.0))
-        .collapsible(false)
-        .frame(look::panel_frame())
-        .show(ctx, |ui| {
-            look::apply(ui);
-            ui.horizontal_wrapped(|ui| {
-                for (sheet, label) in SHEETS {
-                    ui.selectable_value(&mut dev.sprite_sheet, sheet, label);
-                }
-            });
-            let sheet = dev.sprite_sheet;
-            let (columns, rows) = art.tileset.grid_size(sheet);
-            if columns == 0 {
-                ui.colored_label(look::pal(ui).muted, "That sheet isn't loaded.");
-                return;
-            }
-            let tex = art.icons.texture_for_sheet(sheet);
-            egui::ScrollArea::both().show_rows(ui, PICKER_TILE, rows as usize, |ui, visible| {
-                for r in visible {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        for c in 0..columns {
-                            let id = r as u32 * columns + c;
-                            let uv = art.tileset.get_egui_uv(sheet, id);
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(PICKER_TILE, PICKER_TILE),
-                                egui::Sense::click(),
-                            );
-                            if response.hovered() {
-                                ui.painter().rect_filled(rect, 0.0, look::pal(ui).hover);
-                            }
-                            ui.painter()
-                                .image(tex, rect.shrink(2.0), uv, egui::Color32::WHITE);
-                            if response.on_hover_text(format!("#{id}")).clicked() {
-                                chosen = Some((sheet, id));
-                            }
-                        }
-                    });
-                }
-            });
-        });
-    let mut changed = false;
-    if let Some((sheet, id)) = chosen {
-        let part = &mut dev.prefabs[i].components[n];
-        let key = if part.component == "AnimatedSprite" {
-            "base_tile_id"
-        } else {
-            "tile_id"
-        };
-        if let serde_json::Value::Object(fields) = &mut part.value {
-            if let Ok(sheet) = serde_json::to_value(sheet) {
-                fields.insert("sheet".into(), sheet);
-            }
-            fields.insert(key.into(), serde_json::Value::from(id));
-            changed = true;
-        }
-        open = false;
-    }
-    if !open {
-        dev.sprite_pick = None;
     }
     changed
 }
