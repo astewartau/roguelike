@@ -850,7 +850,7 @@ fn explode_barrel(
 
     // Damage everything attackable in the blast radius.
     let victims: Vec<(Entity, (i32, i32))> = world
-        .query::<(&Position, &crate::components::Attackable)>()
+        .query::<(&Position, &crate::components::Health)>()
         .iter()
         .filter(|(_, (p, _))| {
             (p.x - bx).abs() <= OIL_BARREL_EXPLOSION_RADIUS
@@ -1270,7 +1270,7 @@ mod tests {
         hit(&mut arena.world, barrel, 50);
         crate::systems::combat::remove_dead_entities(&mut arena.ctx(), 0);
         assert!(arena.world.contains(barrel));
-        assert!(arena.world.get::<&crate::components::Attackable>(barrel).is_ok());
+        assert!(arena.world.get::<&crate::components::Health>(barrel).is_ok());
         assert!(arena.world.get::<&BarrelFuse>(barrel).is_ok());
     }
 
@@ -1856,6 +1856,25 @@ mod tests {
         let oil = crate::spawning::spawn_oil_puddle(&mut world, 4, 4);
         ignite_fuel(&mut world, oil);
         assert!(!put_out_by_hand(&mut world, 4, 4, &mut events));
+    }
+
+    /// A blast hurts whatever can be hurt, whether or not it's something
+    /// you'd ever attack on purpose (a door's Health says "never").
+    #[test]
+    fn a_blast_hurts_what_you_would_never_attack() {
+        use crate::components::{Health, Targeting};
+        let mut world = World::new();
+        let mut grid = Grid::filled(16, 16, TileType::Floor);
+        let barrel = crate::spawning::spawn_oil_barrel(&mut world, 4, 4);
+        let mut door_health = Health::new(40);
+        door_health.targeting = Targeting::Never;
+        let door = world.spawn((Position::new(5, 4), door_health));
+        let mut cache = SpatialCache::rebuild_from_world(&world);
+        hit(&mut world, barrel, 50);
+        hit(&mut world, barrel, 1);
+        tick(&mut world, &mut grid, &mut cache, 0.0);
+        assert!(!world.contains(barrel), "it went off");
+        assert!(world.get::<&Health>(door).unwrap().current < 40, "and the blast hurt the door");
     }
 }
 

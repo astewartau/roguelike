@@ -35,8 +35,13 @@ pub fn apply_move(ctx: &mut EffectCtx, entity: Entity, dx: i32, dy: i32) -> Acti
         return ActionResult::Blocked;
     }
 
-    // Check for attackable entity at target - block movement unless it's our own companion
-    let mut passing_through_own_companion = false;
+    // Your own companions step aside for you: walk through one, whatever it
+    // is (it used to need to be hittable for this to work). Anything else
+    // that can be hit stops you.
+    let mut passing_through_own_companion = world
+        .query::<(&Position, &crate::components::Follower)>()
+        .iter()
+        .any(|(id, (p, f))| id != entity && f.leader == entity && p.x == target_x && p.y == target_y);
     if let Some(target_entity) = queries::get_attackable_at(world, target_x, target_y, Some(entity)) {
         // Allow walking through our own tamed companions
         let is_our_companion = world
@@ -196,7 +201,7 @@ pub fn doorway_obstructed(world: &World, door: Entity) -> bool {
         }
         let here = e.get::<&Position>().map(|p| (p.x, p.y) == at).unwrap_or(false);
         here && (e.has::<BlocksMovement>()
-            || e.has::<crate::components::Attackable>()
+            || e.has::<crate::components::Health>()
             || e.has::<crate::components::Health>()
             || e.has::<Container>()
             || e.has::<crate::components::GroundItemPile>())
@@ -475,7 +480,7 @@ pub fn apply_use_stairs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Attackable, CompanionAI, Follower, VisualPosition};
+    use crate::components::{CompanionAI, Follower, VisualPosition};
     use rand::SeedableRng;
 
     // =========================================================================
@@ -649,7 +654,6 @@ mod tests {
             comp_pos,
             VisualPosition::from_position(&comp_pos),
             BlocksMovement,
-            Attackable,
             Follower { leader: owner },
             CompanionAI::new(),
         ));

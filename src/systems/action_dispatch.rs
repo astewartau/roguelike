@@ -3,7 +3,7 @@
 //! Converts input into action types and calculates action durations.
 //! Extracted from time_system.rs to separate action semantics from time management.
 
-use crate::components::{ActionType, Attackable, BlocksMovement, Container, Door, FriendlyNPC, Player, Position, Follower};
+use crate::components::{Health, ActionType, BlocksMovement, Container, Door, FriendlyNPC, Player, Position, Follower};
 use crate::constants::*;
 use crate::events::StairDirection;
 use crate::grid::Grid;
@@ -115,11 +115,12 @@ pub fn determine_action_type(
     }
 
     // Check for attackable entity at target (but not your own tamed companions or sibling companions)
-    for (id, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+    for (id, (enemy_pos, health)) in world.query::<(&Position, &Health)>().iter() {
         if id != entity && enemy_pos.x == target_x && enemy_pos.y == target_y {
-            // Walking into some things doesn't swing at them: breaking one
-            // takes a deliberate attack (AttackDirection) or a blast.
-            if world.get::<&crate::components::HitOnlyOnPurpose>(id).is_ok() {
+            // Walking into something only swings at it if it's attacked
+            // freely: a lantern takes a deliberate attack (AttackDirection)
+            // or a blast, and a door is opened, not attacked.
+            if health.targeting != crate::components::Targeting::Freely {
                 continue;
             }
             // Skip if this is our own tamed companion (player walking into their pet)

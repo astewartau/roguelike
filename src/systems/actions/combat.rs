@@ -6,7 +6,7 @@ use crate::world::World;
 use rand::Rng;
 
 use crate::components::{
-    Attackable, CompanionAI, EffectType, Equipment, Health, LungeAnimation, Player, Position,
+    CompanionAI, EffectType, Equipment, Health, LungeAnimation, Player, Position,
     SecondaryAbility, Follower,
 };
 use crate::constants::*;
@@ -23,7 +23,7 @@ use super::ActionResult;
 /// effect is applied when it completes; anything can happen in between.
 /// Returns `Err(reason)` describing why the swing would miss.
 pub fn melee_reach_check(world: &World, attacker: Entity, target: Entity) -> Result<(), MissReason> {
-    let attackable = world.get::<&Attackable>(target).is_ok();
+    let attackable = world.get::<&Health>(target).is_ok();
     // A broken oil barrel sits at 0 HP while its fuse hisses and is still
     // there to be hit (the hit sets it off): it is not "gone".
     let alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true)
@@ -720,7 +720,6 @@ pub(super) mod tests {
                 Equipment::with_weapon(Weapon::claws(3)),
                 Experience::new(),
                 StatusEffects::new(),
-                Attackable,
                 crate::components::BlocksMovement,
             ));
             let cache = SpatialCache::rebuild_from_world(&world);
@@ -1087,7 +1086,6 @@ pub(super) mod tests {
             Health::new(20),
             StatusEffects::new(),
             Follower { leader: player },
-            Attackable,
             crate::components::BlocksMovement,
         ));
         arena.cache.rebuild_in_place(&arena.world);

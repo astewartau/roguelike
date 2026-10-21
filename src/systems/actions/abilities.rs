@@ -6,7 +6,7 @@ use crate::world::World;
 use rand::Rng;
 
 use crate::components::{
-    AbilityType, Attackable, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container,
+    AbilityType, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container,
     EffectType, Equipment, EquippedWeapon, Health, Inventory, ItemType, LearnedAbilities,
     Player, Position, Projectile, ProjectileMarker,
     SecondaryAbility, Sprite, Follower, VisualPosition,
@@ -178,7 +178,7 @@ pub fn detonate_fireball(
 
     // Collect all attackable entities in radius
     let mut damaged: Vec<(Entity, i32, i32)> = Vec::new();
-    for (id, (pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+    for (id, (pos, _)) in world.query::<(&Position, &Health)>().iter() {
         let dx = (pos.x - target_x).abs();
         let dy = (pos.y - target_y).abs();
         if dx <= FIREBALL_RADIUS && dy <= FIREBALL_RADIUS {
@@ -848,7 +848,7 @@ pub fn apply_disengage(
 
     // Find nearest enemy
     let mut nearest_enemy: Option<(i32, i32, i32)> = None; // (x, y, distance_squared)
-    for (_, (enemy_pos, _)) in world.query::<(&Position, &Attackable)>().iter() {
+    for (_, (enemy_pos, _)) in world.query::<(&Position, &Health)>().iter() {
         if (enemy_pos.x, enemy_pos.y) == pos {
             continue; // Skip self
         }
@@ -1259,7 +1259,7 @@ mod tests {
 
     #[test]
     fn a_hit_breaks_only_the_channels_a_hit_breaks() {
-        use crate::components::{Attackable, StatusEffects};
+        use crate::components::{StatusEffects};
         let mut world = World::new();
         let mut events = EventQueue::new();
         let grid = Grid::filled(8, 8, crate::tile::TileType::Floor);
@@ -1273,7 +1273,7 @@ mod tests {
             breaks_on_move: true,
             breaks_on_damage,
         };
-        let body = || (Position::new(2, 2), Health::new(50), StatusEffects::new(), Attackable);
+        let body = || (Position::new(2, 2), Health::new(50), StatusEffects::new());
         let shouter = world.spawn(body());
         world.insert_one(shouter, channel(ChannelEffect::Shout { radius: 5 }, true)).unwrap();
         let tamer = world.spawn(body());

@@ -450,9 +450,8 @@ mod tests {
         let mut lamp = Prefab::empty("Lamp");
         lamp.add("Shatters");
         let unmet: Vec<_> = lamp.unmet_needs().into_iter().map(|(_, n)| n).collect();
-        assert_eq!(unmet, vec!["Health", "Attackable"]);
+        assert_eq!(unmet, vec!["Health"]);
         lamp.add("Health");
-        lamp.add("Attackable");
         assert!(lamp.unmet_needs().is_empty());
     }
 }

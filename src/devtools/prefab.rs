@@ -201,7 +201,23 @@ pub fn load(path: &Path) -> Vec<Prefab> {
         eprintln!("{}: not a list of prefabs; ignoring it", path.display());
         return Vec::new();
     };
-    items.into_iter().filter_map(|item| serde_json::from_value(item).ok()).collect()
+    items.into_iter().filter_map(|item| serde_json::from_value(item).ok()).map(migrate).collect()
+}
+
+/// Bring a prefab saved by an older version up to date: `Attackable` is now
+/// part of `Health` (anything with health can be hit), and
+/// `HitOnlyOnPurpose` is its "on purpose" targeting setting.
+fn migrate(mut prefab: Prefab) -> Prefab {
+    let on_purpose = prefab.has("HitOnlyOnPurpose");
+    prefab.components.retain(|c| c.component != "Attackable" && c.component != "HitOnlyOnPurpose");
+    if on_purpose {
+        if let Some(Value::Object(health)) =
+            prefab.components.iter_mut().find(|c| c.component == "Health").map(|c| &mut c.value)
+        {
+            health.insert("targeting".into(), Value::from("OnPurpose"));
+        }
+    }
+    prefab
 }
 
 /// Write every prefab to the file. Failures are logged and otherwise
@@ -269,4 +285,28 @@ mod tests {
         assert!(load(&path).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A prefab saved before Attackable became part of Health loads as it
+    /// meant: hittable, and "on purpose" where it said HitOnlyOnPurpose.
+    #[test]
+    fn an_old_prefab_with_attackable_loads_as_health() {
+        let old = serde_json::json!([{
+            "name": "Old lamp",
+            "components": [
+                {"component": "Health", "value": {"current": 5, "max": 5, "regen_amount": 0, "regen_interval": 0.0, "last_regen_time": 0.0}},
+                {"component": "Attackable", "value": null},
+                {"component": "HitOnlyOnPurpose", "value": null}
+            ]
+        }]);
+        let dir = std::env::temp_dir().join(format!("grid_old_prefab_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("prefabs.json");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let loaded = load(&path);
+        let names: Vec<&str> = loaded[0].names();
+        assert_eq!(names, vec!["Health"]);
+        assert_eq!(loaded[0].value("Health").unwrap()["targeting"], "OnPurpose");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
+

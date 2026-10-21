@@ -163,7 +163,7 @@ pub fn apply_open_chest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Attackable, Health, StatusEffects, Follower, TrapEffect};
+    use crate::components::{Health, StatusEffects, Follower, TrapEffect};
     use crate::grid::Grid;
     use crate::tile::{Tile, TileType};
     use rand::rngs::StdRng;
@@ -214,7 +214,6 @@ mod tests {
             Position::new(3, 3),
             Health::new(30),
             StatusEffects::new(),
-            Attackable,
         ));
         let trap =
             crate::spawning::spawn_dungeon_trap(&mut world, 3, 3, TrapEffect::spike());

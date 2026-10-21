@@ -1,7 +1,7 @@
 //! World initialization - creates the game world and spawns initial entities.
 
 use crate::components::{
-    AbilityType, Actor, AnimatedSprite, Attackable, BlocksMovement, BlocksVision, ClassAbility,
+    AbilityType, Actor, AnimatedSprite, BlocksMovement, BlocksVision, ClassAbility,
     Container, Door, Equipment, Experience, Health, Inventory, ItemInstance, ItemType, Name, Player,
     PlayerClass, Position, ClassKit, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
@@ -829,7 +829,6 @@ pub fn init_world(
         Equipment::with_equipped(player_class.starting_weapon()),
         BlocksMovement,
         Experience::new(),
-        Attackable,
         StatusEffects::new(),
         ClassAbility::new(player_class.ability(), player_class.ability_cooldown()),
     ));

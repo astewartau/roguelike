@@ -30,7 +30,7 @@ use crate::world::World;
 use rand::Rng;
 
 use crate::components::{
-    Attackable, BlocksMovement, CausesBurning, Combustible, Door, EffectType, Health, Position,
+    BlocksMovement, CausesBurning, Combustible, Door, EffectType, Health, Position,
     Pushable,
 };
 use crate::constants::*;
@@ -213,7 +213,7 @@ pub fn apply_push(ctx: &mut EffectCtx, pusher: Entity, dx: i32, dy: i32) -> Acti
 pub fn has_bash_target(world: &World, basher: Entity, tile: (i32, i32)) -> bool {
     pushable_at(world, tile.0, tile.1).is_some()
         || world
-            .query::<(&Position, &Attackable)>()
+            .query::<(&Position, &Health)>()
             .iter()
             .any(|(id, (p, _))| id != basher && (p.x, p.y) == tile)
 }

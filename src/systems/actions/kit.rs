@@ -1326,7 +1326,6 @@ mod tests {
         let e = arena.world.spawn((
             pos,
             VisualPosition::from_position(&pos),
-            crate::components::Attackable,
             crate::components::BlocksMovement,
             Health::new(hp),
             StatusEffects::new(),

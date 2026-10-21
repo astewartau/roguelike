@@ -1,7 +1,7 @@
 //! Combat system functions.
 
 use crate::components::{
-    Actor, Affix, Attackable, BlocksMovement, ChaseAI, CompanionAI, Container, Door, EffectType,
+    Actor, Affix, BlocksMovement, ChaseAI, CompanionAI, Container, Door, EffectType,
     Equipment, Experience, Health, ItemInstance, ItemType, Position, Sprite, Stats, VisualPosition,
     Weapon,
 };
@@ -670,11 +670,10 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // Raise Dead) it is a stale id in both sets.
         active_ai_tracker.remove_entity(id);
 
-        // Remove AI, Actor, Attackable, Stats components - turn into decoration
+        // Remove AI, Actor, Stats components - turn into decoration
         let _ = world.remove_one::<Actor>(id);
         let _ = world.remove_one::<ChaseAI>(id);
         let _ = world.remove_one::<CompanionAI>(id);
-        let _ = world.remove_one::<Attackable>(id);
         let _ = world.remove_one::<Health>(id);
         let _ = world.remove_one::<BlocksMovement>(id); // Bones are walkable
         let _ = world.remove_one::<Stats>(id);

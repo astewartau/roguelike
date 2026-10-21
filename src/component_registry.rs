@@ -283,7 +283,6 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(Lacerating, Lacerating { bleed_chance: 0.3 }),
             plain!(Splits, Splits { generation: 0, spent: false }),
             plain!(DevFrozen, DevFrozen),
-            plain!(Attackable, Attackable),
             plain!(BlocksMovement, BlocksMovement),
             plain!(BlocksVision, BlocksVision),
             plain!(Pushable, Pushable),
@@ -304,7 +303,6 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(LightSource, LightSource::torch()),
             plain!(Topples, Topples { toppled: false }),
             plain!(Shatters, Shatters),
-            plain!(HitOnlyOnPurpose, HitOnlyOnPurpose),
             plain!(CarriedTorch, CarriedTorch { lit: true }),
             plain!(Container, Container::chest(Vec::new(), 0)),
             plain!(Door, Door::new()),
@@ -392,7 +390,6 @@ pub const REQUIRES: &[(&str, &[&str])] = &[
     ("BarrelFuse", &["Explosive"]),
     ("OnFire", &["Fuel"]),
     ("Splits", &["Health"]),
-    ("HitOnlyOnPurpose", &["Attackable"]),
     ("Pushable", &["BlocksMovement"]),
     // Remains and loose items are containers of what they hold.
     ("GroundItemPile", &["Container"]),

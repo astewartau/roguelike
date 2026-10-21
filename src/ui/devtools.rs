@@ -673,6 +673,7 @@ fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
     match (component, key) {
         (_, "sheet") => list(&["Tiles", "Rogues", "Monsters", "Items", "AnimatedTiles"]),
         ("ChaseAI", "state") => list(&["Unaware", "Idle", "Chasing", "Investigating"]),
+        (_, "targeting") => list(&["Freely", "OnPurpose", "Never"]),
         (_, "style") => list(&["Warm", "Ghost"]),
         (_, "ignition") => list(&["InPlace", "Replace"]),
         (_, "rarity") => list(&["Common", "Magic", "Rare", "Legendary"]),

@@ -742,7 +742,9 @@ impl Default for Fatigue {
     }
 }
 
-/// Health component - pure data
+/// Can be hurt: by blows, blasts, fire, arrows, anything that does damage.
+/// At 0 it dies (or breaks, or goes off). Whether you'd *aim* at it is
+/// `targeting`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Health {
     /// Hit points left. At 0 it dies (or breaks, or goes off).
@@ -755,6 +757,25 @@ pub struct Health {
     pub regen_interval: f32,
     /// Game time of last regen event
     pub last_regen_time: f32,
+    /// Whether it's something you'd deliberately attack: freely (clicking or
+    /// walking into it), only on purpose (Shift+direction: a lantern), or
+    /// never (a door you open, not attack). Blasts and fire hurt it whatever
+    /// this says.
+    #[serde(default)]
+    pub targeting: Targeting,
+}
+
+/// How a hurtable thing is attacked on purpose. See [`Health::targeting`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Targeting {
+    /// Clicking it or walking into it attacks it.
+    #[default]
+    Freely,
+    /// Only a deliberate attack (Shift+direction) does: you'd never mean to
+    /// smash it by accident.
+    OnPurpose,
+    /// Never attacked on purpose; only blasts, fire and the like hurt it.
+    Never,
 }
 
 impl Health {
@@ -765,7 +786,14 @@ impl Health {
             regen_amount: 0,
             regen_interval: 0.0,
             last_regen_time: 0.0,
+            targeting: Targeting::Freely,
         }
+    }
+
+    /// The same, attacked only on purpose (Shift+direction), never by a
+    /// click or a step.
+    pub fn on_purpose(self) -> Self {
+        Self { targeting: Targeting::OnPurpose, ..self }
     }
 
     /// Create health with regeneration (time-based)
@@ -776,6 +804,7 @@ impl Health {
             regen_amount,
             regen_interval,
             last_regen_time: 0.0,
+            targeting: Targeting::Freely,
         }
     }
 
@@ -2067,10 +2096,6 @@ impl Equipment {
     }
 }
 
-/// Marker for entities that can be attacked
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct Attackable;
-
 /// Visual effect: lunge animation toward a target
 #[derive(Debug, Clone, Copy)]
 pub struct LungeAnimation {
@@ -2786,12 +2811,6 @@ pub enum LanternStyle {
 /// `systems::fire::shatter`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Shatters;
-
-/// `Attackable`, but only on purpose (Shift+direction): clicking it or
-/// walking into it doesn't attack it. For things you'd never mean to smash
-/// by accident, like a lantern.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct HitOnlyOnPurpose;
 
 /// A torch carried by a creature (goblins). While `lit` the carrier has a
 /// `LightSource` and sets alight oil and webs it walks into; a soaking puts it

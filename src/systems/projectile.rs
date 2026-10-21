@@ -10,8 +10,8 @@
 //! 5. Once visual catches up, the arrow is despawned
 
 
-use crate::components::{
-    Attackable, EffectType, ItemType, Position, Projectile, ProjectileKind, ProjectileMarker,
+use crate::components::{Health, 
+    EffectType, ItemType, Position, Projectile, ProjectileKind, ProjectileMarker,
     VisualPosition,
 };
 use crate::events::GameEvent;
@@ -46,7 +46,7 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
 
     // Get all attackable entities and their positions for collision checking
     let attackables: Vec<(Entity, i32, i32)> = world
-        .query::<(&Position, &Attackable)>()
+        .query::<(&Position, &Health)>()
         .iter()
         .map(|(e, (pos, _))| (e, pos.x, pos.y))
         .collect();

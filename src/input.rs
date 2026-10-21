@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{AbilityType, Attackable, BlocksMovement, Container, Door, Health, ItemType, Player, Position, Follower, Tameable};
+use crate::components::{AbilityType, BlocksMovement, Container, Door, Health, ItemType, Player, Position, Follower, Tameable};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -275,14 +275,10 @@ pub fn identify_click_target(
 
     // Check for entities at this tile (order matters - check most specific first)
 
-    // 1. Check for attackable enemy (some things are attackable only on
-    // purpose: Shift+direction, not a click)
-    for (id, (pos, _)) in world
-        .query::<(&Position, &Attackable)>()
-        .without::<&crate::components::HitOnlyOnPurpose>()
-        .iter()
-    {
-        if pos.x == tile_x && pos.y == tile_y {
+    // 1. Check for something to attack (a click attacks only what's
+    // attacked freely: not a lantern you'd only hit on purpose, nor a door)
+    for (id, (pos, health)) in world.query::<(&Position, &Health)>().iter() {
+        if pos.x == tile_x && pos.y == tile_y && health.targeting == crate::components::Targeting::Freely {
             return ClickTarget::Enemy { entity: id, x: tile_x, y: tile_y };
         }
     }
@@ -536,7 +532,7 @@ pub fn update_pursuit(
     };
 
     // Check if target is still attackable
-    if world.get::<&Attackable>(target).is_err() {
+    if world.get::<&Health>(target).is_err() {
         input.clear_path();
         return false;
     }

@@ -4,7 +4,7 @@
 //! without modifying spawning code. Also defines NPC types with dialogue.
 
 use crate::components::{
-    Actor, Attackable, BlocksMovement, ChaseAI, Dialogue, DialogueAction, DialogueNode, DialogueOption,
+    Actor, BlocksMovement, ChaseAI, Dialogue, DialogueAction, DialogueNode, DialogueOption,
     Equipment, FriendlyNPC, Health, LightSource, OverlaySprite, Position, RangedWeapon, Sprite, Stats,
     StatusEffects, Tameable, VisualPosition, Vendor, Weapon,
 };
@@ -143,7 +143,6 @@ impl EnemyDef {
                 stats,
                 equipment,
                 status_effects,
-                Attackable,
                 BlocksMovement,
             ))
         } else {
@@ -157,7 +156,6 @@ impl EnemyDef {
                 stats,
                 equipment,
                 status_effects,
-                Attackable,
                 BlocksMovement,
             ))
         };
@@ -1323,7 +1321,7 @@ pub fn spawn_lantern(
     y: i32,
     style: crate::components::LanternStyle,
 ) -> hecs::Entity {
-    use crate::components::{Attackable, Fuel, Health, HitOnlyOnPurpose, LanternStyle, Name, Shatters, SpriteTint};
+    use crate::components::{Fuel, Health, LanternStyle, Name, Shatters, SpriteTint};
 
     // Fuel like a campfire (put out by hand, relit with a torch), but behind
     // glass; breaking that (`Health`) smashes it into burning oil.
@@ -1334,10 +1332,9 @@ pub fn spawn_lantern(
         Sprite::from_ref(tile_ids::LANTERN_UNLIT),
         Fuel::lantern(LightSource::lantern(style)),
         Shatters,
-        HitOnlyOnPurpose,
         Name::new("Lantern"),
-        Health::new(crate::constants::LANTERN_HEALTH),
-        Attackable,
+        // Smashed only on purpose (Shift+direction), never by a stray click.
+        Health::new(crate::constants::LANTERN_HEALTH).on_purpose(),
         StatusEffects::new(),
         BlocksMovement,
     ));
@@ -1608,7 +1605,6 @@ pub fn spawn_oil_barrel(world: &mut World, x: i32, y: i32) -> hecs::Entity {
         Health::new(OIL_BARREL_HEALTH),
         StatusEffects::new(),
         Combustible { flammability: OIL_BARREL_FLAMMABILITY },
-        Attackable,
         BlocksMovement,
         crate::components::Pushable,
     ))

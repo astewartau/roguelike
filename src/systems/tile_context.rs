@@ -41,7 +41,7 @@ use hecs::Entity;
 use crate::world::World;
 
 use crate::components::{
-    AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Topples,
+    AbilityType, Actor, Asleep, BarrelFuse, Targeting, BlocksMovement, Topples,
     CausesBurning, OnFire, ClassAbility, ClassKit, Container, GroundItemPile,
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, Health, Inventory, ItemType, LearnedAbilities, Name,
@@ -336,6 +336,11 @@ fn container_feature(world: &World, e: Entity, c: &Container) -> Option<String> 
     } else {
         name
     })
+}
+
+/// How `e` is attacked on purpose, if it can be hurt at all.
+fn targeting(world: &World, e: Entity) -> Option<Targeting> {
+    world.get::<&Health>(e).ok().map(|h| h.targeting)
 }
 
 /// Non-creature features of `e`, as the player sees them: its `Name`, and
@@ -660,7 +665,7 @@ pub fn context_actions(
     let hostile = seen
         .iter()
         .copied()
-        .find(|&e| relation_of(world, player, e) == Relation::Hostile && has::<Attackable>(world, e));
+        .find(|&e| relation_of(world, player, e) == Relation::Hostile && targeting(world, e).is_some_and(|t| t != Targeting::Never));
     let npc = seen.iter().copied().find(|&e| has::<FriendlyNPC>(world, e));
     let companion = seen.iter().copied().find(|&e| relation_of(world, player, e) == Relation::Companion);
     let explosive = if visible { here.iter().copied().find(|&e| has::<Explosive>(world, e)) } else { None };
@@ -676,8 +681,15 @@ pub fn context_actions(
     let attack_target = hostile.or(explosive);
 
     // --- Attacks ----------------------------------------------------------
-    if attack_target.is_some() {
-        let command = if dist == 1 { bump.clone() } else { click.clone() };
+    if let Some(target) = attack_target {
+        // Something you only hit on purpose isn't hit by a bump or a click:
+        // the menu makes the attack deliberate, as Shift+direction would.
+        let deliberate = targeting(world, target) == Some(Targeting::OnPurpose);
+        let command = match (dist == 1, deliberate) {
+            (true, true) => ContextCommand::Intent(PlayerIntent::AttackDirection { dx, dy }),
+            (true, false) => bump.clone(),
+            (false, _) => click.clone(),
+        };
         let gate = if dist == 1 { busy.clone() } else { Ok(()) };
         out.push(ContextAction::new(attack_label(world, player), command).gate(gate));
     }
@@ -1268,6 +1280,46 @@ mod tests {
         set_tile(&mut arena, (7, 5), |t| *t = Tile { visible: true, explored: true, ..Tile::new(TileType::Wall) });
         let acts = actions_at(&arena, (9, 5));
         assert_eq!(find(&acts, "Grave Bolt").reason.as_deref(), Some("No line of sight"));
+    }
+
+    /// How a hurtable thing is attacked follows its Health's targeting: a
+    /// bump swings only at something attacked freely, the menu's Attack is a
+    /// deliberate one for something you only hit on purpose, and something
+    /// never attacked on purpose isn't offered at all.
+    #[test]
+    fn attacking_follows_targeting() {
+        use crate::components::Targeting;
+        let mut arena = Arena::new((5, 5));
+        see_all(&mut arena);
+        let goblin = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, 6, 5, &mut arena.rng);
+        let _ = arena.world.remove_one::<crate::components::Asleep>(goblin);
+        arena.cache.rebuild_in_place(&arena.world);
+        let set = |arena: &mut Arena, t: Targeting| arena.world.get::<&mut Health>(goblin).unwrap().targeting = t;
+        let bump_attacks = |arena: &Arena| {
+            matches!(
+                crate::systems::action_dispatch::determine_action_type(&arena.world, &arena.grid, arena.player, 1, 0),
+                crate::components::ActionType::Attack { .. }
+            )
+        };
+        let attack = |arena: &Arena| {
+            actions_at(arena, (6, 5)).into_iter().find(|a| a.label.starts_with("Attack")).map(|a| a.command)
+        };
+
+        set(&mut arena, Targeting::Freely);
+        assert!(bump_attacks(&arena));
+        assert_eq!(attack(&arena), Some(ContextCommand::Intent(PlayerIntent::Move { dx: 1, dy: 0 })));
+
+        set(&mut arena, Targeting::OnPurpose);
+        assert!(!bump_attacks(&arena), "walking into it doesn't swing");
+        assert_eq!(
+            attack(&arena),
+            Some(ContextCommand::Intent(PlayerIntent::AttackDirection { dx: 1, dy: 0 })),
+            "the menu's Attack is deliberate"
+        );
+
+        set(&mut arena, Targeting::Never);
+        assert!(!bump_attacks(&arena));
+        assert_eq!(attack(&arena), None, "nothing offers to attack it");
     }
 
     #[test]

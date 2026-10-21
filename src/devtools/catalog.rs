@@ -45,11 +45,9 @@ pub const INFO: &[Info] = &[
     info("OverlaySprite", "Looks", "", "A second picture drawn on top, like an archer's bow.", &[]),
     info("FlameOverlay", "Looks", "", "Animated flames drawn over its picture.", &["Sprite"]),
     // Body
-    info("Health", "Body", "", "Hit points. At 0 it dies, breaks or goes off.", &[]),
+    info("Health", "Body", "", "Can be hurt (by blows, blasts, fire): hit points, and whether you'd attack it freely, only on purpose, or never.", &[]),
     info("Stats", "Body", "", "Strength, intelligence and agility: damage, spell power, dodging.", &[]),
     info("StatusEffects", "Body", "", "Can be burning, poisoned, slowed, wet and so on.", &[]),
-    info("Attackable", "Body", "", "Can be hit.", &["Health"]),
-    info("HitOnlyOnPurpose", "Body", "", "Only hit on purpose (Shift+direction), never by clicking or walking into it.", &[]),
     info("BlocksMovement", "Body", "blocks the way", "Nothing can stand on its tile.", &[]),
     info("BlocksVision", "Body", "blocks sight", "Can't be seen past.", &[]),
     info("Pushable", "Body", "can be shoved", "Can be shoved a tile at a time.", &[]),
@@ -84,7 +82,7 @@ pub const INFO: &[Info] = &[
     info("OnFire", "Fire & light", "on fire", "Burning right now (fuel only).", &[]),
     info("CausesBurning", "Fire & light", "burns what steps in", "Sets alight whatever steps onto it.", &[]),
     info("Topples", "Fire & light", "topples", "Knocked into while lit, it tips over and spills its fire.", &["Fuel"]),
-    info("Shatters", "Fire & light", "shatters", "Breaks at 0 HP into a puddle of burning oil.", &["Health", "Attackable"]),
+    info("Shatters", "Fire & light", "shatters", "Breaks at 0 HP into a puddle of burning oil.", &["Health"]),
     info("Explosive", "Fire & light", "explodes", "Burning or broken open, it lights a fuse and blows up.", &["Health|Combustible"]),
     info("BarrelFuse", "Fire & light", "fuse lit", "A lit fuse; it goes off when this runs out.", &[]),
     info("OilPuddle", "Fire & light", "oily", "Oil: coats whoever walks through it, and burns hot.", &["Fuel"]),
@@ -141,7 +139,7 @@ pub const BLOCKS: &[Block] = &[
     Block {
         name: "Creature",
         summary: "A body and a mind: hostile, takes turns, can be hit, blocks its tile.",
-        parts: &["Name", "Sprite", "Health", "Stats", "StatusEffects", "Attackable", "BlocksMovement", "Actor", "ChaseAI", "Equipment"],
+        parts: &["Name", "Sprite", "Health", "Stats", "StatusEffects", "BlocksMovement", "Actor", "ChaseAI", "Equipment"],
     },
     Block {
         name: "Companion",
@@ -150,8 +148,8 @@ pub const BLOCKS: &[Block] = &[
     },
     Block {
         name: "Breakable",
-        summary: "Has hit points and can be hit.",
-        parts: &["Health", "StatusEffects", "Attackable"],
+        summary: "Has hit points: can be hit, blasted and burned.",
+        parts: &["Health", "StatusEffects"],
     },
     Block { name: "Obstacle", summary: "Stands in the way.", parts: &["BlocksMovement"] },
     Block { name: "Wall-like", summary: "Stands in the way and blocks sight.", parts: &["BlocksMovement", "BlocksVision"] },

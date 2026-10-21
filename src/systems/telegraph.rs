@@ -183,7 +183,7 @@ pub fn lean_offsets(world: &World, now: f32) -> Vec<(Entity, (f32, f32))> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{ActionInProgress, Attackable, Health};
+    use crate::components::{ActionInProgress, Health};
 
     fn hostile(world: &mut World, x: i32, y: i32) -> Entity {
         world.spawn((Position::new(x, y), Actor::new(1.0), ChaseAI::new(8), Health::new(5)))
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn melee_telegraph_tracks_progress_in_game_time_and_marks_the_target_tile() {
         let mut world = World::new();
-        let target = world.spawn((Position::new(5, 6), Attackable, Health::new(10)));
+        let target = world.spawn((Position::new(5, 6), Health::new(10)));
         let orc = hostile(&mut world, 5, 5);
         set_action(&mut world, orc, ActionType::Attack { target }, 1.0, 2.0);
 
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn a_swing_that_will_whiff_is_not_telegraphed() {
         let mut world = World::new();
-        let target = world.spawn((Position::new(5, 8), Attackable, Health::new(10)));
+        let target = world.spawn((Position::new(5, 8), Health::new(10)));
         let orc = hostile(&mut world, 5, 5);
         set_action(&mut world, orc, ActionType::Attack { target }, 0.0, 1.0);
         assert!(hostile_telegraphs(&world, 0.5).is_empty());
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn tamed_companions_and_idle_hostiles_are_not_telegraphed() {
         let mut world = World::new();
-        let target = world.spawn((Position::new(5, 6), Attackable, Health::new(10)));
+        let target = world.spawn((Position::new(5, 6), Health::new(10)));
         // Adjacent but not swinging.
         hostile(&mut world, 4, 6);
         // Swinging, but a tamed companion.

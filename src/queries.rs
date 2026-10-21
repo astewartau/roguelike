@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use hecs::Entity;
 use crate::world::World;
 
-use crate::components::{
-    Actor, Attackable, BlocksMovement, EffectType, Equipment, Position, Stats,
+use crate::components::{Health, 
+    Actor, BlocksMovement, EffectType, Equipment, Position, Stats,
 };
 use crate::spatial_cache::SpatialCache;
 use crate::systems::effects;
@@ -34,7 +34,7 @@ pub fn get_attackable_at(
     exclude: Option<Entity>,
 ) -> Option<Entity> {
     world
-        .query::<(&Position, &Attackable)>()
+        .query::<(&Position, &Health)>()
         .iter()
         .find(|(id, (pos, _))| {
             pos.x == x && pos.y == y && (exclude != Some(*id))
@@ -132,7 +132,7 @@ fn stops_flyers(world: &World, blocker: Entity) -> bool {
         .entity(blocker)
         .map(|e| {
             e.has::<Actor>()
-                || e.has::<Attackable>()
+                || e.has::<Health>()
                 || e.has::<crate::components::FriendlyNPC>()
                 || e.has::<crate::components::Door>()
         })
