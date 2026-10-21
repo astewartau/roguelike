@@ -309,6 +309,8 @@ pub(super) fn picker(
             let entries: Vec<&catalog::Info> = catalog::INFO
                 .iter()
                 .filter(|info| info.group == group && !has(info.name) && info.name != "Position")
+                // Modifiers of something already here are switches in its card.
+                .filter(|info| catalog::host_of(info.name, has).is_none())
                 .filter(|info| matches(info.name, info.summary, info.phrase))
                 .collect();
             if entries.is_empty() {
@@ -354,14 +356,19 @@ pub(super) fn picker(
 fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool {
     let mut changed = false;
     let mut remove = None;
+    let mut edits: Vec<PartEdit> = Vec::new();
     let group_of = |name: &str| {
         catalog::info_of(name)
             .map(|i| i.group)
             .unwrap_or("Internal")
     };
     for group in GROUPS {
+        let current = dev.prefabs[i].clone();
+        let has = |n: &str| current.has(n);
         let indices: Vec<usize> = (0..dev.prefabs[i].components.len())
             .filter(|&n| group_of(&dev.prefabs[i].components[n].component) == group)
+            // A modifier is a switch in its host's card, not a card itself.
+            .filter(|&n| catalog::host_of(&dev.prefabs[i].components[n].component, &has).is_none())
             .collect();
         if indices.is_empty() {
             continue;
@@ -417,6 +424,11 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
                             if !value.is_null() {
                                 changed |= ui.push_id(("part", n), |ui| edit_value(ui, art, &name, "", value)).inner;
                             }
+                            if let Some(need) = trigger_line(ui, &name, &has) {
+                                edits.push(PartEdit::Add(need));
+                            }
+                            let value_of = |m: &str| current.value(m).cloned();
+                            edits.extend(ui.push_id(("mods", n), |ui| modifier_switches(ui, art, &name, &has, &value_of)).inner);
                         });
                 }
             },
@@ -426,7 +438,105 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
         dev.prefabs[i].remove_at(n);
         changed = true;
     }
+    for edit in edits {
+        let prefab = &mut dev.prefabs[i];
+        match edit {
+            PartEdit::Add(name) => {
+                prefab.add(name);
+            }
+            PartEdit::Remove(name) => {
+                if let Some(n) = prefab.components.iter().position(|c| c.component == name) {
+                    prefab.remove_at(n);
+                }
+            }
+            PartEdit::Set(name, value) => {
+                if let Some(part) = prefab.components.iter_mut().find(|c| c.component == name) {
+                    part.value = value;
+                }
+            }
+        }
+        changed = true;
+    }
     changed
+}
+
+/// A change to the parts of an entity (or a prefab) asked for from inside a
+/// card: the builder applies it to the prefab, the inspector sends it to
+/// the world.
+pub(super) enum PartEdit {
+    Add(&'static str),
+    Remove(&'static str),
+    Set(&'static str, serde_json::Value),
+}
+
+/// Inside `host`'s card: a switch for each modifier that belongs to it (see
+/// `catalog::MODIFIERS`), and, under each one switched on, its settings.
+pub(super) fn modifier_switches(
+    ui: &mut egui::Ui,
+    art: &DevArt,
+    host: &str,
+    has: &dyn Fn(&str) -> bool,
+    value_of: &dyn Fn(&str) -> Option<serde_json::Value>,
+) -> Vec<PartEdit> {
+    let mine: Vec<&(&'static str, &'static str, &'static str)> = catalog::MODIFIERS
+        .iter()
+        .filter(|(m, hosts, _)| {
+            // Where it sits: the host it's under if it's on, else the first
+            // of its hosts that's here.
+            catalog::host_of(m, has) == Some(host) && hosts.split('|').any(|h| h == host)
+        })
+        .collect();
+    let mut edits = Vec::new();
+    if mine.is_empty() {
+        return edits;
+    }
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        for (modifier, _, label) in &mine {
+            let mut on = has(modifier);
+            let info = catalog::info_of(modifier).map(|i| i.summary).unwrap_or("");
+            if look::toggle(ui, &mut on, *label).on_hover_text(info).changed() {
+                edits.push(if on { PartEdit::Add(modifier) } else { PartEdit::Remove(modifier) });
+            }
+        }
+    });
+    for (modifier, _, label) in &mine {
+        let Some(mut value) = value_of(modifier).filter(|v| !v.is_null()) else { continue };
+        ui.label(egui::RichText::new(*label).small().color(look::pal(ui).muted));
+        if ui.push_id(("modifier", *modifier), |ui| edit_value(ui, art, modifier, "", &mut value)).inner {
+            edits.push(PartEdit::Set(modifier, value));
+        }
+    }
+    edits
+}
+
+/// For a reaction (`catalog::TRIGGERS`): "Goes off when", each trigger
+/// with a dot (filled if it can happen here) and, if it can't, a button to
+/// add what it needs. Returns the component asked for.
+pub(super) fn trigger_line(ui: &mut egui::Ui, name: &str, has: &dyn Fn(&str) -> bool) -> Option<&'static str> {
+    let triggers = catalog::triggers_of(name);
+    if triggers.is_empty() {
+        return None;
+    }
+    let p = look::pal(ui);
+    let mut add = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("Goes off when").small().color(p.muted));
+        for (label, need) in triggers {
+            let possible = need.is_empty() || has(need);
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            if possible {
+                ui.painter().circle_filled(dot.center(), 4.0, p.accent);
+            } else {
+                ui.painter().circle_stroke(dot.center(), 3.5, egui::Stroke::new(1.0_f32, p.muted));
+            }
+            ui.label(egui::RichText::new(*label).color(if possible { p.text } else { p.muted }));
+            if !possible && ui.small_button(format!("+ {need}")).on_hover_text(format!("Add {need} so this can happen")).clicked() {
+                add = crate::component_registry::find(need).map(|e| e.name);
+            }
+        }
+    });
+    add
 }
 
 #[cfg(test)]
@@ -446,12 +556,19 @@ mod tests {
         }
         assert!(p.unmet_needs().is_empty(), "{:?}", p.unmet_needs());
 
-        // Something that shatters wants to be breakable.
+        // Something that shatters can be knocked into from the start, and
+        // broken once it has Health: its triggers say which are possible.
         let mut lamp = Prefab::empty("Lamp");
         lamp.add("Shatters");
-        let unmet: Vec<_> = lamp.unmet_needs().into_iter().map(|(_, n)| n).collect();
-        assert_eq!(unmet, vec!["Health"]);
+        let possible = |p: &Prefab| {
+            crate::devtools::catalog::triggers_of("Shatters")
+                .iter()
+                .filter(|(_, need)| need.is_empty() || p.has(need))
+                .map(|(label, _)| *label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(possible(&lamp), vec!["knocked into"]);
         lamp.add("Health");
-        assert!(lamp.unmet_needs().is_empty());
+        assert_eq!(possible(&lamp), vec!["broken (0 HP)", "knocked into"]);
     }
 }

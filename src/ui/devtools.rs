@@ -606,7 +606,14 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
     use crate::devtools::catalog;
     let group_of = |name: &str| catalog::info_of(name).map(|i| i.group).unwrap_or("Internal");
     for group in catalog::GROUPS {
-        let here: Vec<_> = known.iter().filter(|entry| group_of(entry.name) == group).collect();
+        let names: Vec<&str> = known.iter().map(|k| k.name).collect();
+        let has = |n: &str| names.contains(&n);
+        let here: Vec<_> = known
+            .iter()
+            .filter(|entry| group_of(entry.name) == group)
+            // A modifier is a switch in its host's card, not a card itself.
+            .filter(|entry| catalog::host_of(entry.name, &has).is_none())
+            .collect();
         if here.is_empty() {
             continue;
         }
@@ -643,6 +650,20 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                     }
                     if let Some(why) = error {
                         ui.colored_label(look::pal(ui).danger, why);
+                    }
+                    use super::devtools_prefab::{modifier_switches, trigger_line, PartEdit};
+                    let mut edits = Vec::new();
+                    if let Some(need) = trigger_line(ui, entry.name, &has) {
+                        edits.push(PartEdit::Add(need));
+                    }
+                    let value_of = |m: &str| crate::component_registry::find(m).and_then(|c| (c.read)(world, e));
+                    edits.extend(ui.push_id(("mods", entry.name), |ui| modifier_switches(ui, art, entry.name, &has, &value_of)).inner);
+                    for edit in edits {
+                        dev.commands.push(match edit {
+                            PartEdit::Add(name) => DevCommand::AddComponent { entity: e, name },
+                            PartEdit::Remove(name) => DevCommand::RemoveComponent { entity: e, name },
+                            PartEdit::Set(name, value) => DevCommand::SetComponent { entity: e, name, value },
+                        });
                     }
                 });
             }

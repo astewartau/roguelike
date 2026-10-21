@@ -82,8 +82,8 @@ pub const INFO: &[Info] = &[
     info("OnFire", "Fire & light", "on fire", "Burning right now (fuel only).", &[]),
     info("CausesBurning", "Fire & light", "burns what steps in", "Sets alight whatever steps onto it.", &[]),
     info("Topples", "Fire & light", "topples", "Knocked into while lit, it tips over and spills its fire.", &["Fuel"]),
-    info("Shatters", "Fire & light", "shatters", "Breaks at 0 HP into a puddle of burning oil.", &["Health"]),
-    info("Explosive", "Fire & light", "explodes", "Burning or broken open, it lights a fuse and blows up.", &["Health|Combustible"]),
+    info("Shatters", "Fire & light", "shatters", "Breaks at 0 HP into a puddle of burning oil.", &[]),
+    info("Explosive", "Fire & light", "explodes", "Burning or broken open, it lights a fuse and blows up.", &[]),
     info("BarrelFuse", "Fire & light", "fuse lit", "A lit fuse; it goes off when this runs out.", &[]),
     info("OilPuddle", "Fire & light", "oily", "Oil: coats whoever walks through it, and burns hot.", &["Fuel"]),
     info("WetTile", "Fire & light", "wet", "A soaked tile: damp fuel on it won't catch.", &[]),
@@ -117,6 +117,58 @@ pub const INFO: &[Info] = &[
     info("RangedCooldown", "Internal", "", "Time until its next shot.", &["ChaseAI"]),
     info("GrabbedBy", "Internal", "", "Who is holding it.", &[]),
 ];
+
+/// Components that only adjust another one (their host): the builder shows
+/// each as a switch inside its host's card, with its own few settings
+/// under it, rather than as a card of its own. They stay separate
+/// components (systems ask for them directly); this is only how they're
+/// edited. Each is (modifier, host or "A|B" hosts, the switch's label).
+pub const MODIFIERS: &[(&str, &str, &str)] = &[
+    ("Asleep", "ChaseAI", "asleep"),
+    ("SeesInDark", "ChaseAI", "sees in the dark"),
+    ("Tameable", "ChaseAI", "can be tamed"),
+    ("SupportAI", "ChaseAI", "heals and hastes allies"),
+    ("Flanker", "ChaseAI", "flanks"),
+    ("PackHunter", "ChaseAI", "hunts in packs"),
+    ("Charger", "ChaseAI", "charges"),
+    ("HitAndRun", "ChaseAI", "hits and runs"),
+    ("WebSpinner", "ChaseAI", "spins webs"),
+    ("CanOpenDoors", "ChaseAI|CompanionAI", "opens doors"),
+    ("FearImmune", "ChaseAI|CompanionAI", "fearless"),
+    ("Venomous", "ChaseAI|CompanionAI", "venomous bite"),
+    ("Lacerating", "ChaseAI|CompanionAI", "makes wounds bleed"),
+    ("Grabber", "ChaseAI|CompanionAI", "grabs"),
+    ("DevFrozen", "Actor", "frozen (dev)"),
+    ("SpriteTint", "Sprite|AnimatedSprite", "tinted"),
+    ("OverlaySprite", "Sprite", "second picture on top"),
+    ("FlameOverlay", "Sprite", "flames on top"),
+];
+
+/// The host `modifier` sits in, among those `has` (the first present), if
+/// it's a modifier and one of its hosts is there.
+pub fn host_of(modifier: &str, has: &dyn Fn(&str) -> bool) -> Option<&'static str> {
+    MODIFIERS
+        .iter()
+        .find(|(m, _, _)| *m == modifier)
+        .and_then(|(_, hosts, _)| hosts.split('|').find(|h| has(h)))
+}
+
+/// Reactions: what sets each one off, and what each trigger needs on the
+/// entity to be possible ("" for nothing more). The builder shows them as
+/// a "goes off when" line, ticked or crossed.
+pub const TRIGGERS: &[(&str, &[(&str, &str)])] = &[
+    ("Explosive", &[("hurt", "Health"), ("set burning", "Combustible")]),
+    ("Shatters", &[("broken (0 HP)", "Health"), ("knocked into", "")]),
+    ("Splits", &[("badly hurt", "Health")]),
+    ("Topples", &[("knocked into while lit", "Fuel")]),
+    ("Trap", &[("stepped on", "")]),
+    ("Web", &[("walked into", "")]),
+];
+
+/// What sets `name` off, if it's a reaction.
+pub fn triggers_of(name: &str) -> &'static [(&'static str, &'static str)] {
+    TRIGGERS.iter().find(|(n, _)| *n == name).map(|(_, t)| *t).unwrap_or(&[])
+}
 
 /// What the builder knows about `name`, if anything.
 pub fn info_of(name: &str) -> Option<&'static Info> {
@@ -189,10 +241,42 @@ mod tests {
             }
             assert!(crate::component_registry::find(info.name).is_some(), "{} is described but not registered", info.name);
         }
+        for (modifier, hosts, _) in MODIFIERS {
+            assert!(crate::component_registry::find(modifier).is_some(), "modifier {modifier} isn't registered");
+            for host in hosts.split('|') {
+                assert!(crate::component_registry::find(host).is_some(), "{modifier}'s host {host} isn't registered");
+            }
+        }
+        for (reaction, triggers) in TRIGGERS {
+            assert!(crate::component_registry::find(reaction).is_some(), "reaction {reaction} isn't registered");
+            for (_, need) in *triggers {
+                assert!(need.is_empty() || crate::component_registry::find(need).is_some(), "{reaction} trigger needs {need}");
+            }
+        }
         for block in BLOCKS {
             for part in block.parts {
                 assert!(crate::component_registry::find(part).is_some(), "{}: unknown part {part}", block.name);
             }
         }
     }
+
+    /// A modifier lives in its host's card when the host is there (and is
+    /// an ordinary entry otherwise); a reaction knows what each of its
+    /// triggers needs.
+    #[test]
+    fn modifiers_find_their_host_and_reactions_their_triggers() {
+        let hostile = |n: &str| ["Actor", "ChaseAI", "Sprite"].contains(&n);
+        assert_eq!(host_of("Charger", &hostile), Some("ChaseAI"));
+        assert_eq!(host_of("Venomous", &hostile), Some("ChaseAI"));
+        assert_eq!(host_of("SpriteTint", &hostile), Some("Sprite"));
+        let companion = |n: &str| ["Actor", "CompanionAI", "Follower"].contains(&n);
+        assert_eq!(host_of("Venomous", &companion), Some("CompanionAI"), "either mind hosts it");
+        assert_eq!(host_of("Charger", &companion), None, "only a hostile mind charges");
+        assert_eq!(host_of("Explosive", &hostile), None, "not a modifier");
+
+        let explosive: Vec<_> = triggers_of("Explosive").iter().map(|(_, need)| *need).collect();
+        assert_eq!(explosive, vec!["Health", "Combustible"]);
+        assert!(triggers_of("Name").is_empty());
+    }
 }
+
