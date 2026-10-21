@@ -27,7 +27,34 @@
 use std::any::TypeId;
 use std::ops::Deref;
 
-use hecs::{Component, ComponentError, DynamicBundle, Entity, NoSuchEntity, Query, QueryMut};
+use hecs::{
+    Component, ComponentError, DynamicBundle, Entity, NoSuchEntity, PreparedQuery, PreparedQueryIter, Query, QueryMut,
+};
+
+/// Declares cached queries, one per-thread `hecs::PreparedQuery` each, for
+/// sweeps that run on every step of the simulation.
+///
+/// Most of a plain query's cost is matching it against every archetype in
+/// the world, and a floor has dozens of those, most of them empty (hecs
+/// never frees one, and adding or removing a component makes new ones). A
+/// prepared query keeps its matching and redoes it only when the world
+/// gains an archetype (or it is used on a different world), so a sweep
+/// costs only the entities it visits. Iteration order is the same as a
+/// plain query's.
+///
+/// ```ignore
+/// prepared_query! { STATUS: &'static mut StatusEffects; }
+/// STATUS.with_borrow_mut(|q| for (_, effects) in world.prepared_query_mut(q) { ... });
+/// ```
+macro_rules! prepared_query {
+    ($($name:ident: $q:ty;)+) => {
+        thread_local! {
+            $(static $name: std::cell::RefCell<hecs::PreparedQuery<$q>> =
+                std::cell::RefCell::new(hecs::PreparedQuery::new());)+
+        }
+    };
+}
+pub(crate) use prepared_query;
 
 /// A change to an entity the engine's bookkeeping has to follow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +134,12 @@ impl World {
     /// which components entities have, so it needs no hooks.
     pub fn query_mut<Q: Query>(&mut self) -> QueryMut<'_, Q> {
         self.inner.query_mut::<Q>()
+    }
+
+    /// `query_mut` with the archetype matching done in advance: see
+    /// [`prepared_query!`].
+    pub fn prepared_query_mut<'q, Q: Query>(&'q mut self, query: &'q mut PreparedQuery<Q>) -> PreparedQueryIter<'q, Q> {
+        query.query_mut(&mut self.inner)
     }
 
     /// The component types `entity` has (none if it's gone).

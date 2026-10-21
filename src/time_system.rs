@@ -526,29 +526,17 @@ fn apply_action_effects(
 
 /// Process time-based health regeneration
 pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&mut EventQueue>) {
-    use std::collections::HashSet;
-
-    // First pass: collect entities with Regenerating effect (boosted regen)
-    let regenerating: HashSet<Entity> = world
-        .query::<(&Health, &StatusEffects)>()
-        .iter()
-        .filter_map(|(id, (_, status_effects))| {
-            if effects::has_effect(status_effects, EffectType::Regenerating) {
-                Some(id)
-            } else {
-                None
-            }
-        })
-        .collect();
+    crate::world::prepared_query! {
+        REGEN: (&'static mut Health, Option<&'static crate::components::Hunger>, Option<&'static StatusEffects>);
+    }
 
     // Collect regen info first to avoid borrow issues
     let mut regen_events: Vec<(Entity, i32)> = Vec::new();
 
-    for (id, (health, hunger)) in
-        world.query_mut::<(&mut Health, Option<&crate::components::Hunger>)>()
-    {
+    REGEN.with_borrow_mut(|q| for (id, (health, hunger, status_effects)) in world.prepared_query_mut(q) {
         // Check if this entity has boosted regen from Regenerating effect
-        let has_regen_boost = regenerating.contains(&id);
+        let has_regen_boost =
+            status_effects.is_some_and(|s| effects::has_effect(s, EffectType::Regenerating));
 
         // Hungry (player-only Hunger meter below threshold): natural HP regen
         // stops. Potion-boosted Regenerating still works — it's not "natural".
@@ -581,7 +569,7 @@ pub fn tick_health_regen(world: &mut World, current_time: f32, events: Option<&m
                 regen_events.push((id, amount));
             }
         }
-    }
+    });
 
     // Emit events
     if let Some(events) = events {
@@ -630,12 +618,15 @@ pub fn tick_status_effects(world: &mut World, elapsed: f32) {
         return;
     }
 
-    for (_, effects) in world.query_mut::<&mut StatusEffects>() {
-        effects.effects.retain_mut(|effect| {
-            effect.remaining_duration -= elapsed;
-            effect.remaining_duration > 0.0
-        });
-    }
+    crate::world::prepared_query! { STATUS: &'static mut StatusEffects; }
+    STATUS.with_borrow_mut(|q| {
+        for (_, effects) in world.prepared_query_mut(q) {
+            effects.effects.retain_mut(|effect| {
+                effect.remaining_duration -= elapsed;
+                effect.remaining_duration > 0.0
+            });
+        }
+    });
 }
 
 /// Process ability cooldown ticks
@@ -646,32 +637,47 @@ pub fn tick_ability_cooldowns(world: &mut World, elapsed: f32) {
         return;
     }
 
-    for (_, ability) in world.query_mut::<&mut ClassAbility>() {
-        if ability.cooldown_remaining > 0.0 {
-            ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
-        }
+    crate::world::prepared_query! {
+        CLASS: &'static mut ClassAbility;
+        SECONDARY: &'static mut SecondaryAbility;
+        KIT: &'static mut ClassKit;
+        LEARNED: &'static mut LearnedAbilities;
     }
 
-    // Also tick secondary abilities (Druid's Barkskin)
-    for (_, ability) in world.query_mut::<&mut SecondaryAbility>() {
-        if ability.cooldown_remaining > 0.0 {
-            ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
-        }
-    }
-
-    // Also tick the per-class kit abilities
-    for (_, kit) in world.query_mut::<&mut ClassKit>() {
-        kit.tick(elapsed);
-    }
-
-    // Also tick learned spells (studied scrolls + Raise Dead)
-    for (_, learned) in world.query_mut::<&mut LearnedAbilities>() {
-        for spell in learned.spells.iter_mut() {
-            if spell.cooldown_remaining > 0.0 {
-                spell.cooldown_remaining = (spell.cooldown_remaining - elapsed).max(0.0);
+    CLASS.with_borrow_mut(|q| {
+        for (_, ability) in world.prepared_query_mut(q) {
+            if ability.cooldown_remaining > 0.0 {
+                ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
             }
         }
-    }
+    });
+
+    // Also tick secondary abilities (Druid's Barkskin)
+    SECONDARY.with_borrow_mut(|q| {
+        for (_, ability) in world.prepared_query_mut(q) {
+            if ability.cooldown_remaining > 0.0 {
+                ability.cooldown_remaining = (ability.cooldown_remaining - elapsed).max(0.0);
+            }
+        }
+    });
+
+    // Also tick the per-class kit abilities
+    KIT.with_borrow_mut(|q| {
+        for (_, kit) in world.prepared_query_mut(q) {
+            kit.tick(elapsed);
+        }
+    });
+
+    // Also tick learned spells (studied scrolls + Raise Dead)
+    LEARNED.with_borrow_mut(|q| {
+        for (_, learned) in world.prepared_query_mut(q) {
+            for spell in learned.spells.iter_mut() {
+                if spell.cooldown_remaining > 0.0 {
+                    spell.cooldown_remaining = (spell.cooldown_remaining - elapsed).max(0.0);
+                }
+            }
+        }
+    });
 }
 
 /// Process ranged attack cooldown ticks (for enemies with bows)
@@ -680,11 +686,14 @@ pub fn tick_ranged_cooldowns(world: &mut World, elapsed: f32) {
         return;
     }
 
-    for (_, cooldown) in world.query_mut::<&mut RangedCooldown>() {
-        if cooldown.remaining > 0.0 {
-            cooldown.remaining = (cooldown.remaining - elapsed).max(0.0);
+    crate::world::prepared_query! { RANGED: &'static mut RangedCooldown; }
+    RANGED.with_borrow_mut(|q| {
+        for (_, cooldown) in world.prepared_query_mut(q) {
+            if cooldown.remaining > 0.0 {
+                cooldown.remaining = (cooldown.remaining - elapsed).max(0.0);
+            }
         }
-    }
+    });
 }
 
 /// Process burn damage for entities with the Burning effect
@@ -695,10 +704,12 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
     let mut burn_events: Vec<(Entity, (f32, f32), i32)> = Vec::new();
     let mut deaths: Vec<Entity> = Vec::new();
 
+    crate::world::prepared_query! {
+        BURNABLE: (&'static mut Health, &'static mut StatusEffects, &'static Position);
+    }
+
     // First pass: find burning entities and check if they should take damage
-    for (entity, (health, effects, pos)) in
-        world.query_mut::<(&mut Health, &mut StatusEffects, &Position)>()
-    {
+    BURNABLE.with_borrow_mut(|q| for (entity, (health, effects, pos)) in world.prepared_query_mut(q) {
         // Oil burns hot: an Oiled creature takes more from each burn tick.
         let oiled = effects.effects.iter().any(|e| e.effect_type == EffectType::Oiled);
         // Find the burning effect
@@ -725,7 +736,7 @@ pub fn tick_burn_damage(world: &mut World, current_time: f32, events: &mut Event
                 }
             }
         }
-    }
+    });
 
     // Emit burn damage events and interrupt channeling
     for (entity, position, damage) in burn_events {
@@ -766,8 +777,10 @@ pub fn tick_dot_damage(
     use crate::components::{Player, Position};
     use crate::events::DamageKind;
 
+    crate::world::prepared_query! { AFFLICTABLE: (&'static Health, &'static mut StatusEffects); }
+
     let mut due: Vec<(Entity, DamageKind, i32)> = Vec::new();
-    for (entity, (health, effects)) in world.query_mut::<(&Health, &mut StatusEffects)>() {
+    AFFLICTABLE.with_borrow_mut(|q| for (entity, (health, effects)) in world.prepared_query_mut(q) {
         if health.current <= 0 {
             continue;
         }
@@ -782,7 +795,7 @@ pub fn tick_dot_damage(
                 due.push((entity, kind, damage));
             }
         }
-    }
+    });
 
     for (entity, kind, raw) in due {
         let alive = world.get::<&Health>(entity).map(|h| h.current > 0).unwrap_or(false);

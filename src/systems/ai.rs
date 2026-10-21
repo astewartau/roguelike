@@ -7,7 +7,7 @@
 //! operate in defensive mode — they only engage enemies that have attacked
 //! the player or that the player has attacked.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use hecs::Entity;
 use crate::world::World;
@@ -81,20 +81,20 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
         return;
     }
 
-    // Entity positions for visibility checks. A HashMap, not a Vec: this is
-    // probed once per threat-table entry per entity per tick, and deep floors
-    // carry ~47 enemies with several entries each — a linear scan made the
-    // whole pass quadratic in entity count.
-    let positions: HashMap<Entity, (i32, i32)> = world
-        .query::<&Position>()
-        .iter()
-        .map(|(e, p)| (e, (p.x, p.y)))
-        .collect();
-
-    let pos_lookup = |entity: Entity| -> Option<(i32, i32)> { positions.get(&entity).copied() };
+    // The sweeps borrow the world shared (with the threat tables borrowed
+    // unique by the query), so a target's position is looked up directly:
+    // reading Position is only shared, which the sweeps' own borrow allows.
+    // This runs on every step, so it neither builds a position map nor
+    // matches the world's archetypes afresh (`prepared_query!`).
+    crate::world::prepared_query! {
+        CHASERS: (&'static Position, &'static mut ChaseAI);
+        COMPANIONS: (&'static Position, &'static mut CompanionAI);
+    }
+    let world = &*world;
+    let pos_lookup = |entity: Entity| -> Option<(i32, i32)> { world.get::<&Position>(entity).ok().map(|p| (p.x, p.y)) };
 
     // Decay enemy threat tables
-    for (_, (pos, ai)) in world.query_mut::<(&Position, &mut ChaseAI)>() {
+    CHASERS.with_borrow_mut(|q| for (_, (pos, ai)) in q.query(world).iter() {
         let entity_pos = (pos.x, pos.y);
         for entry in ai.threat_table.iter_mut() {
             let target_visible = pos_lookup(entry.entity)
@@ -119,10 +119,10 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
             }
         }
         ai.threat_table.retain(|e| e.time_at_minimum < THREAT_MEMORY_DURATION);
-    }
+    });
 
     // Decay companion threat tables
-    for (_, (pos, ai)) in world.query_mut::<(&Position, &mut CompanionAI)>() {
+    COMPANIONS.with_borrow_mut(|q| for (_, (pos, ai)) in q.query(world).iter() {
         let entity_pos = (pos.x, pos.y);
         for entry in ai.threat_table.iter_mut() {
             let target_visible = pos_lookup(entry.entity)
@@ -138,7 +138,7 @@ pub fn tick_threat_decay(world: &mut World, grid: &Grid, spatial_cache: &Spatial
             }
         }
         ai.threat_table.retain(|e| e.time_at_minimum < THREAT_MEMORY_DURATION);
-    }
+    });
 }
 
 /// Simple distance check for sight (Chebyshev distance).
@@ -209,12 +209,17 @@ pub(crate) fn investigate_noise(world: &mut World, entity: Entity, toward: (i32,
 /// Count down shout cooldowns in game time. The shout itself is a `Channel`,
 /// advanced by the shouter's Waits.
 pub fn tick_shout_cooldowns(world: &mut World, elapsed: f32) {
-    // Decrement shout cooldowns.
-    for (_, ai) in world.query_mut::<&mut ChaseAI>() {
-        if ai.shout_cooldown > 0.0 {
-            ai.shout_cooldown = (ai.shout_cooldown - elapsed).max(0.0);
-        }
+    if elapsed <= 0.0 {
+        return;
     }
+    crate::world::prepared_query! { SHOUTERS: &'static mut ChaseAI; }
+    SHOUTERS.with_borrow_mut(|q| {
+        for (_, ai) in world.prepared_query_mut(q) {
+            if ai.shout_cooldown > 0.0 {
+                ai.shout_cooldown = (ai.shout_cooldown - elapsed).max(0.0);
+            }
+        }
+    });
 }
 
 /// Advance the role-specific ability cooldowns (shaman support casts, spider
@@ -224,21 +229,28 @@ pub fn tick_role_cooldowns(world: &mut World, elapsed: f32) {
     if elapsed <= 0.0 {
         return;
     }
-    for (_, support) in world.query_mut::<&mut SupportAI>() {
+    crate::world::prepared_query! {
+        SUPPORTS: &'static mut SupportAI;
+        SPINNERS: &'static mut WebSpinner;
+        BOSSES: &'static mut Boss;
+        HIT_AND_RUNS: &'static mut HitAndRun;
+        CHARGERS: &'static mut Charger;
+    }
+    SUPPORTS.with_borrow_mut(|q| world.prepared_query_mut(q).for_each(|(_, support)| {
         support.cooldown = (support.cooldown - elapsed).max(0.0);
-    }
-    for (_, spinner) in world.query_mut::<&mut WebSpinner>() {
+    }));
+    SPINNERS.with_borrow_mut(|q| world.prepared_query_mut(q).for_each(|(_, spinner)| {
         spinner.cooldown = (spinner.cooldown - elapsed).max(0.0);
-    }
-    for (_, boss) in world.query_mut::<&mut Boss>() {
+    }));
+    BOSSES.with_borrow_mut(|q| world.prepared_query_mut(q).for_each(|(_, boss)| {
         boss.cooldown = (boss.cooldown - elapsed).max(0.0);
-    }
-    for (_, hit_and_run) in world.query_mut::<&mut HitAndRun>() {
+    }));
+    HIT_AND_RUNS.with_borrow_mut(|q| world.prepared_query_mut(q).for_each(|(_, hit_and_run)| {
         hit_and_run.retreat_remaining = (hit_and_run.retreat_remaining - elapsed).max(0.0);
-    }
-    for (_, charger) in world.query_mut::<&mut Charger>() {
+    }));
+    CHARGERS.with_borrow_mut(|q| world.prepared_query_mut(q).for_each(|(_, charger)| {
         charger.cooldown = (charger.cooldown - elapsed).max(0.0);
-    }
+    }));
 }
 
 /// A melee swing by `attacker` just resolved (hit or miss). Hit-and-run
@@ -1906,7 +1918,7 @@ mod tests {
     fn test_threat_decay_resolves_each_target_position_independently() {
         // tick_threat_decay looks up every threat target's position. That lookup
         // used a linear scan over a Vec of all entity positions, making the pass
-        // quadratic in entity count; it is a HashMap now. This test pins the
+        // quadratic in entity count; it is a direct `world.get` now. This test pins the
         // behaviour the lookup has to preserve: each enemy's own threat entries
         // decay at the visible or hidden rate according to *that* target's
         // position, not whichever entity the scan happened to reach first.
@@ -1971,7 +1983,7 @@ mod tests {
     fn test_threat_decay_handles_target_with_no_position() {
         // A target whose Position is gone (despawned corpse) must simply be
         // treated as not visible rather than panicking or matching some other
-        // entity — the HashMap lookup returns None exactly like the scan did.
+        // entity — the lookup returns None exactly like the scan did.
         let grid = open_grid(12, 5, None);
         let mut world = World::new();
 

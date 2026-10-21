@@ -44,6 +44,15 @@ pub fn update_projectiles(ctx: &mut EffectCtx, current_time: f32) {
     // (projectile_entity, x, y, potion_type, incendiary)
     let mut finished_projectiles: Vec<(Entity, i32, i32, Option<ItemType>, bool)> = Vec::new();
 
+    // This runs on every step of the simulation, and almost always with
+    // nothing in flight: then there is nothing to move or hit, so don't
+    // gather the attackables at all.
+    crate::world::prepared_query! { PROJECTILES: &'static Projectile; }
+    let in_flight = PROJECTILES.with_borrow_mut(|q| q.query(world).iter().any(|(_, p)| p.finished.is_none()));
+    if !in_flight {
+        return;
+    }
+
     // Get all attackable entities and their positions for collision checking
     let attackables: Vec<(Entity, i32, i32)> = world
         .query::<(&Position, &Health)>()
