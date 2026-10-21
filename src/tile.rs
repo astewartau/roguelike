@@ -463,6 +463,13 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// Whether it's drawn: explored, or in view now. In play a tile in
+    /// view is explored too; the editor shows every tile without exploring
+    /// it, so leaving the editor leaves the map as you'd explored it.
+    pub fn known(&self) -> bool {
+        self.explored || self.visible
+    }
+
     pub fn new(tile_type: TileType) -> Self {
         Self {
             tile_type,

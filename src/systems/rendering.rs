@@ -396,7 +396,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
 
         let (is_explored, is_visible) = grid
             .get(pos.x, pos.y)
-            .map(|tile| (tile.explored, tile.visible))
+            .map(|tile| (tile.known(), tile.visible))
             .unwrap_or((false, false));
 
         // Actors (enemies) are only visible in FOV, not in fog
@@ -540,7 +540,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     for (pos_x, pos_y, vis_x, vis_y, anim) in animated_entities {
         let (is_explored, is_visible) = grid
             .get(pos_x, pos_y)
-            .map(|tile| (tile.explored, tile.visible))
+            .map(|tile| (tile.known(), tile.visible))
             .unwrap_or((false, false));
 
         // Calculate current frame based on real time

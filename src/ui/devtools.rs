@@ -489,9 +489,11 @@ fn player_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
     use crate::devtools::cheats::{ALL_EFFECTS, LEARNABLE};
     let (world, player) = (view.world, view.player);
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         look::toggle(ui, &mut dev.god_mode, "God mode");
         look::toggle(ui, &mut dev.keep_fed, "Never hungry or tired");
+        look::toggle(ui, &mut dev.no_fog, "See everything")
+            .on_hover_text("While playing, no fog of war (and the whole map explored). The editor always sees everything.");
     });
 
     look::section(ui, "Health");
@@ -614,7 +616,6 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         if ui.button("Reveal map").clicked() {
             dev.commands.push(DevCommand::RevealMap);
         }
-        look::toggle(ui, &mut dev.no_fog, "See everything");
     });
 
     look::section(ui, "Creatures");

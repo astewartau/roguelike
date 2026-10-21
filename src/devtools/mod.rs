@@ -323,7 +323,8 @@ pub struct DevTools {
     pub god_mode: bool,
     /// Hunger stays full and fatigue at nothing.
     pub keep_fed: bool,
-    /// Every tile is seen, fog of war or not.
+    /// While playing (the tools hidden), every tile is seen and explored,
+    /// fog of war or not. The editor always sees everything regardless.
     pub no_fog: bool,
     /// Multiplies how fast animations and effects play (1 is normal), for
     /// watching them slowly. Game time is unaffected.

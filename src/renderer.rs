@@ -837,8 +837,8 @@ impl Renderer {
             for y in min_y..=max_y {
                 for x in min_x..=max_x {
                     if let Some(tile) = grid.get(x, y) {
-                        // Only render explored tiles
-                        if !tile.explored {
+                        // Only render explored tiles (or ones in view)
+                        if !tile.known() {
                             continue;
                         }
 
@@ -989,7 +989,7 @@ impl Renderer {
 
                 // Check if tile is explored (decals should respect fog of war)
                 let is_visible = grid.get(decal.x, decal.y)
-                    .map(|t| t.explored)
+                    .map(|t| t.known())
                     .unwrap_or(false);
 
                 if !is_visible {
@@ -1061,7 +1061,7 @@ impl Renderer {
             for y in min_y..=max_y {
                 for x in min_x..=max_x {
                     let Some(tile) = grid.get(x, y) else { continue };
-                    if tile.tile_type != crate::tile::TileType::TallGrass || !tile.explored {
+                    if tile.tile_type != crate::tile::TileType::TallGrass || !tile.known() {
                         continue;
                     }
                     let idx = y as usize * grid.width + x as usize;

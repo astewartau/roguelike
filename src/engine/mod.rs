@@ -258,7 +258,7 @@ impl GameEngine {
     }
 
     /// Start a sandbox: an empty walled arena, nobody in it, the developer
-    /// tools shown (no panel open) with the fog lifted and the world clock
+    /// tools shown (no panel open, the editor seeing everything) and the world clock
     /// on Hold (Run sets it going). Placing a player there makes them
     /// `class`.
     pub fn start_sandbox(&mut self, class: PlayerClass, camera: &mut Camera) {
@@ -271,7 +271,6 @@ impl GameEngine {
         let ui_state = GameUiState::new(state.player_entity);
         self.begin(state, ui_state);
         self.dev.visible = true;
-        self.dev.no_fog = true;
     }
 
     fn begin(&mut self, state: GameState, ui_state: GameUiState) {
@@ -862,8 +861,13 @@ impl GameEngine {
         }
 
         // Update visibility based on LOS and illumination (only when game
-        // state changed, or every frame while the dev tools lift the fog)
-        if state.fov_dirty || self.dev.no_fog {
+        // state changed, or every frame while the fog is lifted). The editor
+        // (the dev tools shown) sees every tile, without exploring it; in
+        // play only the Player tab's See everything lifts the fog, and that
+        // explores everything.
+        let editing = self.dev.visible;
+        let see_all = self.dev.no_fog && !editing;
+        if state.fov_dirty || editing || see_all {
             {
                 profile_scope!("fov_update");
                 systems::update_fov(
@@ -875,10 +879,10 @@ impl GameEngine {
                 );
             }
 
-            if self.dev.no_fog {
+            if editing || see_all {
                 for tile in &mut state.grid.tiles {
                     tile.visible = true;
-                    tile.explored = true;
+                    tile.explored |= see_all;
                 }
             }
 
@@ -915,7 +919,11 @@ impl GameEngine {
         // First-sighting boss announcements ("... glares at you!"). Cheap:
         // at most one boss per floor; the event is picked up by the message
         // log on the next event-processing pass.
-        systems::ai::announce_boss_sightings(&mut state.world, &state.grid, &mut self.events);
+        // A boss is announced when the player first sees it, not when the
+        // editor shows the whole map.
+        if !self.dev.visible {
+            systems::ai::announce_boss_sightings(&mut state.world, &state.grid, &mut self.events);
+        }
 
         // Collect renderables
         let entities = {
@@ -3077,6 +3085,37 @@ mod tests {
         }
         engine.dev.tool = None;
         (engine, camera)
+    }
+
+    /// The editor sees every tile without exploring any: leaving it brings
+    /// back the fog, the map explored just as before. In play, only the
+    /// Player tab's See everything lifts the fog (and explores it all).
+    #[test]
+    fn the_editor_sees_everything_without_exploring_it() {
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_game(PlayerClass::Fighter, 77, &mut camera);
+        let count = |engine: &GameEngine| {
+            let grid = &engine.state.as_ref().unwrap().grid;
+            let seen = grid.tiles.iter().filter(|t| t.visible).count();
+            let explored = grid.tiles.iter().filter(|t| t.explored).count();
+            (seen, explored, grid.tiles.len())
+        };
+        run_frames(&mut engine, &mut camera, 0.2);
+        let (seen, explored, all) = count(&engine);
+        assert!(seen < all && explored < all, "a fresh floor is mostly fog");
+
+        engine.dev.visible = true;
+        run_frames(&mut engine, &mut camera, 0.2);
+        assert_eq!(count(&engine), (all, explored, all), "the editor sees it all, exploring nothing");
+
+        engine.dev.visible = false;
+        run_frames(&mut engine, &mut camera, 0.2);
+        assert_eq!(count(&engine), (seen, explored, all), "back in play, the fog is back");
+
+        engine.dev.no_fog = true;
+        run_frames(&mut engine, &mut camera, 0.2);
+        assert_eq!(count(&engine), (all, all, all), "See everything, while playing");
     }
 
     /// The editor is lit evenly, player or no player: showing the tools
