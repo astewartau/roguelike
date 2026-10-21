@@ -85,6 +85,10 @@ pub struct GameState {
     /// Whether this run has already been written to the history file
     /// (guards against double-recording on death + return-to-menu).
     pub run_recorded: bool,
+
+    /// A sandbox: an empty arena to try things in with the developer tools,
+    /// with or without a player. Never recorded; dying doesn't end it.
+    pub sandbox: bool,
 }
 
 impl GameState {
@@ -130,7 +134,58 @@ impl GameState {
             player_class,
             kills: 0,
             run_recorded: false,
+            sandbox: false,
         }
+    }
+
+    /// An empty walled arena with nobody in it, for the developer tools.
+    /// `player_class` is who appears when a player is placed. Until then
+    /// `player_entity` names no one, which everything that asks after the
+    /// player already treats as "no player".
+    pub fn new_sandbox(player_class: PlayerClass) -> Self {
+        let (w, h) = (SANDBOX_WIDTH, SANDBOX_HEIGHT);
+        let mut grid = Grid::filled(w, h, crate::tile::TileType::Floor);
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                if x == 0 || y == 0 || x == w as i32 - 1 || y == h as i32 - 1 {
+                    if let Some(tile) = grid.get_mut(x, y) {
+                        tile.tile_type = crate::tile::TileType::Wall;
+                    }
+                }
+            }
+        }
+        for tile in &mut grid.tiles {
+            tile.explored = true;
+        }
+        let world = World::new();
+        let spatial_cache = SpatialCache::rebuild_from_world(&world);
+        let seed = rand::random::<u64>();
+        Self {
+            world,
+            grid,
+            player_entity: Entity::DANGLING,
+            current_floor: 0,
+            floors: HashMap::new(),
+            game_clock: GameClock::new(),
+            action_scheduler: ActionScheduler::new(),
+            fov_dirty: true,
+            spatial_cache,
+            active_ai_tracker: ActiveAITracker::new(),
+            fire_accumulator: 0.0,
+            identify_accumulator: 0.0,
+            survival_accumulator: 0.0,
+            seed,
+            rng: StdRng::seed_from_u64(seed),
+            player_class,
+            kills: 0,
+            run_recorded: true,
+            sandbox: true,
+        }
+    }
+
+    /// Whether there is a player in the world (a sandbox may have none).
+    pub fn has_player(&self) -> bool {
+        self.world.contains(self.player_entity)
     }
 
     /// Bundle this state's simulation fields with the engine-owned event queue

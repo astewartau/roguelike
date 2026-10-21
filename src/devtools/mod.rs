@@ -126,6 +126,9 @@ pub enum CursorTool {
     LookOfExplosion { fiery: bool },
     /// Fire a projectile from the player at the tile, for real.
     Shoot(Shot),
+    /// Put a fresh player of this class on the tile, in place of any
+    /// player already there.
+    PlacePlayer(crate::components::PlayerClass),
 }
 
 /// What the effects bench can fire.
@@ -207,6 +210,7 @@ impl CursorTool {
             CursorTool::LookOfExplosion { fiery: true } => "Explosion (look only)".into(),
             CursorTool::LookOfExplosion { fiery: false } => "Shockwave (look only)".into(),
             CursorTool::Shoot(shot) => format!("Shoot {}", shot.name()),
+            CursorTool::PlacePlayer(class) => format!("Place yourself ({})", class.name()),
         }
     }
 
@@ -269,6 +273,8 @@ pub enum EngineRequest {
     ClearPath,
     /// The player fired something: wait until it lands, so it flies.
     WaitForShots,
+    /// A new player was placed: their hotbars and HUD start afresh.
+    PlayerArrived,
 }
 
 /// Everything the developer tools remember between frames.
@@ -302,6 +308,13 @@ pub struct DevTools {
     pub anim_speed: f32,
     /// Creatures are held still (`DevFrozen`).
     pub ai_frozen: bool,
+    /// The world clock: while running, game time passes on its own at
+    /// `clock_speed` game seconds per real second, player or no player
+    /// (one who is there just stands, and can act whenever they like).
+    pub clock_running: bool,
+    pub clock_speed: f32,
+    /// Run the world on to its next action completion, once.
+    pub clock_step: bool,
     /// Frames per second, smoothed, for the run info.
     pub fps: f32,
     last_frame: Option<std::time::Instant>,
@@ -373,6 +386,9 @@ impl Default for DevTools {
             no_fog: false,
             anim_speed: 1.0,
             ai_frozen: false,
+            clock_running: false,
+            clock_speed: 1.0,
+            clock_step: false,
             fps: 0.0,
             last_frame: None,
             floor: 0,
@@ -540,6 +556,15 @@ impl DevTools {
                 let (x, y) = (at.0 as f32 + 0.5, at.1 as f32 + 0.5);
                 let radius = self.explosion_radius;
                 vfx.spawn(x, y, crate::vfx::VfxType::Explosion { radius, fiery });
+            }
+            CursorTool::PlacePlayer(class) => {
+                self.status = Some(match place_player(state, events, class, at) {
+                    Ok(()) => {
+                        self.requests.push(EngineRequest::PlayerArrived);
+                        format!("You're here, as a {}", class.name())
+                    }
+                    Err(why) => format!("Can't place you there: {why}"),
+                });
             }
             CursorTool::Shoot(shot) => match shoot(state, events, &mut self.rng, shot, at) {
                 Ok(()) => self.requests.push(EngineRequest::WaitForShots),
@@ -853,6 +878,36 @@ fn resync(state: &mut GameState, e: Entity) {
 /// Put one of `kind` in `player`'s pack, ignoring the weight limit. Gear is
 /// rolled at the panel's rarity (accessories at least Magic, as they carry
 /// nothing else).
+/// A fresh `class` player at `at`, in place of any player there was (the
+/// old one is removed, pack and all).
+fn place_player(
+    state: &mut GameState,
+    events: &mut EventQueue,
+    class: crate::components::PlayerClass,
+    at: (i32, i32),
+) -> Result<(), &'static str> {
+    if !state.grid.is_walkable(at.0, at.1) {
+        return Err("not a floor tile");
+    }
+    let old = state.player_entity;
+    if state.spatial_cache.is_blocked(at) && !state.world.get::<&crate::components::Position>(old).is_ok_and(|p| (p.x, p.y) == at) {
+        return Err("something is in the way");
+    }
+    if state.world.contains(old) {
+        let _ = state.world.despawn(old);
+        state.sync_world_changes();
+    }
+    let player = crate::engine::spawn_player(&mut state.world, class, crate::components::Position::new(at.0, at.1));
+    state.player_entity = player;
+    state.player_class = class;
+    let mut ctx = state.actor_ctx(events);
+    spawn::adopt(&mut ctx, player);
+    let player_pos = Some(at);
+    ctx.tracker.initialize_from_world(ctx.world, player_pos);
+    state.fov_dirty = true;
+    Ok(())
+}
+
 fn give_item(world: &mut World, player: Entity, kind: ItemType, options: &SpawnOptions, rng: &mut StdRng) {
     use crate::systems::item_defs::{get_def, roll_gear_with_rarity, ItemCategory};
     let gear = matches!(get_def(kind).category, ItemCategory::Weapon | ItemCategory::Armor | ItemCategory::Accessory);

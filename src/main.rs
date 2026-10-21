@@ -222,9 +222,18 @@ impl AppState {
             self.engine.start_game(class, seed, &mut self.render_ctx.camera);
         }
 
+        if let Some(class) = ui_actions.start_sandbox {
+            self.engine.start_sandbox(class, &mut self.render_ctx.camera);
+        }
+
         // Handle retry action (from game over / pause screen) - restart with
-        // the same class AND the same seed, so it's a true retry of the run
-        if ui_actions.retry_game {
+        // the same class AND the same seed, so it's a true retry of the run.
+        // A sandbox starts again empty.
+        if ui_actions.retry_game && self.engine.in_sandbox() {
+            if let Some(class) = self.engine.selected_class {
+                self.engine.start_sandbox(class, &mut self.render_ctx.camera);
+            }
+        } else if ui_actions.retry_game {
             if let Some(class) = self.engine.selected_class {
                 let seed = self
                     .engine

@@ -10,6 +10,15 @@ use crate::run_history::{RunRecord, SeedMode, PAST_RUNS_SHOWN};
 use egui_glow::EguiGlow;
 use winit::window::Window;
 
+/// What the start screen was left with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartChoice {
+    /// A run, as this class.
+    Run(PlayerClass),
+    /// The sandbox; a player placed there is this class.
+    Sandbox(PlayerClass),
+}
+
 /// Run the start screen UI for class selection.
 ///
 /// `seed_mode` picks how the run is seeded (random / daily / custom);
@@ -18,7 +27,9 @@ use winit::window::Window;
 /// panel, toggled by `stats_open`, whose "use seed" buttons copy a past seed
 /// into the custom field.
 ///
-/// Returns Some(PlayerClass) if the player clicked Start, None otherwise.
+/// Returns what was chosen, if anything: a run as the selected class, or
+/// the sandbox (an empty world for the developer tools, where placing a
+/// player makes them that class).
 #[allow(clippy::too_many_arguments)]
 pub fn run_start_screen(
     egui_glow: &mut EguiGlow,
@@ -30,7 +41,7 @@ pub fn run_start_screen(
     seed_input: &mut String,
     stats_open: &mut bool,
     past_runs: &[RunRecord],
-) -> Option<PlayerClass> {
+) -> Option<StartChoice> {
     let mut start_clicked = None;
 
     egui_glow.run(window, |ctx| {
@@ -62,7 +73,7 @@ pub fn run_start_screen(
                     *selected_class = Some(classes[(cur + classes.len() - 1) % classes.len()]);
                 }
                 if i.key_pressed(Key::Enter) || i.key_pressed(Key::Space) {
-                    start_clicked = *selected_class;
+                    start_clicked = selected_class.map(StartChoice::Run);
                 }
             });
         }
@@ -178,7 +189,20 @@ pub fn run_start_screen(
                     });
 
                     if ui.add_enabled(start_enabled, button).clicked() {
-                        start_clicked = *selected_class;
+                        start_clicked = selected_class.map(StartChoice::Run);
+                    }
+
+                    ui.add_space(8.0);
+                    let sandbox = egui::Button::new(
+                        egui::RichText::new("Sandbox").size(16.0).color(egui::Color32::LIGHT_GRAY),
+                    )
+                    .min_size(egui::vec2(200.0, 32.0));
+                    if ui
+                        .add_enabled(start_enabled, sandbox)
+                        .on_hover_text("An empty world and the developer tools: place yourself, creatures and things, and watch")
+                        .clicked()
+                    {
+                        start_clicked = selected_class.map(StartChoice::Sandbox);
                     }
 
                     ui.add_space(20.0);

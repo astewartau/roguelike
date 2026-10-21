@@ -42,7 +42,7 @@ pub use loot_window::{draw_loot_window, get_loot_window_data};
 pub use message_log::{draw_message_log, MessageLog};
 pub use pause_screen::{run_pause_screen, PauseChoice};
 pub use shop_window::{draw_shop_window, get_shop_window_data};
-pub use start_screen::run_start_screen;
+pub use start_screen::{run_start_screen, StartChoice};
 pub use status_bar::{draw_status_bar, get_status_bar_data, StatusBarAnim};
 pub use tile_info::{TileMenu, TileMenuOutcome};
 pub use targeting::{draw_targeting_overlay, get_ability_targeting_overlay_data, get_targeting_overlay_data};
@@ -97,6 +97,8 @@ pub struct UiActions {
     pub close_dialogue: bool,
     /// Start the game with selected class (from start screen)
     pub start_game: Option<crate::components::PlayerClass>,
+    /// Open the sandbox, a placed player being this class (from start screen)
+    pub start_sandbox: Option<crate::components::PlayerClass>,
     /// Activate an ability (from a hotbar slot)
     pub ability_to_use: Option<crate::components::AbilityType>,
     /// Buy item from vendor (index in vendor inventory)

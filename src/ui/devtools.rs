@@ -105,7 +105,7 @@ fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
             }
         });
     });
-    let _ = view;
+    clock_bar(ui, dev, view);
     ui.add_space(4.0);
     let tabs: Vec<(DevTab, &str, &str)> = DevTab::ALL.iter().map(|&t| (t, t.icon(), t.name())).collect();
     if let Some(tab) = look::pill_tabs(ui, dev.tab, &tabs) {
@@ -132,6 +132,34 @@ fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         if let Some(status) = &dev.status {
             ui.label(egui::RichText::new(status).small().color(p.muted));
         }
+    });
+}
+
+/// The world clock: run or hold game time on its own, step to the next
+/// thing that happens, and how fast it runs.
+fn clock_bar(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
+    let p = look::pal(ui);
+    ui.horizontal(|ui| {
+        let (label, tip) = if dev.clock_running {
+            ("⏸ Hold", "Stop game time passing on its own")
+        } else {
+            ("▶ Run", "Let game time pass on its own, whether or not you act")
+        };
+        if ui.selectable_label(dev.clock_running, label).on_hover_text(tip).clicked() {
+            dev.clock_running = !dev.clock_running;
+        }
+        if ui.small_button("Step").on_hover_text("Run the world to the next action that finishes").clicked() {
+            dev.clock_step = true;
+        }
+        for speed in crate::constants::DEV_CLOCK_SPEEDS {
+            let text = if speed < 1.0 { format!("{speed}×") } else { format!("{speed:.0}×") };
+            if ui.selectable_label(dev.clock_speed == speed, text).clicked() {
+                dev.clock_speed = speed;
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(format!("{:.1} s", view.game_time)).small().color(p.muted));
+        });
     });
 }
 
@@ -182,8 +210,45 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     });
     ui.add_space(4.0);
 
+    egui::CollapsingHeader::new("You").default_open(true).show(ui, |ui| {
+        ui.label(
+            egui::RichText::new("A fresh character on the clicked tile, in place of the one there is.")
+                .small()
+                .color(look::pal(ui).muted),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for class in crate::components::PlayerClass::ALL {
+                tool_button(ui, dev, CursorTool::PlacePlayer(class), class.name(), "Click the map to put yourself there");
+            }
+        });
+    });
+
     egui::CollapsingHeader::new("Creatures").default_open(true).show(ui, |ui| {
         let options = &mut dev.spawn_options;
+        ui.horizontal(|ui| {
+            use crate::components::{Disposition, Faction};
+            ui.label("Side");
+            egui::ComboBox::from_id_salt("spawn_faction")
+                .selected_text(options.faction.map_or("As they come", |f| f.name()))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut options.faction, None, "As they come");
+                    for f in Faction::ALL {
+                        ui.selectable_value(&mut options.faction, Some(f), f.name());
+                    }
+                })
+                .response
+                .on_hover_text("Creatures on different sides fight each other");
+            egui::ComboBox::from_id_salt("spawn_disposition")
+                .selected_text(options.disposition.map_or("As they come", |d| d.name()))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut options.disposition, None, "As they come");
+                    for d in Disposition::ALL {
+                        ui.selectable_value(&mut options.disposition, Some(d), d.name());
+                    }
+                })
+                .response
+                .on_hover_text("Aggressive: goes for enemies. Defensive: only fights what hurts it. Timid: runs.");
+        });
         ui.horizontal(|ui| {
             for (wake, label) in
                 [(Wakefulness::Awake, "Awake"), (Wakefulness::Asleep, "Asleep"), (Wakefulness::AsRolled, "As rolled")]

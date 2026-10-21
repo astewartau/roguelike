@@ -89,11 +89,23 @@ pub struct SpawnOptions {
     pub rarity: Rarity,
     /// Traps are placed already revealed.
     pub revealed: bool,
+    /// The side creatures are put on, and how they meet their enemies;
+    /// None leaves them as they come.
+    pub faction: Option<crate::components::Faction>,
+    pub disposition: Option<crate::components::Disposition>,
 }
 
 impl Default for SpawnOptions {
     fn default() -> Self {
-        Self { wake: Wakefulness::Awake, companion: false, count: 1, rarity: Rarity::Common, revealed: true }
+        Self {
+            wake: Wakefulness::Awake,
+            companion: false,
+            count: 1,
+            rarity: Rarity::Common,
+            revealed: true,
+            faction: None,
+            disposition: None,
+        }
     }
 }
 
@@ -292,12 +304,14 @@ fn spawn_one(
             if options.companion {
                 make_companion(world, e, ctx.player);
             }
+            set_side(world, e, options);
             e
         }
         Spawnable::Boss(ability) => {
             let floor = BOSSES.iter().find(|(a, _)| *a == ability)?.1;
             let e = spawning::spawn_boss(world, floor, x, y, rng)?;
             set_wakefulness(world, e, options.wake);
+            set_side(world, e, options);
             e
         }
         Spawnable::Wizard => spawning::npcs::WIZARD.spawn(world, x, y),
@@ -387,6 +401,19 @@ fn set_wakefulness(world: &mut crate::world::World, e: Entity, wake: Wakefulness
             let _ = world.insert_one(e, crate::components::Asleep);
         }
         Wakefulness::AsRolled => {}
+    }
+}
+
+/// Put a freshly made creature on the panel's side, with its temperament
+/// (a temperament only means something to a hunting mind).
+fn set_side(world: &mut crate::world::World, e: Entity, options: &SpawnOptions) {
+    if let Some(faction) = options.faction {
+        let _ = world.insert_one(e, faction);
+    }
+    if let Some(disposition) = options.disposition {
+        if world.get::<&ChaseAI>(e).is_ok() {
+            let _ = world.insert_one(e, disposition);
+        }
     }
 }
 

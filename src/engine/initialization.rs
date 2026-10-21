@@ -760,47 +760,11 @@ pub(crate) fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Contain
     Container::chest(instances, gold)
 }
 
-/// Initialize the game world with player, enemies, and objects. `rng` drives
-/// all loot/spawn rolls, so a seeded rng reproduces the floor exactly.
-/// Returns (world, player_entity, player_start_position).
-pub fn init_world(
-    grid: &Grid,
-    player_class: PlayerClass,
-    rng: &mut impl Rng,
-) -> (World, Entity, Position) {
-    let mut world = World::new();
-
-    // Find player spawn position (default to map center; overwritten below)
-    let mut player_start = Position::new(grid.width as i32 / 2, grid.height as i32 / 2);
-    if let Some(starting_room) = &grid.starting_room {
-        let (cx, cy) = starting_room.center();
-        if grid.is_walkable(cx, cy) {
-            player_start = Position::new(cx, cy);
-        } else {
-            'find_in_room: for dy in 1..starting_room.height - 1 {
-                for dx in 1..starting_room.width - 1 {
-                    let x = starting_room.x + dx;
-                    let y = starting_room.y + dy;
-                    if grid.is_walkable(x, y) {
-                        player_start = Position::new(x, y);
-                        break 'find_in_room;
-                    }
-                }
-            }
-        }
-    } else {
-        'find_spawn: for y in 0..grid.height as i32 {
-            for x in 0..grid.width as i32 {
-                if let Some(tile) = grid.get(x, y) {
-                    if tile.tile_type.is_walkable() {
-                        player_start = Position::new(x, y);
-                        break 'find_spawn;
-                    }
-                }
-            }
-        }
-    }
-
+/// Spawn the player as `player_class` starts out at `at`: their stats,
+/// kit, pack and gear. Used to start a run, and by the developer tools to
+/// put a player into the sandbox.
+pub fn spawn_player(world: &mut World, player_class: PlayerClass, at: Position) -> Entity {
+    let player_start = at;
     // Build starting inventory from class definition
     let mut starting_inventory = Inventory::new();
     for item in player_class.starting_inventory() {
@@ -876,6 +840,52 @@ pub fn init_world(
     // Every class gets its kit of extra abilities (Guard; the Ranger's four;
     // Thorns/Entangle; Bone Ward/Sacrifice/Corpse Explosion).
     let _ = world.insert_one(player_entity, ClassKit::for_class(player_class));
+
+    player_entity
+}
+
+/// Initialize the game world with player, enemies, and objects. `rng` drives
+/// all loot/spawn rolls, so a seeded rng reproduces the floor exactly.
+/// Returns (world, player_entity, player_start_position).
+pub fn init_world(
+    grid: &Grid,
+    player_class: PlayerClass,
+    rng: &mut impl Rng,
+) -> (World, Entity, Position) {
+    let mut world = World::new();
+
+    // Find player spawn position (default to map center; overwritten below)
+    let mut player_start = Position::new(grid.width as i32 / 2, grid.height as i32 / 2);
+    if let Some(starting_room) = &grid.starting_room {
+        let (cx, cy) = starting_room.center();
+        if grid.is_walkable(cx, cy) {
+            player_start = Position::new(cx, cy);
+        } else {
+            'find_in_room: for dy in 1..starting_room.height - 1 {
+                for dx in 1..starting_room.width - 1 {
+                    let x = starting_room.x + dx;
+                    let y = starting_room.y + dy;
+                    if grid.is_walkable(x, y) {
+                        player_start = Position::new(x, y);
+                        break 'find_in_room;
+                    }
+                }
+            }
+        }
+    } else {
+        'find_spawn: for y in 0..grid.height as i32 {
+            for x in 0..grid.width as i32 {
+                if let Some(tile) = grid.get(x, y) {
+                    if tile.tile_type.is_walkable() {
+                        player_start = Position::new(x, y);
+                        break 'find_spawn;
+                    }
+                }
+            }
+        }
+    }
+
+    let player_entity = spawn_player(&mut world, player_class, player_start);
 
     // Spawn chests, doors, braziers, coffins, barrels, water, and shop
     // (all rolls come from the caller's rng — seeded for reproducible floors).

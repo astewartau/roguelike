@@ -20,7 +20,7 @@ mod simulation;
 pub use context::{ActorCtx, EffectCtx, SimCtx};
 pub use floor_transition::{can_transition_floor, handle_floor_transition, transition_to_floor};
 pub use game_state::GameState;
-pub use initialization::initialize_single_ai_actor;
+pub use initialization::{initialize_single_ai_actor, spawn_player};
 pub use simulation::*;
 
 
@@ -253,28 +253,30 @@ impl GameEngine {
             camera.set_tracking_target(glam::Vec2::new(x + 0.5, y + 0.5));
         }
 
-        let mut ui_state = GameUiState::new(state.player_entity);
+        let ui_state = fresh_ui_state(&state);
+        self.begin(state, ui_state);
+    }
 
-        // Auto-fill the hotbars with the player's abilities so they're usable
-        // right away: main bar first, overflow onto the Shift bar.
-        {
-            let entries = starting_hotbar_abilities(&state.world, state.player_entity);
-            let slots = ui_state
-                .hotbar_main
-                .iter_mut()
-                .chain(ui_state.hotbar_shift.iter_mut());
-            for (slot, ability) in slots.zip(entries) {
-                *slot = Some(crate::ui::HotbarEntry::Ability(ability));
-            }
+    /// Start a sandbox: an empty walled arena, nobody in it, the developer
+    /// tools open on the spawn tab with the fog lifted and the world clock
+    /// running. Placing a player there makes them `class`.
+    pub fn start_sandbox(&mut self, class: PlayerClass, camera: &mut Camera) {
+        self.finalize_run_record();
+        let state = GameState::new_sandbox(class);
+        camera.set_tracking_target(glam::Vec2::new(
+            state.grid.width as f32 / 2.0,
+            state.grid.height as f32 / 2.0,
+        ));
+        let ui_state = GameUiState::new(state.player_entity);
+        self.begin(state, ui_state);
+        self.dev.visible = true;
+        self.dev.tab = crate::devtools::DevTab::Spawn;
+        self.dev.no_fog = true;
+        self.dev.clock_running = true;
+        self.dev.status = Some("An empty world. Place a player, or creatures, and watch.".into());
+    }
 
-            // Everyone gets Rest, bound to the R slot of the Q/E/R hotbar,
-            // and Sleep on the E slot.
-            ui_state.hotbar_qer[1] =
-                Some(crate::ui::HotbarEntry::Ability(AbilityType::Sleep));
-            ui_state.hotbar_qer[2] =
-                Some(crate::ui::HotbarEntry::Ability(AbilityType::Rest));
-        }
-
+    fn begin(&mut self, state: GameState, ui_state: GameUiState) {
         self.state = Some(state);
         self.ui_state = Some(ui_state);
         self.game_mode = GameMode::Playing;
@@ -282,6 +284,12 @@ impl GameEngine {
         self.rest_accumulator = 0.0;
         self.sleeping = false;
         self.sleep_accumulator = 0.0;
+        self.dev.clock_running = false;
+    }
+
+    /// Whether the current run is a sandbox.
+    pub fn in_sandbox(&self) -> bool {
+        self.state.as_ref().is_some_and(|s| s.sandbox)
     }
 
     /// Check if we're currently playing (not on start screen).
@@ -560,7 +568,21 @@ impl GameEngine {
                     .get::<&Health>(state.player_entity)
                     .map(|h| h.is_dead())
                     .unwrap_or(false);
-                if player_dead {
+                if player_dead && state.sandbox {
+                    // The sandbox carries on without you: the body goes, and
+                    // the world clock keeps the world going.
+                    let player = state.player_entity;
+                    if let Some(state) = self.state.as_mut() {
+                        let _ = state.world.despawn(player);
+                        state.sync_world_changes();
+                        state.fov_dirty = true;
+                    }
+                    self.input.clear_path();
+                    self.dev.clock_running = true;
+                    if let Some(ui) = self.ui_state.as_mut() {
+                        ui.message_log.system("You died. The world carries on without you.");
+                    }
+                } else if player_dead {
                     self.game_mode = GameMode::GameOver;
                     // Write this run's history line as soon as death is
                     // detected (the game-over screen shows the same stats).
@@ -594,6 +616,12 @@ impl GameEngine {
         let mut window_action = None;
         if input_result.toggle_fullscreen {
             window_action = Some(WindowAction::ToggleFullscreen);
+        }
+
+        // The developer tools' world clock: game time passing on its own.
+        {
+            profile_scope!("world_clock");
+            self.tick_world_clock(dt);
         }
 
         // Fast-forward the simulation while resting (a few Wait-steps per frame).
@@ -1091,8 +1119,16 @@ impl GameEngine {
                 );
 
                 // Return start_game action if player clicked Start
+                use crate::ui::StartChoice;
                 crate::ui::UiActions {
-                    start_game: start_result,
+                    start_game: match start_result {
+                        Some(StartChoice::Run(class)) => Some(class),
+                        _ => None,
+                    },
+                    start_sandbox: match start_result {
+                        Some(StartChoice::Sandbox(class)) => Some(class),
+                        _ => None,
+                    },
                     ..Default::default()
                 }
             }
@@ -1968,6 +2004,12 @@ impl GameEngine {
             }
             EngineRequest::ClearPath => self.input.clear_path(),
             EngineRequest::WaitForShots => self.dev_wait_for_shots(),
+            EngineRequest::PlayerArrived => {
+                if let Some(state) = self.state.as_ref() {
+                    self.ui_state = Some(fresh_ui_state(state));
+                }
+                self.input.clear_path();
+            }
         }
     }
 
@@ -2026,12 +2068,47 @@ impl GameEngine {
         }
     }
 
+    /// Run the developer tools' world clock for this frame: while it runs,
+    /// game time passes at its speed (real frame time scaled, at most
+    /// `DEV_CLOCK_MAX_STEP` a frame), whether or not there's a player; a
+    /// Step runs the world to its next action completion. Held while the
+    /// game is paused or a rest or sleep is driving time itself.
+    fn tick_world_clock(&mut self, dt: f32) {
+        let step = std::mem::take(&mut self.dev.clock_step);
+        if self.game_mode != GameMode::Playing || self.resting || self.sleeping {
+            return;
+        }
+        if !self.dev.clock_running && !step {
+            return;
+        }
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let mut ctx = state.actor_ctx(&mut self.events);
+        if step {
+            simulation::step_world_once(&mut ctx);
+        }
+        if self.dev.clock_running {
+            let owed = (dt * self.dev.clock_speed).min(crate::constants::DEV_CLOCK_MAX_STEP);
+            let until = ctx.clock.time + owed;
+            simulation::advance_world_to(&mut ctx, until);
+        }
+        state.fov_dirty = true;
+    }
+
     /// Let `seconds` of game time pass, the player waiting throughout
-    /// (whatever happens meanwhile).
+    /// (whatever happens meanwhile), or the world simply running on if
+    /// there's no player.
     fn dev_advance_time(&mut self, seconds: f32) {
         let Some(start) = self.state.as_ref().map(|s| s.game_clock.time) else {
             return;
         };
+        if let Some(state) = self.state.as_mut().filter(|s| !s.has_player()) {
+            simulation::advance_world_to(&mut state.actor_ctx(&mut self.events), start + seconds);
+            state.fov_dirty = true;
+            self.dev.status = Some(format!("{seconds:.1} s passed"));
+            return;
+        }
         let steps = (seconds / crate::constants::ACTION_WAIT_DURATION).ceil().max(1.0) as usize;
         for _ in 0..steps {
             let Some(mut ctx) = self.sim_ctx() else {
@@ -2115,6 +2192,21 @@ fn pick_campfire_spot(
 /// spell list (the Necromancer's Raise Dead keeps its old slot), then the
 /// class kit. The caller lays these out over the main bar and then the Shift
 /// bar, so a kit longer than the main bar spills over instead of being lost.
+/// The HUD state for a player just arrived: their abilities on the
+/// hotbars (main bar first, overflow onto the Shift bar), Sleep and Rest on
+/// E and R.
+fn fresh_ui_state(state: &GameState) -> GameUiState {
+    let mut ui_state = GameUiState::new(state.player_entity);
+    let entries = starting_hotbar_abilities(&state.world, state.player_entity);
+    let slots = ui_state.hotbar_main.iter_mut().chain(ui_state.hotbar_shift.iter_mut());
+    for (slot, ability) in slots.zip(entries) {
+        *slot = Some(crate::ui::HotbarEntry::Ability(ability));
+    }
+    ui_state.hotbar_qer[1] = Some(crate::ui::HotbarEntry::Ability(AbilityType::Sleep));
+    ui_state.hotbar_qer[2] = Some(crate::ui::HotbarEntry::Ability(AbilityType::Rest));
+    ui_state
+}
+
 fn starting_hotbar_abilities(world: &crate::world::World, player: Entity) -> Vec<AbilityType> {
     let mut entries: Vec<AbilityType> = Vec::new();
     if let Ok(a) = world.get::<&ClassAbility>(player) {
@@ -2877,6 +2969,171 @@ mod tests {
                 let _ = engine.tick(1.0 / 60.0, &mut camera);
                 check(&mut engine, &format!("turn {turn}"));
             }
+        }
+    }
+
+    /// A sandbox engine with its clock running, and an awake goblin on each
+    /// of the given sides at each spot, placed through the developer tools.
+    fn sandbox_with(goblins: &[((i32, i32), crate::components::Faction)]) -> (GameEngine, crate::camera::Camera) {
+        use crate::devtools::{CursorTool, Spawnable};
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        let goblin = crate::devtools::spawn::ENEMIES.iter().position(|d| d.name == "Goblin").expect("goblins exist");
+        for &(at, faction) in goblins {
+            engine.dev.spawn_options.faction = Some(faction);
+            engine.dev.tool = Some(CursorTool::Place(Spawnable::Enemy(goblin)));
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, at);
+        }
+        engine.dev.tool = None;
+        (engine, camera)
+    }
+
+    /// Run the engine `seconds` of real time at 60 frames a second.
+    fn run_frames(engine: &mut GameEngine, camera: &mut crate::camera::Camera, seconds: f32) {
+        for _ in 0..(seconds * 60.0) as usize {
+            let _ = engine.tick(1.0 / 60.0, camera);
+        }
+    }
+
+    #[test]
+    fn a_sandbox_starts_empty_with_its_clock_running() {
+        let (mut engine, mut camera) = sandbox_with(&[]);
+        let state = engine.state.as_ref().unwrap();
+        assert!(state.sandbox && !state.has_player());
+        assert!(engine.dev.visible && engine.dev.clock_running);
+        assert_eq!(state.grid.get(0, 0).unwrap().tile_type, crate::tile::TileType::Wall);
+        run_frames(&mut engine, &mut camera, 2.0);
+        assert!(engine.game_time() > 1.5, "time passes with nobody there");
+        assert_eq!(engine.game_mode, GameMode::Playing);
+    }
+
+    #[test]
+    fn rivals_fight_in_a_sandbox_with_nobody_playing() {
+        use crate::components::Faction;
+        let (mut engine, mut camera) = sandbox_with(&[((10, 10), Faction::Red), ((14, 10), Faction::Blue)]);
+        run_frames(&mut engine, &mut camera, 30.0);
+        let state = engine.state.as_ref().unwrap();
+        let goblins: Vec<(i32, i32)> = state
+            .world
+            .query::<(&Health, &crate::components::ChaseAI)>()
+            .iter()
+            .map(|(_, (h, _))| (h.current, h.max))
+            .collect();
+        assert!(goblins.len() < 2 || goblins.iter().any(|&(c, m)| c < m), "they fought: {goblins:?}");
+    }
+
+    #[test]
+    fn a_player_placed_in_the_sandbox_plays_and_dying_leaves_the_world_running() {
+        use crate::devtools::CursorTool;
+        let (mut engine, mut camera) = sandbox_with(&[]);
+        engine.dev.tool = Some(CursorTool::PlacePlayer(PlayerClass::Ranger));
+        {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (20, 15));
+        }
+        for request in engine.dev.take_requests() {
+            engine.handle_dev_request(request);
+        }
+        let state = engine.state.as_ref().unwrap();
+        assert!(state.has_player());
+        assert_eq!(state.player_class, PlayerClass::Ranger);
+        let ui = engine.ui_state.as_ref().unwrap();
+        assert!(ui.hotbar_main.iter().any(Option::is_some), "their hotbar is filled");
+
+        // They can act.
+        let result = {
+            let mut ctx = engine.sim_ctx().unwrap();
+            execute_player_intent(&mut ctx, crate::systems::player_input::PlayerIntent::Move { dx: 1, dy: 0 })
+        };
+        assert_eq!(result.turn_result, simulation::TurnResult::Started);
+
+        // Dying doesn't end a sandbox.
+        {
+            let state = engine.state.as_mut().unwrap();
+            state.world.get::<&mut Health>(state.player_entity).unwrap().current = 0;
+        }
+        run_frames(&mut engine, &mut camera, 1.0);
+        assert_eq!(engine.game_mode, GameMode::Playing);
+        assert!(!engine.state.as_ref().unwrap().has_player());
+        assert!(engine.dev.clock_running);
+    }
+
+    /// `random_component_combinations_hold_up`, in a sandbox with no player:
+    /// random builds (sides and temperaments among them) left to the world
+    /// clock, with blasts, fires, kills and deletes, and the same checks.
+    #[test]
+    fn random_component_combinations_hold_up_with_nobody_playing() {
+        use crate::devtools::CursorTool;
+        use rand::{seq::SliceRandom, Rng, SeedableRng};
+
+        let pool: Vec<&'static crate::component_registry::ComponentEntry> = crate::component_registry::entries()
+            .iter()
+            .filter(|e| e.name != "Position")
+            .collect();
+        let tools = [CursorTool::Blast, CursorTool::Ignite, CursorTool::Douse, CursorTool::Kill, CursorTool::Delete];
+        let seeds: u64 = std::env::var("FUZZ_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+        for seed in 0..seeds {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let (mut engine, mut camera) = sandbox_with(&[]);
+            let mut built: Vec<(Entity, Vec<&str>)> = Vec::new();
+            {
+                let state = engine.state.as_mut().unwrap();
+                for _ in 0..12 {
+                    let (x, y) = (rng.gen_range(14..26), rng.gen_range(10..20));
+                    let pos = crate::components::Position::new(x, y);
+                    let e = state.world.spawn((pos, crate::components::VisualPosition::from_position(&pos)));
+                    let count = rng.gen_range(1..=6);
+                    let mut parts: Vec<&str> = pool.choose_multiple(&mut rng, count).map(|entry| entry.name).collect();
+                    // Plenty of minds, so there's a world to watch.
+                    if rng.gen_bool(0.5) {
+                        parts.push("ChaseAI");
+                    }
+                    for name in &parts {
+                        let entry = crate::component_registry::find(name).unwrap();
+                        let _ = (entry.write)(&mut state.world, e, (entry.default)());
+                    }
+                    let mut ctx = state.actor_ctx(&mut engine.events);
+                    crate::devtools::spawn::adopt(&mut ctx, e);
+                    built.push((e, parts));
+                }
+            }
+            let check = |engine: &mut GameEngine, when: &str| {
+                let state = engine.state.as_mut().unwrap();
+                state.sync_world_changes();
+                let context = format!("seed {seed}, {when}, built {built:?}");
+                state.spatial_cache.assert_coherent_with_world(&state.world, &context);
+                for (e, parts) in &built {
+                    if state.world.contains(*e) {
+                        let unmet = crate::component_registry::unmet_requirements(&state.world, *e);
+                        assert!(unmet.is_empty(), "{context}: {e:?} from {parts:?} lacks {unmet:?}");
+                    }
+                }
+                for e in state.action_scheduler.scheduled_entities() {
+                    assert!(state.world.contains(e), "{context}: {e:?} is scheduled but gone");
+                }
+            };
+            check(&mut engine, "after building");
+            for frame in 0..600 {
+                if frame % 30 == 29 {
+                    let state = engine.state.as_mut().unwrap();
+                    let targets: Vec<(i32, i32)> = built
+                        .iter()
+                        .filter_map(|(e, _)| state.world.get::<&crate::components::Position>(*e).ok().map(|p| (p.x, p.y)))
+                        .collect();
+                    if let (Some(&at), Some(&tool)) = (targets.choose(&mut rng), tools.choose(&mut rng)) {
+                        engine.dev.tool = Some(tool);
+                        engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, at);
+                    }
+                }
+                if frame % 50 == 0 {
+                    engine.dev.clock_step = true;
+                }
+                let _ = engine.tick(1.0 / 60.0, &mut camera);
+                check(&mut engine, &format!("frame {frame}"));
+            }
+            assert!(engine.game_time() > 5.0, "seed {seed}: the clock ran");
         }
     }
 

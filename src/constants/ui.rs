@@ -261,3 +261,12 @@ pub const DEVTOOLS_GHOST_ALPHA: u8 = 150;
 /// it fired land (a stray arrow can fly a long way). Each is half a second
 /// of game time.
 pub const DEV_MAX_SHOT_WAITS: usize = 16;
+
+/// The speeds the developer tools' world clock offers, in game seconds per
+/// real second.
+pub const DEV_CLOCK_SPEEDS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+/// Most game time the world clock catches up in one frame. A long frame (a
+/// hitch, the window dragged) would otherwise be simulated all at once;
+/// lower keeps the world from lurching, higher keeps high speeds honest on
+/// slow frames.
+pub const DEV_CLOCK_MAX_STEP: f32 = 0.5;

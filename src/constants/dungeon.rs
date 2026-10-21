@@ -156,3 +156,10 @@ pub const OIL_SPILL_ROOM_CHANCE: f64 = 0.1;
 pub const OIL_SPILL_ROOM_MIN: usize = 2;
 /// Puddle tiles in a stray room spill (max).
 pub const OIL_SPILL_ROOM_MAX: usize = 4;
+
+/// The sandbox arena's size, walls included. Bigger gives room for more
+/// set-pieces side by side; every AI is awake in the sandbox (there is no
+/// player to be far from), so a much bigger one with many creatures costs
+/// more per step.
+pub const SANDBOX_WIDTH: usize = 40;
+pub const SANDBOX_HEIGHT: usize = 30;
