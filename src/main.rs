@@ -265,7 +265,7 @@ impl AppState {
                     fires: self.engine.fires(),
                 },
                 crate::render::SceneLighting {
-                    player_pos: self.engine.player_visual_pos(),
+                    player_pos: self.engine.player_light_pos(),
                     player_light_radius: self.engine.player_light_radius(),
                     player_light_color: self.engine.player_light_color(),
                     light_map: &light_map,

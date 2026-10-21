@@ -43,11 +43,6 @@ pub struct Camera {
     shake_elapsed: f32,
     /// Set for a directional kick, `None` for a rattle.
     shake_direction: Option<Vec2>,
-    /// Physical pixels on the right of the window covered by a docked panel
-    /// (the developer tools). `position` is the centre of the map you can
-    /// still see, so the player stays centred beside the panel, and every
-    /// mapping below agrees on it.
-    right_inset: f32,
 }
 
 impl Camera {
@@ -67,20 +62,7 @@ impl Camera {
             shake_amplitude: 0.0,
             shake_elapsed: 0.0,
             shake_direction: None,
-            right_inset: 0.0,
         }
-    }
-
-    /// Set how much of the window's right side a docked panel covers, in
-    /// physical pixels (0 for none).
-    pub fn set_right_inset(&mut self, px: f32) {
-        self.right_inset = px.clamp(0.0, self.viewport_width * 0.8);
-    }
-
-    /// World point at the middle of the whole window: `position` (the middle
-    /// of the visible map) shifted by half the covered strip.
-    fn window_centre(&self) -> Vec2 {
-        self.position + Vec2::new(self.right_inset / (2.0 * self.zoom), 0.0)
     }
 
     /// Start panning - records the world position under the cursor as anchor
@@ -278,7 +260,7 @@ impl Camera {
         let ndc_x = (screen_x / self.viewport_width) * 2.0 - 1.0;
         let ndc_y = 1.0 - (screen_y / self.viewport_height) * 2.0;
 
-        let centre = self.window_centre();
+        let centre = self.position;
         let world_x = (ndc_x * self.viewport_width) / (2.0 * self.zoom) + centre.x;
         let world_y = (ndc_y * self.viewport_height) / (2.0 * self.zoom) + centre.y;
 
@@ -290,7 +272,7 @@ impl Camera {
         let half_width = self.viewport_width / (2.0 * self.zoom);
         let half_height = self.viewport_height / (2.0 * self.zoom);
 
-        let centre = self.window_centre();
+        let centre = self.position;
         let left = centre.x - half_width;
         let bottom = centre.y - half_height;
 
@@ -313,7 +295,7 @@ impl Camera {
         // centre, so a shake can never corrupt panning, the momentum
         // velocity, coordinate round-tripping or tile culling - it just moves
         // the view for a few frames.
-        let centre = self.window_centre() + self.shake_offset();
+        let centre = self.position + self.shake_offset();
 
         let left = centre.x - half_width;
         let right = centre.x + half_width;
@@ -327,7 +309,7 @@ impl Camera {
         let half_width = self.viewport_width / (2.0 * self.zoom);
         let half_height = self.viewport_height / (2.0 * self.zoom);
 
-        let centre = self.window_centre();
+        let centre = self.position;
         let min_x = (centre.x - half_width).floor() as i32 - 1;
         let max_x = (centre.x + half_width).ceil() as i32 + 1;
         let min_y = (centre.y - half_height).floor() as i32 - 1;
@@ -440,18 +422,5 @@ mod tests {
 
         assert!(camera.shake_direction.is_none());
         assert_ne!(camera.shake_offset(), Vec2::ZERO, "the shake was dropped");
-    }
-
-    #[test]
-    fn an_inset_keeps_the_mappings_agreeing_and_centres_the_visible_map() {
-        let mut camera = test_camera();
-        camera.set_right_inset(200.0);
-        // Round trip still holds
-        let w = camera.screen_to_world(123.0, 456.0);
-        let (sx, sy) = camera.world_to_screen(w.x, w.y);
-        assert!((sx - 123.0).abs() < 1e-3 && (sy - 456.0).abs() < 1e-3);
-        // `position` sits in the middle of the uncovered part
-        let (cx, _) = camera.world_to_screen(camera.position.x, camera.position.y);
-        assert!((cx - (800.0 - 200.0) / 2.0).abs() < 1e-3, "centred at {cx}");
     }
 }

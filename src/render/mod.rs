@@ -20,8 +20,9 @@ use std::sync::Arc;
 /// Shared by `RenderContext::render_frame` and `Renderer::render`, which both
 /// need the whole set.
 pub struct SceneLighting<'a> {
-    /// Where the player's light is centred; None when there is no player (a
-    /// sandbox with nobody placed), and the world is lit evenly instead.
+    /// Where the player's light is centred; None in the editor (the
+    /// developer tools shown) or with no player, when the world is lit
+    /// evenly instead.
     pub player_pos: Option<(f32, f32)>,
     /// The player's light reach, with its own flicker already applied.
     pub player_light_radius: f32,

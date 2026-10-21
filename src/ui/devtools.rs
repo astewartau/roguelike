@@ -56,29 +56,29 @@ pub struct DevView<'a> {
 /// whichever rail icon is open, beside the rail and resizable.
 pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView) {
     if !dev.visible {
-        dev.panel_px = 0.0;
         dev.hud_top = 0.0;
         dev.hud_right = 0.0;
         return;
     }
     let screen = ctx.screen_rect();
     let toolbar = toolbar(ctx, dev, view);
-    let rail = rail(ctx, dev);
-    let mut covered_left = rail.min.x;
+    rail(ctx, dev);
+    // Nothing of the tools' own sits on the right edge; only a panel
+    // dragged there does.
+    let mut covered_left = screen.max.x;
     if dev.panel_open {
         // A panel starts near the top left, beside the HUD's Status window
         // and below the toolbar.
         let home = egui::pos2(view.hud_left + DEVTOOLS_EDGE_GAP, toolbar.max.y + DEVTOOLS_EDGE_GAP);
         if let Some(panel) = panel(ctx, dev, art, view, home) {
             // The HUD's top-right panel moves aside for it only while it's
-            // still over that corner (it can be dragged anywhere).
-            let corner = rail.min.x - crate::constants::TILE_INFO_WIDTH - 2.0 * crate::constants::TILE_INFO_MARGIN;
+            // over that corner (it can be dragged anywhere).
+            let corner = screen.max.x - crate::constants::TILE_INFO_WIDTH - 2.0 * crate::constants::TILE_INFO_MARGIN;
             if panel.max.x > corner {
                 covered_left = covered_left.min(panel.min.x);
             }
         }
     }
-    dev.panel_px = (screen.max.x - rail.min.x) * ctx.pixels_per_point();
     dev.hud_top = toolbar.max.y;
     dev.hud_right = screen.max.x - covered_left;
     super::devtools_palette::draw_palette(ctx, dev, view);
@@ -106,11 +106,11 @@ fn toolbar(ctx: &egui::Context, dev: &mut DevTools, view: &DevView) -> egui::Rec
         .rect
 }
 
-/// The run: floor, seed and frame rate.
+/// The run: floor and frame rate.
 fn run_info(ui: &mut egui::Ui, dev: &DevTools) {
     let p = look::pal(ui);
     ui.label(
-        egui::RichText::new(format!("Floor {} · seed {} · {:.0} fps", dev.floor, dev.seed, dev.fps))
+        egui::RichText::new(format!("Floor {} · {:.0} fps", dev.floor, dev.fps))
             .small()
             .color(p.muted),
     );
@@ -176,17 +176,17 @@ fn tool_and_status(ui: &mut egui::Ui, dev: &mut DevTools) {
     }
 }
 
-/// The rail of tool icons at the top right, each opening its panel.
+/// The row of tool icons along the bottom middle, each opening its panel.
 /// Returns where it was drawn.
 fn rail(ctx: &egui::Context, dev: &mut DevTools) -> egui::Rect {
     egui::Area::new(egui::Id::new("devtools_rail"))
         .order(egui::Order::Middle)
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-DEVTOOLS_EDGE_GAP, DEVTOOLS_EDGE_GAP))
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -DEVTOOLS_EDGE_GAP))
         .show(ctx, |ui| {
             look::apply(ui);
             look::floating_frame(egui::Margin::same(6.0)).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.horizontal(|ui| {
                     for tab in DevTab::ALL {
                         let open = dev.panel_open && dev.tab == tab;
                         if look::rail_button(ui, tab.icon(), tab.name(), open).clicked() {

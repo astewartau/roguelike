@@ -272,7 +272,6 @@ impl GameEngine {
         self.begin(state, ui_state);
         self.dev.visible = true;
         self.dev.no_fog = true;
-        self.dev.status = Some("An empty world. Place a player, or creatures, then Run the clock.".into());
     }
 
     fn begin(&mut self, state: GameState, ui_state: GameUiState) {
@@ -757,9 +756,6 @@ impl GameEngine {
         // — which is exactly when the player is looking at it — so please do
         // not "fix" this to game time. Hit flashes ride on `dt` for the same
         // reason; see `systems::animation::update_hit_flashes`.
-        // The dev panel covers the right of the window: centre the map in
-        // what's left.
-        camera.set_right_inset(self.dev.panel_px);
         camera.update(dt, self.input.mouse_down);
 
         // God mode and full meters from the dev tools.
@@ -882,10 +878,11 @@ impl GameEngine {
             // Calculate per-tile illumination (must be after FOV update)
             {
                 profile_scope!("illumination");
+                // The editor (dev tools shown) is lit evenly, player or not.
                 systems::calculate_illumination(
                     &state.world,
                     &mut state.grid,
-                    state.player_entity,
+                    (!self.dev.visible).then_some(state.player_entity),
                     crate::constants::FOV_RADIUS,
                 );
             }
@@ -1083,8 +1080,13 @@ impl GameEngine {
         self.ui_state.as_ref().map(|u| u.show_grid_lines).unwrap_or(false)
     }
 
-    /// Get player position for lighting (uses visual position for smooth lighting).
-    pub fn player_visual_pos(&self) -> Option<(f32, f32)> {
+    /// Where the player's light is centred (their visual position, for smooth
+    /// lighting). None in the editor (the dev tools shown), which is lit
+    /// evenly whether or not there's a player, and with no player.
+    pub fn player_light_pos(&self) -> Option<(f32, f32)> {
+        if self.dev.visible {
+            return None;
+        }
         self.state.as_ref().and_then(|s| {
             s.world.get::<&crate::components::VisualPosition>(s.player_entity).ok()
                 .map(|vp| (vp.x + 0.5, vp.y + 0.5))  // Center of tile
@@ -2825,7 +2827,7 @@ mod tests {
                 crate::systems::update_fov(&state.world, &mut state.grid, player, crate::constants::FOV_RADIUS, state.game_clock.time)
             });
             time("calculate_illumination", 60, || {
-                crate::systems::calculate_illumination(&state.world, &mut state.grid, player, crate::constants::FOV_RADIUS)
+                crate::systems::calculate_illumination(&state.world, &mut state.grid, Some(player), crate::constants::FOV_RADIUS)
             });
             // Per frame.
             time("LightOcclusion::build", 60, || {
@@ -3045,6 +3047,35 @@ mod tests {
         (engine, camera)
     }
 
+    /// The editor is lit evenly, player or no player: showing the tools
+    /// drops the pool of light at the player's feet, and hiding them brings
+    /// it back.
+    #[test]
+    fn the_editor_has_its_own_lighting() {
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_game(PlayerClass::Fighter, 77, &mut camera);
+        let at_feet = |engine: &GameEngine| {
+            let state = engine.state.as_ref().unwrap();
+            let p = state.world.get::<&crate::components::Position>(state.player_entity).map(|p| (p.x, p.y)).unwrap();
+            state.grid.illumination[p.1 as usize * state.grid.width + p.0 as usize]
+        };
+        run_frames(&mut engine, &mut camera, 0.2);
+        let playing = at_feet(&engine);
+        assert!(engine.player_light_pos().is_some());
+
+        engine.dev.visible = true;
+        run_frames(&mut engine, &mut camera, 0.2);
+        assert_eq!(engine.player_light_pos(), None, "no pool of light in the editor");
+        let editing = at_feet(&engine);
+        assert!(editing < playing, "relit evenly: {playing} -> {editing}");
+
+        engine.dev.visible = false;
+        run_frames(&mut engine, &mut camera, 0.2);
+        assert!(engine.player_light_pos().is_some());
+        assert_eq!(at_feet(&engine), playing, "the player's light again");
+    }
+
     /// With the developer tools shown, WASD pans the view and never moves
     /// the player; hidden, the same key is a step.
     #[test]
@@ -3116,7 +3147,7 @@ mod tests {
     fn an_empty_sandbox_is_lit_not_black() {
         let (mut engine, mut camera) = sandbox_with(&[]);
         run_frames(&mut engine, &mut camera, 0.1);
-        assert_eq!(engine.player_visual_pos(), None, "no player's light to centre");
+        assert_eq!(engine.player_light_pos(), None, "no player's light to centre");
         let grid = &engine.state.as_ref().unwrap().grid;
         let darkest = grid.illumination.iter().copied().fold(f32::INFINITY, f32::min);
         assert!(darkest >= 0.25, "every tile lit as in view, darkest was {darkest}");

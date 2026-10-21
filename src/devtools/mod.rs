@@ -308,16 +308,16 @@ pub struct DevTools {
     pub rain_style: RainStyle,
     /// Queued by the panel, carried out by `apply_commands`.
     pub commands: Vec<DevCommand>,
-    /// Width of the icon rail last frame, in physical pixels (0 while
-    /// hidden), for the camera to keep the map centred beside it.
-    pub panel_px: f32,
     /// How far the game's HUD keeps clear of the tools last frame, in egui
-    /// points: below the toolbar, and left of the rail and any open panel.
+    /// points: below the toolbar, and left of a panel over the top-right
+    /// corner.
     /// Both 0 while hidden.
     pub hud_top: f32,
     pub hud_right: f32,
-    /// One line of feedback for the panel ("Placed 3 Goblins").
+    /// One line of feedback for the toolbar ("Placed 3 Goblins"), and when
+    /// it was first shown: it goes after `DEVTOOLS_STATUS_SECONDS`.
     pub status: Option<String>,
+    status_shown: Option<(String, std::time::Instant)>,
     /// The player can't be hurt (Invulnerable, kept topped up).
     pub god_mode: bool,
     /// Hunger stays full and fatigue at nothing.
@@ -388,6 +388,9 @@ pub struct DevTools {
     requests: Vec<EngineRequest>,
     /// God mode as last applied, to notice it being switched off.
     god_mode_applied: bool,
+    /// Whether the tools were shown as of the last relight, to relight the
+    /// map (editor lighting, or the player's) when that changes.
+    visible_applied: bool,
     /// Tile the mouse button went down on (and has dragged to), while a
     /// tool is held down.
     held_at: Option<(i32, i32)>,
@@ -406,10 +409,10 @@ impl Default for DevTools {
             search: String::new(),
             rain_style: RainStyle::default(),
             commands: Vec::new(),
-            panel_px: 0.0,
             hud_top: 0.0,
             hud_right: 0.0,
             status: None,
+            status_shown: None,
             god_mode: false,
             keep_fed: false,
             no_fog: false,
@@ -447,6 +450,7 @@ impl Default for DevTools {
             last_prefab_save: None,
             requests: Vec::new(),
             god_mode_applied: false,
+            visible_applied: false,
             held_at: None,
             rng: StdRng::from_entropy(),
         }
@@ -867,11 +871,27 @@ impl DevTools {
             cheats::end_god_mode(state);
         }
         self.god_mode_applied = self.god_mode;
+        // A status line goes after a few seconds (a new one starts afresh).
+        let now = std::time::Instant::now();
+        match (&self.status, &self.status_shown) {
+            (None, _) => self.status_shown = None,
+            (Some(line), Some((shown, since))) if line == shown => {
+                if (now - *since).as_secs_f32() > crate::constants::DEVTOOLS_STATUS_SECONDS {
+                    self.status = None;
+                    self.status_shown = None;
+                }
+            }
+            (Some(line), _) => self.status_shown = Some((line.clone(), now)),
+        }
+        // Shown, the map is lit the editor's way; hidden, by the player.
+        if self.visible != self.visible_applied {
+            state.fov_dirty = true;
+            self.visible_applied = self.visible;
+        }
         self.floor = state.current_floor;
         self.seed = state.seed;
         // Measured here from the wall clock: the frame time the engine gets
         // is clamped for animation.
-        let now = std::time::Instant::now();
         if let Some(last) = self.last_frame.replace(now) {
             let dt = (now - last).as_secs_f32();
             if dt > 0.0 {

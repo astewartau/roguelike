@@ -288,14 +288,16 @@ fn has_line_of_sight(
     true
 }
 
-/// Calculate per-tile illumination from player and light sources.
+/// Calculate per-tile illumination from the player's light and light sources.
+/// `player_light` is whose light the scene is seen by: None for the
+/// editor's even lighting (no pool around anyone), as with no player.
 /// Light sources contribute what reaches the tile through walls, doors and
 /// objects (`systems::light::light_reaching`).
 /// Must be called after update_fov (requires visible flags to be set).
 pub fn calculate_illumination(
     world: &World,
     grid: &mut Grid,
-    player_entity: Entity,
+    player_light: Option<Entity>,
     fov_radius: i32,
 ) {
     let width = grid.width;
@@ -306,9 +308,9 @@ pub fn calculate_illumination(
         *illum = 0.0;
     }
 
-    // Where the player stands. With nobody there (a sandbox), whatever is
-    // in view is lit evenly, with no pool of light around anyone.
-    let player_pos = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y));
+    // Where the player stands. Without their light (the editor, or nobody
+    // there), whatever is in view is lit evenly, with no pool around anyone.
+    let player_pos = player_light.and_then(|e| world.get::<&Position>(e).ok()).map(|p| (p.x, p.y));
     let player_light_radius = fov_radius as f32;
 
     // Collect all light sources, and what the floor lets through between them

@@ -262,6 +262,9 @@ pub const DEVTOOLS_PANEL_MIN_WIDTH: f32 = 260.0;
 pub const DEVTOOLS_EDGE_GAP: f32 = 8.0;
 /// Size of one square icon button on the tool rail, in egui points.
 pub const DEVTOOLS_RAIL_BUTTON: f32 = 42.0;
+/// How long the toolbar's status line ("Placed 3 Goblins", "Can't move it
+/// there") stays up, in real seconds.
+pub const DEVTOOLS_STATUS_SECONDS: f32 = 4.0;
 /// Widest the toolbar's status line ("Placed 3 Goblins") gets before it's
 /// cut short, in egui points (the whole line shows on hover).
 pub const DEVTOOLS_STATUS_MAX_WIDTH: f32 = 240.0;
