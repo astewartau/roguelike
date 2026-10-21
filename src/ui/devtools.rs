@@ -63,8 +63,15 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
     let rail = rail(ctx, dev);
     let mut covered_left = rail.min.x;
     if dev.panel_open {
-        if let Some(panel) = panel(ctx, dev, art, view, screen.max.x - rail.min.x + DEVTOOLS_EDGE_GAP) {
-            covered_left = panel.min.x;
+        // A panel starts beside the rail, below the toolbar.
+        let home = egui::pos2(rail.min.x - DEVTOOLS_EDGE_GAP, toolbar.max.y + DEVTOOLS_EDGE_GAP);
+        if let Some(panel) = panel(ctx, dev, art, view, home) {
+            // The HUD's top-right panel moves aside for it only while it's
+            // still over that corner (it can be dragged anywhere).
+            let corner = rail.min.x - crate::constants::TILE_INFO_WIDTH - 2.0 * crate::constants::TILE_INFO_MARGIN;
+            if panel.max.x > corner {
+                covered_left = covered_left.min(panel.min.x);
+            }
         }
     }
     dev.panel_px = (screen.max.x - rail.min.x) * ctx.pixels_per_point();
@@ -189,37 +196,39 @@ fn rail(ctx: &egui::Context, dev: &mut DevTools) -> egui::Rect {
         .rect
 }
 
-/// The open tool's panel, `right` points in from the screen's right edge
-/// (beside the rail): its name, then its contents. It's as tall as what it
-/// shows (a floor tile's inspection is short, the spawn list long),
-/// scrolling once that's taller than the screen. Each tool's panel can be
-/// made wider or narrower from its left edge, and keeps its own width.
-/// Returns where it was drawn.
-fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, right: f32) -> Option<egui::Rect> {
+/// The open tool's panel: its name, then its contents. It starts with its
+/// top-right corner at `home` and can be dragged anywhere by its header (or
+/// any empty part of it). It's as tall as what it shows (a floor tile's
+/// inspection is short, the spawn list long), scrolling once that would
+/// run off the bottom of the screen, and can be made wider or narrower from
+/// its sides. Each tool's panel keeps its own place and width. Returns
+/// where it was drawn.
+fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, home: egui::Pos2) -> Option<egui::Rect> {
     // Inspecting is a way of clicking the map: its panel only appears once
     // something has been picked.
     if dev.tab == DevTab::Inspect && dev.inspect_tile.is_none() {
         return None;
     }
-    let screen = ctx.screen_rect();
-    let tallest = screen.height() - 2.0 * DEVTOOLS_EDGE_GAP;
+    let bottom = ctx.screen_rect().max.y - DEVTOOLS_EDGE_GAP;
     let mut open = true;
     let frame = look::floating_frame(egui::Margin::same(14.0));
-    let chrome = frame.total_margin().sum().y;
+    let below = frame.total_margin().bottom;
     let shown = egui::Window::new(dev.tab.name())
         .id(egui::Id::new(("devtools_panel", dev.tab.name())))
         .title_bar(false)
         .frame(frame)
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-right, DEVTOOLS_EDGE_GAP))
+        .pivot(egui::Align2::RIGHT_TOP)
+        .default_pos(home)
+        .movable(true)
         // Width by hand; height always follows the contents.
         .resizable([true, false])
         .default_width(DEVTOOLS_PANEL_WIDTH)
         .min_width(DEVTOOLS_PANEL_MIN_WIDTH)
         .show(ctx, |ui| {
             look::apply(ui);
-            let top = ui.cursor().top();
             ui.horizontal(|ui| {
-                ui.heading(format!("{}  {}", dev.tab.icon(), dev.tab.name()));
+                ui.heading(format!("{}  {}", dev.tab.icon(), dev.tab.name()))
+                    .on_hover_cursor(egui::CursorIcon::Grab);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if look::cross_button(ui).on_hover_text("Close this panel").clicked() {
                         open = false;
@@ -236,10 +245,9 @@ fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, 
                 look::search_box(ui, &mut dev.search, "Search everything");
                 ui.add_space(4.0);
             }
-            let used = ui.cursor().top() - top;
             egui::ScrollArea::vertical()
                 .auto_shrink([false, true])
-                .max_height((tallest - chrome - used).max(0.0))
+                .max_height((bottom - below - ui.cursor().top()).max(0.0))
                 .show(ui, |ui| match dev.tab {
                     DevTab::Spawn if building => super::devtools_prefab::prefab_parts(ui, dev, art),
                     DevTab::Spawn => spawn_tab(ui, dev, art),
