@@ -546,10 +546,14 @@ impl DevTools {
         }
     }
 
+    /// Show or hide the tools. Hiding them is going back to play: the tool
+    /// is dropped and the world clock holds, so time passes as you act.
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
         if !self.visible {
             self.disarm();
+            self.clock_running = false;
+            self.clock_step = false;
         }
     }
 
@@ -1561,6 +1565,16 @@ mod tests {
 
         dev.toggle();
         assert_eq!(dev.tool, None, "hidden, nothing is armed");
+    }
+
+    /// Going back to play holds the world clock.
+    #[test]
+    fn hiding_the_tools_holds_the_clock() {
+        let mut dev = DevTools::new();
+        dev.toggle();
+        dev.clock_running = true;
+        dev.toggle();
+        assert!(!dev.visible && !dev.clock_running);
     }
 
     #[test]
