@@ -59,7 +59,30 @@ impl Prefab {
             return false;
         };
         self.components.push(PrefabComponent { component: entry.name.to_string(), value: (entry.default)() });
+        // What it requires comes with it, as the world would add it anyway.
+        for needed in registry::all_requirements(name) {
+            if !self.has(needed) {
+                if let Some(entry) = registry::find(needed) {
+                    self.components.push(PrefabComponent { component: entry.name.to_string(), value: (entry.default)() });
+                }
+            }
+        }
         true
+    }
+
+    /// Remove the component at `index`, and anything that requires it (as
+    /// the world would).
+    pub fn remove_at(&mut self, index: usize) {
+        let Some(part) = self.components.get(index) else { return };
+        let mut gone = registry::all_dependents(&part.component);
+        gone.push(registry::find(&part.component).map(|e| e.name).unwrap_or(""));
+        let name = part.component.clone();
+        self.components.retain(|c| c.component != name && !gone.contains(&c.component.as_str()));
+    }
+
+    /// What in this prefab requires `name` (so it can't go without them).
+    pub fn needed_by(&self, name: &str) -> Vec<&str> {
+        registry::all_dependents(name).into_iter().filter(|d| self.has(d)).collect()
     }
 
     /// The value of `name`, if it has it.

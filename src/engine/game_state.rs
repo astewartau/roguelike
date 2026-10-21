@@ -149,6 +149,17 @@ impl GameState {
         }
     }
 
+    /// Apply the world's change journal to the collision cache, scheduler
+    /// and AI tracker. See [`super::context::apply_world_changes`].
+    pub fn sync_world_changes(&mut self) {
+        super::context::apply_world_changes(
+            &mut self.world,
+            &mut self.spatial_cache,
+            &mut self.action_scheduler,
+            &mut self.active_ai_tracker,
+        );
+    }
+
     /// Initialize AI actors after world creation.
     /// Must be called separately because it needs mutable access to events.
     pub fn initialize_ai(&mut self, events: &mut EventQueue) {

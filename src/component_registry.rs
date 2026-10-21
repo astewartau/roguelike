@@ -350,10 +350,127 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(CompanionAI, CompanionAI::new()),
             plain!(FriendlyNPC, FriendlyNPC),
             plain!(Vendor, Vendor::new(Vec::new(), 0)),
-            plain!(Dialogue, Dialogue::new("Someone", Vec::new())),
+            plain!(Dialogue, Dialogue::new(
+                "Someone",
+                vec![DialogueNode {
+                    text: "Hello.".into(),
+                    options: vec![DialogueOption { label: "Goodbye".into(), next_node: None, action: DialogueAction::None }],
+                }],
+            )),
             plain!(Furniture, Furniture { kind: FurnitureKind::Fountain, used: false }),
         ]
     })
+}
+
+/// What each component can't work without: adding it brings these along
+/// (at their defaults), and removing one of these takes it away too, so an
+/// entity can never hold a component without what it needs. Applied by the
+/// world itself (`world::World`'s hooks), whoever makes the change.
+///
+/// Only hard requirements belong here: data the component reads, with one
+/// right answer. "Needs one of these" hints (a tint needs a Sprite or an
+/// AnimatedSprite) are the prefab builder's (`devtools::catalog`). Each
+/// entry is (component, what it requires).
+pub const REQUIRES: &[(&str, &[&str])] = &[
+    // A mind needs turns to act in; a companion's needs someone to follow.
+    ("ChaseAI", &["Actor"]),
+    ("CompanionAI", &["Actor", "Follower"]),
+    // A channel advances on its channeller's turns.
+    ("Channel", &["Actor"]),
+    // Settings of a hostile mind: they only mean something to one.
+    ("Asleep", &["ChaseAI"]),
+    ("SeesInDark", &["ChaseAI"]),
+    ("SupportAI", &["ChaseAI"]),
+    ("Flanker", &["ChaseAI"]),
+    ("PackHunter", &["ChaseAI"]),
+    ("Charger", &["ChaseAI"]),
+    ("HitAndRun", &["ChaseAI"]),
+    ("WebSpinner", &["ChaseAI"]),
+    // Burning is a status effect.
+    ("Combustible", &["StatusEffects"]),
+    ("Explosive", &["StatusEffects"]),
+    ("BarrelFuse", &["Explosive"]),
+    ("OnFire", &["Fuel"]),
+    ("Splits", &["Health"]),
+    ("HitOnlyOnPurpose", &["Attackable"]),
+    ("Pushable", &["BlocksMovement"]),
+    // Remains and loose items are containers of what they hold.
+    ("GroundItemPile", &["Container"]),
+    ("Raisable", &["Container"]),
+    // Someone you can talk to has something to say (without it, talking
+    // opened no window and swallowed all input); a shopkeeper is one.
+    ("FriendlyNPC", &["Dialogue"]),
+    ("Vendor", &["FriendlyNPC"]),
+    ("OverlaySprite", &["Sprite"]),
+];
+
+/// The requirement table by component type: what each requires, and what
+/// requires it.
+struct Requirements {
+    requires: std::collections::HashMap<TypeId, Vec<&'static ComponentEntry>>,
+    required_by: std::collections::HashMap<TypeId, Vec<&'static ComponentEntry>>,
+}
+
+fn requirements() -> &'static Requirements {
+    static TABLE: std::sync::OnceLock<Requirements> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = Requirements { requires: Default::default(), required_by: Default::default() };
+        for (name, needs) in REQUIRES {
+            let Some(entry) = find(name) else { continue };
+            for need in *needs {
+                let Some(needed) = find(need) else { continue };
+                table.requires.entry((entry.type_id)()).or_default().push(needed);
+                table.required_by.entry((needed.type_id)()).or_default().push(entry);
+            }
+        }
+        table
+    })
+}
+
+/// What a component of type `t` requires.
+pub fn requires_of(t: TypeId) -> &'static [&'static ComponentEntry] {
+    requirements().requires.get(&t).map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// What requires a component of type `t`.
+pub fn required_by(t: TypeId) -> &'static [&'static ComponentEntry] {
+    requirements().required_by.get(&t).map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// Everything `name` requires, following requirements of requirements, in
+/// the order they'd be added.
+pub fn all_requirements(name: &str) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    let mut stack = vec![name];
+    while let Some(next) = stack.pop() {
+        for (component, needs) in REQUIRES {
+            if *component == next {
+                for need in *needs {
+                    if !out.contains(need) && *need != name {
+                        out.push(need);
+                        stack.push(need);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Everything that requires `name`, directly or through a chain: what
+/// removing it would take away too.
+pub fn all_dependents(name: &str) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    let mut stack = vec![name];
+    while let Some(next) = stack.pop() {
+        for (component, needs) in REQUIRES {
+            if needs.contains(&next) && !out.contains(component) && *component != name {
+                out.push(component);
+                stack.push(component);
+            }
+        }
+    }
+    out
 }
 
 pub fn find(name: &str) -> Option<&'static ComponentEntry> {
@@ -387,7 +504,8 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{}: default doesn't write: {err}", entry.name));
             let read = (entry.read)(&world, e).unwrap_or_else(|| panic!("{}: nothing to read", entry.name));
             assert_eq!(read, value, "{} round trip", entry.name);
-            assert_eq!(components_of(&world, e).0.len(), 1, "{} is recognised", entry.name);
+            let known: Vec<&str> = components_of(&world, e).0.iter().map(|k| k.name).collect();
+            assert!(known.contains(&entry.name), "{} is recognised", entry.name);
             (entry.remove)(&mut world, e);
             assert!((entry.read)(&world, e).is_none(), "{} removed", entry.name);
         }
@@ -401,4 +519,32 @@ mod tests {
         assert!((health.write)(&mut world, e, serde_json::json!({"current": "lots"})).is_err());
         assert!(world.get::<&Health>(e).is_err());
     }
+
+    /// Requirements come along when a component is added, from any path,
+    /// and go when they're removed: a hostile mind always has turns to act
+    /// in, a companion someone to follow, and neither outlives them.
+    #[test]
+    fn requirements_follow_and_cascade() {
+        let mut world = World::new();
+        let creature = world.spawn((Position::new(1, 1), CompanionAI::new()));
+        assert!(world.get::<&Actor>(creature).is_ok(), "a companion mind brings turns");
+        assert!(world.get::<&Follower>(creature).is_ok(), "and someone to follow");
+
+        let sleeper = world.spawn((Position::new(2, 2),));
+        world.insert_one(sleeper, Asleep).unwrap();
+        assert!(world.get::<&ChaseAI>(sleeper).is_ok(), "chains: Asleep brings ChaseAI");
+        assert!(world.get::<&Actor>(sleeper).is_ok(), "which brings Actor");
+
+        // Take away its turns: the minds that needed them go, and with them
+        // the settings that only meant something to the hostile one.
+        world.remove_one::<Actor>(sleeper).unwrap();
+        assert!(world.get::<&ChaseAI>(sleeper).is_err());
+        assert!(world.get::<&Asleep>(sleeper).is_err());
+
+        // Something you can talk to always has something to say.
+        let npc = world.spawn((Position::new(3, 3), FriendlyNPC));
+        let dialogue = world.get::<&Dialogue>(npc).expect("talking needs words");
+        assert!(!dialogue.nodes.is_empty(), "a usable dialogue, not an empty one that locks input");
+    }
 }
+

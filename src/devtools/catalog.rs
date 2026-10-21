@@ -20,7 +20,9 @@ pub struct Info {
     pub phrase: &'static str,
     /// What it does, in a sentence.
     pub summary: &'static str,
-    /// What it does nothing without. "A|B" means either will do.
+    /// What it does nothing without, as a hint: "A|B" means either will do.
+    /// Hard requirements (one right answer) aren't hints; they're
+    /// `component_registry::REQUIRES`, and the world adds them itself.
     pub needs: &'static [&'static str],
 }
 
@@ -40,78 +42,78 @@ pub const INFO: &[Info] = &[
     info("Sprite", "Looks", "", "The picture it's drawn with.", &[]),
     info("AnimatedSprite", "Looks", "", "An animated picture, drawn over its sprite (flames, water).", &[]),
     info("SpriteTint", "Looks", "", "Tints its picture (multiplies the colours; white is untinted).", &["Sprite|AnimatedSprite"]),
-    info("OverlaySprite", "Looks", "", "A second picture drawn on top, like an archer's bow.", &["Sprite"]),
+    info("OverlaySprite", "Looks", "", "A second picture drawn on top, like an archer's bow.", &[]),
     info("FlameOverlay", "Looks", "", "Animated flames drawn over its picture.", &["Sprite"]),
     // Body
     info("Health", "Body", "", "Hit points. At 0 it dies, breaks or goes off.", &[]),
     info("Stats", "Body", "", "Strength, intelligence and agility: damage, spell power, dodging.", &[]),
     info("StatusEffects", "Body", "", "Can be burning, poisoned, slowed, wet and so on.", &[]),
     info("Attackable", "Body", "", "Can be hit.", &["Health"]),
-    info("HitOnlyOnPurpose", "Body", "", "Only hit on purpose (Shift+direction), never by clicking or walking into it.", &["Attackable"]),
+    info("HitOnlyOnPurpose", "Body", "", "Only hit on purpose (Shift+direction), never by clicking or walking into it.", &[]),
     info("BlocksMovement", "Body", "blocks the way", "Nothing can stand on its tile.", &[]),
     info("BlocksVision", "Body", "blocks sight", "Can't be seen past.", &[]),
-    info("Pushable", "Body", "can be shoved", "Can be shoved a tile at a time.", &["BlocksMovement"]),
+    info("Pushable", "Body", "can be shoved", "Can be shoved a tile at a time.", &[]),
     info("Flying", "Body", "flies", "Hovers over water, traps and webs.", &[]),
     info("Equipment", "Body", "", "What it wields and wears; its weapon sets its melee damage.", &["Actor"]),
     info("XpMultiplier", "Body", "worth extra XP", "Worth this many times the usual XP when killed.", &["Health"]),
     // Mind
     info("Actor", "Mind", "", "Takes turns. Speed is how fast it acts.", &["ChaseAI|CompanionAI"]),
-    info("ChaseAI", "Mind", "hunts you", "Hostile: wanders, notices you, chases and attacks.", &["Actor"]),
-    info("Asleep", "Mind", "asleep", "Asleep until something wakes it.", &["ChaseAI"]),
+    info("ChaseAI", "Mind", "hunts you", "Hostile: wanders, notices you, chases and attacks.", &[]),
+    info("Asleep", "Mind", "asleep", "Asleep until something wakes it.", &[]),
     info("CanOpenDoors", "Mind", "opens doors", "Opens doors, and shouts to wake its allies.", &["ChaseAI|CompanionAI"]),
-    info("SeesInDark", "Mind", "sees in the dark", "Sees you in the dark.", &["ChaseAI"]),
+    info("SeesInDark", "Mind", "sees in the dark", "Sees you in the dark.", &[]),
     info("FearImmune", "Mind", "fearless", "Never flees and can't be feared.", &["ChaseAI"]),
-    info("SupportAI", "Mind", "heals allies", "Keeps its distance and heals or hastes its allies.", &["ChaseAI"]),
+    info("SupportAI", "Mind", "heals allies", "Keeps its distance and heals or hastes its allies.", &[]),
     info("Boss", "Mind", "a boss", "Uses its boss ability on a cooldown.", &["ChaseAI"]),
-    info("Flanker", "Mind", "flanks", "Circles round to attack from the side.", &["ChaseAI"]),
-    info("PackHunter", "Mind", "hunts in packs", "Braver near packmates; hurting one alerts the rest.", &["ChaseAI"]),
-    info("Charger", "Mind", "charges", "Charges in a straight line.", &["ChaseAI"]),
-    info("HitAndRun", "Mind", "hits and runs", "Breaks off after each attack.", &["ChaseAI"]),
+    info("Flanker", "Mind", "flanks", "Circles round to attack from the side.", &[]),
+    info("PackHunter", "Mind", "hunts in packs", "Braver near packmates; hurting one alerts the rest.", &[]),
+    info("Charger", "Mind", "charges", "Charges in a straight line.", &[]),
+    info("HitAndRun", "Mind", "hits and runs", "Breaks off after each attack.", &[]),
     info("Tameable", "Mind", "tameable", "A druid can tame it.", &["ChaseAI"]),
     info("DevFrozen", "Mind", "frozen", "Developer tools: it waits forever.", &["Actor"]),
     // Attacks
     info("Venomous", "Attacks", "venomous", "Its hits slow and poison.", &["ChaseAI|CompanionAI"]),
     info("Lacerating", "Attacks", "makes you bleed", "Its hits may cause bleeding.", &["ChaseAI|CompanionAI"]),
     info("Grabber", "Attacks", "grabs", "Its hits can grab and hold you.", &["ChaseAI"]),
-    info("Splits", "Attacks", "splits when hurt", "Splits in two when badly hurt.", &["Health"]),
+    info("Splits", "Attacks", "splits when hurt", "Splits in two when badly hurt.", &[]),
     // Fire & light
     info("LightSource", "Fire & light", "glows", "Gives off light: radius, brightness, colour, flicker.", &[]),
     info("CarriedTorch", "Fire & light", "carries a torch", "Carries a torch: a walking light that sets oil and webs alight.", &["Actor"]),
-    info("Combustible", "Fire & light", "catches fire", "Can catch fire (as a creature does: it starts Burning).", &["StatusEffects"]),
+    info("Combustible", "Fire & light", "catches fire", "Can catch fire (as a creature does: it starts Burning).", &[]),
     info("Fuel", "Fire & light", "burns", "Lies there and can burn: how readily, how long, what it looks like lit.", &[]),
-    info("OnFire", "Fire & light", "on fire", "Burning right now (fuel only).", &["Fuel"]),
+    info("OnFire", "Fire & light", "on fire", "Burning right now (fuel only).", &[]),
     info("CausesBurning", "Fire & light", "burns what steps in", "Sets alight whatever steps onto it.", &[]),
     info("Topples", "Fire & light", "topples", "Knocked into while lit, it tips over and spills its fire.", &["Fuel"]),
     info("Shatters", "Fire & light", "shatters", "Breaks at 0 HP into a puddle of burning oil.", &["Health", "Attackable"]),
-    info("Explosive", "Fire & light", "explodes", "Burning or broken open, it lights a fuse and blows up.", &["Health", "StatusEffects"]),
-    info("BarrelFuse", "Fire & light", "fuse lit", "A lit fuse; it goes off when this runs out.", &["Explosive"]),
+    info("Explosive", "Fire & light", "explodes", "Burning or broken open, it lights a fuse and blows up.", &["Health|Combustible"]),
+    info("BarrelFuse", "Fire & light", "fuse lit", "A lit fuse; it goes off when this runs out.", &[]),
     info("OilPuddle", "Fire & light", "oily", "Oil: coats whoever walks through it, and burns hot.", &["Fuel"]),
     info("WetTile", "Fire & light", "wet", "A soaked tile: damp fuel on it won't catch.", &[]),
     info("RainCloud", "Fire & light", "rains", "Rain over its area, soaking it again and again.", &[]),
     // Things
     info("Container", "Things", "holds loot", "Holds items and gold.", &[]),
-    info("GroundItemPile", "Things", "", "Loose items lying on the floor: picked up, not opened.", &["Container"]),
-    info("Raisable", "Things", "raisable", "The dead can be raised from it, or it detonated.", &["Container"]),
+    info("GroundItemPile", "Things", "", "Loose items lying on the floor: picked up, not opened.", &[]),
+    info("Raisable", "Things", "raisable", "The dead can be raised from it, or it detonated.", &[]),
     info("Door", "Things", "", "Opens and closes.", &["BlocksMovement"]),
     info("SecretDoor", "Things", "", "Looks like wall until found; then it's a door.", &["BlocksMovement"]),
     info("Trap", "Things", "a trap", "Goes off under whoever steps on it, and is used up.", &[]),
     info("Concealed", "Things", "hidden", "Invisible until the player spots it, then shows this look.", &[]),
     info("Furniture", "Things", "", "A fountain, altar or shrine to use.", &["BlocksMovement"]),
     info("Web", "Things", "sticky", "Roots whoever walks into it, and is used up.", &[]),
-    info("WebSpinner", "Things", "spins webs", "Lays webs on its own tile every few seconds.", &["ChaseAI"]),
+    info("WebSpinner", "Things", "spins webs", "Lays webs on its own tile every few seconds.", &[]),
     info("WebWalker", "Things", "walks on webs", "Crosses webs without being caught.", &[]),
     // Allies & people
     info("Follower", "Allies & people", "on your side", "On someone's side (you, if placed from a prefab).", &[]),
-    info("CompanionAI", "Allies & people", "follows you", "Follows its leader and fights whoever threatens them.", &["Actor", "Follower"]),
+    info("CompanionAI", "Allies & people", "follows you", "Follows its leader and fights whoever threatens them.", &[]),
     info("Summoned", "Allies & people", "summoned", "Counts against its summoner's limit.", &[]),
     info("FriendlyNPC", "Allies & people", "friendly", "Can be talked to, never attacked by bumping.", &["Name"]),
-    info("Vendor", "Allies & people", "sells things", "Buys and sells: its stock and gold.", &["FriendlyNPC"]),
+    info("Vendor", "Allies & people", "sells things", "Buys and sells: its stock and gold.", &[]),
     info("Dialogue", "Allies & people", "", "What it says when talked to.", &["FriendlyNPC"]),
     // Internal: state the game keeps for itself, hidden from the picker by
     // default.
     info("Position", "Internal", "", "Where it is (set by where it's placed).", &[]),
     info("VisualPosition", "Internal", "", "Where it's drawn while it moves.", &[]),
-    info("Channel", "Internal", "", "Something it's in the middle of channelling.", &["Actor"]),
+    info("Channel", "Internal", "", "Something it's in the middle of channelling.", &[]),
     info("LightExposure", "Internal", "", "How lit it is right now.", &[]),
     info("RootStruggleNoticed", "Internal", "", "Rooted-struggle bookkeeping.", &[]),
     info("RangedCooldown", "Internal", "", "Time until its next shot.", &["ChaseAI"]),
@@ -180,6 +182,13 @@ mod tests {
             }
         }
         for info in INFO {
+            for need in info.needs {
+                assert!(
+                    !crate::component_registry::all_requirements(info.name).contains(need),
+                    "{} lists {need} as a hint, but it's a hard requirement the world adds itself",
+                    info.name
+                );
+            }
             assert!(crate::component_registry::find(info.name).is_some(), "{} is described but not registered", info.name);
         }
         for block in BLOCKS {

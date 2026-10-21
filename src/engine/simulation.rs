@@ -255,6 +255,10 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
         systems::grab::tick_grabs(ctx.world, ctx.events);
         systems::split::process_splits(ctx);
 
+        // Whatever that despawned or un/blocked, the collision cache, the
+        // scheduler and the AI tracker now follow, before anyone decides.
+        ctx.sync_world_changes();
+
         // After player completes an action, check for dormant entities that should wake up
         if next_entity == player_entity {
             if let Some(player_pos) = queries::get_entity_position(ctx.world, player_entity) {

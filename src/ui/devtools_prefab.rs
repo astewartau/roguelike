@@ -325,7 +325,14 @@ pub(super) fn picker(
                 |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     for info in entries {
-                        if look::add_row(ui, info.name, info.summary).clicked() {
+                        let brings: Vec<&str> =
+                            crate::component_registry::all_requirements(info.name).into_iter().filter(|n| !has(n)).collect();
+                        let summary = if brings.is_empty() {
+                            info.summary.to_string()
+                        } else {
+                            format!("{}  Also adds {}.", info.summary, brings.join(", "))
+                        };
+                        if look::add_row(ui, info.name, &summary).clicked() {
                             picked.push(info.name);
                         }
                     }
@@ -385,14 +392,22 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
                                 if let Some(info) = info {
                                     look::hint(ui, info.summary);
                                 }
-                                if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
+                                let needed_by: Vec<String> =
+                                    dev.prefabs[i].needed_by(&name).into_iter().map(String::from).collect();
+                                if !needed_by.is_empty() {
+                                    ui.colored_label(look::pal(ui).muted, format!("for {}", needed_by.join(", ")));
+                                } else if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
                                     ui.colored_label(look::pal(ui).muted, info.phrase);
                                 }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if look::cross_button(ui).on_hover_text("Remove").clicked()
-                                        {
+                                        let tip = if needed_by.is_empty() {
+                                            "Remove".to_string()
+                                        } else {
+                                            format!("Remove (and {}, which need it)", needed_by.join(", "))
+                                        };
+                                        if look::cross_button(ui).on_hover_text(tip).clicked() {
                                             remove = Some(n);
                                         }
                                     },
@@ -408,7 +423,7 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
         );
     }
     if let Some(n) = remove {
-        dev.prefabs[i].components.remove(n);
+        dev.prefabs[i].remove_at(n);
         changed = true;
     }
     changed

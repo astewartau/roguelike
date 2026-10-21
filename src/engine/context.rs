@@ -66,7 +66,45 @@ pub struct ActorCtx<'a> {
     pub rng: &'a mut StdRng,
 }
 
+/// Bring the engine's bookkeeping in line with what changed in the world
+/// (`World::take_changes`): despawned entities leave the collision cache,
+/// the scheduler and the AI tracker; an entity whose blocking changed is
+/// re-registered in the collision cache with the flags it actually has.
+pub fn apply_world_changes(
+    world: &mut World,
+    spatial: &mut SpatialCache,
+    scheduler: &mut ActionScheduler,
+    tracker: &mut ActiveAITracker,
+) {
+    use crate::components::{BlocksMovement, BlocksVision, Position};
+    use crate::world::WorldChange;
+    for change in world.take_changes() {
+        match change {
+            WorldChange::Despawned(e) => {
+                spatial.remove_entity(e);
+                scheduler.cancel_for_entity(e);
+                tracker.remove_entity(e);
+            }
+            WorldChange::Blocking(e) => {
+                let Some(pos) = world.get::<&Position>(e).ok().map(|p| (p.x, p.y)) else {
+                    spatial.remove_entity(e);
+                    continue;
+                };
+                let movement = world.get::<&BlocksMovement>(e).is_ok();
+                let vision = world.get::<&BlocksVision>(e).is_ok();
+                spatial.register_entity(e, pos, movement, vision);
+            }
+        }
+    }
+}
+
 impl ActorCtx<'_> {
+    /// Apply the world's change journal to this context's bookkeeping. See
+    /// [`apply_world_changes`].
+    pub fn sync_world_changes(&mut self) {
+        apply_world_changes(self.world, self.spatial, self.scheduler, self.tracker);
+    }
+
     /// Reborrow just the effect-applying subset.
     pub fn effects(&mut self) -> EffectCtx<'_> {
         EffectCtx {

@@ -624,7 +624,16 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                             look::hint(ui, info.summary);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if look::cross_button(ui).on_hover_text("Remove").clicked() {
+                            let needed_by: Vec<&str> = crate::component_registry::all_dependents(entry.name)
+                                .into_iter()
+                                .filter(|d| known.iter().any(|k| k.name == *d))
+                                .collect();
+                            let tip = if needed_by.is_empty() {
+                                "Remove".to_string()
+                            } else {
+                                format!("Remove (and {}, which need it)", needed_by.join(", "))
+                            };
+                            if look::cross_button(ui).on_hover_text(tip).clicked() {
                                 dev.commands.push(DevCommand::RemoveComponent { entity: e, name: entry.name });
                             }
                         });

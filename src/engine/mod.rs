@@ -861,6 +861,7 @@ impl GameEngine {
         // The check compares per-tile blocker *counts*, so a tile two entities
         // share has to be accounted for twice — an opened coffin and the
         // skeleton standing on it, say.
+        state.sync_world_changes();
         #[cfg(debug_assertions)]
         state
             .spatial_cache
@@ -2705,6 +2706,41 @@ mod tests {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         engine.start_game(PlayerClass::Fighter, 1234, &mut camera);
         engine
+    }
+
+    /// The world's change journal keeps the bookkeeping right even when the
+    /// code making a change doesn't: a blocker despawned without a word to
+    /// the collision cache, scheduler or AI tracker leaves none of them
+    /// pointing at it, and dropping one of two blocking flags (the cache's
+    /// clear used to drop both) leaves the other counted.
+    #[test]
+    fn the_world_journal_keeps_the_bookkeeping_in_step() {
+        use crate::components::{BlocksMovement, BlocksVision, Position};
+        let mut engine = engine_with_run();
+        let state = engine.state.as_mut().unwrap();
+        let at = state.world.get::<&Position>(state.player_entity).map(|p| (p.x + 1, p.y)).unwrap();
+
+        // A wall-like thing, blocking both.
+        let pillar = state.world.spawn((Position::new(at.0, at.1), BlocksMovement, BlocksVision));
+        state.sync_world_changes();
+        assert!(state.spatial_cache.is_blocked(at), "spawned blockers are registered by the journal");
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after spawning");
+
+        // Opened up, the old way: the component goes and the cache clears
+        // *both* flags. The journal puts back the one it still has.
+        state.world.remove_one::<BlocksMovement>(pillar).unwrap();
+        state.spatial_cache.clear_blocking_flags(pillar);
+        state.sync_world_changes();
+        assert!(!state.spatial_cache.is_blocked(at));
+        assert!(state.spatial_cache.blocks_vision(at), "still blocks sight");
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after unblocking");
+
+        // Deleted without telling anyone.
+        state.action_scheduler.schedule(pillar, state.game_clock.time + 1.0);
+        state.world.despawn(pillar).unwrap();
+        state.sync_world_changes();
+        assert_eq!(state.action_scheduler.scheduled_count(pillar), 0, "no turn left for it");
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after despawning");
     }
 
     /// A creature that appears mid-game (a split slime, a boss's brood, a
