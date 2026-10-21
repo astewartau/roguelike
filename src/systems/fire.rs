@@ -30,8 +30,8 @@ use crate::world::World;
 use rand::Rng;
 
 use crate::components::{
-    AnimatedSprite, BarrelFuse, Burnout, CausesBurning, Combustible, Doused, EffectType, Topples,
-    Fuel, FuseCause, Health, Ignition, LightSource, Explosive, OilPuddle, OnFire, Position,
+    BarrelFuse, Burnout, CausesBurning, Combustible, Doused, EffectType, Topples,
+    Fuel, FuseCause, Health, Ignition, Explosive, OilPuddle, OnFire, Position,
     StatusEffects, WetTile,
 };
 use crate::constants::*;
@@ -91,7 +91,7 @@ pub fn tick_fire(
             crate::systems::torches::put_out_dropped_torch(world, id, Some(kind));
             continue;
         }
-        let _ = world.despawn(id);
+        crate::systems::used_up::use_up(world, id, crate::systems::used_up::BURNT_AWAY);
         if burnout == Burnout::ScorchGrass {
             if let Some(tile) = grid.get_mut(x, y) {
                 if tile.tile_type == TileType::TallGrass {
@@ -115,7 +115,7 @@ pub fn tick_fire(
         }
     }
     for id in dried {
-        let _ = world.despawn(id);
+        crate::systems::used_up::use_up(world, id, &["WetTile"]);
     }
 
     // 3. Oil barrels: a burning barrel lights its (fire) fuse. A barrel at
@@ -386,21 +386,16 @@ pub fn ignite_fuel(world: &mut World, id: Entity) {
     }
     match fuel.ignition {
         Ignition::InPlace => {
-            let _ = world.insert(
-                id,
-                (
-                    OnFire { remaining: fuel.burn_time },
-                    CausesBurning,
-                    fuel.lit_look,
-                    fuel.lit_light.with_fresh_phase(),
-                ),
-            );
+            // Its flames and light are the fuel's own (drawn and lit from
+            // `Fuel` while `OnFire`), never written over the entity's.
+            let _ = world.insert(id, (OnFire { remaining: fuel.burn_time }, CausesBurning));
         }
         Ignition::Replace => {
             let Some((x, y)) = crate::queries::get_entity_position(world, id) else {
                 return;
             };
-            let _ = world.despawn(id);
+            // Consumed by the fire: the fuel (and what it was) goes.
+            crate::systems::used_up::use_up(world, id, &["Fuel"]);
             crate::spawning::spawn_fire_patch(world, x, y);
         }
     }
@@ -419,7 +414,7 @@ pub fn douse_fuel(world: &mut World, id: Entity) {
         Doused::Extinguish => extinguish(world, id),
         Doused::Sheltered => {}
         Doused::Despawn => {
-            let _ = world.despawn(id);
+            crate::systems::used_up::use_up(world, id, crate::systems::used_up::BURNT_AWAY);
         }
         Doused::LeavesItem(kind) => {
             crate::systems::torches::put_out_dropped_torch(world, id, Some(kind));
@@ -427,15 +422,13 @@ pub fn douse_fuel(world: &mut World, id: Entity) {
     }
 }
 
-/// Put a fire out and leave what was burning, ready to be lit again: its
-/// flames, light and burn on contact go. By hand (`put_out_by_hand`) or
-/// water (`douse_fuel`).
+/// Put a fire out and leave what was burning, ready to be lit again: the
+/// fire and its burn on contact go (its flames and light went with
+/// `OnFire`), and the entity's own look and light are left alone. By hand
+/// (`put_out_by_hand`) or water (`douse_fuel`).
 pub(crate) fn extinguish(world: &mut World, id: Entity) {
-    // One at a time: as a bundle, one missing would keep them all.
     let _ = world.remove_one::<OnFire>(id);
     let _ = world.remove_one::<CausesBurning>(id);
-    let _ = world.remove_one::<AnimatedSprite>(id);
-    let _ = world.remove_one::<LightSource>(id);
 }
 
 /// Someone puts out a tended fire they're standing at (a campfire, brazier
@@ -566,7 +559,7 @@ pub fn splash_water(
         .map(|(id, _)| id)
         .collect();
     for id in washed_oil {
-        let _ = world.despawn(id);
+        crate::systems::used_up::use_up(world, id, &["OilPuddle", "Fuel"]);
     }
 
     // Soak oil barrels: Wet for BARREL_SOAK_DURATION, so fire cannot take
@@ -1193,6 +1186,11 @@ mod tests {
     }
 
     /// One seeded fire tick of `dt` game seconds; returns the events.
+    /// The light given off at `tile`, if any (what the light map sees).
+    fn light_at(world: &World, tile: (i32, i32)) -> Option<crate::components::LightSource> {
+        crate::systems::light::light_emitters(world).into_iter().find(|(at, _)| *at == tile).map(|(_, l)| l)
+    }
+
     fn tick(world: &mut World, grid: &mut Grid, cache: &mut SpatialCache, dt: f32) -> Vec<GameEvent> {
         use rand::SeedableRng;
         let mut events = EventQueue::new();
@@ -1757,8 +1755,9 @@ mod tests {
 
         assert!(topple(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
 
-        // Unlit: no more light or contact hazard, and a second topple is a no-op.
-        assert!(world.get::<&LightSource>(brazier).is_err());
+        // Unlit: the brazier gives no more light or contact hazard (the
+        // fire it spilled does), and a second topple is a no-op.
+        assert!(world.get::<&OnFire>(brazier).is_err());
         assert!(world.get::<&CausesBurning>(brazier).is_err());
         assert!(!topple(&mut world, &grid, brazier, &mut events, &mut rand::thread_rng()));
 
@@ -1777,7 +1776,8 @@ mod tests {
         ignite_fuel(&mut world, oil);
         let grass = crate::spawning::spawn_fire_patch(&mut world, 3, 2);
         for burning in [oil, grass] {
-            let anim = *world.get::<&AnimatedSprite>(burning).unwrap();
+            assert!(world.get::<&OnFire>(burning).is_ok());
+            let anim = world.get::<&Fuel>(burning).unwrap().lit_look;
             assert_eq!((anim.sheet, anim.base_tile_id), crate::tile::tile_ids::FIRE_EFFECT);
         }
     }
@@ -1790,7 +1790,10 @@ mod tests {
         let campfire = crate::spawning::spawn_campfire(&mut world, 2, 2);
         let brazier = crate::spawning::spawn_brazier(&mut world, 3, 2);
         let lantern = crate::spawning::spawn_lantern(&mut world, 4, 2, crate::components::LanternStyle::Warm);
-        let burning = |w: &World, e| w.get::<&OnFire>(e).is_ok() && w.get::<&LightSource>(e).is_ok();
+        let burning = |w: &World, e| {
+            let at = w.get::<&Position>(e).map(|p| (p.x, p.y)).unwrap();
+            w.get::<&OnFire>(e).is_ok() && light_at(w, at).is_some()
+        };
         assert!(burning(&world, campfire) && burning(&world, brazier) && burning(&world, lantern));
 
         // Rain on all three: the open fires go out, the one behind glass doesn't.
@@ -1850,7 +1853,7 @@ mod tests {
         let purple = (0.6, 0.2, 0.9);
         world.get::<&mut Fuel>(lantern).unwrap().lit_light.color = purple;
         ignite_fuel(&mut world, lantern);
-        assert_eq!(world.get::<&LightSource>(lantern).map(|l| l.color).ok(), Some(purple));
+        assert_eq!(light_at(&world, (2, 2)).map(|l| l.color), Some(purple));
 
         // A loose fire on the floor isn't tended: no putting that out by hand.
         let oil = crate::spawning::spawn_oil_puddle(&mut world, 4, 4);
@@ -1875,6 +1878,27 @@ mod tests {
         tick(&mut world, &mut grid, &mut cache, 0.0);
         assert!(!world.contains(barrel), "it went off");
         assert!(world.get::<&Health>(door).unwrap().current < 40, "and the blast hurt the door");
+    }
+
+    /// Fire and torches light with their own light and leave the thing's
+    /// own alone: a glowing crystal that's set burning and put out still
+    /// glows its own colour, and so does a creature that drops its torch.
+    #[test]
+    fn a_things_own_light_survives_fire_and_torches() {
+        use crate::components::{CarriedTorch, LightSource};
+        let mut world = World::new();
+        let crystal_light = LightSource::crystal();
+        let crystal = world.spawn((Position::new(2, 2), crystal_light, Fuel::oil()));
+        ignite_fuel(&mut world, crystal);
+        let here: Vec<_> = crate::systems::light::light_emitters(&world).into_iter().filter(|(at, _)| *at == (2, 2)).collect();
+        assert_eq!(here.len(), 2, "its own light and the fire's");
+        extinguish(&mut world, crystal);
+        assert_eq!(world.get::<&LightSource>(crystal).map(|l| l.color).ok(), Some(crystal_light.color), "its own light is kept");
+
+        let bearer = world.spawn((Position::new(5, 5), crystal_light, CarriedTorch { lit: true }));
+        assert_eq!(crate::systems::light::light_emitters(&world).iter().filter(|(at, _)| *at == (5, 5)).count(), 2);
+        let _ = world.remove_one::<CarriedTorch>(bearer);
+        assert!(world.get::<&LightSource>(bearer).is_ok(), "dropping the torch keeps its own glow");
     }
 }
 

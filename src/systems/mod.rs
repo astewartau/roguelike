@@ -58,6 +58,7 @@ pub mod telegraph;
 pub mod tile_context;
 pub mod tile_effects;
 pub mod targets;
+pub mod used_up;
 pub mod webs;
 
 // Re-export commonly used items

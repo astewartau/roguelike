@@ -409,7 +409,7 @@ mod tests {
             .find(|(_, pos, _)| *pos == (9, 9))
             .expect("standing brazier restored at its tile");
         assert!(lit, "a standing brazier stays lit");
-        assert!(world.get::<&LightSource>(standing).is_ok());
+        assert!(world.get::<&crate::components::OnFire>(standing).is_ok(), "and gives its light");
 
         let barrels: Vec<(Entity, (i32, i32))> = world
             .query::<&Position>()
@@ -448,10 +448,10 @@ mod tests {
 
         let ghost = LightSource::lantern(LanternStyle::Ghost);
         let lanterns: Vec<_> = world
-            .query::<(&Position, &LightSource)>()
+            .query::<(&Position, &crate::components::Fuel)>()
             .with::<&Shatters>()
             .iter()
-            .map(|(_, (p, l))| ((p.x, p.y), l.color))
+            .map(|(_, (p, f))| ((p.x, p.y), f.lit_light.color))
             .collect();
         assert_eq!(lanterns, vec![((12, 5), ghost.color)], "the standing one, in its light");
     }

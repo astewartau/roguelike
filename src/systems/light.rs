@@ -32,10 +32,7 @@
 use hecs::Entity;
 use crate::world::World;
 
-use crate::components::{
-    Actor, BlocksMovement, BlocksVision, Door, EffectType, LightExposure, LightSource, Position,
-    SecretDoor, StatusEffects,
-};
+use crate::components::{Actor, BlocksMovement, BlocksVision, Door, EffectType, LightExposure, LightSource, Position, SecretDoor, StatusEffects, Fuel, OnFire, CarriedTorch};
 use crate::constants::*;
 use crate::grid::Grid;
 use crate::tile::TileType;
@@ -50,6 +47,17 @@ pub fn light_emitters(world: &World) -> Vec<((i32, i32), LightSource)> {
         .iter()
         .map(|(_, (pos, light))| ((pos.x, pos.y), *light))
         .collect();
+    // A fire lights with its fuel's light, alongside any light the thing has
+    // of its own.
+    for (id, (pos, fuel, _)) in world.query::<(&Position, &Fuel, &OnFire)>().iter() {
+        lights.push(((pos.x, pos.y), LightSource { phase: stable_phase(id), ..fuel.lit_light }));
+    }
+    // So does a lit torch, in whoever's hand.
+    for (id, (pos, torch)) in world.query::<(&Position, &CarriedTorch)>().iter() {
+        if torch.lit {
+            lights.push(((pos.x, pos.y), LightSource { phase: stable_phase(id), ..LightSource::torch() }));
+        }
+    }
     for (id, (pos, status)) in world
         .query::<(&Position, &StatusEffects)>()
         .without::<&LightSource>()

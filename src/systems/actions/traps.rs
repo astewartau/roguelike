@@ -79,7 +79,7 @@ pub(crate) fn check_trap_trigger(
         was_hidden,
     });
 
-    let _ = world.despawn(trap_entity);
+    crate::systems::used_up::use_up(world, trap_entity, &["Trap", "Concealed", "FlameOverlay"]);
 }
 
 /// Set a trap with `effect` at the target tile: a visible pressure plate

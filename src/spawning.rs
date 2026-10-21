@@ -220,10 +220,7 @@ impl EnemyDef {
 
         // Torch-bearers carry their own light.
         if self.torch {
-            let _ = world.insert(
-                entity,
-                (crate::components::CarriedTorch { lit: true }, LightSource::torch()),
-            );
+            let _ = world.insert_one(entity, crate::components::CarriedTorch { lit: true });
         }
 
         // Spider-kin ignore webs and periodically lay them.
@@ -1189,14 +1186,12 @@ pub fn spawn_campfire(world: &mut World, x: i32, y: i32) -> hecs::Entity {
 /// flames, ignites things stepping on it (CausesBurning), and is avoided by AI.
 /// When it burns out (see `tick_fire`) tall grass under it reverts to floor.
 pub fn spawn_fire_patch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{AnimatedSprite, CausesBurning, Fuel, OnFire};
+    use crate::components::{CausesBurning, Fuel, OnFire};
 
     let pos = Position::new(x, y);
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        AnimatedSprite::flames(),
-        LightSource::brazier(),
         CausesBurning,
         Fuel::grass_fire(),
         OnFire { remaining: crate::constants::GRASS_BURN_DURATION },
@@ -1351,7 +1346,7 @@ pub fn spawn_lantern(
 /// that can catch grass beside it until it gutters out (`Fuel::dropped_torch`).
 pub fn spawn_dropped_torch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     use crate::components::{
-        AnimatedSprite, Container, Fuel, GroundItemPile, ItemInstance, ItemType, OnFire,
+        Container, Fuel, GroundItemPile, ItemInstance, ItemType, OnFire,
     };
     use crate::constants::DROPPED_TORCH_BURN_DURATION;
 
@@ -1359,8 +1354,6 @@ pub fn spawn_dropped_torch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     world.spawn((
         pos,
         VisualPosition::from_position(&pos),
-        AnimatedSprite::torch(),
-        LightSource::torch(),
         Fuel::dropped_torch(),
         OnFire { remaining: DROPPED_TORCH_BURN_DURATION },
         Container::ground_pile(vec![ItemInstance::plain(ItemType::Torch)]),

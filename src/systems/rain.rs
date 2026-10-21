@@ -46,7 +46,7 @@ pub fn tick_rain(ctx: &mut EffectCtx, game_dt: f32) {
             soak(ctx, (x, y), radius);
         }
         if spent {
-            let _ = ctx.world.despawn(id);
+            crate::systems::used_up::use_up(ctx.world, id, &["RainCloud"]);
         }
     }
 }

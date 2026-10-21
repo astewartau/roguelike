@@ -24,7 +24,7 @@ use hecs::Entity;
 use crate::world::World;
 
 use crate::components::{
-    CarriedTorch, Container, Equipment, GroundItemPile, ItemInstance, ItemType, LightSource,
+    CarriedTorch, Container, Equipment, GroundItemPile, ItemInstance, ItemType,
     OnFire, Position,
 };
 use crate::events::{EventQueue, GameEvent};
@@ -49,22 +49,18 @@ fn held_kind(world: &World, entity: Entity) -> Option<ItemType> {
 pub fn sync_held_torch(world: &mut World, entity: Entity) {
     match held_kind(world, entity) {
         Some(ItemType::Torch) => {
-            let _ = world.insert(entity, (CarriedTorch { lit: true }, LightSource::torch()));
+            let _ = world.insert_one(entity, CarriedTorch { lit: true });
         }
         Some(ItemType::UnlitTorch) => {
-            let _ = world.remove_one::<LightSource>(entity);
             let _ = world.insert_one(entity, CarriedTorch { lit: false });
         }
         _ => stop_carrying(world, entity),
     }
 }
 
-/// Take away an entity's torch and its light. One at a time: removing them
-/// as a bundle removes nothing at all from a carrier of an unlit torch, which
-/// has no light to remove.
+/// Take away an entity's torch (its light is the torch's, so goes with it).
 fn stop_carrying(world: &mut World, entity: Entity) {
     let _ = world.remove_one::<CarriedTorch>(entity);
-    let _ = world.remove_one::<LightSource>(entity);
 }
 
 /// Put out an entity's torch, if it carries a lit one: no more light, and the
@@ -85,7 +81,6 @@ pub fn douse_torch(world: &mut World, entity: Entity, events: &mut EventQueue) {
         if let Ok(mut torch) = world.get::<&mut CarriedTorch>(entity) {
             torch.lit = false;
         }
-        let _ = world.remove_one::<LightSource>(entity);
     }
     events.push(GameEvent::TorchDoused { entity });
 }
@@ -234,14 +229,27 @@ pub fn drop_torch(world: &mut World, entity: Entity) {
 /// unlit torch) if it is still there.
 pub fn put_out_dropped_torch(world: &mut World, torch: Entity, leaves: Option<ItemType>) {
     let pos = world.get::<&Position>(torch).map(|p| (p.x, p.y)).ok();
-    let items: Vec<ItemInstance> = world
+    let (items, gold): (Vec<ItemInstance>, u32) = world
         .get::<&mut Container>(torch)
-        .map(|mut c| std::mem::take(&mut c.items))
+        .map(|mut c| (std::mem::take(&mut c.items), std::mem::take(&mut c.gold)))
         .unwrap_or_default();
-    let _ = world.despawn(torch);
+    crate::systems::used_up::use_up(world, torch, &["Container", "GroundItemPile", "Fuel", "OnFire", "CausesBurning"]);
     let Some((x, y)) = pos else {
         return;
     };
+    // Gold dropped with the torch stays on the floor too (it used to vanish).
+    if gold > 0 {
+        let mut coins = Container::ground_pile(Vec::new());
+        coins.gold = gold;
+        let at = Position::new(x, y);
+        world.spawn((
+            at,
+            crate::components::VisualPosition::from_position(&at),
+            crate::components::Sprite::from_ref(crate::tile::tile_ids::COINS),
+            coins,
+            GroundItemPile,
+        ));
+    }
     for mut item in items {
         if item.kind == ItemType::Torch {
             match leaves {
@@ -372,7 +380,10 @@ mod tests {
         let mut world = World::new();
         let g = goblin(&mut world, 2, 2);
         drop_torch(&mut world, g);
-        assert!(world.get::<&LightSource>(g).is_err(), "the corpse doesn't glow");
+        let corpse_at = world.get::<&Position>(g).map(|p| (p.x, p.y)).unwrap();
+        assert!(world.get::<&CarriedTorch>(g).is_err(), "the corpse carries no torch");
+        let lights = crate::systems::light::light_emitters(&world);
+        assert_eq!(lights.iter().filter(|(at, _)| *at == corpse_at).count(), 1, "only the dropped torch glows there");
         let dropped = world
             .query::<(&Position, &OnFire)>()
             .without::<&OilPuddle>()
@@ -516,6 +527,6 @@ mod tests {
             .flat_map(|(_, c)| c.items.iter().map(|i| i.kind).collect::<Vec<_>>())
             .collect();
         assert_eq!(left, vec![ItemType::UnlitTorch]);
-        assert!(world.query::<&LightSource>().iter().next().is_none(), "and it's dark");
+        assert!(crate::systems::light::light_emitters(&world).is_empty(), "and it's dark");
     }
 }

@@ -68,7 +68,7 @@ pub fn trigger_web_at(
     let Some(web) = web_at(world, x, y) else {
         return;
     };
-    let _ = world.despawn(web);
+    crate::systems::used_up::use_up(world, web, &["Web", "Fuel"]);
     crate::systems::effects::add_effect_to_entity(world, entity, EffectType::Rooted, WEB_ROOT_DURATION);
     events.push(GameEvent::WebTouched { victim: entity, position: (x, y) });
 }

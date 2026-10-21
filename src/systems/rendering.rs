@@ -523,6 +523,14 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
         .iter()
         .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, *anim))
         .collect();
+    // A burning fuel's flames, drawn over whatever it is.
+    animated_entities.extend(
+        world
+            .query::<(&Position, &VisualPosition, &crate::components::Fuel)>()
+            .with::<&crate::components::OnFire>()
+            .iter()
+            .map(|(_, (pos, vis_pos, fuel))| (pos.x, pos.y, vis_pos.x, vis_pos.y, fuel.lit_look)),
+    );
     animated_entities.sort_by_key(|(_, _, _, _, anim)| anim.z_order);
 
     for (pos_x, pos_y, vis_x, vis_y, anim) in animated_entities {

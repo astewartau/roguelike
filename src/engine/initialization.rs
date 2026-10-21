@@ -1089,7 +1089,7 @@ pub fn spawn_floor_entities(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{LanternStyle, Shatters, LightSource, OilPuddle};
+    use crate::components::{LanternStyle, Shatters, OilPuddle};
     use crate::dungeon_gen::RoomTheme;
     use rand::SeedableRng;
 
@@ -1108,11 +1108,11 @@ mod tests {
 
             // A lantern's style shows in its light: ghost-light is cold.
             let lanterns: Vec<((i32, i32), LanternStyle)> = world
-                .query::<(&Position, &LightSource)>()
+                .query::<(&Position, &crate::components::Fuel)>()
                 .with::<&Shatters>()
                 .iter()
-                .map(|(_, (p, l))| {
-                    let style = if l.color == LIGHT_COLOR_GHOST {
+                .map(|(_, (p, f))| {
+                    let style = if f.lit_light.color == LIGHT_COLOR_GHOST {
                         LanternStyle::Ghost
                     } else {
                         LanternStyle::Warm

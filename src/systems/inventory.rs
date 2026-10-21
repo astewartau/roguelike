@@ -335,7 +335,7 @@ pub fn cleanup_empty_ground_piles(world: &mut World) {
         .collect();
 
     for id in empty_piles {
-        let _ = world.despawn(id);
+        crate::systems::used_up::use_up(world, id, &["Container", "GroundItemPile"]);
     }
 }
 

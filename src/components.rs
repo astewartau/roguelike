@@ -2353,12 +2353,6 @@ fn random_light_phase() -> f32 {
 }
 
 impl LightSource {
-    /// The same light with its own flicker phase, so copies of one light
-    /// (every lantern lit from the same `Fuel`) don't flicker in step.
-    pub fn with_fresh_phase(self) -> Self {
-        Self { phase: random_light_phase(), ..self }
-    }
-
     /// Create a standard campfire light
     pub fn campfire() -> Self {
         Self {
@@ -2648,8 +2642,8 @@ impl Fuel {
             doused: Doused::LeavesItem(ItemType::UnlitTorch),
             burnout: Burnout::LeavesItem(ItemType::UnlitTorch),
             spreads: false,
-            lit_look: AnimatedSprite::flames(),
-            lit_light: LightSource::brazier(),
+            lit_look: AnimatedSprite::torch(),
+            lit_light: LightSource::torch(),
             tended: false,
         }
     }
