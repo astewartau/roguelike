@@ -280,7 +280,10 @@ pub enum EngineRequest {
 /// Everything the developer tools remember between frames.
 pub struct DevTools {
     pub visible: bool,
+    /// The tool whose panel the rail shows (or last showed), and whether
+    /// that panel is open.
     pub tab: DevTab,
+    pub panel_open: bool,
     /// The armed cursor tool, if any.
     pub tool: Option<CursorTool>,
     pub spawn_options: SpawnOptions,
@@ -292,9 +295,14 @@ pub struct DevTools {
     pub rain_style: RainStyle,
     /// Queued by the panel, carried out by `apply_commands`.
     pub commands: Vec<DevCommand>,
-    /// Width of the docked panel last frame, in physical pixels (0 while
+    /// Width of the icon rail last frame, in physical pixels (0 while
     /// hidden), for the camera to keep the map centred beside it.
     pub panel_px: f32,
+    /// How far the game's HUD keeps clear of the tools last frame, in egui
+    /// points: below the toolbar, and left of the rail and any open panel.
+    /// Both 0 while hidden.
+    pub hud_top: f32,
+    pub hud_right: f32,
     /// One line of feedback for the panel ("Placed 3 Goblins").
     pub status: Option<String>,
     /// The player can't be hurt (Invulnerable, kept topped up).
@@ -373,6 +381,7 @@ impl Default for DevTools {
         Self {
             visible: false,
             tab: DevTab::default(),
+            panel_open: false,
             tool: None,
             spawn_options: SpawnOptions::default(),
             brush: 0,
@@ -380,6 +389,8 @@ impl Default for DevTools {
             rain_style: RainStyle::default(),
             commands: Vec::new(),
             panel_px: 0.0,
+            hud_top: 0.0,
+            hud_right: 0.0,
             status: None,
             god_mode: false,
             keep_fed: false,
@@ -433,6 +444,22 @@ impl DevTools {
         self.picker_search.clear();
         self.palette_selected = 0;
         self.palette_focus = true;
+    }
+
+    /// Show `tab`'s panel.
+    pub fn open_panel(&mut self, tab: DevTab) {
+        self.tab = tab;
+        self.panel_open = true;
+    }
+
+    /// A rail icon was clicked: open its panel, or close it if it's the one
+    /// already open.
+    pub fn rail_clicked(&mut self, tab: DevTab) {
+        if self.panel_open && self.tab == tab {
+            self.panel_open = false;
+        } else {
+            self.open_panel(tab);
+        }
     }
 
     pub fn toggle(&mut self) {
@@ -550,7 +577,7 @@ impl DevTools {
                     (id == player, state.world.get::<&crate::components::Actor>(id).is_err())
                 });
                 self.select(at, here.first().copied());
-                self.tab = DevTab::Inspect;
+                self.open_panel(DevTab::Inspect);
             }
             CursorTool::LookOfExplosion { fiery } => {
                 let (x, y) = (at.0 as f32 + 0.5, at.1 as f32 + 0.5);
@@ -1191,6 +1218,7 @@ mod tests {
         dev.use_tool(state, &mut events, &mut vfx, spot);
         let goblin = dev.inspected.expect("picked the goblin");
         assert_eq!(dev.tab, DevTab::Inspect);
+        assert!(dev.panel_open, "picking something opens the inspector");
 
         // An edit lands; a bad one is kept as a draft with the reason.
         dev.commands.push(DevCommand::SetComponent {

@@ -121,7 +121,8 @@ pub fn draw_palette(ctx: &egui::Context, dev: &mut DevTools, view: &DevView) {
 
     let mut picked: Option<(usize, bool)> = if enter && !found.is_empty() { Some((dev.palette_selected, shift)) } else { None };
     let screen = ctx.screen_rect();
-    let map_centre = (screen.width() - crate::constants::DEVTOOLS_PANEL_WIDTH) / 2.0;
+    // Centred over the map left uncovered by the rail and the open panel.
+    let map_centre = (screen.width() - dev.hud_right) / 2.0;
     let area = egui::Area::new(egui::Id::new("dev_add_palette"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2((map_centre - PALETTE_WIDTH / 2.0).max(8.0), screen.height() * 0.12))

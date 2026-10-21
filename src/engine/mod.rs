@@ -270,7 +270,7 @@ impl GameEngine {
         let ui_state = GameUiState::new(state.player_entity);
         self.begin(state, ui_state);
         self.dev.visible = true;
-        self.dev.tab = crate::devtools::DevTab::Spawn;
+        self.dev.open_panel(crate::devtools::DevTab::Spawn);
         self.dev.no_fog = true;
         self.dev.clock_running = true;
         self.dev.status = Some("An empty world. Place a player, or creatures, and watch.".into());

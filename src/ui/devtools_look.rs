@@ -121,21 +121,6 @@ pub fn panel_frame() -> egui::Frame {
         })
 }
 
-/// A card around a group of controls.
-pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let p = pal(ui);
-    egui::Frame::none()
-        .fill(p.card)
-        .stroke(Stroke::new(1.0_f32, p.border))
-        .rounding(Rounding::same(10.0))
-        .inner_margin(egui::Margin::same(10.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
-        })
-        .inner
-}
-
 /// A section label: small, quiet capitals with room above.
 pub fn section(ui: &mut egui::Ui, text: &str) {
     let p = pal(ui);
@@ -171,39 +156,33 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, label: impl Into<egui::WidgetTex
     .inner
 }
 
-/// A row of pill tabs, each an icon and a name, filling the width in as
-/// many rows as it takes. Returns the tab clicked, if any.
-pub fn pill_tabs<T: Copy + PartialEq>(ui: &mut egui::Ui, current_tab: T, tabs: &[(T, &str, &str)]) -> Option<T> {
+/// A square icon button for the tool rail: the icon alone, its name on
+/// hover. Filled with the accent while `selected` (its panel is open).
+pub fn rail_button(ui: &mut egui::Ui, icon: &str, name: &str, selected: bool) -> egui::Response {
     let p = pal(ui);
-    let mut picked = None;
-    let per_row = 4;
-    let gap = 4.0;
-    let width = (ui.available_width() - gap * (per_row as f32 - 1.0)) / per_row as f32;
-    for row in tabs.chunks(per_row) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for &(tab, icon, name) in row {
-                let selected = tab == current_tab;
-                let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 46.0), egui::Sense::click());
-                let fill = if selected {
-                    p.accent
-                } else if response.hovered() {
-                    p.hover
-                } else {
-                    Color32::TRANSPARENT
-                };
-                ui.painter().rect_filled(rect, Rounding::same(10.0), fill);
-                let ink = if selected { p.on_accent } else if response.hovered() { p.text } else { p.muted };
-                let sans = |size: f32| FontId::new(size, FontFamily::Name(SANS.into()));
-                ui.painter().text(rect.center() - egui::vec2(0.0, 8.0), egui::Align2::CENTER_CENTER, icon, sans(16.0), ink);
-                ui.painter().text(rect.center() + egui::vec2(0.0, 11.0), egui::Align2::CENTER_CENTER, name, sans(11.5), ink);
-                if response.clicked() {
-                    picked = Some(tab);
-                }
-            }
-        });
-    }
-    picked
+    let size = crate::constants::DEVTOOLS_RAIL_BUTTON;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let fill = if selected {
+        p.accent
+    } else if response.hovered() {
+        p.hover
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, Rounding::same(10.0), fill);
+    let ink = if selected { p.on_accent } else if response.hovered() { p.text } else { p.muted };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, icon, FontId::new(20.0, FontFamily::Name(SANS.into())), ink);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_ui_at_pointer(|ui| {
+        apply(ui);
+        ui.label(name);
+    })
+}
+
+/// The frame of a bar fixed to a screen edge (the toolbar, the rail): the
+/// panel's colours with a hairline border, square to the screen.
+pub fn bar_frame(margin: egui::Margin) -> egui::Frame {
+    let p = PALETTE;
+    egui::Frame::none().fill(p.bg).stroke(Stroke::new(1.0_f32, p.border)).inner_margin(margin)
 }
 
 /// Text in the heavier face and full text colour, for titles. (egui's own

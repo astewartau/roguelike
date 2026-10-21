@@ -503,14 +503,17 @@ pub fn run_ui(
         } else {
             None
         };
+        // The HUD keeps clear of the developer tools while they're shown.
+        let hud_top = dev.hud_top;
+        let hud_right = dev.hud_right;
         if let Some(ref info) = menu_info {
-            tile_info::draw_tile_info_panel(ctx, info);
+            tile_info::draw_tile_info_panel(ctx, info, hud_top, hud_right);
         } else if pointer_on_map {
-            tile_info::draw_tile_info_panel(ctx, &hover_info);
+            tile_info::draw_tile_info_panel(ctx, &hover_info, hud_top, hud_right);
         }
 
         // Status bar (always visible)
-        draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time);
+        draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time, hud_top);
 
         // Scrolling combat/message log (bottom-left)
         draw_message_log(ctx, &ui_state.message_log);

@@ -545,6 +545,9 @@ pub fn draw_status_bar(
     anim: &mut StatusBarAnim,
     icons: &UiIcons,
     game_time: f32,
+    // Points to keep below the top of the screen (clear of the developer
+    // tools' toolbar).
+    top: f32,
 ) {
     let health_percent = if data.health_max > 0 {
         data.health_current as f32 / data.health_max as f32
@@ -576,7 +579,7 @@ pub fn draw_status_bar(
         "Status",
         |window| {
             window
-                .fixed_pos([10.0, 10.0])
+                .fixed_pos([10.0, 10.0 + top])
                 .resizable(false)
                 .title_bar(false)
         },

@@ -1,5 +1,7 @@
-//! The developer tools panel, docked on the right (backquote toggles it),
-//! and the ghost preview a cursor tool shows over the map.
+//! The developer tools, laid out like an editor (backquote shows and hides
+//! them all): a toolbar across the top, an icon rail down the right edge
+//! whose icons open each tool's panel, and the ghost preview a cursor tool
+//! shows over the map.
 //!
 //! This reads the world and never changes it: choosing something arms a
 //! `devtools::CursorTool` for the next map click, or queues a
@@ -8,7 +10,7 @@
 use crate::camera::Camera;
 use crate::constants::{
     CAMERA_SHAKE_BOSS_ABILITY, CAMERA_SHAKE_EXPLOSION, CAMERA_SHAKE_MAX_AMPLITUDE, CAMERA_SHAKE_PLAYER_SWING,
-    DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_WIDTH,
+    DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_WIDTH, DEVTOOLS_RAIL_BUTTON, DEVTOOLS_RAIL_WIDTH, DEVTOOLS_TOOLBAR_HEIGHT,
 };
 use crate::devtools::paint::PAINTABLE;
 use crate::devtools::spawn::{DoorKind, BOSSES, ENEMIES};
@@ -44,123 +46,199 @@ pub struct DevView<'a> {
     pub game_time: f32,
 }
 
-/// Draw the panel (if open) and record its width for the camera.
+/// Draw the tools (if shown) and record what they cover, for the camera and
+/// the HUD: a toolbar across the top (run info, the world clock, the armed
+/// tool), an icon rail down the right edge, and the panel of whichever rail
+/// icon is open, floating over the map beside the rail.
 pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView) {
     if !dev.visible {
         dev.panel_px = 0.0;
+        dev.hud_top = 0.0;
+        dev.hud_right = 0.0;
         return;
     }
-    let screen = ctx.screen_rect();
-    dev.panel_px = DEVTOOLS_PANEL_WIDTH * ctx.pixels_per_point();
+    toolbar(ctx, dev, view);
+    rail(ctx, dev);
+    if dev.panel_open {
+        panel(ctx, dev, art, view);
+    }
+    dev.panel_px = DEVTOOLS_RAIL_WIDTH * ctx.pixels_per_point();
+    dev.hud_top = DEVTOOLS_TOOLBAR_HEIGHT;
+    dev.hud_right = DEVTOOLS_RAIL_WIDTH + if dev.panel_open { DEVTOOLS_PANEL_WIDTH } else { 0.0 };
+    super::devtools_palette::draw_palette(ctx, dev, view);
+}
 
+/// The toolbar across the top: what run this is on the left, the world
+/// clock in the middle, the armed tool and the last thing done on the right.
+fn toolbar(ctx: &egui::Context, dev: &mut DevTools, view: &DevView) {
+    let screen = ctx.screen_rect();
+    egui::Area::new(egui::Id::new("devtools_toolbar"))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            look::apply(ui);
+            let frame = look::bar_frame(egui::Margin::symmetric(12.0, 0.0));
+            let chrome = frame.total_margin().sum();
+            frame.show(ui, |ui| {
+                let size = egui::vec2(screen.width() - chrome.x, DEVTOOLS_TOOLBAR_HEIGHT - chrome.y);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let third = rect.width() / 3.0;
+                let left = egui::Rect::from_min_size(rect.min, egui::vec2(third, rect.height()));
+                let middle = left.translate(egui::vec2(third, 0.0));
+                let right = middle.translate(egui::vec2(third, 0.0));
+                let centred = egui::Layout::left_to_right(egui::Align::Center);
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(left).layout(centred), |ui| run_info(ui, dev));
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new()
+                        .max_rect(middle)
+                        .layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)),
+                    |ui| {
+                        ui.horizontal_centered(|ui| clock_controls(ui, dev, view));
+                    },
+                );
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    |ui| tool_and_status(ui, dev),
+                );
+            });
+        });
+}
+
+/// The toolbar's left: that these are the developer tools, and the run.
+fn run_info(ui: &mut egui::Ui, dev: &DevTools) {
+    let p = look::pal(ui);
+    ui.label(look::strong("Developer"));
+    ui.label(
+        egui::RichText::new(format!("Floor {} · seed {} · {:.0} fps", dev.floor, dev.seed, dev.fps))
+            .small()
+            .color(p.muted),
+    );
+}
+
+/// The world clock: run or hold game time on its own, step to the next
+/// thing that happens, how fast it runs, and what time it is.
+fn clock_controls(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
+    let p = look::pal(ui);
+    ui.spacing_mut().item_spacing.x = 4.0;
+    let (label, tip) = if dev.clock_running {
+        ("⏸ Hold", "Stop game time passing on its own")
+    } else {
+        ("▶ Run", "Let game time pass on its own, whether or not you act")
+    };
+    if ui.selectable_label(dev.clock_running, label).on_hover_text(tip).clicked() {
+        dev.clock_running = !dev.clock_running;
+    }
+    if ui.button("Step").on_hover_text("Run the world to the next action that finishes").clicked() {
+        dev.clock_step = true;
+    }
+    ui.add_space(6.0);
+    for speed in crate::constants::DEV_CLOCK_SPEEDS {
+        let text = if speed < 1.0 { format!("{speed}×") } else { format!("{speed:.0}×") };
+        if ui.selectable_label(dev.clock_speed == speed, text).on_hover_text("How fast game time runs").clicked() {
+            dev.clock_speed = speed;
+        }
+    }
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(format!("{:.1} s", view.game_time)).color(p.muted))
+        .on_hover_text("Game time");
+}
+
+/// The toolbar's right (laid out right to left): close, then the armed tool
+/// with a way to drop it, then the last thing done.
+fn tool_and_status(ui: &mut egui::Ui, dev: &mut DevTools) {
+    let p = look::pal(ui);
+    if look::cross_button(ui).on_hover_text("Hide the developer tools (`)").clicked() {
+        dev.toggle();
+        return;
+    }
+    ui.add_space(4.0);
+    match dev.tool {
+        Some(tool) => {
+            if ui.small_button("Drop").on_hover_text("Or right-click the map, or Esc").clicked() {
+                dev.disarm();
+            }
+            ui.label(egui::RichText::new(tool.describe()).color(p.text));
+            ui.label(egui::RichText::new("●").color(p.accent));
+        }
+        None => {
+            ui.label(egui::RichText::new("No tool: pick one from a panel").small().color(p.muted));
+        }
+    }
+    if let Some(status) = &dev.status {
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(egui::RichText::new(status).small().color(p.muted)).truncate())
+            .on_hover_text(status);
+    }
+}
+
+/// The icon rail down the right edge: one icon per tool, opening its panel.
+fn rail(ctx: &egui::Context, dev: &mut DevTools) {
+    let screen = ctx.screen_rect();
+    egui::Area::new(egui::Id::new("devtools_rail"))
+        .order(egui::Order::Middle)
+        .fixed_pos(egui::pos2(screen.max.x - DEVTOOLS_RAIL_WIDTH, screen.min.y + DEVTOOLS_TOOLBAR_HEIGHT))
+        .show(ctx, |ui| {
+            look::apply(ui);
+            let inset = (DEVTOOLS_RAIL_WIDTH - DEVTOOLS_RAIL_BUTTON) / 2.0;
+            let frame = look::bar_frame(egui::Margin::symmetric(inset, 10.0));
+            let chrome = frame.total_margin().sum();
+            frame.show(ui, |ui| {
+                ui.set_width(DEVTOOLS_RAIL_WIDTH - chrome.x);
+                ui.set_height(screen.height() - DEVTOOLS_TOOLBAR_HEIGHT - chrome.y);
+                ui.spacing_mut().item_spacing.y = 6.0;
+                for tab in DevTab::ALL {
+                    let open = dev.panel_open && dev.tab == tab;
+                    if look::rail_button(ui, tab.icon(), tab.name(), open).clicked() {
+                        dev.rail_clicked(tab);
+                    }
+                }
+            });
+        });
+}
+
+/// The open tool's panel, beside the rail: its name, then its contents,
+/// scrolling when they're taller than the screen.
+fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView) {
+    let screen = ctx.screen_rect();
     egui::Area::new(egui::Id::new("devtools_panel"))
         .order(egui::Order::Middle)
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(0.0, 0.0))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-DEVTOOLS_RAIL_WIDTH, DEVTOOLS_TOOLBAR_HEIGHT))
         .show(ctx, |ui| {
             look::apply(ui);
             let frame = look::panel_frame();
             let chrome = frame.total_margin().sum();
+            let max_height = screen.height() - DEVTOOLS_TOOLBAR_HEIGHT - chrome.y;
             frame.show(ui, |ui| {
-                    ui.set_width(DEVTOOLS_PANEL_WIDTH - chrome.x);
-                    ui.set_min_height(screen.height() - chrome.y);
-                    let top = ui.cursor().top();
-                    header(ui, dev, view);
-                    ui.add_space(4.0);
-                    if dev.tab == DevTab::Prefabs {
-                        super::devtools_prefab::prefabs_pinned(ui, dev, art);
-                    }
-                    let used = ui.cursor().top() - top;
-                    egui::ScrollArea::vertical()
-                        .max_height(screen.height() - chrome.y - used)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match dev.tab {
-                            DevTab::Spawn => spawn_tab(ui, dev, art),
-                            DevTab::Paint => paint_tab(ui, dev, art),
-                            DevTab::Player => player_tab(ui, dev, view),
-                            DevTab::World => world_tab(ui, dev, view),
-                            DevTab::Inspect => inspect_tab(ui, dev, view, art),
-                            DevTab::Prefabs => super::devtools_prefab::prefabs_tab(ui, dev, art),
-                            DevTab::Overlays => overlays_tab(ui, dev),
-                            DevTab::Effects => effects_tab(ui, dev),
-                        });
-                });
-        });
-    super::devtools_palette::draw_palette(ctx, dev, view);
-}
-
-fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
-    let p = look::pal(ui);
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.heading("Developer tools");
-            ui.label(
-                egui::RichText::new(format!("Floor {} · seed {} · {:.0} fps", dev.floor, dev.seed, dev.fps))
-                    .small()
-                    .color(p.muted),
-            );
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-            if look::cross_button(ui).on_hover_text("Close (`)").clicked() {
-                dev.toggle();
-            }
-        });
-    });
-    clock_bar(ui, dev, view);
-    ui.add_space(4.0);
-    let tabs: Vec<(DevTab, &str, &str)> = DevTab::ALL.iter().map(|&t| (t, t.icon(), t.name())).collect();
-    if let Some(tab) = look::pill_tabs(ui, dev.tab, &tabs) {
-        dev.tab = tab;
-    }
-    ui.add_space(4.0);
-    look::card(ui, |ui| {
-        match dev.tool {
-            Some(tool) => {
+                ui.set_width(DEVTOOLS_PANEL_WIDTH - chrome.x);
+                let top = ui.cursor().top();
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("●").color(p.accent));
-                    ui.label(tool.describe());
+                    ui.heading(format!("{}  {}", dev.tab.icon(), dev.tab.name()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Drop").on_hover_text("Or right-click the map, or Esc").clicked() {
-                            dev.disarm();
+                        if look::cross_button(ui).on_hover_text("Close this panel").clicked() {
+                            dev.panel_open = false;
                         }
                     });
                 });
-            }
-            None => {
-                ui.colored_label(p.muted, "Pick something, then click the map.");
-            }
-        }
-        if let Some(status) = &dev.status {
-            ui.label(egui::RichText::new(status).small().color(p.muted));
-        }
-    });
-}
-
-/// The world clock: run or hold game time on its own, step to the next
-/// thing that happens, and how fast it runs.
-fn clock_bar(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
-    let p = look::pal(ui);
-    ui.horizontal(|ui| {
-        let (label, tip) = if dev.clock_running {
-            ("⏸ Hold", "Stop game time passing on its own")
-        } else {
-            ("▶ Run", "Let game time pass on its own, whether or not you act")
-        };
-        if ui.selectable_label(dev.clock_running, label).on_hover_text(tip).clicked() {
-            dev.clock_running = !dev.clock_running;
-        }
-        if ui.small_button("Step").on_hover_text("Run the world to the next action that finishes").clicked() {
-            dev.clock_step = true;
-        }
-        for speed in crate::constants::DEV_CLOCK_SPEEDS {
-            let text = if speed < 1.0 { format!("{speed}×") } else { format!("{speed:.0}×") };
-            if ui.selectable_label(dev.clock_speed == speed, text).clicked() {
-                dev.clock_speed = speed;
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(format!("{:.1} s", view.game_time)).small().color(p.muted));
+                ui.add_space(4.0);
+                if dev.tab == DevTab::Prefabs {
+                    super::devtools_prefab::prefabs_pinned(ui, dev, art);
+                }
+                let used = ui.cursor().top() - top;
+                egui::ScrollArea::vertical()
+                    .max_height(max_height - used)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| match dev.tab {
+                        DevTab::Spawn => spawn_tab(ui, dev, art),
+                        DevTab::Paint => paint_tab(ui, dev, art),
+                        DevTab::Player => player_tab(ui, dev, view),
+                        DevTab::World => world_tab(ui, dev, view),
+                        DevTab::Inspect => inspect_tab(ui, dev, view, art),
+                        DevTab::Prefabs => super::devtools_prefab::prefabs_tab(ui, dev, art),
+                        DevTab::Overlays => overlays_tab(ui, dev),
+                        DevTab::Effects => effects_tab(ui, dev),
+                    });
+            });
         });
-    });
 }
 
 /// One selectable row: icon and name. Returns its response.
@@ -648,7 +726,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                 dev.prefabs.push(crate::devtools::prefab::capture(world, e, &name));
                 dev.selected_prefab = Some(dev.prefabs.len() - 1);
                 dev.prefabs_dirty = true;
-                dev.tab = DevTab::Prefabs;
+                dev.open_panel(DevTab::Prefabs);
             }
             // Placed from a prefab and tweaked here: write the tweaks back.
             let origin = dev.placed_from.get(&e).and_then(|name| dev.prefabs.iter().position(|p| &p.name == name));

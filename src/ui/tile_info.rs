@@ -60,11 +60,12 @@ fn hp_row(ui: &mut egui::Ui, current: i32, max: i32) {
     });
 }
 
-/// The "what's here" panel, pinned to the top-right corner. Not interactable,
-/// so it never swallows a click meant for the map underneath it.
-pub fn draw_tile_info_panel(ctx: &egui::Context, info: &TileInfo) {
+/// The "what's here" panel, pinned to the top-right corner, kept `top`
+/// points down and `right` points in (clear of the developer tools). Not
+/// interactable, so it never swallows a click meant for the map underneath it.
+pub fn draw_tile_info_panel(ctx: &egui::Context, info: &TileInfo, top: f32, right: f32) {
     egui::Area::new(egui::Id::new("tile_info_panel"))
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-TILE_INFO_MARGIN, TILE_INFO_MARGIN))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-TILE_INFO_MARGIN - right, TILE_INFO_MARGIN + top))
         .order(egui::Order::Middle)
         .interactable(false)
         .show(ctx, |ui| {
