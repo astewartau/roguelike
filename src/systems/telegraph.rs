@@ -8,7 +8,8 @@
 //! with it. Fusing oil barrels are telegraphed the same way (their blast
 //! radius, filling as the fuse burns). Nothing here changes simulation state.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{ActionType, Actor, BarrelFuse, ChaseAI, Explosive, Position, Follower};
 use crate::constants::*;

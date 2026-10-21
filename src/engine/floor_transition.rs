@@ -6,7 +6,8 @@ use crate::constants::*;
 use crate::grid::Grid;
 use crate::time_system::ActionScheduler;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use std::collections::HashMap;
 
 use super::initialization::spawn_floor_entities;

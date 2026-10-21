@@ -12,7 +12,8 @@
 //!
 //! A slippery (Oiled) target cannot be grabbed at all.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{EffectType, GrabbedBy, Grabber, Health, RootStruggleNoticed};
 use crate::constants::*;

@@ -10,7 +10,8 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use egui::Color32;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use super::style::{self, colors};
 use crate::constants::*;

@@ -1,7 +1,8 @@
 //! What the Player and World tabs do to a run: the player's numbers and
 //! statuses, and the world's creatures, map and contents.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     AbilityType, ChaseAI, ClassAbility, ClassKit, CompanionAI, DevFrozen, EffectType, Experience,

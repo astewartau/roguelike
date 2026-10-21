@@ -36,7 +36,8 @@ use crate::time_system::{ActionScheduler, GameClock};
 use crate::ui::GameUiState;
 use crate::vfx::VfxManager;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::rngs::StdRng;
 
 /// The narrowest bundle: what it takes to apply an action's effects to the

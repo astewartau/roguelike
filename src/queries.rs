@@ -5,7 +5,8 @@
 
 use std::collections::HashSet;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     Actor, Attackable, BlocksMovement, EffectType, Equipment, Position, Stats,

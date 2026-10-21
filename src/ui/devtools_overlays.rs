@@ -2,7 +2,8 @@
 //! tile and creature, drawn over the map (under the UI), as toggled on the
 //! Overlays tab.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::camera::Camera;
 use crate::components::{

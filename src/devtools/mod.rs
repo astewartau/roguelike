@@ -18,7 +18,8 @@ pub mod prefab;
 
 pub mod spawn;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 

@@ -15,7 +15,8 @@
 //! `fire::tick_fire` / `identify::tick_identification`), so it freezes while
 //! the game is paused/idle — and races ahead during rest/sleep fast-forward.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{Fatigue, Health, Hunger, ItemType, Position};
 use crate::constants::*;

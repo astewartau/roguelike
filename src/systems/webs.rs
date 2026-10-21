@@ -6,7 +6,8 @@
 //! (`trigger_web_at`, called from the movement action). Webs are highly
 //! flammable; the fire side lives in `systems::fire`.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{EffectType, Position, WebWalker, Web};
 use crate::constants::*;

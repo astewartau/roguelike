@@ -10,7 +10,8 @@ use super::style;
 use super::UiActions;
 use crate::components::{Container, ItemInstance};
 use crate::systems::{loot_source_label, loot_sources, stack_items};
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// One row in a loot section: a single item, or a stack of one kind.
 pub struct LootRow {

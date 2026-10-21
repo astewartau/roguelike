@@ -9,7 +9,8 @@ use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
 use crate::systems::player_input::{self, PlayerIntent};
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use std::collections::{HashSet, VecDeque};
 use winit::keyboard::KeyCode;
 

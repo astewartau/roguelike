@@ -8,7 +8,8 @@ use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
 use crate::time_system::{ActionScheduler, GameClock};
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::collections::HashMap;

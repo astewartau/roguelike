@@ -15,7 +15,7 @@ use crate::ease;
 use crate::grid::Grid;
 use crate::systems;
 use crate::tile::TileType;
-use hecs::World;
+use crate::world::World;
 
 /// Format elapsed game time (seconds) as HH:MM:SS, starting from 00:00:00.
 pub fn format_game_clock(seconds: f32) -> String {

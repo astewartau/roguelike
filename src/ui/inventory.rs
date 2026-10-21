@@ -9,7 +9,7 @@ use crate::components::{
     AbilityType, ClassAbility, ClassKit, Equipment, Inventory, SecondaryAbility, Stats,
 };
 use crate::systems;
-use hecs::World;
+use crate::world::World;
 
 /// Data needed to render the inventory window
 pub struct InventoryWindowData {

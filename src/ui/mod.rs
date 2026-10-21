@@ -62,7 +62,8 @@ use crate::input::{AbilityTargetingMode, TargetingMode};
 use crate::multi_tileset::MultiTileset;
 use crate::vfx::VisualEffect;
 use egui_glow::EguiGlow;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use winit::window::Window;
 
 /// Actions the UI wants to perform (returned to game logic)

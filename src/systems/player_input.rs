@@ -4,7 +4,8 @@
 //! and provides intent-to-action conversion. This keeps game logic
 //! out of main.rs and in proper ECS systems.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{ActionType, BlocksMovement, Equipment, EquippedWeapon, ItemType, Position};
 use crate::grid::Grid;

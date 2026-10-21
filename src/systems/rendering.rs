@@ -6,7 +6,8 @@ use crate::tile::{SpriteSheet, tile_ids};
 use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
 use crate::fov::Fov;
 use crate::grid::Grid;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use std::collections::HashSet;
 
 /// Ambient brightness at the edge of FOV (base illumination in visible area)

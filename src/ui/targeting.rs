@@ -5,7 +5,7 @@
 use crate::camera::Camera;
 use crate::components::{AbilityType, ItemType, Position, Tameable};
 use crate::input::{AbilityTargetingMode, TargetingMode};
-use hecs::World;
+use crate::world::World;
 use std::collections::HashSet;
 
 /// Data needed for the targeting overlay

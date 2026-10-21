@@ -11,7 +11,8 @@
 //! around), or the secret door converts into a normal openable door with a
 //! distinct tint. Hooked from `apply_move` (see `systems::actions::movement`).
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{Concealed, Door, Position, SecretDoor, Sprite, SpriteTint};

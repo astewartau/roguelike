@@ -12,7 +12,8 @@ use crate::grid::Grid;
 use crate::spatial_cache::SpatialCache;
 use crate::systems::experience::{calculate_xp_value, grant_xp};
 use crate::tile::tile_ids;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 /// Whether `entity` has health and it has run out. Entities without a

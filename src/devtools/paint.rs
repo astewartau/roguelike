@@ -21,7 +21,7 @@ pub const PAINTABLE: [TileType; 8] = [
 /// Keeps the water list and its animation entities in step and moves the
 /// stairs markers; the caller sets `fov_dirty`. Returns whether anything
 /// changed.
-pub fn paint(world: &mut hecs::World, grid: &mut Grid, at: (i32, i32), brush: i32, tile: TileType) -> bool {
+pub fn paint(world: &mut crate::world::World, grid: &mut Grid, at: (i32, i32), brush: i32, tile: TileType) -> bool {
     let mut changed = false;
     for dy in -brush..=brush {
         for dx in -brush..=brush {
@@ -31,7 +31,7 @@ pub fn paint(world: &mut hecs::World, grid: &mut Grid, at: (i32, i32), brush: i3
     changed
 }
 
-fn paint_tile(world: &mut hecs::World, grid: &mut Grid, (x, y): (i32, i32), tile: TileType) -> bool {
+fn paint_tile(world: &mut crate::world::World, grid: &mut Grid, (x, y): (i32, i32), tile: TileType) -> bool {
     let Some(cell) = grid.get_mut(x, y) else {
         return false;
     };
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn painting_water_keeps_the_water_list_and_ripples_in_step() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let mut grid = Grid::filled(9, 9, TileType::Floor);
         assert!(paint(&mut world, &mut grid, (4, 4), 1, TileType::Water));
         assert_eq!(grid.water_positions.len(), 9);

@@ -1,6 +1,7 @@
 //! Bow shots, thrown potions, and projectile path calculation.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     ActiveAmmo, ChaseAI, EffectType, Equipment, Health, Inventory, ItemType, Player, Position,

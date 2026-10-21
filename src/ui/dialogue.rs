@@ -9,7 +9,7 @@ use crate::components::{Dialogue, Sprite};
 use crate::multi_tileset::MultiTileset;
 use crate::systems;
 use crate::tile::SpriteSheet;
-use hecs::World;
+use crate::world::World;
 
 /// Data needed to render the dialogue window
 pub struct DialogueWindowData {

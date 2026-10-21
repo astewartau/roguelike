@@ -25,7 +25,8 @@
 //! one shoved into water is soaked. Traps, webs and discovery are for
 //! creatures and do not fire.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{

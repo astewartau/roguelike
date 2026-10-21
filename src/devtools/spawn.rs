@@ -378,7 +378,7 @@ fn spawn_one(
     Some(e)
 }
 
-fn set_wakefulness(world: &mut hecs::World, e: Entity, wake: Wakefulness) {
+fn set_wakefulness(world: &mut crate::world::World, e: Entity, wake: Wakefulness) {
     match wake {
         Wakefulness::Awake => {
             let _ = world.remove_one::<crate::components::Asleep>(e);
@@ -391,7 +391,7 @@ fn set_wakefulness(world: &mut hecs::World, e: Entity, wake: Wakefulness) {
 }
 
 /// Tame a freshly made creature to `owner`, the way taming does it.
-fn make_companion(world: &mut hecs::World, e: Entity, owner: Entity) {
+fn make_companion(world: &mut crate::world::World, e: Entity, owner: Entity) {
     let _ = world.remove_one::<ChaseAI>(e);
     let _ = world.remove_one::<crate::components::Asleep>(e);
     let _ = world.insert(

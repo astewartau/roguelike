@@ -11,7 +11,8 @@ use crate::components::{Health, Position};
 use crate::constants::*;
 use crate::events::GameEvent;
 use glam::Vec2;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Queue a shake for `event` if it is the sort of thing that shakes the view,
 /// and nothing otherwise.

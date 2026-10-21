@@ -15,7 +15,8 @@ use crate::spatial_cache::SpatialCache;
 use crate::systems::action_dispatch;
 use crate::systems::actions::{self, ActionResult};
 use crate::systems::effects;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 

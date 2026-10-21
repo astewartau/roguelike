@@ -8,7 +8,8 @@ use crate::constants::*;
 use crate::events::StairDirection;
 use crate::grid::Grid;
 use crate::tile::TileType;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 // =============================================================================
 // ACTION DURATION CALCULATION

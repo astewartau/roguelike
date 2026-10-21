@@ -18,7 +18,8 @@ use crate::ease;
 use crate::grid::Grid;
 use crate::systems::effects;
 use crate::vfx::{DamageTier, VfxType, VisualEffect};
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Data for an enemy with active status effects
 pub struct EnemyStatusData {

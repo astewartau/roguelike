@@ -1,6 +1,7 @@
 //! Trap placement, trap triggering, and container opening.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use rand::Rng;
 
@@ -205,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_spike_trap_damages_and_is_consumed() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let grid = make_grid(7, 7);
         let mut events = EventQueue::new();
 
@@ -233,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_snare_trap_roots_victim() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let grid = make_grid(7, 7);
         let mut events = EventQueue::new();
 
@@ -255,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_empty_tile_triggers_nothing() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let grid = make_grid(5, 5);
         let mut events = EventQueue::new();
 
@@ -268,7 +269,7 @@ mod tests {
 
     #[test]
     fn a_set_trap_spares_its_owner_and_their_pets() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let grid = make_grid(7, 7);
         let mut events = EventQueue::new();
         let owner = world.spawn((Position::new(1, 1), StatusEffects::new()));

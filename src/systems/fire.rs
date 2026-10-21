@@ -25,7 +25,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{

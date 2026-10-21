@@ -13,7 +13,8 @@
 //! This module is what they leave behind and how they wear off: the drip
 //! trail, and drying off by a fire.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{CausesBurning, EffectType, OilPuddle, OnFire, Position, StatusEffects};

@@ -29,7 +29,8 @@
 //! what you see by, and it covers your whole view, so counting it would make
 //! every tile you stand on fully lit.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     Actor, BlocksMovement, BlocksVision, Door, EffectType, LightExposure, LightSource, Position,

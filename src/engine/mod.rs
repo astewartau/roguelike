@@ -983,7 +983,7 @@ impl GameEngine {
 
     /// Get a reference to the ECS world (returns None if not playing).
     #[allow(dead_code)] // Public API for external callers
-    pub fn world(&self) -> Option<&hecs::World> {
+    pub fn world(&self) -> Option<&crate::world::World> {
         self.state.as_ref().map(|s| &s.world)
     }
 
@@ -1810,7 +1810,7 @@ impl GameEngine {
         &mut self,
         mode: TimeSkip,
         dt: f32,
-        stop_reason: impl Fn(&hecs::World, Entity) -> Option<&'static str>,
+        stop_reason: impl Fn(&crate::world::World, Entity) -> Option<&'static str>,
     ) {
         if !mode.active(self) {
             return;
@@ -2049,7 +2049,7 @@ impl GameEngine {
 
 /// True when the player is Hungry (or worse) and has no Regenerating effect:
 /// natural HP regen is stopped, so resting cannot heal them.
-fn player_too_hungry_to_recover(world: &hecs::World, player: Entity) -> bool {
+fn player_too_hungry_to_recover(world: &crate::world::World, player: Entity) -> bool {
     let hungry = world
         .get::<&crate::components::Hunger>(player)
         .map(|h| h.is_hungry())
@@ -2110,7 +2110,7 @@ fn pick_campfire_spot(
 /// spell list (the Necromancer's Raise Dead keeps its old slot), then the
 /// class kit. The caller lays these out over the main bar and then the Shift
 /// bar, so a kit longer than the main bar spills over instead of being lost.
-fn starting_hotbar_abilities(world: &hecs::World, player: Entity) -> Vec<AbilityType> {
+fn starting_hotbar_abilities(world: &crate::world::World, player: Entity) -> Vec<AbilityType> {
     let mut entries: Vec<AbilityType> = Vec::new();
     if let Ok(a) = world.get::<&ClassAbility>(player) {
         entries.push(a.ability_type);
@@ -2228,7 +2228,7 @@ impl AbilitySlot {
     /// The ability this slot holds, or `None` if the slot is empty, holds
     /// something else, or is still on cooldown. The cooldown is the only gate —
     /// abilities no longer cost a spendable resource.
-    fn ready_ability(self, world: &hecs::World, player: Entity) -> Option<AbilityType> {
+    fn ready_ability(self, world: &crate::world::World, player: Entity) -> Option<AbilityType> {
         match self {
             AbilitySlot::Class => {
                 let a = world.get::<&ClassAbility>(player).ok()?;
@@ -2366,7 +2366,7 @@ impl AbilitySlot {
     /// cooldown inside the action they fire instead: `apply_activate_barkskin`
     /// / `apply_activate_fear` / `apply_activate_stun` for the secondary slot,
     /// `apply_cast_learned_spell` / `apply_start_raise_dead` for spells.
-    fn start_cooldown(self, world: &mut hecs::World, player: Entity) {
+    fn start_cooldown(self, world: &mut crate::world::World, player: Entity) {
         match self {
             AbilitySlot::Class => {
                 if let Ok(mut ability) = world.get::<&mut ClassAbility>(player) {
@@ -3223,7 +3223,7 @@ mod tests {
         /// loose pile, and whether it stands in the way. Sorted, so two
         /// censuses compare directly.
         const KINDS: [&str; 5] = ["Chest", "Coffin", "Barrel", "corpse", "pile"];
-        fn kind(world: &hecs::World, id: hecs::Entity) -> &'static str {
+        fn kind(world: &crate::world::World, id: hecs::Entity) -> &'static str {
             if world.get::<&GroundItemPile>(id).is_ok() {
                 return "pile";
             }
@@ -3233,7 +3233,7 @@ mod tests {
             let name = world.get::<&Name>(id).map(|n| n.0.clone()).unwrap_or_default();
             KINDS.iter().copied().find(|k| *k == name).unwrap_or("other")
         }
-        fn census(world: &hecs::World) -> Vec<(&'static str, bool, bool)> {
+        fn census(world: &crate::world::World) -> Vec<(&'static str, bool, bool)> {
             let mut rows: Vec<_> = world
                 .query::<&Container>()
                 .iter()
@@ -3365,7 +3365,7 @@ mod tests {
             }
 
             // Record, per tile, whether a container there blocks.
-            let census = |world: &hecs::World| -> Vec<((i32, i32), bool, bool)> {
+            let census = |world: &crate::world::World| -> Vec<((i32, i32), bool, bool)> {
                 let mut rows: Vec<((i32, i32), bool, bool)> = world
                     .query::<(&Position, &Container)>()
                     .iter()
@@ -3802,7 +3802,7 @@ mod tests {
     /// Summoned), not a hostile — and it doesn't block its owner's path.
     #[test]
     fn test_spawn_raised_skeleton_is_companion_not_hostile() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let owner = world.spawn((crate::components::Position::new(1, 1),));
 
         let mut clock = crate::time_system::GameClock::new();

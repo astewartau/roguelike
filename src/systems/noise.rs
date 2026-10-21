@@ -15,7 +15,8 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{AIState, ChaseAI, Door, Player, Position, SecretDoor};
 use crate::constants::*;

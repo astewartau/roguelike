@@ -12,7 +12,8 @@
 //! - **Shrine**: instantly identifies everything carried/equipped and grants
 //!   a Protected ward. One use, then inert.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{

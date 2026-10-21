@@ -5,7 +5,8 @@ use crate::events::{EventQueue, GameEvent};
 use crate::spatial_cache::SpatialCache;
 use crate::systems::item_defs;
 use crate::systems::items::item_weight;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Add an item directly to an entity's inventory
 pub fn add_item_to_inventory(world: &mut World, entity: Entity, item: ItemInstance) -> bool {

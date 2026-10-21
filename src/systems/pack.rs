@@ -16,7 +16,8 @@
 //! identity, so two packs that meet simply become one bigger pack. A tamed
 //! rat has left the pack and neither counts nor is counted.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{AIState, Asleep, ChaseAI, Health, PackHunter, Player, Position, Follower};
 use crate::constants::*;

@@ -37,7 +37,8 @@
 
 use std::collections::HashSet;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     AbilityType, Actor, Asleep, Attackable, BarrelFuse, BlocksMovement, Topples,

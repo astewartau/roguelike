@@ -51,7 +51,7 @@ pub fn kit_ability_for_action(action: &ActionType) -> Option<AbilityType> {
 /// ability whose action arrives by some other route than its hotbar slot (a
 /// click, the context menu) is refused while cooling down: the cooldown is
 /// the only gate.
-pub fn kit_ability_ready(world: &hecs::World, entity: Entity, ability: AbilityType) -> bool {
+pub fn kit_ability_ready(world: &crate::world::World, entity: Entity, ability: AbilityType) -> bool {
     world
         .get::<&crate::components::ClassKit>(entity)
         .ok()
@@ -102,14 +102,14 @@ pub fn apply_guard_complete(ctx: &mut EffectCtx, entity: Entity) -> ActionResult
 }
 
 /// Whether `target` is guarding right now.
-pub fn is_guarding(world: &hecs::World, target: Entity) -> bool {
+pub fn is_guarding(world: &crate::world::World, target: Entity) -> bool {
     queries::has_status_effect(world, target, EffectType::Guarding)
 }
 
 /// A blow landed on a guarding `defender`: stagger the attacker and announce
 /// the block. Returns the raw damage that gets through.
 pub fn resolve_guard_block(
-    world: &mut hecs::World,
+    world: &mut crate::world::World,
     events: &mut crate::events::EventQueue,
     attacker: Entity,
     defender: Entity,
@@ -131,7 +131,7 @@ pub fn resolve_guard_block(
 /// Whether `basher` can Shield Bash `tile`: an adjacent tile (within
 /// `SHIELD_BASH_RANGE`, not its own) holding a creature or a pushable object.
 /// Shared by click validation, the context menu, and the action itself.
-pub fn can_shield_bash(world: &hecs::World, basher: Entity, tile: (i32, i32)) -> bool {
+pub fn can_shield_bash(world: &crate::world::World, basher: Entity, tile: (i32, i32)) -> bool {
     let Some(from) = queries::get_entity_position(world, basher) else {
         return false;
     };
@@ -142,7 +142,7 @@ pub fn can_shield_bash(world: &hecs::World, basher: Entity, tile: (i32, i32)) ->
 
 /// Raw Shield Bash damage: `SHIELD_BASH_DAMAGE` plus half the strength bonus
 /// (the bonus being `(STR - 10) / 2`, as for melee).
-pub fn shield_bash_damage(world: &hecs::World, basher: Entity) -> i32 {
+pub fn shield_bash_damage(world: &crate::world::World, basher: Entity) -> i32 {
     let strength = queries::effective_stats(world, basher).strength;
     (SHIELD_BASH_DAMAGE + (strength - 10) / 2 / 2).max(1)
 }
@@ -252,7 +252,7 @@ fn bash_hit(
 /// `GRAVE_BOLT_RANGE`, and in line of sight (walls and vision-blocking
 /// entities such as closed doors block it, as for a bow shot).
 pub fn can_grave_bolt(
-    world: &hecs::World,
+    world: &crate::world::World,
     grid: &crate::grid::Grid,
     caster: Entity,
     tile: (i32, i32),
@@ -281,7 +281,7 @@ pub fn can_grave_bolt(
 
 /// Grave Bolt damage for `caster`: `GRAVE_BOLT_DAMAGE` x INT power, rounded,
 /// at least 1.
-pub fn grave_bolt_damage(world: &hecs::World, caster: Entity) -> i32 {
+pub fn grave_bolt_damage(world: &crate::world::World, caster: Entity) -> i32 {
     ((GRAVE_BOLT_DAMAGE as f32 * queries::int_power(world, caster)).round() as i32).max(1)
 }
 
@@ -344,7 +344,7 @@ pub fn apply_grave_bolt(
 
 /// Charges a Bone Ward cast at `center` would get: one, plus one per corpse
 /// within `BONE_WARD_CORPSE_RADIUS`, capped at `BONE_WARD_MAX_CHARGES`.
-pub fn bone_ward_charges(world: &hecs::World, center: (i32, i32)) -> u32 {
+pub fn bone_ward_charges(world: &crate::world::World, center: (i32, i32)) -> u32 {
     let corpses = world
         .query::<(&Position, &Container)>()
         .with::<&crate::components::Raisable>()
@@ -371,7 +371,7 @@ fn start_bone_ward(ctx: &mut EffectCtx, entity: Entity) {
 
 /// Whether `skeleton` is a living raised skeleton owned by `owner` within
 /// `SACRIFICE_RANGE`. Shared by click validation and the action itself.
-pub fn is_valid_sacrifice_target(world: &hecs::World, owner: Entity, skeleton: Entity) -> bool {
+pub fn is_valid_sacrifice_target(world: &crate::world::World, owner: Entity, skeleton: Entity) -> bool {
     let owned = world.get::<&Summoned>(skeleton).is_ok_and(|s| s.by == owner)
         && world.get::<&Health>(skeleton).map(|h| h.current > 0).unwrap_or(false);
     let (Some(a), Some(b)) = (
@@ -450,7 +450,7 @@ fn start_sacrifice(ctx: &mut EffectCtx, caster: Entity, skeleton: Entity) {
 // =============================================================================
 
 /// Whether `corpse` is a corpse within `CORPSE_EXPLOSION_RANGE` of `caster`.
-pub fn is_valid_corpse_target(world: &hecs::World, caster: Entity, corpse: Entity) -> bool {
+pub fn is_valid_corpse_target(world: &crate::world::World, caster: Entity, corpse: Entity) -> bool {
     let is_corpse = world.get::<&crate::components::Raisable>(corpse).is_ok();
     let (Some(a), Some(b)) = (
         queries::get_entity_position(world, caster),
@@ -463,7 +463,7 @@ pub fn is_valid_corpse_target(world: &hecs::World, caster: Entity, corpse: Entit
 
 /// Living hostiles (enemy AI, not anyone's companion) within `radius` of
 /// `center`. The player, companions and NPCs are never included.
-fn hostiles_near(world: &hecs::World, center: (i32, i32), radius: i32) -> Vec<(Entity, (i32, i32))> {
+fn hostiles_near(world: &crate::world::World, center: (i32, i32), radius: i32) -> Vec<(Entity, (i32, i32))> {
     world
         .query::<(&Position, &Health, &ChaseAI)>()
         .without::<&Follower>()
@@ -650,7 +650,7 @@ mod tests {
     use crate::systems::actions::combat::tests::Arena;
     use crate::tile::{tile_ids, Tile};
 
-    fn effect_remaining(world: &hecs::World, e: Entity, effect: EffectType) -> Option<f32> {
+    fn effect_remaining(world: &crate::world::World, e: Entity, effect: EffectType) -> Option<f32> {
         world
             .get::<&StatusEffects>(e)
             .ok()?

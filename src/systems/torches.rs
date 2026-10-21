@@ -20,7 +20,8 @@
 //! floor: a light, but no hazard. Pick it up while it burns and it's yours;
 //! leave it and it gutters out to an unlit torch.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     CarriedTorch, Container, Equipment, GroundItemPile, ItemInstance, ItemType, LightSource,

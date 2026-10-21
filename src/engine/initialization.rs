@@ -14,7 +14,8 @@ use crate::tile_occupancy::TileOccupancy;
 use crate::tile::tile_ids;
 
 use super::ActorCtx;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::seq::SliceRandom;
 use rand::Rng;
 

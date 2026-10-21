@@ -10,7 +10,7 @@ use crate::components::{
 };
 use crate::tile::{tile_ids, SpriteSheet};
 use crate::tile_occupancy::TileOccupancy;
-use hecs::World;
+use crate::world::World;
 use rand::Rng;
 
 /// Ranged attack configuration for enemies

@@ -594,7 +594,7 @@ mod tests {
         for tile in &mut grid.tiles {
             tile.visible = true;
         }
-        let player = hecs::World::new().spawn(());
+        let player = crate::world::World::new().spawn(());
         let mut vfx = VfxManager::new();
         let splash = GameEvent::PotionSplash { x: 2, y: 2, potion_type: crate::components::ItemType::HealthPotion };
 

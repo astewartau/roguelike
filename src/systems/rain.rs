@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn rain_keeps_soaking_whatever_walks_in_until_it_stops() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let mut grid = Grid::filled(12, 12, TileType::Floor);
         let mut spatial = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
         let mut events = EventQueue::new();
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn rain_puts_out_carried_torches() {
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let mut grid = Grid::filled(12, 12, TileType::Floor);
         let mut spatial = crate::spatial_cache::SpatialCache::rebuild_from_world(&world);
         let mut events = EventQueue::new();
@@ -117,7 +117,7 @@ mod tests {
             Position::new(5, 5),
             RainCloud { radius: CALL_RAIN_RADIUS, remaining: CALL_RAIN_DURATION, since_soak: 0.0 },
         ));
-        let lit = |w: &hecs::World, e| w.get::<&crate::components::CarriedTorch>(e).is_ok_and(|t| t.lit);
+        let lit = |w: &crate::world::World, e| w.get::<&crate::components::CarriedTorch>(e).is_ok_and(|t| t.lit);
         assert!(lit(&world, goblin) && lit(&world, hero));
 
         let mut ctx = EffectCtx { world: &mut world, grid: &mut grid, spatial: &mut spatial, events: &mut events, rng: &mut rng };

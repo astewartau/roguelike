@@ -1,7 +1,8 @@
 //! Movement, doors, stairs, and directional interaction.
 
 use crate::engine::EffectCtx;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{BlocksMovement, Container, Door, Player, Position};
 use crate::events::{EventQueue, GameEvent, StairDirection};

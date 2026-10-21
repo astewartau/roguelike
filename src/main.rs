@@ -31,6 +31,7 @@ mod tile_occupancy;
 mod time_system;
 mod ui;
 mod vfx;
+mod world;
 
 use engine::{GameEngine, WindowAction};
 use render::RenderContext;

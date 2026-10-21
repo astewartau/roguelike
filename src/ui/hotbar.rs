@@ -24,7 +24,8 @@ use crate::components::{
 };
 use crate::systems;
 use crate::tile::tile_ids;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// An entry placed in a hotbar slot: an inventory item or an ability.
 #[derive(Debug, Clone, Copy, PartialEq)]

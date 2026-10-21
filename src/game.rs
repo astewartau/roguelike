@@ -1,6 +1,7 @@
 //! Core game initialization and state management.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Advance a dialogue by selecting an option.
 /// Returns true if the dialogue ended (caller should close the UI).

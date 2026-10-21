@@ -18,7 +18,8 @@ use crate::events::GameEvent;
 use crate::systems::actions::apply_potion_splash;
 use crate::systems::effects;
 use crate::engine::EffectCtx;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Update all projectiles based on the current game time.
 /// This should be called when game time advances.

@@ -19,7 +19,8 @@
 //! So stepping out of the lane during the wind-up dodges the charge, and
 //! baiting it into a wall buys a free beating.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{ActionType, Charger, EffectType, LungeAnimation, Position};
 use crate::constants::*;

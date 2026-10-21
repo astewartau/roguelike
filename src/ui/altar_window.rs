@@ -9,7 +9,7 @@ use super::style;
 use super::UiActions;
 use crate::components::{Inventory, ItemInstance};
 use crate::systems::furniture::{altar_blessing_chance, altar_item_value};
-use hecs::World;
+use crate::world::World;
 
 /// Data needed to render the altar window
 pub struct AltarWindowData {

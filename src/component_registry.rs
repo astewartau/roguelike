@@ -12,7 +12,8 @@
 
 use std::any::TypeId;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

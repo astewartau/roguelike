@@ -4,7 +4,8 @@ use crate::components::{HitFlash, LungeAnimation, Position, VisualPosition};
 use crate::constants::*;
 use crate::ease;
 use crate::events::GameEvent;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Smoothly interpolate visual positions toward logical positions.
 ///

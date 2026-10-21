@@ -13,7 +13,8 @@
 //! Runs from the engine tick in game-time via the accumulator pattern (see
 //! `fire::tick_fire`), so it freezes while the game is paused/idle.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{Equipment, Inventory, ItemInstance};
 use crate::constants::*;

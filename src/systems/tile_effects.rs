@@ -11,7 +11,8 @@
 //! It is driven from `fire::tick_fire` each engine tick, so it advances on game
 //! time like the rest of the fire ecosystem.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{

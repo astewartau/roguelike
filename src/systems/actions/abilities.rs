@@ -1,7 +1,8 @@
 //! Class abilities: blink, fireball, taming, life drain, fear, sprint,
 //! barkskin, disengage, tumble, and crippling shot.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{

@@ -15,7 +15,8 @@ use crate::time_system::{self};
 use crate::ui::UiActions;
 
 use super::{ActorCtx, SimCtx};
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 /// Result of attempting to start a player action.

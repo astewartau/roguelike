@@ -1,7 +1,8 @@
 //! Item system functions.
 
 use crate::components::{Health, Inventory, ItemType};
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use super::item_defs::{get_def, ItemCategory, UseEffect};
 
@@ -292,7 +293,7 @@ mod tests {
         use crate::grid::Grid;
         use crate::tile::{Tile, TileType};
 
-        let mut world = hecs::World::new();
+        let mut world = crate::world::World::new();
         let mut inv = Inventory::new();
         inv.items.push(ItemInstance::plain(ItemType::WaterFlaskEmpty));
         let entity = world.spawn((Position::new(2, 2), inv, StatusEffects::new()));

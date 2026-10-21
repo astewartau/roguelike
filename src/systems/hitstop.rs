@@ -18,7 +18,8 @@
 //! length, so a cleave that crits and kills three things freezes once, for
 //! the longest of them.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::Follower;
 use crate::constants::*;

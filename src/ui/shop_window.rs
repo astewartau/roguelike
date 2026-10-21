@@ -8,7 +8,8 @@ use super::UiActions;
 use crate::components::{Dialogue, Inventory, ItemType, Vendor};
 use crate::systems::item_defs::{get_price, get_sell_price};
 use crate::systems::item_name;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 /// Data needed to render the shop window
 pub struct ShopWindowData {

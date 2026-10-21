@@ -6,7 +6,8 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{BlocksMovement, BlocksVision, Position};
 

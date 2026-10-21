@@ -33,7 +33,7 @@
 
 use std::collections::HashSet;
 
-use hecs::World;
+use crate::world::World;
 
 use crate::components::{BlocksMovement, Position};
 

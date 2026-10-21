@@ -1,6 +1,7 @@
 //! Equipping, unequipping, and dropping items.
 
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 
 use crate::components::{
     Equipment, EquippedWeapon, Health, Inventory, ItemInstance, ItemType, RangedWeapon, Weapon,
@@ -389,7 +390,7 @@ pub fn apply_drop_equipped_weapon(
 mod tests {
     use super::*;
     use crate::components::{Affix, Rarity};
-    use hecs::World;
+    use crate::world::World;
 
     #[test]
     fn test_max_health_affix_applies_symmetrically_without_healing() {

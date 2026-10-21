@@ -17,7 +17,7 @@ use crate::components::{BlocksMovement, FurnitureKind, TrapEffect, LanternStyle,
 use crate::grid::Grid;
 use crate::multi_tileset::MultiTileset;
 use crate::tile::SpriteSheet;
-use hecs::World;
+use crate::world::World;
 
 use super::icons::UiIcons;
 use super::devtools_look as look;

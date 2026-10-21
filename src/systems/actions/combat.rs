@@ -1,7 +1,8 @@
 //! Melee attacks, cleave, and stun.
 
 use crate::engine::EffectCtx;
-use hecs::{Entity, World};
+use hecs::Entity;
+use crate::world::World;
 use rand::Rng;
 
 use crate::components::{
@@ -198,7 +199,7 @@ pub fn apply_melee_blow(
             .get::<&crate::components::Lacerating>(attacker)
             .ok()
             .map(|l| l.bleed_chance);
-        let mut afflict = |world: &mut hecs::World, effect: EffectType, duration: f32| {
+        let mut afflict = |world: &mut crate::world::World, effect: EffectType, duration: f32| {
             let had = crate::systems::effects::entity_has_effect(world, target, effect);
             if crate::systems::effects::add_effect_to_entity(world, target, effect, duration) && !had {
                 gained.push(effect);
@@ -560,7 +561,7 @@ pub(super) mod tests {
     };
     use crate::grid::Grid;
     use crate::tile::{tile_ids, Tile, TileType};
-    use hecs::World;
+    use crate::world::World;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
