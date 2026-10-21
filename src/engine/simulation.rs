@@ -217,7 +217,7 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
             return;
         }
 
-        let Some((next_entity, completion_time)) = ctx.scheduler.pop_next() else {
+        if !step_world(ctx) {
             // Safety check: if scheduler is empty but player can't act, recover
             if let Ok(mut actor) = ctx.world.get::<&mut Actor>(player_entity) {
                 // Case 1: Player has a stuck current_action
@@ -228,56 +228,99 @@ pub fn advance_until_player_ready(ctx: &mut ActorCtx) {
                 }
             }
             return;
-        };
-
-        let previous_time = ctx.clock.time;
-        ctx.clock.advance_to(completion_time);
-        let now = ctx.clock.time;
-        let elapsed = now - previous_time;
-
-        update_projectiles_at_time(ctx, now);
-
-        time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
-        time_system::tick_burn_damage(ctx.world, now, ctx.events);
-        time_system::tick_dot_damage(ctx.world, now, ctx.rng, ctx.events);
-        time_system::tick_status_effects(ctx.world, elapsed);
-        time_system::tick_ability_cooldowns(ctx.world, elapsed);
-        time_system::tick_ranged_cooldowns(ctx.world, elapsed);
-        systems::ai::tick_threat_decay(ctx.world, ctx.grid, ctx.spatial, elapsed);
-        systems::ai::tick_shout_cooldowns(ctx.world, elapsed);
-        systems::ai::tick_role_cooldowns(ctx.world, elapsed);
-
-        time_system::complete_action(ctx, next_entity);
-
-        // Post-action consequences that need the full actor context or must
-        // land before anyone picks their next action: grabs whose holder died
-        // or drifted away let go, and badly hurt slimes split.
-        systems::grab::tick_grabs(ctx.world, ctx.events);
-        systems::split::process_splits(ctx);
-
-        // Whatever that despawned or un/blocked, the collision cache, the
-        // scheduler and the AI tracker now follow, before anyone decides.
-        ctx.sync_world_changes();
-
-        // After player completes an action, check for dormant entities that should wake up
-        if next_entity == player_entity {
-            if let Some(player_pos) = queries::get_entity_position(ctx.world, player_entity) {
-                let newly_active = ctx.tracker.update_on_player_move(ctx.world, player_pos);
-                // Schedule newly awakened entities
-                let wake_at = ctx.clock.time + 0.1;
-                for ai_entity in newly_active {
-                    ctx.scheduler.schedule(ai_entity, wake_at);
-                }
-            }
-        } else {
-            // Non-player entity: let AI decide next action
-            systems::ai::decide_action(ctx, next_entity);
         }
-
-        // Either branch can have stunned someone (the player's Stun completing,
-        // a boss's Ground Slam decided); stop what they were doing now.
-        time_system::apply_stun_interrupts(ctx);
     }
+}
+
+/// Run the world forward to game time `until`, whoever is or isn't there to
+/// play: every action due by then completes, in order, and the clock ends on
+/// `until` exactly (what elapsed past the last completion still counts for
+/// effects, cooldowns and regeneration). The developer tools' world clock
+/// drives this, so the world goes on without a player.
+pub fn advance_world_to(ctx: &mut ActorCtx, until: f32) {
+    profile_function!();
+    while ctx.scheduler.peek_next().is_some_and(|(_, t)| t <= until) {
+        step_world(ctx);
+    }
+    if until > ctx.clock.time {
+        let previous_time = ctx.clock.time;
+        ctx.clock.advance_to(until);
+        tick_elapsed(ctx, previous_time);
+    }
+    update_projectiles_at_time(ctx, ctx.clock.time);
+}
+
+/// Run the world to its next action completion, whoever's it is (the
+/// developer tools' Step). False if nothing is scheduled.
+pub fn step_world_once(ctx: &mut ActorCtx) -> bool {
+    let stepped = step_world(ctx);
+    update_projectiles_at_time(ctx, ctx.clock.time);
+    stepped
+}
+
+/// Complete the next scheduled action: the clock jumps to it, everything
+/// that runs on elapsed time catches up, the action lands, and the one whose
+/// action it was picks what to do next. False if nothing is scheduled.
+fn step_world(ctx: &mut ActorCtx) -> bool {
+    let Some((next_entity, completion_time)) = ctx.scheduler.pop_next() else {
+        return false;
+    };
+    let player_entity = ctx.player;
+
+    let previous_time = ctx.clock.time;
+    ctx.clock.advance_to(completion_time);
+    tick_elapsed(ctx, previous_time);
+
+    time_system::complete_action(ctx, next_entity);
+
+    // Post-action consequences that need the full actor context or must
+    // land before anyone picks their next action: grabs whose holder died
+    // or drifted away let go, and badly hurt slimes split.
+    systems::grab::tick_grabs(ctx.world, ctx.events);
+    systems::split::process_splits(ctx);
+
+    // Whatever that despawned or un/blocked, the collision cache, the
+    // scheduler and the AI tracker now follow, before anyone decides.
+    ctx.sync_world_changes();
+
+    // After player completes an action, check for dormant entities that should wake up
+    if next_entity == player_entity {
+        if let Some(player_pos) = queries::get_entity_position(ctx.world, player_entity) {
+            let newly_active = ctx.tracker.update_on_player_move(ctx.world, player_pos);
+            // Schedule newly awakened entities
+            let wake_at = ctx.clock.time + 0.1;
+            for ai_entity in newly_active {
+                ctx.scheduler.schedule(ai_entity, wake_at);
+            }
+        }
+    } else {
+        // Non-player entity: let AI decide next action
+        systems::ai::decide_action(ctx, next_entity);
+    }
+
+    // Either branch can have stunned someone (the player's Stun completing,
+    // a boss's Ground Slam decided); stop what they were doing now.
+    time_system::apply_stun_interrupts(ctx);
+    true
+}
+
+/// Everything that runs on elapsed game time, caught up from
+/// `previous_time` to the clock's current time.
+fn tick_elapsed(ctx: &mut ActorCtx, previous_time: f32) {
+    let now = ctx.clock.time;
+    let elapsed = now - previous_time;
+
+    update_projectiles_at_time(ctx, now);
+
+    time_system::tick_health_regen(ctx.world, now, Some(ctx.events));
+    time_system::tick_burn_damage(ctx.world, now, ctx.events);
+    time_system::tick_dot_damage(ctx.world, now, ctx.rng, ctx.events);
+    time_system::tick_status_effects(ctx.world, elapsed);
+    time_system::tick_ability_cooldowns(ctx.world, elapsed);
+    time_system::tick_ranged_cooldowns(ctx.world, elapsed);
+    systems::ai::tick_threat_decay(ctx.world, ctx.grid, ctx.spatial, elapsed);
+    systems::ai::tick_shout_cooldowns(ctx.world, elapsed);
+    systems::ai::tick_role_cooldowns(ctx.world, elapsed);
 }
 
 /// Update projectiles at current time.
@@ -916,6 +959,50 @@ mod tests {
     use crate::components::{
         AbilityType, Affix, Equipment, ItemInstance, LearnedAbilities, Rarity, Stats,
     };
+
+    /// With nobody playing, the world clock still runs the world: creatures
+    /// take turns, and the clock lands exactly where it was asked to.
+    #[test]
+    fn the_world_runs_without_a_player() {
+        let mut arena = crate::systems::actions::TestArena::new((1, 1));
+        let player = arena.player;
+        arena.world.despawn(player).unwrap();
+        arena.cache.rebuild_in_place(&arena.world);
+        let rats: Vec<Entity> = [(5, 5), (10, 10)]
+            .iter()
+            .map(|&(x, y)| {
+                let rat = crate::spawning::enemies::RAT.spawn(&mut arena.world, x, y, &mut arena.rng);
+                let _ = arena.world.remove_one::<crate::components::Asleep>(rat);
+                rat
+            })
+            .collect();
+        arena.cache.rebuild_in_place(&arena.world);
+        for &rat in &rats {
+            crate::engine::initialize_single_ai_actor(&mut arena.ctx(), rat);
+        }
+        let start: Vec<(i32, i32)> = rats.iter().map(|&r| arena.pos(r)).collect();
+
+        advance_world_to(&mut arena.ctx(), 20.0);
+
+        assert_eq!(arena.clock.time, 20.0);
+        let end: Vec<(i32, i32)> = rats.iter().map(|&r| arena.pos(r)).collect();
+        assert_ne!(start, end, "the rats wandered");
+        for &rat in &rats {
+            assert_eq!(arena.scheduler.scheduled_count(rat), 1, "each still has its next turn queued");
+        }
+    }
+
+    /// Running the world on doesn't run past what's due: a step lands on the
+    /// next completion, and nothing later has happened yet.
+    #[test]
+    fn a_step_stops_at_the_next_completion() {
+        let mut arena = crate::systems::actions::TestArena::new((1, 1));
+        let rat = arena.rat(8, 8, 1.0);
+        crate::engine::initialize_single_ai_actor(&mut arena.ctx(), rat);
+        let (_, due) = arena.scheduler.peek_next().expect("the rat has a turn queued");
+        assert!(step_world_once(&mut arena.ctx()));
+        assert_eq!(arena.clock.time, due);
+    }
 
     /// Spawn a bare player with one Scroll of Blink and the given base INT.
     fn player_with_blink_scroll(world: &mut World, int: i32) -> Entity {

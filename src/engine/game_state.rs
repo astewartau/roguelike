@@ -163,12 +163,12 @@ impl GameState {
     /// Initialize AI actors after world creation.
     /// Must be called separately because it needs mutable access to events.
     pub fn initialize_ai(&mut self, events: &mut EventQueue) {
-        // Get player position for active AI tracking
+        // Get player position for active AI tracking (none: everyone is awake)
         let player_pos = self
             .world
             .get::<&Position>(self.player_entity)
-            .map(|p| (p.x, p.y))
-            .unwrap_or((0, 0));
+            .ok()
+            .map(|p| (p.x, p.y));
 
         // Initialize active AI tracker based on player position
         self.active_ai_tracker

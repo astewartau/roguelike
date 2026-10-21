@@ -219,8 +219,8 @@ pub fn transition_to_floor(
     let player_pos = floor_ctx
         .world
         .get::<&Position>(player_entity)
-        .map(|p| (p.x, p.y))
-        .unwrap_or((0, 0));
+        .ok()
+        .map(|p| (p.x, p.y));
     floor_ctx.tracker.initialize_from_world(floor_ctx.world, player_pos);
     super::initialization::initialize_ai_actors(&mut floor_ctx);
 

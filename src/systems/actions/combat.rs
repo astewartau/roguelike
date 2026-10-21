@@ -756,7 +756,7 @@ pub(super) mod tests {
             }
             self.world.get::<&mut Actor>(e).unwrap().speed = speed;
             self.cache.rebuild_in_place(&self.world);
-            self.tracker.initialize_from_world(&self.world, ppos);
+            self.tracker.initialize_from_world(&self.world, Some(ppos));
         }
 
         pub(crate) fn ctx(&mut self) -> ActorCtx<'_> {

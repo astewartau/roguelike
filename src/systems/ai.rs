@@ -279,18 +279,18 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
     let (clock, scheduler, active_tracker, spatial_cache, events, rng) =
         (&**clock, &mut **scheduler, &mut **tracker, &**spatial, &mut **events, &mut **rng);
 
-    // FIRST: Distance check - cheapest operation, do this before anything else
-    let entity_pos = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y));
-    let player_pos = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y));
-
-    if let (Some(epos), Some(ppos)) = (entity_pos, player_pos) {
+    // FIRST: Distance check - cheapest operation, do this before anything else.
+    // With no player in the world (the sandbox) there is no one to be far
+    // from, and everything stays awake.
+    let Some(epos) = world.get::<&Position>(entity).ok().map(|p| (p.x, p.y)) else {
+        return;
+    };
+    if let Some(ppos) = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y)) {
         let distance = (epos.0 - ppos.0).abs() + (epos.1 - ppos.1).abs();
         if distance > AI_ACTIVE_RADIUS {
             active_tracker.mark_dormant(entity);
             return;
         }
-    } else {
-        return;
     }
 
     // Check if entity has Actor component

@@ -3618,7 +3618,7 @@ mod tests {
             state.spatial_cache.rebuild_in_place(&state.world);
             state
                 .active_ai_tracker
-                .initialize_from_world(&state.world, player_pos);
+                .initialize_from_world(&state.world, Some(player_pos));
         }
 
         let script = [

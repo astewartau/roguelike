@@ -1187,7 +1187,7 @@ mod tests {
         }
         arena.cache.rebuild_in_place(&arena.world);
         let ppos = arena.pos(player);
-        arena.tracker.initialize_from_world(&arena.world, ppos);
+        arena.tracker.initialize_from_world(&arena.world, Some(ppos));
 
         crate::systems::ai::decide_action(&mut arena.ctx(), rear);
         let action = arena.action(rear);

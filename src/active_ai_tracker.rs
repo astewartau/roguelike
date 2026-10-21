@@ -116,19 +116,18 @@ impl ActiveAITracker {
 
     /// Initialize from current world state.
     /// Scans all AI entities and categorizes them as active or dormant based on
-    /// their distance from the player.
+    /// their distance from the player. With no player (the sandbox), all of
+    /// them are active.
     pub fn initialize_from_world(
         &mut self,
         world: &World,
-        player_pos: (i32, i32),
+        player_pos: Option<(i32, i32)>,
     ) {
         self.clear();
 
         // Check ChaseAI entities (enemies)
         for (entity, pos) in world.query::<(&Position, &ChaseAI)>().iter().map(|(e, (p, _))| (e, (p.x, p.y))) {
-            let distance = (pos.0 - player_pos.0).abs() + (pos.1 - player_pos.1).abs();
-
-            if distance <= AI_ACTIVE_RADIUS {
+            if in_active_range(pos, player_pos) {
                 self.active_entities.insert(entity);
             } else {
                 self.dormant_entities.insert(entity);
@@ -137,9 +136,7 @@ impl ActiveAITracker {
 
         // Check CompanionAI entities (tamed animals)
         for (entity, pos) in world.query::<(&Position, &CompanionAI)>().iter().map(|(e, (p, _))| (e, (p.x, p.y))) {
-            let distance = (pos.0 - player_pos.0).abs() + (pos.1 - player_pos.1).abs();
-
-            if distance <= AI_ACTIVE_RADIUS {
+            if in_active_range(pos, player_pos) {
                 self.active_entities.insert(entity);
             } else {
                 self.dormant_entities.insert(entity);
@@ -164,4 +161,10 @@ impl Default for ActiveAITracker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Whether an AI at `pos` is close enough to the player to be active; with
+/// no player, everything is.
+fn in_active_range(pos: (i32, i32), player_pos: Option<(i32, i32)>) -> bool {
+    player_pos.is_none_or(|p| (pos.0 - p.0).abs() + (pos.1 - p.1).abs() <= AI_ACTIVE_RADIUS)
 }
