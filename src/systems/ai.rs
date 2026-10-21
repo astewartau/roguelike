@@ -962,12 +962,11 @@ fn try_boss_ability(
             // rises as a hostile skeleton (spawned by the engine, which owns
             // the scheduler — same path as coffin skeletons).
             let bones: Option<(Entity, (i32, i32))> = world
-                .query::<(&Position, &crate::components::Container)>()
-                .with::<&crate::components::Raisable>()
+                .query::<&Position>()
                 .iter()
-                .filter(|(_, (pos, _))| cheb(entity_pos, (pos.x, pos.y)) <= BOSS_RAISE_RANGE)
-                .min_by_key(|(_, (pos, _))| cheb(entity_pos, (pos.x, pos.y)))
-                .map(|(id, (pos, _))| (id, (pos.x, pos.y)));
+                .filter(|(e, pos)| crate::systems::targets::is_remains(world, *e) && cheb(entity_pos, (pos.x, pos.y)) <= BOSS_RAISE_RANGE)
+                .min_by_key(|(_, pos)| cheb(entity_pos, (pos.x, pos.y)))
+                .map(|(id, pos)| (id, (pos.x, pos.y)));
             let (bones_id, bones_pos) = bones?;
 
             // The bones are used up; whatever they held drops to the floor,

@@ -4,7 +4,7 @@
 //! This module is purely about input state - it does NOT execute game logic.
 
 use crate::camera::Camera;
-use crate::components::{AbilityType, BlocksMovement, Container, Door, Health, ItemType, Player, Position, Follower, Tameable};
+use crate::components::{AbilityType, BlocksMovement, Container, Door, Health, ItemType, Position};
 use crate::grid::Grid;
 use crate::pathfinding;
 use crate::queries;
@@ -758,13 +758,8 @@ pub fn process_frame(
                     match targeting.ability_type {
                         AbilityType::Tame => {
                             // Check if there's a tameable entity at this position
-                            let mut tameable_target = None;
-                            for (entity, (tpos, _)) in world.query::<(&Position, &Tameable)>().iter() {
-                                if tpos.x == target_x && tpos.y == target_y {
-                                    tameable_target = Some(entity);
-                                    break;
-                                }
-                            }
+                            let tameable_target =
+                                crate::systems::targets::at_tile(world, (target_x, target_y), |e| crate::systems::targets::can_be_tamed(world, e));
 
                             if let Some(target_entity) = tameable_target {
                                 // Cancel targeting mode and create intent
@@ -776,17 +771,9 @@ pub fn process_frame(
                         }
                         AbilityType::LifeDrain => {
                             // Check if there's an enemy entity at this position
-                            let mut enemy_target = None;
-                            for (entity, (tpos, health)) in world.query::<(&Position, &Health)>()
-                                .without::<&Player>()
-                                .without::<&Follower>()
-                                .iter()
-                            {
-                                if tpos.x == target_x && tpos.y == target_y && health.current > 0 {
-                                    enemy_target = Some(entity);
-                                    break;
-                                }
-                            }
+                            let enemy_target = crate::systems::targets::at_tile(world, (target_x, target_y), |e| {
+                                crate::systems::targets::can_be_drained(world, player_entity, e)
+                            });
 
                             if let Some(target_entity) = enemy_target {
                                 // Cancel targeting mode and create intent
@@ -872,17 +859,8 @@ pub fn process_frame(
                         }
                         AbilityType::RaiseDead => {
                             // Raise Dead: needs a bones/corpse container at the tile.
-                            let mut bones_target = None;
-                            for (entity, (cpos, _)) in world
-                                .query::<(&Position, &Container)>()
-                                .with::<&crate::components::Raisable>()
-                                .iter()
-                            {
-                                if cpos.x == target_x && cpos.y == target_y {
-                                    bones_target = Some(entity);
-                                    break;
-                                }
-                            }
+                            let bones_target =
+                                crate::systems::targets::at_tile(world, (target_x, target_y), |e| crate::systems::targets::is_remains(world, e));
 
                             if let Some(target_entity) = bones_target {
                                 input.cancel_targeting();
@@ -916,12 +894,8 @@ pub fn process_frame(
                         }
                         AbilityType::CorpseExplosion => {
                             // A corpse (bones container) on that tile.
-                            let corpse = world
-                                .query::<(&Position, &Container)>()
-                                .with::<&crate::components::Raisable>()
-                                .iter()
-                                .find(|(_, (p, _))| p.x == target_x && p.y == target_y)
-                                .map(|(e, _)| e);
+                            let corpse =
+                                crate::systems::targets::at_tile(world, (target_x, target_y), |e| crate::systems::targets::is_remains(world, e));
                             if let Some(corpse) = corpse {
                                 input.cancel_targeting();
                                 result.player_intent = Some(PlayerIntent::CorpseExplosion { corpse });

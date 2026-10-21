@@ -46,7 +46,7 @@ use crate::components::{
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, Health, Inventory, ItemType, LearnedAbilities, Name,
     Explosive, Player, Trap, Position, Summoned,
-    SecondaryAbility, SecretDoor, StatusEffects, Follower, Tameable, Vendor, WetTile,
+    SecondaryAbility, SecretDoor, StatusEffects, Follower, Vendor, WetTile,
 };
 use crate::constants::*;
 use crate::grid::Grid;
@@ -672,7 +672,7 @@ pub fn context_actions(
     let pushable = if visible { crate::systems::push::pushable_at(world, x, y) } else { None };
     let corpse = if visible {
         here.iter().copied().find(|&e| {
-            world.get::<&crate::components::Raisable>(e).is_ok()
+            crate::systems::targets::is_remains(world, e)
         })
     } else {
         None
@@ -873,7 +873,7 @@ pub fn context_actions(
                 PlayerIntent::CastLearnedSpell { ability: AbilityType::LearnedFireball, target_x: x, target_y: y },
                 in_range(dist, FIREBALL_RANGE),
             ));
-            let drainable = world.get::<&Health>(target).is_ok() && !has::<Follower>(world, target);
+            let drainable = crate::systems::targets::can_be_drained(world, player, target);
             if drainable {
                 abilities.push(ability(
                     AbilityType::LifeDrain,
@@ -895,7 +895,7 @@ pub fn context_actions(
             in_range(dist, CALL_RAIN_RANGE),
         ));
     }
-    if let Some(target) = seen.iter().copied().find(|&e| has::<Tameable>(world, e) && !has::<Follower>(world, e)) {
+    if let Some(target) = seen.iter().copied().find(|&e| crate::systems::targets::can_be_tamed(world, e)) {
         abilities.push(ability(AbilityType::Tame, PlayerIntent::StartTaming { target }, in_range(dist, TAME_RANGE)));
     }
     if let Some(corpse) = corpse {

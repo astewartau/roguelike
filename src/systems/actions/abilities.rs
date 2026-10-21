@@ -257,9 +257,7 @@ pub fn apply_start_life_drain(
     target: Entity,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // Verify target still exists and is alive
-    let target_alive = world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(false);
-    if !target_alive {
+    if !crate::systems::targets::can_be_drained(world, caster, target) {
         return ActionResult::Invalid;
     }
 
@@ -459,9 +457,7 @@ pub fn apply_start_raise_dead(
     target: Entity,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // Verify the target is still a bones/corpse container
-    let is_bones = world.get::<&crate::components::Raisable>(target).is_ok();
-    if !is_bones {
+    if !crate::systems::targets::is_remains(world, target) {
         return ActionResult::Invalid;
     }
 
@@ -680,10 +676,9 @@ fn channel_target_still_fits(world: &World, channel: &Channel, target: Entity) -
     match channel.effect {
         // A creature that died mid-channel isn't tamed as a corpse.
         ChannelEffect::Tame => {
-            world.get::<&crate::components::Tameable>(target).is_ok()
-                && world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true)
+            crate::systems::targets::can_be_tamed(world, target)
         }
-        ChannelEffect::RaiseDead => world.get::<&crate::components::Raisable>(target).is_ok(),
+        ChannelEffect::RaiseDead => crate::systems::targets::is_remains(world, target),
         ChannelEffect::LifeDrain { .. } => world.get::<&Health>(target).is_ok_and(|h| h.current > 0),
         ChannelEffect::Shout { .. } => true,
     }
@@ -793,7 +788,7 @@ pub fn apply_start_taming(
     events: &mut EventQueue,
 ) -> ActionResult {
     // Verify target still exists and is tameable
-    if world.get::<&crate::components::Tameable>(target).is_err() {
+    if !crate::systems::targets::can_be_tamed(world, target) {
         return ActionResult::Invalid;
     }
 
@@ -1316,7 +1311,7 @@ mod tests {
         assert!(world.get::<&PendingInterrupt>(rat).is_ok(), "drops what it was doing");
 
         // Dies mid-channel: the tame fails.
-        let other = world.spawn((Position::new(2, 3), Health::new(5), Tameable));
+        let other = world.spawn((Position::new(2, 3), Health::new(5), ChaseAI::new(4), Tameable));
         assert_eq!(apply_start_taming(&mut world, druid, other, &mut events), ActionResult::Completed);
         world.get::<&mut Health>(other).unwrap().current = 0;
         let mut spatial = SpatialCache::rebuild_from_world(&world);

@@ -57,6 +57,7 @@ pub mod torches;
 pub mod telegraph;
 pub mod tile_context;
 pub mod tile_effects;
+pub mod targets;
 pub mod webs;
 
 // Re-export commonly used items

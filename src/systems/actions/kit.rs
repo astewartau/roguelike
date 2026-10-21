@@ -16,7 +16,7 @@
 use hecs::Entity;
 
 use crate::components::{
-    AbilityType, ActionType, Actor, BoneWard, ChaseAI, Container, EffectType,
+    AbilityType, ActionType, Actor, BoneWard, ChaseAI, EffectType,
     Health, Player, Position, Summoned, Follower, VisualPosition,
 };
 use crate::constants::*;
@@ -346,10 +346,9 @@ pub fn apply_grave_bolt(
 /// within `BONE_WARD_CORPSE_RADIUS`, capped at `BONE_WARD_MAX_CHARGES`.
 pub fn bone_ward_charges(world: &crate::world::World, center: (i32, i32)) -> u32 {
     let corpses = world
-        .query::<(&Position, &Container)>()
-        .with::<&crate::components::Raisable>()
+        .query::<&Position>()
         .iter()
-        .filter(|(_, (p, _))| (p.x - center.0).abs().max((p.y - center.1).abs()) <= BONE_WARD_CORPSE_RADIUS)
+        .filter(|(e, p)| crate::systems::targets::is_remains(world, *e) && (p.x - center.0).abs().max((p.y - center.1).abs()) <= BONE_WARD_CORPSE_RADIUS)
         .count() as u32;
     (1 + corpses).min(BONE_WARD_MAX_CHARGES)
 }
@@ -451,7 +450,7 @@ fn start_sacrifice(ctx: &mut EffectCtx, caster: Entity, skeleton: Entity) {
 
 /// Whether `corpse` is a corpse within `CORPSE_EXPLOSION_RANGE` of `caster`.
 pub fn is_valid_corpse_target(world: &crate::world::World, caster: Entity, corpse: Entity) -> bool {
-    let is_corpse = world.get::<&crate::components::Raisable>(corpse).is_ok();
+    let is_corpse = crate::systems::targets::is_remains(world, corpse);
     let (Some(a), Some(b)) = (
         queries::get_entity_position(world, caster),
         queries::get_entity_position(world, corpse),
@@ -644,7 +643,7 @@ pub fn apply_call_rain(ctx: &mut EffectCtx, caster: Entity, tx: i32, ty: i32) ->
 mod tests {
     use super::*;
     use crate::components::{
-        CompanionAI, Equipment, ItemInstance, ItemType, Sprite, StatusEffects, Weapon,
+        CompanionAI, Container, Equipment, ItemInstance, ItemType, Sprite, StatusEffects, Weapon,
     };
     use crate::events::{DamageKind, MissReason};
     use crate::systems::actions::combat::tests::Arena;

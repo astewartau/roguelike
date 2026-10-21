@@ -3,7 +3,7 @@
 //! Displays targeting indicators for abilities like Blink and Fireball.
 
 use crate::camera::Camera;
-use crate::components::{AbilityType, ItemType, Position, Tameable};
+use crate::components::{AbilityType, ItemType, Position};
 use crate::input::{AbilityTargetingMode, TargetingMode};
 use crate::world::World;
 use std::collections::HashSet;
@@ -83,7 +83,10 @@ pub fn get_ability_targeting_overlay_data(
     let mut tameable_positions = Vec::new();
     match targeting.ability_type {
         AbilityType::Tame => {
-            for (_, (pos, _)) in world.query::<(&Position, &Tameable)>().iter() {
+            for (e, pos) in world.query::<&Position>().iter() {
+                if !crate::systems::targets::can_be_tamed(world, e) {
+                    continue;
+                }
                 let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
                 if dist <= targeting.max_range {
                     tameable_positions.push((pos.x, pos.y));
@@ -113,8 +116,10 @@ pub fn get_ability_targeting_overlay_data(
             }
         }
         AbilityType::RaiseDead | AbilityType::CorpseExplosion => {
-            use crate::components::{Container, Raisable};
-            for (_, (pos, _)) in world.query::<(&Position, &Container)>().with::<&Raisable>().iter() {
+            for (e, pos) in world.query::<&Position>().iter() {
+                if !crate::systems::targets::is_remains(world, e) {
+                    continue;
+                }
                 let dist = (pos.x - player_pos.x).abs().max((pos.y - player_pos.y).abs());
                 if dist <= targeting.max_range {
                     tameable_positions.push((pos.x, pos.y));
