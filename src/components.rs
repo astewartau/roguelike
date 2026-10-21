@@ -441,7 +441,9 @@ impl SecondaryAbility {
 /// Position component - world coordinates (grid-based)
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Position {
+    /// Tile column.
     pub x: i32,
+    /// Tile row.
     pub y: i32,
 }
 
@@ -454,7 +456,9 @@ impl Position {
 /// Sprite component - visual representation using tileset
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Sprite {
+    /// Which sprite sheet the picture is on.
     pub sheet: SpriteSheet,
+    /// Which tile on the sheet, counting across rows from the top left.
     pub tile_id: u32,
 }
 
@@ -477,7 +481,9 @@ impl Sprite {
 /// to the hand, and a ground item's badge from the pile's top item.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OverlaySprite {
+    /// Which sprite sheet the overlay is on.
     pub sheet: SpriteSheet,
+    /// Which tile on the sheet the overlay is.
     pub tile_id: u32,
 }
 
@@ -494,6 +500,7 @@ impl OverlaySprite {
 /// Animated sprite component - cycles through frames in real-time
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnimatedSprite {
+    /// Which sprite sheet the frames are on.
     pub sheet: SpriteSheet,
     /// First frame's tile ID
     pub base_tile_id: u32,
@@ -738,7 +745,9 @@ impl Default for Fatigue {
 /// Health component - pure data
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Health {
+    /// Hit points left. At 0 it dies (or breaks, or goes off).
     pub current: i32,
+    /// Hit points when unhurt; healing stops here.
     pub max: i32,
     /// HP regenerated per regen event
     pub regen_amount: i32,
@@ -778,8 +787,11 @@ impl Health {
 /// Stats component - pure data
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
+    /// Melee damage. (All three stats add up to what it's worth in XP.)
     pub strength: i32,
+    /// Spell power, and how quickly unknown items are identified.
     pub intelligence: i32,
+    /// Stealth (sleeping enemies stir more slowly) and spotting traps and secret doors.
     pub agility: i32,
 }
 
@@ -1176,6 +1188,7 @@ pub struct ActiveEffect {
 /// Component for entities with active status effects
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct StatusEffects {
+    /// Effects on it now, each with how long it has left.
     pub effects: Vec<ActiveEffect>,
 }
 
@@ -1212,8 +1225,10 @@ pub struct Raisable;
 /// Container component (for chests, coffins, barrels)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Container {
+    /// What's inside.
     pub items: Vec<ItemInstance>,
     pub gold: u32,
+    /// Whether it has been opened.
     pub is_open: bool,
     /// Chance a skeleton climbs out when it's opened (0.0-1.0): a coffin.
     pub spawn_chance: f32,
@@ -1539,6 +1554,7 @@ pub enum ChannelEffect {
 /// it finishes at `required`, and the rules for what breaks it are data.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
+    /// What finishing (or keeping up) the channel does.
     pub effect: ChannelEffect,
     /// What it's aimed at, if anything.
     #[serde(with = "crate::component_registry::entity_ref::option")]
@@ -1586,7 +1602,9 @@ pub struct ThreatEntry {
 /// AI behavior: chase the highest-threat target, wander otherwise
 #[derive(Debug, Clone)]
 pub struct ChaseAI {
+    /// How far it can see you, in tiles (halved while it's idle and you sneak).
     pub sight_radius: i32,
+    /// What it's doing: Unaware (hasn't noticed anyone), Idle, Chasing, or Investigating a last-seen spot.
     pub state: AIState,
     /// Per-target threat tracking
     pub threat_table: Vec<ThreatEntry>,
@@ -1675,7 +1693,9 @@ impl ChaseAI {
 /// Visual position for smooth interpolation (separate from logical grid Position)
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct VisualPosition {
+    /// Where it's drawn, across (follows its tile smoothly).
     pub x: f32,
+    /// Where it's drawn, down (follows its tile smoothly).
     pub y: f32,
 }
 
@@ -1761,6 +1781,7 @@ impl Container {
 /// Door component - can be open or closed
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Door {
+    /// Whether it stands open.
     pub is_open: bool,
     /// Sprite to use when door is open
     pub open_sprite: (crate::tile::SpriteSheet, u32),
@@ -2166,8 +2187,11 @@ pub struct ActiveAmmo {
 /// Used e.g. to render fire arrows as red/orange-tinted normal arrows.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SpriteTint {
+    /// Red, multiplied into the picture (1.0 leaves it as drawn).
     pub r: f32,
+    /// Green, multiplied into the picture (1.0 leaves it as drawn).
     pub g: f32,
+    /// Blue, multiplied into the picture (1.0 leaves it as drawn).
     pub b: f32,
 }
 
@@ -2443,6 +2467,7 @@ pub struct CausesBurning;
 /// ignite. `flammability` is a 0..1 chance multiplier applied to ignition rolls.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Combustible {
+    /// How readily it catches fire, 0 (never) to 1.
     pub flammability: f32,
 }
 
@@ -2654,6 +2679,7 @@ impl Fuel {
 /// applies the fuel's `Burnout` when it reaches zero.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OnFire {
+    /// Seconds of burning left (forever for a hearth).
     #[serde(with = "crate::component_registry::seconds")]
     pub remaining: f32,
 }
@@ -2688,9 +2714,11 @@ pub enum FuseCause {
 /// zeroes `remaining` (immediate detonation on the next fire tick).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BarrelFuse {
+    /// Seconds until it goes off.
     pub remaining: f32,
     /// The fuse's full length, for the telegraph's fill progress.
     pub total: f32,
+    /// What lit it: Fire (water puts it out) or Broken (water doesn't).
     pub cause: FuseCause,
 }
 
@@ -2726,6 +2754,7 @@ pub struct Pushable;
 /// tile, checked by fire spread.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct WetTile {
+    /// Seconds until the tile dries out.
     pub remaining: f32,
 }
 
@@ -2770,6 +2799,7 @@ pub struct HitOnlyOnPurpose;
 /// `systems::torches`).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CarriedTorch {
+    /// Whether the torch is burning.
     pub lit: bool,
 }
 
@@ -2778,6 +2808,7 @@ pub struct CarriedTorch {
 /// `Fuel`). A brazier. See `systems::fire::topple`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Topples {
+    /// Whether it has been knocked over (and is out for good).
     pub toppled: bool,
 }
 
@@ -2847,6 +2878,7 @@ impl TrapEffect {
 /// `Concealed`.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Trap {
+    /// What it does to whoever steps on it, and how strongly.
     pub effect: TrapEffect,
     /// Who set it. They and their companions step over it safely, and it
     /// gives them threat on whoever it hurts. `None` for the dungeon's own,
@@ -2860,7 +2892,9 @@ pub struct Trap {
 /// Spawned without a `Sprite` of its own.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Concealed {
+    /// What it looks like once spotted.
     pub sprite: Sprite,
+    /// The tint it shows once spotted.
     pub tint: SpriteTint,
 }
 
@@ -3019,6 +3053,7 @@ pub struct Tameable;
 /// counting against how many it can keep at once while it lives.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Summoned {
+    /// Who summoned it (it counts against their limit).
     #[serde(with = "crate::component_registry::entity_ref")]
     pub by: Entity,
 }
@@ -3028,6 +3063,7 @@ pub struct Summoned {
 /// animal, a raised skeleton.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Follower {
+    /// Whose side it's on.
     #[serde(with = "crate::component_registry::entity_ref")]
     pub leader: Entity,
 }
@@ -3134,6 +3170,7 @@ pub enum BossAbility {
 /// immune to fear/morale, announced on first sighting, bonus XP on death.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Boss {
+    /// The boss ability it uses on a cooldown.
     pub ability: BossAbility,
     /// Seconds until the ability is ready (ticked by `tick_role_cooldowns`).
     pub cooldown: f32,
@@ -3155,7 +3192,9 @@ pub struct FearImmune;
 /// since enemy natural weapons are not item instances with on-hit affixes.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Venomous {
+    /// Seconds a hit slows the target for (0 for none).
     pub slow_duration: f32,
+    /// Seconds a hit poisons the target for (0 for none).
     pub poison_duration: f32,
 }
 
@@ -3163,6 +3202,7 @@ pub struct Venomous {
 /// chance (rats). Applied in the enemy melee path, like [`Venomous`].
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Lacerating {
+    /// Chance (0 to 1) a hit makes the target bleed.
     pub bleed_chance: f32,
 }
 
@@ -3181,6 +3221,7 @@ pub struct Flying;
 /// Deliberately not the Feared status, which drives UI/VFX of its own.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct HitAndRun {
+    /// Seconds it keeps backing off after an attack.
     pub retreat_remaining: f32,
 }
 
@@ -3194,6 +3235,7 @@ pub struct Grabber;
 /// dies, is stunned or is no longer adjacent (`systems::grab`).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GrabbedBy {
+    /// Who is holding it.
     #[serde(with = "crate::component_registry::entity_ref")]
     pub grabber: Entity,
 }
@@ -3204,7 +3246,9 @@ pub struct GrabbedBy {
 /// (`spent`). See `systems::split`.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Splits {
+    /// How many times its line has split already; it stops at the limit, and each generation is worth half the XP.
     pub generation: u8,
+    /// Whether it has used up its one split.
     pub spent: bool,
 }
 
@@ -3215,6 +3259,7 @@ pub struct Splits {
 /// (`ai::tick_role_cooldowns`). See `systems::charge`.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Charger {
+    /// Seconds until it can charge again.
     pub cooldown: f32,
 }
 
@@ -3238,6 +3283,7 @@ pub struct Flanker;
 /// A root applied afresh has more time left than this and is announced again.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct RootStruggleNoticed {
+    /// Seconds before it notices again that it's stuck.
     pub remaining: f32,
 }
 

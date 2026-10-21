@@ -98,7 +98,7 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
             if ui.small_button("Copy").clicked() {
                 duplicate = Some(i);
             }
-            if ui.small_button("✕").on_hover_text("Delete").clicked() {
+            if look::cross_button(ui).on_hover_text("Delete").clicked() {
                 delete = Some(i);
             }
             let selected = dev.selected_prefab == Some(i);
@@ -157,7 +157,7 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                 }
                 ui.vertical(|ui| {
                     let name = prefab.value("Name").and_then(|v| v.as_str()).unwrap_or(&prefab.name);
-                    ui.strong(name);
+                    ui.label(look::strong(name));
                     ui.horizontal(|ui| {
                         if let Some(hp) = prefab.value("Health").and_then(|h| h.get("max")).and_then(|v| v.as_i64()) {
                             ui.colored_label(look::pal(ui).danger, format!("{hp} HP"));
@@ -306,7 +306,7 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
             continue;
         }
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(group).strong().color(look::pal(ui).accent));
+        look::section(ui, group);
         for n in indices {
             let name = dev.prefabs[i].components[n].component.clone();
             let info = catalog::info_of(&name);
@@ -318,12 +318,15 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
                     ui.horizontal(|ui| {
                         let known = registry::find(&name).is_some();
                         let title = if known { name.clone() } else { format!("{name} (unknown)") };
-                        ui.strong(title).on_hover_text(info.map(|i| i.summary).unwrap_or(""));
+                        ui.label(look::strong(title));
+                        if let Some(info) = info {
+                            look::hint(ui, info.summary);
+                        }
                         if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
                             ui.colored_label(look::pal(ui).muted, info.phrase);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                            if look::cross_button(ui).on_hover_text("Remove").clicked() {
                                 remove = Some(n);
                             }
                             if name == "Sprite" || name == "AnimatedSprite" {

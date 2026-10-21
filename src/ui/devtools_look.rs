@@ -68,6 +68,9 @@ pub fn apply(ui: &mut egui::Ui) {
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
     style.spacing.interact_size.y = 26.0;
     style.spacing.slider_rail_height = 5.0;
+    // Labels are words to read, not text to select (a drag across one
+    // painted it in the selection colour).
+    style.interaction.selectable_labels = false;
 
     let v = &mut style.visuals;
     v.dark_mode = true;
@@ -203,6 +206,47 @@ pub fn pill_tabs<T: Copy + PartialEq>(ui: &mut egui::Ui, current_tab: T, tabs: &
     picked
 }
 
+/// Text in the heavier face and full text colour, for titles. (egui's own
+/// "strong" text takes the colour of a pressed button, which here is the
+/// dark ink used on amber.)
+pub fn strong(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text)
+        .font(FontId::new(14.0, FontFamily::Name(SANS_STRONG.into())))
+        .color(PALETTE.text)
+}
+
+/// A small round button with a drawn cross: close, remove, clear. (The
+/// "✕" glyph isn't in the panel's font.)
+pub fn cross_button(ui: &mut egui::Ui) -> egui::Response {
+    let p = pal(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.painter().circle_filled(rect.center(), 10.0, p.hover);
+    }
+    let ink = if hovered { p.danger } else { p.muted };
+    let r = 4.0;
+    let c = rect.center();
+    let stroke = Stroke::new(1.6_f32, ink);
+    ui.painter().line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
+    ui.painter().line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A small "?" that explains something on hover.
+pub fn hint(ui: &mut egui::Ui, text: &str) {
+    let p = pal(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(15.0, 15.0), egui::Sense::hover());
+    let ink = if response.hovered() { p.accent } else { p.muted };
+    ui.painter().circle_stroke(rect.center(), 6.5, Stroke::new(1.0_f32, ink));
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "?", FontId::new(10.0, FontFamily::Name(SANS_STRONG.into())), ink);
+    response.on_hover_ui(|ui| {
+        apply(ui);
+        ui.set_max_width(260.0);
+        ui.label(text);
+    });
+}
+
 /// A filled accent button for the main action in a place.
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let p = pal(ui);
@@ -244,7 +288,7 @@ pub fn search_box(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Res
                 let clear = !text.is_empty();
                 let width = ui.available_width() - if clear { 22.0 } else { 0.0 };
                 let edit = ui.add(egui::TextEdit::singleline(text).hint_text(hint).frame(false).desired_width(width));
-                if clear && ui.add(egui::Button::new(egui::RichText::new("✕").color(p.muted)).frame(false)).clicked() {
+                if clear && cross_button(ui).clicked() {
                     text.clear();
                 }
                 edit

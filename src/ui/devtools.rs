@@ -95,7 +95,7 @@ fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
             );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-            if ui.button("✕").on_hover_text("Close (`)").clicked() {
+            if look::cross_button(ui).on_hover_text("Close (`)").clicked() {
                 dev.toggle();
             }
         });
@@ -562,7 +562,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
     };
     ui.separator();
     ui.horizontal(|ui| {
-        ui.strong(entity_label(world, e));
+        ui.label(look::strong(entity_label(world, e)));
         ui.colored_label(look::pal(ui).muted, format!("#{}", e.id()));
     });
     ui.horizontal_wrapped(|ui| {
@@ -701,6 +701,10 @@ fn edit_rgb(ui: &mut egui::Ui, value: &mut serde_json::Value, mut rgb: [f32; 3])
     changed
 }
 
+/// How wide a number box is in the settings editor, so a column of them
+/// lines up.
+const NUMBER_WIDTH: f32 = 72.0;
+
 pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &mut serde_json::Value) -> bool {
     use serde_json::Value;
     if let Some(rgb) = as_rgb(key, value) {
@@ -714,14 +718,14 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
         Value::Bool(b) => look::toggle(ui, b, "").changed(),
         Value::Number(n) => {
             if let Some(mut i) = n.as_i64() {
-                let changed = ui.add(egui::DragValue::new(&mut i)).changed();
+                let changed = ui.add_sized([NUMBER_WIDTH, 22.0], egui::DragValue::new(&mut i)).changed();
                 if changed {
                     *value = Value::from(i);
                 }
                 changed
             } else {
                 let mut f = n.as_f64().unwrap_or(0.0);
-                let changed = ui.add(egui::DragValue::new(&mut f).speed(0.05)).changed();
+                let changed = ui.add_sized([NUMBER_WIDTH, 22.0], egui::DragValue::new(&mut f).speed(0.05)).changed();
                 if changed {
                     if let Some(num) = serde_json::Number::from_f64(f) {
                         *value = Value::Number(num);
@@ -752,7 +756,7 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
             for (i, item) in items.iter_mut().enumerate() {
                 ui.push_id(i, |ui| {
                     ui.horizontal_top(|ui| {
-                        if ui.small_button("✕").clicked() {
+                        if look::cross_button(ui).clicked() {
                             remove = Some(i);
                         }
                         ui.vertical(|ui| changed |= edit_value(ui, component, key, item));
@@ -769,20 +773,45 @@ pub(super) fn edit_value(ui: &mut egui::Ui, component: &str, key: &str, value: &
             changed
         }
         Value::Object(fields) => {
+            use crate::devtools::field_docs;
             let mut changed = false;
-            for (name, field) in fields.iter_mut() {
-                ui.push_id(name.as_str(), |ui| {
-                    let scalar = !matches!(field, Value::Object(_) | Value::Array(_))
-                        || as_rgb(name, field).is_some();
-                    if scalar {
+            let is_scalar = |name: &str, field: &Value| {
+                !matches!(field, Value::Object(_) | Value::Array(_)) || as_rgb(name, field).is_some()
+            };
+            // Plain settings in a two-column grid, so the inputs line up:
+            // the setting's name (with a ? explaining it, where the code
+            // documents it), then its value.
+            egui::Grid::new(ui.id().with(("fields", component, key)))
+                .num_columns(2)
+                .spacing(egui::vec2(12.0, 6.0))
+                .show(ui, |ui| {
+                    for (name, field) in fields.iter_mut() {
+                        if !is_scalar(name, field) {
+                            continue;
+                        }
                         ui.horizontal(|ui| {
-                            ui.label(name.as_str());
-                            changed |= edit_value(ui, component, name, field);
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.label(egui::RichText::new(field_docs::label(name)).color(look::pal(ui).muted));
+                            if let Some(doc) = field_docs::doc(component, name) {
+                                look::hint(ui, doc);
+                            }
                         });
-                    } else {
-                        egui::CollapsingHeader::new(name.as_str()).default_open(false).show(ui, |ui| {
-                            changed |= edit_value(ui, component, name, field);
-                        });
+                        ui.push_id(name.as_str(), |ui| changed |= edit_value(ui, component, name, field));
+                        ui.end_row();
+                    }
+                });
+            // Nested values (a fire's lit look, a list of items) fold away
+            // underneath.
+            for (name, field) in fields.iter_mut() {
+                if is_scalar(name, field) {
+                    continue;
+                }
+                ui.push_id(name.as_str(), |ui| {
+                    let title = egui::RichText::new(field_docs::label(name)).color(look::pal(ui).muted);
+                    let header = egui::CollapsingHeader::new(title).id_salt(name.as_str()).default_open(false);
+                    let shown = header.show(ui, |ui| changed |= edit_value(ui, component, name, field));
+                    if let Some(doc) = field_docs::doc(component, name) {
+                        shown.header_response.on_hover_text(doc);
                     }
                 });
             }

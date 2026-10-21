@@ -13,6 +13,7 @@
 pub mod cheats;
 pub mod paint;
 pub mod catalog;
+pub mod field_docs;
 pub mod prefab;
 
 pub mod spawn;
