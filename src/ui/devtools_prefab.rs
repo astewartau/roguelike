@@ -10,7 +10,7 @@
 //! `devtools::catalog`.
 
 use crate::component_registry as registry;
-use crate::devtools::catalog::{self, BLOCKS, GROUPS};
+use crate::devtools::catalog::{self, GROUPS};
 use crate::devtools::prefab::{self, Prefab};
 use crate::devtools::{spawn, CursorTool, DevTools};
 
@@ -18,38 +18,58 @@ use super::devtools::{edit_value, row, DevArt};
 use super::devtools_look as look;
 
 
-pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
-    library(ui, dev, art);
-    let Some(i) = dev.selected_prefab.filter(|i| *i < dev.prefabs.len()) else {
-        return;
-    };
-    ui.separator();
+/// Which prefab is being edited, if any (and still exists).
+fn editing(dev: &DevTools) -> Option<usize> {
+    dev.selected_prefab.filter(|i| *i < dev.prefabs.len())
+}
+
+/// The part of the Prefabs tab that stays put above the scrolling list:
+/// while a prefab is being edited, a way back to the library, its name,
+/// what it is so far, and the buttons to place it and add to it. (Nothing
+/// while the library is showing.)
+pub(super) fn prefabs_pinned(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
+    let Some(i) = editing(dev) else { return };
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label("Name");
-        changed |= ui.text_edit_singleline(&mut dev.prefabs[i].name).changed();
+        if ui.button("← Prefabs").on_hover_text("Back to the library").clicked() {
+            dev.selected_prefab = None;
+            dev.palette = None;
+            dev.expanded_part = None;
+        }
+        changed |= ui
+            .add(egui::TextEdit::singleline(&mut dev.prefabs[i].name).desired_width(f32::INFINITY))
+            .changed();
     });
+    if editing(dev).is_none() {
+        return;
+    }
     preview_card(ui, art, &dev.prefabs[i]);
     changed |= needs(ui, &mut dev.prefabs[i]);
-
-    ui.add_space(4.0);
-    let label = if dev.picker_open {
-        "Done adding"
-    } else {
-        "+  Add to it"
-    };
-    if look::primary_button(ui, label).clicked() {
-        dev.picker_open = !dev.picker_open;
-    }
-    if dev.picker_open {
-        let current = dev.prefabs[i].clone();
-        for name in picker(ui, dev, &|n| current.has(n)) {
-            changed |= dev.prefabs[i].add(name);
+    ui.horizontal(|ui| {
+        let armed = dev.tool == Some(CursorTool::PlacePrefab(i));
+        let place = if armed { "Placing… (click the map)" } else { "Place" };
+        if ui.selectable_label(armed, place).clicked() {
+            dev.tool = if armed { None } else { Some(CursorTool::PlacePrefab(i)) };
         }
-    }
-    changed |= cards(ui, dev, art, i);
+        if look::primary_button(ui, "+  Add").on_hover_text("Search components and building blocks").clicked() {
+            dev.open_palette(crate::devtools::PaletteTarget::Prefab(i));
+        }
+    });
     if changed {
         dev.prefabs_dirty = true;
+    }
+}
+
+/// The scrolling part of the Prefabs tab: the library, or the parts of the
+/// prefab being edited.
+pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
+    match editing(dev) {
+        None => library(ui, dev, art),
+        Some(i) => {
+            if cards(ui, dev, art, i) {
+                dev.prefabs_dirty = true;
+            }
+        }
     }
 }
 
@@ -261,178 +281,48 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
     add.is_some_and(|name| prefab.add(name))
 }
 
-/// The add picker: a search box, building blocks as chips, then every
-/// component not yet there (`has`), grouped by what it does, each with what
-/// it does in a sentence. Returns the components picked this frame (all of
-/// a block's parts, for a block). Used by the prefab builder and the
-/// inspector alike; it stays open to add more.
-pub(super) fn picker(
-    ui: &mut egui::Ui,
-    dev: &mut DevTools,
-    has: &dyn Fn(&str) -> bool,
-) -> Vec<&'static str> {
-    let mut picked = Vec::new();
-    look::card(ui, |ui| {
-        look::search_box(ui, &mut dev.picker_search, "Search: burn, light, door…");
-        let search = dev.picker_search.to_lowercase();
-        let matches = |name: &str, summary: &str, phrase: &str| {
-            search.is_empty()
-                || name.to_lowercase().contains(&search)
-                || summary.to_lowercase().contains(&search)
-                || phrase.contains(&search)
-        };
-
-        let blocks: Vec<_> = BLOCKS
-            .iter()
-            .filter(|b| matches(b.name, b.summary, ""))
-            .collect();
-        if !blocks.is_empty() {
-            look::section(ui, "Building blocks");
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                for block in blocks {
-                    if look::chip(ui, block.name)
-                        .on_hover_text(block.summary)
-                        .clicked()
-                    {
-                        picked.extend(block.parts.iter().copied().filter(|p| !has(p)));
-                    }
-                }
-            });
-        }
-
-        let mut any = false;
-        for group in GROUPS {
-            if group == "Internal" && !dev.picker_internal {
-                continue;
-            }
-            let entries: Vec<&catalog::Info> = catalog::INFO
-                .iter()
-                .filter(|info| info.group == group && !has(info.name) && info.name != "Position")
-                // Modifiers of something already here are switches in its card.
-                .filter(|info| catalog::host_of(info.name, has).is_none())
-                .filter(|info| matches(info.name, info.summary, info.phrase))
-                .collect();
-            if entries.is_empty() {
-                continue;
-            }
-            any = true;
-            let searching = !search.is_empty();
-            look::accordion(
-                ui,
-                ("picker_group", group),
-                group,
-                entries.len(),
-                searching,
-                |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    for info in entries {
-                        let brings: Vec<&str> =
-                            crate::component_registry::all_requirements(info.name).into_iter().filter(|n| !has(n)).collect();
-                        let summary = if brings.is_empty() {
-                            info.summary.to_string()
-                        } else {
-                            format!("{}  Also adds {}.", info.summary, brings.join(", "))
-                        };
-                        if look::add_row(ui, info.name, &summary).clicked() {
-                            picked.push(info.name);
-                        }
-                    }
-                },
-            );
-        }
-        if !any && !search.is_empty() {
-            ui.colored_label(look::pal(ui).muted, "Nothing matches that.");
-        }
-        ui.add_space(6.0);
-        look::toggle(ui, &mut dev.picker_internal, "Show internal state")
-            .on_hover_text("Also list state the game keeps for itself");
-    });
-    picked
-}
-
-/// The prefab's components, as cards grouped like the picker, each with its
-/// settings laid out (not collapsed) and a ✕ to remove it.
+/// The prefab's parts, grouped like the add palette into accordions, each a
+/// compact card (see [`part_card`]); only one is open at a time.
 fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool {
     let mut changed = false;
     let mut remove = None;
     let mut edits: Vec<PartEdit> = Vec::new();
-    let group_of = |name: &str| {
-        catalog::info_of(name)
-            .map(|i| i.group)
-            .unwrap_or("Internal")
-    };
+    let current = dev.prefabs[i].clone();
+    let has = |n: &str| current.has(n);
+    let value_of = |m: &str| current.value(m).cloned();
+    let group_of = |name: &str| catalog::info_of(name).map(|i| i.group).unwrap_or("Internal");
+    if current.components.is_empty() {
+        ui.colored_label(look::pal(ui).muted, "Nothing yet: + Add a building block or a component.");
+    }
     for group in GROUPS {
-        let current = dev.prefabs[i].clone();
-        let has = |n: &str| current.has(n);
-        let indices: Vec<usize> = (0..dev.prefabs[i].components.len())
-            .filter(|&n| group_of(&dev.prefabs[i].components[n].component) == group)
+        let indices: Vec<usize> = (0..current.components.len())
+            .filter(|&n| group_of(&current.components[n].component) == group)
             // A modifier is a switch in its host's card, not a card itself.
-            .filter(|&n| catalog::host_of(&dev.prefabs[i].components[n].component, &has).is_none())
+            .filter(|&n| catalog::host_of(&current.components[n].component, &has).is_none())
             .collect();
         if indices.is_empty() {
             continue;
         }
-        look::accordion(
-            ui,
-            ("prefab_group", i, group),
-            group,
-            indices.len(),
-            false,
-            |ui| {
-                for n in indices {
-                    let name = dev.prefabs[i].components[n].component.clone();
-                    let info = catalog::info_of(&name);
-                    egui::Frame::none()
-                        .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).border))
-                        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                let known = registry::find(&name).is_some();
-                                let title = if known {
-                                    name.clone()
-                                } else {
-                                    format!("{name} (unknown)")
-                                };
-                                ui.label(look::strong(title));
-                                if let Some(info) = info {
-                                    look::hint(ui, info.summary);
-                                }
-                                let needed_by: Vec<String> =
-                                    dev.prefabs[i].needed_by(&name).into_iter().map(String::from).collect();
-                                if !needed_by.is_empty() {
-                                    ui.colored_label(look::pal(ui).muted, format!("for {}", needed_by.join(", ")));
-                                } else if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
-                                    ui.colored_label(look::pal(ui).muted, info.phrase);
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let tip = if needed_by.is_empty() {
-                                            "Remove".to_string()
-                                        } else {
-                                            format!("Remove (and {}, which need it)", needed_by.join(", "))
-                                        };
-                                        if look::cross_button(ui).on_hover_text(tip).clicked() {
-                                            remove = Some(n);
-                                        }
-                                    },
-                                );
-                            });
-                            let value = &mut dev.prefabs[i].components[n].value;
-                            if !value.is_null() {
-                                changed |= ui.push_id(("part", n), |ui| edit_value(ui, art, &name, "", value)).inner;
-                            }
-                            if let Some(need) = trigger_line(ui, &name, &has) {
-                                edits.push(PartEdit::Add(need));
-                            }
-                            let value_of = |m: &str| current.value(m).cloned();
-                            edits.extend(ui.push_id(("mods", n), |ui| modifier_switches(ui, art, &name, &has, &value_of)).inner);
-                        });
+        look::accordion(ui, ("prefab_group", i, group), group, indices.len(), false, |ui| {
+            for n in indices {
+                let name = current.components[n].component.clone();
+                let needed_by: Vec<&str> = current.needed_by(&name);
+                let expanded = dev.expanded_part.as_deref() == Some(name.as_str());
+                let value = &mut dev.prefabs[i].components[n].value;
+                let out = ui
+                    .push_id(("part", n), |ui| part_card(ui, art, &name, value, &needed_by, expanded, &has, &value_of))
+                    .inner;
+                changed |= out.changed;
+                edits.extend(out.edits);
+                match out.action {
+                    Some(CardAction::Toggle) => {
+                        dev.expanded_part = if expanded { None } else { Some(name.clone()) };
+                    }
+                    Some(CardAction::Remove) => remove = Some(n),
+                    None => {}
                 }
-            },
-        );
+            }
+        });
     }
     if let Some(n) = remove {
         dev.prefabs[i].remove_at(n);
@@ -458,6 +348,158 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
         changed = true;
     }
     changed
+}
+
+/// What the user did with a card's header.
+pub(super) enum CardAction {
+    /// Open it, or close it.
+    Toggle,
+    Remove,
+}
+
+/// What came of drawing a card.
+pub(super) struct CardOutcome {
+    pub action: Option<CardAction>,
+    /// Its own settings were edited (in place, in the value passed in).
+    pub changed: bool,
+    /// Changes it asked for to other parts (modifier switches, a trigger's
+    /// missing need).
+    pub edits: Vec<PartEdit>,
+}
+
+/// One part of an entity or prefab as a compact card: a single line (its
+/// name, a few words of what it's set to, a ? and a remove cross) that
+/// opens, on a click, to its settings, what sets it off and its modifier
+/// switches. Shared by the prefab builder and the Inspect tab.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn part_card(
+    ui: &mut egui::Ui,
+    art: &DevArt,
+    name: &str,
+    value: &mut serde_json::Value,
+    needed_by: &[&str],
+    expanded: bool,
+    has: &dyn Fn(&str) -> bool,
+    value_of: &dyn Fn(&str) -> Option<serde_json::Value>,
+) -> CardOutcome {
+    let p = look::pal(ui);
+    let info = catalog::info_of(name);
+    let mut out = CardOutcome { action: None, changed: false, edits: Vec::new() };
+    egui::Frame::none()
+        .fill(if expanded { p.card } else { egui::Color32::TRANSPARENT })
+        .stroke(egui::Stroke::new(1.0_f32, if expanded { p.accent } else { p.border }))
+        .rounding(egui::Rounding::same(8.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let header = ui.horizontal(|ui| {
+                let known = registry::find(name).is_some();
+                ui.label(look::strong(if known { name.to_string() } else { format!("{name} (unknown)") }));
+                if let Some((sheet, id)) = super::devtools_tiles::as_tile(value) {
+                    let (tex, uv) = art.icon((sheet, id));
+                    ui.add(egui::Image::new(egui::load::SizedTexture::new(tex, egui::vec2(18.0, 18.0))).uv(uv));
+                }
+                let brief = if !needed_by.is_empty() {
+                    format!("for {}", needed_by.join(", "))
+                } else {
+                    brief(name, value, has)
+                };
+                ui.add(egui::Label::new(egui::RichText::new(brief).color(p.muted)).truncate());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let tip = if needed_by.is_empty() {
+                        "Remove".to_string()
+                    } else {
+                        format!("Remove (and {}, which need it)", needed_by.join(", "))
+                    };
+                    if look::cross_button(ui).on_hover_text(tip).clicked() {
+                        out.action = Some(CardAction::Remove);
+                    }
+                    if let Some(info) = info {
+                        look::hint(ui, info.summary);
+                    }
+                });
+            });
+            // The whole header line opens and closes it.
+            let toggle = ui.interact(header.response.rect, ui.id().with("open"), egui::Sense::click());
+            if toggle.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && out.action.is_none() {
+                out.action = Some(CardAction::Toggle);
+            }
+            if !expanded {
+                return;
+            }
+            if !value.is_null() {
+                out.changed |= edit_value(ui, art, name, "", value);
+            }
+            if let Some(need) = trigger_line(ui, name, has) {
+                out.edits.push(PartEdit::Add(need));
+            }
+            out.edits.extend(modifier_switches(ui, art, name, has, value_of));
+        });
+    out
+}
+
+/// A few words of what a part is set to, for its card's line: its own key
+/// numbers, then the modifiers switched on in it.
+fn brief(name: &str, value: &serde_json::Value, has: &dyn Fn(&str) -> bool) -> String {
+    let num = |k: &str| value.get(k).and_then(|v| v.as_f64());
+    let int = |k: &str| num(k).map(|v| v.round() as i64);
+    let mut words: Vec<String> = match name {
+        "Name" => value.as_str().map(|s| vec![s.to_string()]).unwrap_or_default(),
+        "Health" => {
+            let mut w = vec![format!("{}/{} HP", int("current").unwrap_or(0), int("max").unwrap_or(0))];
+            match value.get("targeting").and_then(|t| t.as_str()) {
+                Some("OnPurpose") => w.push("hit on purpose".into()),
+                Some("Never") => w.push("never attacked".into()),
+                _ => {}
+            }
+            w
+        }
+        "Stats" => vec![format!(
+            "STR {} · INT {} · AGI {}",
+            int("strength").unwrap_or(0),
+            int("intelligence").unwrap_or(0),
+            int("agility").unwrap_or(0)
+        )],
+        "Actor" => num("speed").map(|s| vec![format!("speed {s:.2}")]).unwrap_or_default(),
+        "ChaseAI" => int("sight_radius").map(|r| vec![format!("sees {r} tiles")]).unwrap_or_default(),
+        "LightSource" => num("radius").map(|r| vec![format!("radius {r:.1}")]).unwrap_or_default(),
+        "Fuel" => match value.get("burn_time") {
+            Some(serde_json::Value::String(_)) => vec!["burns forever".into()],
+            Some(t) => t.as_f64().map(|t| vec![format!("burns {t:.0}s")]).unwrap_or_default(),
+            None => vec![],
+        },
+        _ => match value {
+            serde_json::Value::Object(fields) => fields
+                .iter()
+                .filter(|(_, v)| v.is_number() || v.is_boolean() || v.is_string())
+                .filter(|(k, _)| !super::devtools_tiles::is_tile_key(k))
+                .take(2)
+                .map(|(k, v)| format!("{} {}", crate::devtools::field_docs::label(k).to_lowercase(), short(v)))
+                .collect(),
+            _ => vec![],
+        },
+    };
+    let switched_on: Vec<&str> = catalog::MODIFIERS
+        .iter()
+        .filter(|(m, hosts, _)| has(m) && hosts.split('|').any(|h| h == name) && catalog::host_of(m, has) == Some(name))
+        .map(|(_, _, label)| *label)
+        .collect();
+    if !switched_on.is_empty() {
+        words.push(switched_on.join(", "));
+    }
+    words.join(" · ")
+}
+
+fn short(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => match n.as_f64() {
+            Some(f) if f.fract() != 0.0 => format!("{f:.2}"),
+            _ => n.to_string(),
+        },
+        serde_json::Value::Bool(b) => if *b { "yes" } else { "no" }.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        _ => String::new(),
+    }
 }
 
 /// A change to the parts of an entity (or a prefab) asked for from inside a
@@ -546,7 +588,7 @@ mod tests {
     #[test]
     fn a_creature_block_needs_nothing_more() {
         let mut p = Prefab::empty("Test");
-        for part in super::BLOCKS
+        for part in crate::devtools::catalog::BLOCKS
             .iter()
             .find(|b| b.name == "Creature")
             .unwrap()

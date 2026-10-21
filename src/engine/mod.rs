@@ -378,7 +378,11 @@ impl GameEngine {
                         return None;
                     }
                 }
-                // 3. Drop the armed dev tool, then close the dev panel.
+                // 3. Close the dev tools' add palette, drop the armed dev
+                //    tool, then close the dev panel.
+                if self.dev.palette.take().is_some() {
+                    return None;
+                }
                 if self.dev.tool.is_some() {
                     self.dev.disarm();
                     return None;

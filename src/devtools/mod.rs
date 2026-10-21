@@ -34,6 +34,15 @@ use crate::vfx::VfxManager;
 pub use spawn::{SpawnOptions, Spawnable, Wakefulness};
 
 /// The panel's tabs.
+/// What the add palette adds to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteTarget {
+    /// The prefab at this index in the library.
+    Prefab(usize),
+    /// An entity in the world (from the Inspect tab).
+    Entity(Entity),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DevTab {
     #[default]
@@ -318,11 +327,17 @@ pub struct DevTools {
     pub selected_prefab: Option<usize>,
     /// Set by the panel when a prefab changes; saved soon after.
     pub prefabs_dirty: bool,
-    /// The prefab builder's add-component picker: whether it's open, what's
-    /// typed in its search box, and whether internal components are listed.
-    pub picker_open: bool,
-    /// The same picker, open on the Inspect tab.
-    pub inspect_picker_open: bool,
+    /// The add palette (components and building blocks to add), if open,
+    /// and what it adds to; the highlighted result; whether its search box
+    /// still needs focusing.
+    pub palette: Option<PaletteTarget>,
+    pub palette_selected: usize,
+    pub palette_focus: bool,
+    /// The one part card open in the prefab builder, and in the inspector.
+    pub expanded_part: Option<String>,
+    pub expanded_component: Option<&'static str>,
+    /// What's typed in the palette's search box, and whether internal
+    /// components are listed.
     pub picker_search: String,
     pub picker_internal: bool,
     /// Which prefab each placed entity came from (by name), so the
@@ -373,8 +388,11 @@ impl Default for DevTools {
             prefabs: prefab::load(std::path::Path::new(prefab::PREFAB_FILE)),
             selected_prefab: None,
             prefabs_dirty: false,
-            picker_open: false,
-            inspect_picker_open: false,
+            palette: None,
+            palette_selected: 0,
+            palette_focus: false,
+            expanded_part: None,
+            expanded_component: None,
             picker_search: String::new(),
             picker_internal: false,
             placed_from: std::collections::HashMap::new(),
@@ -391,6 +409,14 @@ impl Default for DevTools {
 impl DevTools {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Open the add palette for `target`, search cleared, ready to type.
+    pub fn open_palette(&mut self, target: PaletteTarget) {
+        self.palette = Some(target);
+        self.picker_search.clear();
+        self.palette_selected = 0;
+        self.palette_focus = true;
     }
 
     pub fn toggle(&mut self) {

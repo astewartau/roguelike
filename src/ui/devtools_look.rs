@@ -322,22 +322,6 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
-/// A small rounded chip (a building block to add): outlined, filling on
-/// hover.
-pub fn chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let p = pal(ui);
-    let font = FontId::new(12.5, FontFamily::Name(SANS.into()));
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, p.text);
-    let size = galley.size() + egui::vec2(20.0, 10.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hovered = response.hovered();
-    let fill = if hovered { p.accent } else { p.card };
-    ui.painter().rect(rect, Rounding::same(rect.height() / 2.0), fill, Stroke::new(1.0_f32, if hovered { p.accent } else { p.border }));
-    let ink = if hovered { p.on_accent } else { p.text };
-    ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, ink);
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
 /// A full-width search box with a magnifier and a clear button.
 pub fn search_box(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Response {
     let p = pal(ui);
@@ -360,49 +344,6 @@ pub fn search_box(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Res
             .inner
         })
         .inner
-}
-
-/// One entry in a list to add from: its name, what it does underneath,
-/// and a "+" on the right; the whole row highlights on hover and is the
-/// thing to click.
-pub fn add_row(ui: &mut egui::Ui, name: &str, summary: &str) -> egui::Response {
-    let p = pal(ui);
-    let width = ui.available_width();
-    let pad = egui::vec2(10.0, 7.0);
-    let plus_w = 26.0;
-    let name_galley = ui.painter().layout_no_wrap(
-        name.to_owned(),
-        FontId::new(14.0, FontFamily::Name(SANS_STRONG.into())),
-        p.text,
-    );
-    let summary_galley = ui.painter().layout(
-        summary.to_owned(),
-        FontId::new(12.0, FontFamily::Name(SANS.into())),
-        p.muted,
-        (width - pad.x * 2.0 - plus_w).max(40.0),
-    );
-    let height = pad.y * 2.0 + name_galley.size().y + 2.0 + summary_galley.size().y;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let hovered = response.hovered();
-    if hovered {
-        ui.painter().rect_filled(rect, Rounding::same(8.0), p.hover);
-    }
-    let text_at = rect.min + pad;
-    let name_h = name_galley.size().y;
-    ui.painter().galley(text_at, name_galley, p.text);
-    ui.painter().galley(text_at + egui::vec2(0.0, name_h + 2.0), summary_galley, p.muted);
-    let plus = egui::pos2(rect.right() - pad.x - plus_w / 2.0, rect.center().y);
-    if hovered {
-        ui.painter().circle_filled(plus, 11.0, p.accent);
-    }
-    ui.painter().text(
-        plus,
-        egui::Align2::CENTER_CENTER,
-        "+",
-        FontId::new(17.0, FontFamily::Name(SANS_STRONG.into())),
-        if hovered { p.on_accent } else { p.accent },
-    );
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 #[cfg(test)]

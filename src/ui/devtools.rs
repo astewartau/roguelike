@@ -66,6 +66,9 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
                     let top = ui.cursor().top();
                     header(ui, dev, view);
                     ui.add_space(4.0);
+                    if dev.tab == DevTab::Prefabs {
+                        super::devtools_prefab::prefabs_pinned(ui, dev, art);
+                    }
                     let used = ui.cursor().top() - top;
                     egui::ScrollArea::vertical()
                         .max_height(screen.height() - chrome.y - used)
@@ -82,6 +85,7 @@ pub fn draw_devtools(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view
                         });
                 });
         });
+    super::devtools_palette::draw_palette(ctx, dev, view);
 }
 
 fn header(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
@@ -601,13 +605,19 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
     });
 
     let (known, unknown) = registry::components_of(world, e);
+    ui.add_space(2.0);
+    if look::primary_button(ui, "+  Add").on_hover_text("Search components and building blocks").clicked() {
+        dev.open_palette(crate::devtools::PaletteTarget::Entity(e));
+    }
     // Its components, folded into groups by what they do (as the prefab
-    // builder shows them), each a card with its settings laid out.
+    // builder shows them), each a compact card; one open at a time.
+    use super::devtools_prefab::{part_card, CardAction, PartEdit};
     use crate::devtools::catalog;
+    let names: Vec<&str> = known.iter().map(|k| k.name).collect();
+    let has = |n: &str| names.contains(&n);
+    let value_of = |m: &str| registry::find(m).and_then(|c| (c.read)(world, e));
     let group_of = |name: &str| catalog::info_of(name).map(|i| i.group).unwrap_or("Internal");
     for group in catalog::GROUPS {
-        let names: Vec<&str> = known.iter().map(|k| k.name).collect();
-        let has = |n: &str| names.contains(&n);
         let here: Vec<_> = known
             .iter()
             .filter(|entry| group_of(entry.name) == group)
@@ -624,66 +634,39 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                     Some((draft, why)) => (draft.clone(), Some(why.clone())),
                     None => (current, None),
                 };
-                look::card(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(look::strong(entry.name));
-                        if let Some(info) = catalog::info_of(entry.name) {
-                            look::hint(ui, info.summary);
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let needed_by: Vec<&str> = crate::component_registry::all_dependents(entry.name)
-                                .into_iter()
-                                .filter(|d| known.iter().any(|k| k.name == *d))
-                                .collect();
-                            let tip = if needed_by.is_empty() {
-                                "Remove".to_string()
-                            } else {
-                                format!("Remove (and {}, which need it)", needed_by.join(", "))
-                            };
-                            if look::cross_button(ui).on_hover_text(tip).clicked() {
-                                dev.commands.push(DevCommand::RemoveComponent { entity: e, name: entry.name });
-                            }
-                        });
+                let needed_by: Vec<&str> =
+                    registry::all_dependents(entry.name).into_iter().filter(|d| names.contains(d)).collect();
+                let expanded = dev.expanded_component == Some(entry.name);
+                let out = ui
+                    .push_id(entry.name, |ui| part_card(ui, art, entry.name, &mut value, &needed_by, expanded, &has, &value_of))
+                    .inner;
+                if out.changed {
+                    dev.commands.push(DevCommand::SetComponent { entity: e, name: entry.name, value });
+                }
+                if let (Some(why), true) = (error, expanded) {
+                    ui.colored_label(look::pal(ui).danger, why);
+                }
+                match out.action {
+                    Some(CardAction::Toggle) => {
+                        dev.expanded_component = if expanded { None } else { Some(entry.name) };
+                    }
+                    Some(CardAction::Remove) => {
+                        dev.commands.push(DevCommand::RemoveComponent { entity: e, name: entry.name });
+                    }
+                    None => {}
+                }
+                for edit in out.edits {
+                    dev.commands.push(match edit {
+                        PartEdit::Add(name) => DevCommand::AddComponent { entity: e, name },
+                        PartEdit::Remove(name) => DevCommand::RemoveComponent { entity: e, name },
+                        PartEdit::Set(name, value) => DevCommand::SetComponent { entity: e, name, value },
                     });
-                    if !value.is_null() && ui.push_id(entry.name, |ui| edit_value(ui, art, entry.name, "", &mut value)).inner {
-                        dev.commands.push(DevCommand::SetComponent { entity: e, name: entry.name, value });
-                    }
-                    if let Some(why) = error {
-                        ui.colored_label(look::pal(ui).danger, why);
-                    }
-                    use super::devtools_prefab::{modifier_switches, trigger_line, PartEdit};
-                    let mut edits = Vec::new();
-                    if let Some(need) = trigger_line(ui, entry.name, &has) {
-                        edits.push(PartEdit::Add(need));
-                    }
-                    let value_of = |m: &str| crate::component_registry::find(m).and_then(|c| (c.read)(world, e));
-                    edits.extend(ui.push_id(("mods", entry.name), |ui| modifier_switches(ui, art, entry.name, &has, &value_of)).inner);
-                    for edit in edits {
-                        dev.commands.push(match edit {
-                            PartEdit::Add(name) => DevCommand::AddComponent { entity: e, name },
-                            PartEdit::Remove(name) => DevCommand::RemoveComponent { entity: e, name },
-                            PartEdit::Set(name, value) => DevCommand::SetComponent { entity: e, name, value },
-                        });
-                    }
-                });
+                }
             }
         });
     }
     if unknown > 0 {
         ui.colored_label(look::pal(ui).muted, format!("and {unknown} more the tools can't edit"));
-    }
-    ui.add_space(4.0);
-    let label = if dev.inspect_picker_open { "Done adding" } else { "+  Add to it" };
-    if look::primary_button(ui, label).clicked() {
-        dev.inspect_picker_open = !dev.inspect_picker_open;
-    }
-    if dev.inspect_picker_open {
-        let have: Vec<&str> = known.iter().map(|k| k.name).collect();
-        for name in super::devtools_prefab::picker(ui, dev, &|n| have.contains(&n)) {
-            if let Some(entry) = registry::find(name) {
-                dev.commands.push(DevCommand::AddComponent { entity: e, name: entry.name });
-            }
-        }
     }
 }
 
