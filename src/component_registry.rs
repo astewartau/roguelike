@@ -434,6 +434,19 @@ pub fn required_by(t: TypeId) -> &'static [&'static ComponentEntry] {
     requirements().required_by.get(&t).map(Vec::as_slice).unwrap_or(&[])
 }
 
+/// Requirements `e` doesn't meet, as (component, what it's missing). Always
+/// empty while the world's hooks hold; the combination fuzz test checks.
+#[cfg(test)]
+pub fn unmet_requirements(world: &World, e: Entity) -> Vec<(&'static str, &'static str)> {
+    let (known, _) = components_of(world, e);
+    let names: Vec<&str> = known.iter().map(|k| k.name).collect();
+    REQUIRES
+        .iter()
+        .filter(|(component, _)| names.contains(component))
+        .flat_map(|(component, needs)| needs.iter().filter(|n| !names.contains(n)).map(move |n| (*component, *n)))
+        .collect()
+}
+
 /// Everything `name` requires, following requirements of requirements, in
 /// the order they'd be added.
 pub fn all_requirements(name: &str) -> Vec<&'static str> {

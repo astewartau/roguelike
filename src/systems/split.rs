@@ -122,7 +122,11 @@ fn split_one(ctx: &mut ActorCtx, parent: Entity) {
         *child_ai = ai;
     }
 
-    ctx.spatial.register_entity(child, spot, true, false);
+    // In the collision cache as whatever it is (it used to be registered as
+    // blocking even when the parent, and so the copy, wasn't).
+    let blocks_movement = ctx.world.get::<&crate::components::BlocksMovement>(child).is_ok();
+    let blocks_vision = ctx.world.get::<&crate::components::BlocksVision>(child).is_ok();
+    ctx.spatial.register_entity(child, spot, blocks_movement, blocks_vision);
     ctx.events.push(GameEvent::SlimeSplit { parent, child, position: spot });
     crate::engine::initialize_single_ai_actor(ctx, child);
 }

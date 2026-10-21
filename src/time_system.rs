@@ -127,6 +127,12 @@ impl ActionScheduler {
     }
 
     /// Remove all completions for a specific entity (e.g., on death)
+    /// Every entity with a completion queued.
+    #[cfg(test)]
+    pub fn scheduled_entities(&self) -> Vec<Entity> {
+        self.pending_completions.iter().map(|sc| sc.entity).collect()
+    }
+
     /// How many completions are queued for `entity` (at most one, if the
     /// scheduling is right).
     #[cfg(test)]

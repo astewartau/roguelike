@@ -660,8 +660,6 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
             events.push(GameEvent::BossDefeated { name });
         }
 
-        // Remove from spatial cache before removing components
-        spatial_cache.remove_entity(id);
 
         // Death is where an entity leaves the AI sets: ChaseAI/CompanionAI are
         // stripped just below, so update_on_player_move will never re-add it.
@@ -677,6 +675,13 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         let _ = world.remove_one::<Health>(id);
         let _ = world.remove_one::<BlocksMovement>(id); // Bones are walkable
         let _ = world.remove_one::<Stats>(id);
+        // In the collision cache as what the remains are: no longer blocking
+        // the way, but still blocking sight if they do (it used to drop out
+        // of the cache entirely, leaving a sight-blocking corpse unrecorded).
+        let blocks_vision = world.get::<&crate::components::BlocksVision>(id).is_ok();
+        if let Some(tile) = world.get::<&Position>(id).ok().map(|p| (p.x, p.y)) {
+            spatial_cache.register_entity(id, tile, false, blocks_vision);
+        }
         // A torch-bearer's torch falls burning beside the body.
         crate::systems::torches::drop_torch(world, id);
 

@@ -2708,6 +2708,101 @@ mod tests {
         engine
     }
 
+    /// Random entities, built from random components of the whole registry
+    /// (at their defaults), dropped beside the player and then put through
+    /// sixty turns of play with blasts, fires, rain, kills and deletes among
+    /// them. After every step: nothing has panicked, the collision cache
+    /// agrees with the world, every entity has what its components require,
+    /// and nothing scheduled to act is gone. Any combination the tools let
+    /// you build has to hold up, not only the ones the game spawns.
+    #[test]
+    fn random_component_combinations_hold_up() {
+        use crate::devtools::CursorTool;
+        use rand::{seq::SliceRandom, Rng, SeedableRng};
+
+        let pool: Vec<&'static crate::component_registry::ComponentEntry> = crate::component_registry::entries()
+            .iter()
+            .filter(|e| e.name != "Position")
+            .collect();
+        let tools = [CursorTool::Blast, CursorTool::Ignite, CursorTool::Douse, CursorTool::Kill, CursorTool::Delete];
+
+        // Eight by default to keep `cargo test` quick; FUZZ_SEEDS=1000 for a deep sweep.
+        let seeds: u64 = std::env::var("FUZZ_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+        for seed in 0..seeds {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let mut camera = crate::camera::Camera::new(800.0, 600.0);
+            let mut engine = GameEngine::new();
+            engine.start_game(PlayerClass::Fighter, seed, &mut camera);
+            let mut built: Vec<(Entity, Vec<&str>)> = Vec::new();
+            {
+                let state = engine.state.as_mut().unwrap();
+                let player = state.player_entity;
+                if let Ok(mut h) = state.world.get::<&mut Health>(player) {
+                    h.max = 100_000;
+                    h.current = 100_000;
+                }
+                let at = state.world.get::<&crate::components::Position>(player).map(|p| (p.x, p.y)).unwrap();
+                let spots: Vec<(i32, i32)> = (-5..=5)
+                    .flat_map(|dy| (-5..=5).map(move |dx| (at.0 + dx, at.1 + dy)))
+                    .filter(|&(x, y)| (x, y) != at && state.grid.is_walkable(x, y))
+                    .collect();
+                for _ in 0..10 {
+                    let Some(&(x, y)) = spots.choose(&mut rng) else { break };
+                    let pos = crate::components::Position::new(x, y);
+                    let e = state.world.spawn((pos, crate::components::VisualPosition::from_position(&pos)));
+                    let count = rng.gen_range(1..=6);
+                    let parts: Vec<&str> = pool.choose_multiple(&mut rng, count).map(|entry| entry.name).collect();
+                    for name in &parts {
+                        let entry = crate::component_registry::find(name).unwrap();
+                        let _ = (entry.write)(&mut state.world, e, (entry.default)());
+                    }
+                    let mut ctx = state.actor_ctx(&mut engine.events);
+                    crate::devtools::spawn::adopt(&mut ctx, e);
+                    built.push((e, parts));
+                }
+            }
+
+            let check = |engine: &mut GameEngine, when: &str| {
+                let state = engine.state.as_mut().unwrap();
+                state.sync_world_changes();
+                let context = format!("seed {seed}, {when}, built {built:?}");
+                state.spatial_cache.assert_coherent_with_world(&state.world, &context);
+                for (e, parts) in &built {
+                    if state.world.contains(*e) {
+                        let unmet = crate::component_registry::unmet_requirements(&state.world, *e);
+                        assert!(unmet.is_empty(), "{context}: {e:?} from {parts:?} lacks {unmet:?}");
+                    }
+                }
+                for e in state.action_scheduler.scheduled_entities() {
+                    assert!(state.world.contains(e), "{context}: {e:?} is scheduled but gone");
+                }
+            };
+            check(&mut engine, "after building");
+
+            for turn in 0..60 {
+                if turn % 5 == 4 {
+                    let state = engine.state.as_mut().unwrap();
+                    let targets: Vec<(i32, i32)> = built
+                        .iter()
+                        .filter_map(|(e, _)| state.world.get::<&crate::components::Position>(*e).ok().map(|p| (p.x, p.y)))
+                        .collect();
+                    if let (Some(&at), Some(&tool)) = (targets.choose(&mut rng), tools.choose(&mut rng)) {
+                        engine.dev.tool = Some(tool);
+                        engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, at);
+                    }
+                }
+                let result = {
+                    let Some(mut ctx) = engine.sim_ctx() else { break };
+                    execute_player_intent(&mut ctx, crate::systems::player_input::PlayerIntent::Wait)
+                };
+                engine.apply_deferred_spawns(&result);
+                check(&mut engine, &format!("turn {turn}, after the turn"));
+                let _ = engine.tick(1.0 / 60.0, &mut camera);
+                check(&mut engine, &format!("turn {turn}"));
+            }
+        }
+    }
+
     /// The world's change journal keeps the bookkeeping right even when the
     /// code making a change doesn't: a blocker despawned without a word to
     /// the collision cache, scheduler or AI tracker leaves none of them
