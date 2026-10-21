@@ -390,7 +390,7 @@ impl GameEngine {
                 if self.dev.palette.take().is_some() {
                     return None;
                 }
-                if self.dev.tool.is_some() && !self.dev.tool_is_panels() {
+                if self.dev.tool.is_some() && !self.dev.tool_is_default() {
                     self.dev.disarm();
                     return None;
                 }
@@ -474,10 +474,15 @@ impl GameEngine {
                 if !egui_consumed && *button == MouseButton::Left && self.is_playing() {
                     if *btn_state == ElementState::Pressed && self.dev.has_active_tool() {
                         let at = input::cursor_tile(camera, self.input.mouse_pos);
-                        if let Some(state) = self.state.as_mut() {
-                            self.dev.press(state, &mut self.events, &mut self.vfx, at);
+                        let taken = match self.state.as_mut() {
+                            Some(state) => self.dev.press(state, &mut self.events, &mut self.vfx, at),
+                            None => false,
+                        };
+                        // Inspect on bare floor takes nothing: the press pans
+                        // the view (and a click there is handled on release).
+                        if taken {
+                            return None;
                         }
-                        return None;
                     }
                     if *btn_state == ElementState::Released && self.dev.is_held() {
                         self.dev.release();
@@ -501,7 +506,9 @@ impl GameEngine {
 
                         // With the developer tools shown a click is for them,
                         // never a step for the player.
-                        if !was_drag && self.is_playing() && !self.dev.visible {
+                        if !was_drag && self.is_playing() && self.dev.visible {
+                            self.dev.click_floor(input::cursor_tile(camera, self.input.mouse_pos));
+                        } else if !was_drag && self.is_playing() {
                             if self.input.is_targeting() {
                                 self.input.pending_left_click = true;
                             } else if let Some(ref state) = self.state {
@@ -525,7 +532,7 @@ impl GameEngine {
                             || self.input.keys_pressed.contains(&KeyCode::ShiftRight);
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
-                        } else if self.dev.has_active_tool() && !self.dev.tool_is_panels() {
+                        } else if self.dev.has_active_tool() && !self.dev.tool_is_default() {
                             self.dev.disarm();
                         } else if self.dev.visible {
                             // No tile menu or bow shot for the player while

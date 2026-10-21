@@ -206,10 +206,11 @@ impl CursorTool {
         }
     }
 
-    /// The panel it's chosen from. It stays armed only while that panel is
-    /// open.
-    pub fn panel(self) -> DevTab {
-        match self {
+    /// The panel it's chosen from: it stays armed only while that panel is
+    /// open. None for Inspect, which is no panel's: it's what a click on
+    /// the map does whenever nothing else is armed.
+    pub fn panel(self) -> Option<DevTab> {
+        Some(match self {
             CursorTool::Place(_) | CursorTool::PlacePrefab(_) => DevTab::Spawn,
             CursorTool::Paint(_) => DevTab::Paint,
             CursorTool::Teleport
@@ -218,9 +219,9 @@ impl CursorTool {
             | CursorTool::Blast
             | CursorTool::Kill
             | CursorTool::Delete => DevTab::World,
-            CursorTool::Inspect => DevTab::Inspect,
+            CursorTool::Inspect => return None,
             CursorTool::ParticleFire | CursorTool::LookOfExplosion { .. } | CursorTool::Shoot(_) => DevTab::Effects,
-        }
+        })
     }
 
     /// Whether holding the button and dragging keeps applying it.
@@ -346,10 +347,8 @@ pub struct DevTools {
     /// The tile and entity the Inspect tab is looking at.
     pub inspect_tile: Option<(i32, i32)>,
     pub inspected: Option<Entity>,
-    /// The inspector's Move switch: while it's on, dragging the inspected
-    /// entity on the map carries it along. And what's being carried, while
-    /// the button is held.
-    pub move_inspected: bool,
+    /// What a press on the map picked up (with Inspect), carried by the
+    /// drag until the button comes up.
     grabbed: Option<Entity>,
     /// Inspector edits that didn't parse, kept so the text being typed isn't
     /// lost, with why: component name -> (draft, error).
@@ -426,7 +425,6 @@ impl Default for DevTools {
             advance_seconds: 10.0,
             inspect_tile: None,
             inspected: None,
-            move_inspected: false,
             grabbed: None,
             drafts: std::collections::HashMap::new(),
             overlays: Overlays::default(),
@@ -518,28 +516,25 @@ impl DevTools {
         self.grabbed = None;
     }
 
-    /// The tool the open panel arms whenever nothing else is: the inspector
-    /// picks whatever is clicked on the map, with no need to ask it to.
-    fn panel_tool(&self) -> Option<CursorTool> {
-        (self.visible && self.panel_open && self.tab == DevTab::Inspect).then_some(CursorTool::Inspect)
-    }
-
-    /// Whether the armed tool is the open panel's own (so dropping it means
-    /// closing the panel).
-    pub fn tool_is_panels(&self) -> bool {
-        self.tool.is_some() && self.tool == self.panel_tool()
+    /// Whether the armed tool is the default, Inspect: what a click does
+    /// when nothing else is armed, so there's nothing to drop.
+    pub fn tool_is_default(&self) -> bool {
+        self.tool == Some(CursorTool::Inspect)
     }
 
     /// Drop the armed tool once the panel it came from isn't open (closed,
     /// or another opened), so nothing is placed or painted with its panel
-    /// gone; and arm the open panel's own tool if nothing is armed.
+    /// gone; and with nothing armed while the tools are shown, clicks
+    /// inspect.
     fn sync_panel_tool(&mut self) {
         let open = (self.visible && self.panel_open).then_some(self.tab);
-        if self.tool.is_some_and(|tool| Some(tool.panel()) != open) {
+        if self.tool.is_some_and(|tool| tool.panel().is_some_and(|panel| Some(panel) != open)) {
             self.disarm();
         }
-        if self.tool.is_none() {
-            self.tool = self.panel_tool();
+        if !self.visible {
+            self.disarm();
+        } else if self.tool.is_none() {
+            self.tool = Some(CursorTool::Inspect);
         }
     }
 
@@ -561,19 +556,35 @@ impl DevTools {
     }
 
     /// The mouse went down on `at` with a tool armed: apply it once.
-    pub fn press(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager, at: (i32, i32)) {
-        self.held_at = Some(at);
-        // With Move on, pressing on the inspected entity picks it up (to be
-        // carried by `drag`) rather than picking again.
-        if self.tool == Some(CursorTool::Inspect) && self.move_inspected {
-            if let Some(e) = self.inspected {
-                if state.world.get::<&crate::components::Position>(e).is_ok_and(|p| (p.x, p.y) == at) {
-                    self.grabbed = Some(e);
-                    return;
-                }
-            }
+    /// Inspect picks the thing there (switching to its panel) and picks it
+    /// up, for a drag to carry it; on bare floor it takes nothing, and
+    /// returns false so the press can pan the view instead (a click there
+    /// is `click_floor`'s).
+    pub fn press(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager, at: (i32, i32)) -> bool {
+        if self.tool == Some(CursorTool::Inspect) {
+            let Some(e) = thing_at(state, at) else {
+                return false;
+            };
+            self.select(at, Some(e));
+            self.open_panel(DevTab::Inspect);
+            self.grabbed = Some(e);
+            self.held_at = Some(at);
+            return true;
         }
+        self.held_at = Some(at);
         self.use_tool(state, events, vfx, at);
+        true
+    }
+
+    /// A click (no drag) on bare floor that no tool took. With nothing else
+    /// open, or the inspector, it looks at the tile; with another panel
+    /// open it does nothing, so that panel stays.
+    pub fn click_floor(&mut self, at: (i32, i32)) {
+        let inspecting = !self.panel_open || self.tab == DevTab::Inspect;
+        if self.tool_is_default() && inspecting {
+            self.select(at, None);
+            self.open_panel(DevTab::Inspect);
+        }
     }
 
     /// The mouse is held at `at`: a dragging tool applies again on each new
@@ -678,19 +689,7 @@ impl DevTools {
                 self.status = Some(format!("Deleted {n}"));
             }
             CursorTool::Inspect => {
-                let player = state.player_entity;
-                let mut here: Vec<Entity> = state
-                    .world
-                    .query::<&crate::components::Position>()
-                    .iter()
-                    .filter(|(_, p)| (p.x, p.y) == at)
-                    .map(|(id, _)| id)
-                    .collect();
-                // Creatures first, the player last.
-                here.sort_by_key(|&id| {
-                    (id == player, state.world.get::<&crate::components::Actor>(id).is_err())
-                });
-                self.select(at, here.first().copied());
+                self.select(at, thing_at(state, at));
                 self.open_panel(DevTab::Inspect);
             }
             CursorTool::LookOfExplosion { fiery } => {
@@ -1045,6 +1044,20 @@ fn resync(state: &mut GameState, e: Entity) {
     state.fov_dirty = true;
 }
 
+/// What a click on `at` picks: a creature first, the player last.
+fn thing_at(state: &GameState, at: (i32, i32)) -> Option<Entity> {
+    let player = state.player_entity;
+    let mut here: Vec<Entity> = state
+        .world
+        .query::<&crate::components::Position>()
+        .iter()
+        .filter(|(_, p)| (p.x, p.y) == at)
+        .map(|(id, _)| id)
+        .collect();
+    here.sort_by_key(|&id| (id == player, state.world.get::<&crate::components::Actor>(id).is_err()));
+    here.first().copied()
+}
+
 /// Make `e` the player, in place of whoever was (they go). It drops any
 /// mind of its own, which would fight you for it, and anything it was in
 /// the middle of; from now on it acts when you do.
@@ -1203,10 +1216,12 @@ mod tests {
     }
 
     /// A free floor tile near the player.
-    /// Inspect waits for a pick before it has anything to show; with Move
-    /// on, what's picked can be dragged to another tile (never into a
-    /// wall), keeping the spatial cache in step; closing its panel lets go
-    /// of the pick, and closing it again stops inspecting.
+    /// With nothing else armed, a press on the map picks what's there and
+    /// switches to the inspector, whatever panel was open, and a drag
+    /// carries it (never into a wall), keeping the spatial cache in step. A
+    /// press on bare floor is left to pan the view; a click there looks at
+    /// the tile only if nothing else is open. Closing the inspector lets go
+    /// of the pick, then puts it away; clicks still inspect.
     #[test]
     fn the_inspector_picks_and_carries() {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
@@ -1220,16 +1235,13 @@ mod tests {
         dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
         dev.use_tool(state, &mut events, &mut vfx, (5, 5));
         dev.tool = None;
+        dev.open_panel(DevTab::Spawn);
+        assert_eq!(dev.tool, Some(CursorTool::Inspect), "nothing armed: clicks inspect");
 
-        dev.rail_clicked(DevTab::Inspect);
-        assert!(dev.panel_open && dev.inspect_tile.is_none(), "nothing picked, so nothing to show");
-        dev.press(state, &mut events, &mut vfx, (5, 5));
-        dev.release();
+        assert!(dev.press(state, &mut events, &mut vfx, (5, 5)));
         let goblin = dev.inspected.expect("picked the goblin");
+        assert!(dev.panel_open && dev.tab == DevTab::Inspect, "switched to the inspector");
         let at = |state: &GameState| state.world.get::<&Position>(goblin).map(|p| (p.x, p.y)).unwrap();
-
-        dev.move_inspected = true;
-        dev.press(state, &mut events, &mut vfx, (5, 5));
         dev.drag(state, &mut events, &mut vfx, (6, 5));
         dev.drag(state, &mut events, &mut vfx, (7, 6));
         dev.release();
@@ -1239,16 +1251,25 @@ mod tests {
         assert!(state.spatial_cache.is_blocked((7, 6)) && !state.spatial_cache.is_blocked((5, 5)));
         state.spatial_cache.assert_coherent_with_world(&state.world, "after a move");
 
-        dev.press(state, &mut events, &mut vfx, (7, 6));
+        assert!(dev.press(state, &mut events, &mut vfx, (7, 6)));
         dev.drag(state, &mut events, &mut vfx, (0, 6));
         dev.release();
         assert_eq!(at(state), (7, 6), "not into the wall");
         assert!(dev.status.as_deref().is_some_and(|s| s.starts_with("Can't move it")));
 
+        assert!(!dev.press(state, &mut events, &mut vfx, (12, 12)), "bare floor: the press pans");
+        assert_eq!(dev.inspected, Some(goblin));
+        dev.open_panel(DevTab::Spawn);
+        dev.click_floor((12, 12));
+        assert_eq!(dev.tab, DevTab::Spawn, "a floor click leaves another panel be");
         dev.close_panel();
-        assert!(dev.panel_open && dev.inspect_tile.is_none() && dev.tool == Some(CursorTool::Inspect));
+        dev.click_floor((12, 12));
+        assert!(dev.panel_open && dev.tab == DevTab::Inspect && dev.inspect_tile == Some((12, 12)));
+
         dev.close_panel();
-        assert!(!dev.panel_open && dev.tool.is_none());
+        assert!(dev.panel_open && dev.inspect_tile.is_none());
+        dev.close_panel();
+        assert!(!dev.panel_open && dev.tool == Some(CursorTool::Inspect), "clicks still inspect");
     }
 
     fn free_tile_near(state: &GameState) -> (i32, i32) {
@@ -1417,30 +1438,24 @@ mod tests {
     fn tools_last_only_while_their_panel_is_open() {
         let mut dev = DevTools::new();
         dev.visible = true;
-        dev.rail_clicked(DevTab::Inspect);
-        assert_eq!(dev.tool, Some(CursorTool::Inspect));
-        assert!(dev.tool_is_panels());
-        dev.rail_clicked(DevTab::Inspect);
-        assert!(!dev.panel_open);
-        assert_eq!(dev.tool, None, "closing the panel drops its tool");
+        dev.sync_panel_tool();
+        assert_eq!(dev.tool, Some(CursorTool::Inspect), "no panel open: clicks inspect");
+        assert!(dev.tool_is_default());
 
         dev.open_panel(DevTab::Spawn);
-        assert_eq!(dev.tool, None, "other panels arm nothing");
         dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
         dev.sync_panel_tool();
-        assert!(dev.tool.is_some(), "kept while Spawn is open");
+        assert!(!dev.tool_is_default(), "kept while Spawn is open");
         dev.rail_clicked(DevTab::Spawn);
-        assert_eq!(dev.tool, None, "closing Spawn stops the spawning");
+        assert_eq!(dev.tool, Some(CursorTool::Inspect), "closing Spawn stops the spawning");
 
         dev.rail_clicked(DevTab::World);
         dev.tool = Some(CursorTool::Teleport);
         dev.rail_clicked(DevTab::Paint);
-        assert_eq!(dev.tool, None, "opening another panel drops it too");
+        assert_eq!(dev.tool, Some(CursorTool::Inspect), "opening another panel drops it too");
 
-        dev.rail_clicked(DevTab::Effects);
-        dev.tool = Some(CursorTool::ParticleFire);
-        dev.rail_clicked(DevTab::Inspect);
-        assert_eq!(dev.tool, Some(CursorTool::Inspect), "Inspect takes over");
+        dev.toggle();
+        assert_eq!(dev.tool, None, "hidden, nothing is armed");
     }
 
     #[test]

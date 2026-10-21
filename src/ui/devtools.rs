@@ -153,7 +153,7 @@ fn tool_and_status(ui: &mut egui::Ui, dev: &mut DevTools) {
         Some(tool) => {
             ui.label(egui::RichText::new("●").color(p.accent));
             ui.label(egui::RichText::new(tool.describe()).color(p.text));
-            if !dev.tool_is_panels()
+            if !dev.tool_is_default()
                 && ui.small_button("Drop").on_hover_text("Or right-click the map, or Esc").clicked()
             {
                 dev.disarm();
@@ -728,10 +728,6 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
         ui.label(look::strong(entity_label(world, e)));
         ui.colored_label(look::pal(ui).muted, format!("#{}", e.id()));
     });
-    if world.get::<&Position>(e).is_ok() {
-        look::toggle(ui, &mut dev.move_inspected, "Move: drag it on the map")
-            .on_hover_text("Press on it and drag to carry it to another tile");
-    }
     ui.horizontal_wrapped(|ui| {
         if e != view.player {
             if ui.button("Delete").clicked() {
