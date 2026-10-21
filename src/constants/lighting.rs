@@ -17,6 +17,11 @@ pub const LIGHT_PLAYER_AMBIENT: f32 = 0.12;
 /// Extra brightness of the pool around the player, falling off as `t^2` over
 /// the sight radius (full at your feet, nothing at the edge).
 pub const LIGHT_PLAYER_FOCUSED: f32 = 0.2;
+/// Brightness everywhere when there is no player to see by (a sandbox with
+/// nobody placed): the whole world is in view and evenly lit, with no pool
+/// of light anywhere. Higher shows the scene more plainly; lower lets the
+/// world's own lights stand out more.
+pub const LIGHT_OBSERVER_AMBIENT: f32 = 0.6;
 /// Brightness of remembered tiles: explored but out of sight. Keep it below
 /// `LIGHT_PLAYER_AMBIENT`, or the remembered dungeon reads brighter than the
 /// dark at the edge of your view. It must also stay below 0.25, which is how

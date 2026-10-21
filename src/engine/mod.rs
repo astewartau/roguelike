@@ -1035,11 +1035,11 @@ impl GameEngine {
     }
 
     /// Get player position for lighting (uses visual position for smooth lighting).
-    pub fn player_visual_pos(&self) -> (f32, f32) {
+    pub fn player_visual_pos(&self) -> Option<(f32, f32)> {
         self.state.as_ref().and_then(|s| {
             s.world.get::<&crate::components::VisualPosition>(s.player_entity).ok()
                 .map(|vp| (vp.x + 0.5, vp.y + 0.5))  // Center of tile
-        }).unwrap_or((0.0, 0.0))
+        })
     }
 
     /// Get player light radius (FOV radius), breathing very slightly so the
@@ -3007,6 +3007,19 @@ mod tests {
         run_frames(&mut engine, &mut camera, 2.0);
         assert!(engine.game_time() > 1.5, "time passes with nobody there");
         assert_eq!(engine.game_mode, GameMode::Playing);
+    }
+
+    /// With nobody there to see by, the sandbox is still drawn: every tile
+    /// is lit as in view, not left at zero (which the tile shader, reading
+    /// anything under 0.25 as remembered fog, draws black).
+    #[test]
+    fn an_empty_sandbox_is_lit_not_black() {
+        let (mut engine, mut camera) = sandbox_with(&[]);
+        run_frames(&mut engine, &mut camera, 0.1);
+        assert_eq!(engine.player_visual_pos(), None, "no player's light to centre");
+        let grid = &engine.state.as_ref().unwrap().grid;
+        let darkest = grid.illumination.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(darkest >= 0.25, "every tile lit as in view, darkest was {darkest}");
     }
 
     #[test]

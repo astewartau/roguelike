@@ -1,5 +1,5 @@
 use crate::camera::Camera;
-use crate::constants::{LIGHT_AMBIENT_TINT, LIGHT_PLAYER_AMBIENT, LIGHT_PLAYER_FOCUSED};
+use crate::constants::{LIGHT_AMBIENT_TINT, LIGHT_OBSERVER_AMBIENT, LIGHT_PLAYER_AMBIENT, LIGHT_PLAYER_FOCUSED};
 use crate::constants::HOVER_TILE_BRIGHTEN;
 use crate::grid::Grid;
 use crate::multi_tileset::MultiTileset;
@@ -785,17 +785,17 @@ impl Renderer {
             tileset.bind(&self.gl, SpriteSheet::Tiles, 0);
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
-            // Set lighting uniforms
-            self.gl.uniform_2_f32(Some(&self.player_pos_loc), player_pos.0, player_pos.1);
+            // Set lighting uniforms. With no player there is no light of
+            // theirs: an even, untinted brightness and no pool anywhere.
+            let (pos, color, ambient, focused) = match player_pos {
+                Some(pos) => (pos, player_light_color, LIGHT_PLAYER_AMBIENT, LIGHT_PLAYER_FOCUSED),
+                None => ((0.0, 0.0), (1.0, 1.0, 1.0), LIGHT_OBSERVER_AMBIENT, 0.0),
+            };
+            self.gl.uniform_2_f32(Some(&self.player_pos_loc), pos.0, pos.1);
             self.gl.uniform_1_f32(Some(&self.player_light_radius_loc), player_light_radius);
-            self.gl.uniform_3_f32(
-                Some(&self.player_light_color_loc),
-                player_light_color.0,
-                player_light_color.1,
-                player_light_color.2,
-            );
-            self.gl.uniform_1_f32(Some(&self.player_ambient_loc), LIGHT_PLAYER_AMBIENT);
-            self.gl.uniform_1_f32(Some(&self.player_focused_loc), LIGHT_PLAYER_FOCUSED);
+            self.gl.uniform_3_f32(Some(&self.player_light_color_loc), color.0, color.1, color.2);
+            self.gl.uniform_1_f32(Some(&self.player_ambient_loc), ambient);
+            self.gl.uniform_1_f32(Some(&self.player_focused_loc), focused);
 
             self.gl
                 .uniform_1_f32(Some(&self.ambient_tint_loc), LIGHT_AMBIENT_TINT);

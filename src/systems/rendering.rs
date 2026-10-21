@@ -306,12 +306,9 @@ pub fn calculate_illumination(
         *illum = 0.0;
     }
 
-    // Get player position
-    let Ok(player_pos) = world.get::<&Position>(player_entity) else {
-        return;
-    };
-    let player_x = player_pos.x;
-    let player_y = player_pos.y;
+    // Where the player stands. With nobody there (a sandbox), whatever is
+    // in view is lit evenly, with no pool of light around anyone.
+    let player_pos = world.get::<&Position>(player_entity).ok().map(|p| (p.x, p.y));
     let player_light_radius = fov_radius as f32;
 
     // Collect all light sources, and what the floor lets through between them
@@ -337,13 +334,18 @@ pub fn calculate_illumination(
             }
 
             // Tile is visible - calculate illumination from player
-            let dx = (x - player_x) as f32;
-            let dy = (y - player_y) as f32;
-            let distance = (dx * dx + dy * dy).sqrt();
+            let player_contrib = match player_pos {
+                Some((player_x, player_y)) => {
+                    let dx = (x - player_x) as f32;
+                    let dy = (y - player_y) as f32;
+                    let distance = (dx * dx + dy * dy).sqrt();
 
-            // Player light: smooth quadratic falloff
-            let t = (1.0 - distance / player_light_radius).max(0.0);
-            let player_contrib = AMBIENT_BRIGHTNESS + (1.0 - AMBIENT_BRIGHTNESS) * t * t;
+                    // Player light: smooth quadratic falloff
+                    let t = (1.0 - distance / player_light_radius).max(0.0);
+                    AMBIENT_BRIGHTNESS + (1.0 - AMBIENT_BRIGHTNESS) * t * t
+                }
+                None => AMBIENT_BRIGHTNESS,
+            };
             let mut total_illumination = player_contrib;
 
             // Add what each light source gets through to this tile
