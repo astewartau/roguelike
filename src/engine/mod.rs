@@ -938,8 +938,8 @@ impl GameEngine {
     /// Does nothing if not playing.
     /// Input while the developer tools are shown: the player does nothing
     /// (anything they were walking or aiming is dropped), held WASD / arrow
-    /// keys pan the view (faster with Shift), and dragging the map still
-    /// pans it. The keys are read as held rather than consumed, so a held
+    /// keys pan the view (faster with Shift), dragging the map still pans
+    /// it, and Ctrl+C / Ctrl+V / Delete copy, paste and delete things. The keys are read as held rather than consumed, so a held
     /// key keeps panning.
     fn process_dev_view_input(&mut self, camera: &mut Camera, dt: f32) -> InputResult {
         use crate::constants::{CAMERA_KEY_PAN_FAST_MULT, CAMERA_KEY_PAN_SPEED};
@@ -969,9 +969,32 @@ impl GameEngine {
             camera.pan_by(dir.normalize() * CAMERA_KEY_PAN_SPEED * fast * dt / camera.zoom);
         }
 
+        // Editor shortcuts: Ctrl+C copies what's being inspected (and arms
+        // Paste), Ctrl+V pastes a copy under the cursor, Delete deletes it.
+        let ctrl = held([KeyCode::ControlLeft, KeyCode::ControlRight]);
+        let copy = ctrl && input.keys_pressed.remove(&KeyCode::KeyC);
+        let paste = ctrl && input.keys_pressed.remove(&KeyCode::KeyV);
+        let delete = input.keys_pressed.remove(&KeyCode::Delete);
+        let cursor = input::cursor_tile(camera, input.mouse_pos);
+
         let show_inventory = self.ui_state.as_ref().is_some_and(|ui| ui.show_inventory);
         input::process_mouse_drag(input, camera, show_inventory);
-        InputResult { toggle_fullscreen: input.keys_pressed.remove(&KeyCode::F11) }
+        let result = InputResult { toggle_fullscreen: input.keys_pressed.remove(&KeyCode::F11) };
+
+        if let Some(state) = self.state.as_mut() {
+            if copy {
+                if let Some(e) = self.dev.inspected.filter(|&e| state.world.contains(e)) {
+                    self.dev.copy_entity(&state.world, e);
+                }
+            }
+            if paste {
+                self.dev.paste_at(state, &mut self.events, cursor);
+            }
+            if delete {
+                self.dev.delete_inspected(state.player_entity);
+            }
+        }
+        result
     }
 
     pub fn process_ui_actions(&mut self, actions: &UiActions) {

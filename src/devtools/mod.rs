@@ -122,6 +122,8 @@ pub enum CursorTool {
     LookOfExplosion { fiery: bool },
     /// Fire a projectile from the player at the tile, for real.
     Shoot(Shot),
+    /// Place a copy of what's on the clipboard (`DevTools::copy_entity`).
+    Paste,
 }
 
 /// What the effects bench can fire.
@@ -200,6 +202,7 @@ impl CursorTool {
             CursorTool::Delete => "Delete".into(),
             CursorTool::Inspect => "Inspect".into(),
             CursorTool::PlacePrefab(_) => "Place prefab".into(),
+            CursorTool::Paste => "Paste copies".into(),
             CursorTool::LookOfExplosion { fiery: true } => "Explosion (look only)".into(),
             CursorTool::LookOfExplosion { fiery: false } => "Shockwave (look only)".into(),
             CursorTool::Shoot(shot) => format!("Shoot {}", shot.name()),
@@ -219,7 +222,9 @@ impl CursorTool {
             | CursorTool::Blast
             | CursorTool::Kill
             | CursorTool::Delete => DevTab::World,
-            CursorTool::Inspect => return None,
+            // Inspect is the default, and Paste comes from the inspector
+            // but places anywhere until dropped.
+            CursorTool::Inspect | CursorTool::Paste => return None,
             CursorTool::ParticleFire | CursorTool::LookOfExplosion { .. } | CursorTool::Shoot(_) => DevTab::Effects,
         })
     }
@@ -264,7 +269,6 @@ pub enum DevCommand {
     RemoveComponent { entity: Entity, name: &'static str },
     DeleteEntity(Entity),
     KillEntity(Entity),
-    TeleportPlayerTo((i32, i32)),
     /// Rattle the camera, as a hit of this strength would.
     Shake(f32),
     /// Float a damage number over the player.
@@ -350,6 +354,8 @@ pub struct DevTools {
     /// What a press on the map picked up (with Inspect), carried by the
     /// drag until the button comes up.
     grabbed: Option<Entity>,
+    /// A copied entity, as a prefab (not saved), for Paste to place.
+    pub clipboard: Option<prefab::Prefab>,
     /// Inspector edits that didn't parse, kept so the text being typed isn't
     /// lost, with why: component name -> (draft, error).
     pub drafts: std::collections::HashMap<&'static str, (serde_json::Value, String)>,
@@ -426,6 +432,7 @@ impl Default for DevTools {
             inspect_tile: None,
             inspected: None,
             grabbed: None,
+            clipboard: None,
             drafts: std::collections::HashMap::new(),
             overlays: Overlays::default(),
             explosion_radius: 2,
@@ -706,37 +713,90 @@ impl DevTools {
                     self.disarm();
                     return;
                 };
-                // A player prefab places one, and it's you.
-                if prefab.has("Player") {
-                    self.status = Some(match place_as_player(state, events, &prefab, at) {
-                        Ok((made, problems)) => {
-                            self.placed_from.insert(made, prefab.name.clone());
-                            self.requests.push(EngineRequest::PlayerArrived);
-                            match problems.first() {
-                                None => format!("You're here, as {}", prefab.name),
-                                Some(problem) => format!("You're here, as {}, but {problem}", prefab.name),
-                            }
-                        }
-                        Err(why) => format!("Can't place you there: {why}"),
-                    });
-                    return;
-                }
-                let mut ctx = state.actor_ctx(events);
-                let tiles = spawn::placement_tiles(&ctx, prefab.blocks(), at, self.spawn_options.count.max(1) as usize);
-                let mut problems = Vec::new();
-                for tile in &tiles {
-                    let (made, trouble) = prefab::instantiate(&mut ctx, &prefab, *tile);
-                    self.placed_from.insert(made, prefab.name.clone());
-                    problems.extend(trouble);
-                }
-                problems.dedup();
-                self.status = Some(match (tiles.len(), problems.first()) {
-                    (0, _) => "Can't place there: something is in the way".into(),
-                    (n, None) => format!("Placed {n} x {}", prefab.name),
-                    (n, Some(problem)) => format!("Placed {n} x {}, but {problem}", prefab.name),
-                });
-                state.fov_dirty = true;
+                let count = self.spawn_options.count.max(1) as usize;
+                self.place_prefab(state, events, &prefab, at, count, true);
             }
+            CursorTool::Paste => self.paste_at(state, events, at),
+        }
+    }
+
+    /// Place `count` of `prefab` around `at` (`remember`: note where each
+    /// came from, for the inspector's "Update from this"). A player prefab
+    /// places one, and it's you. Returns what was made.
+    fn place_prefab(
+        &mut self,
+        state: &mut GameState,
+        events: &mut EventQueue,
+        prefab: &prefab::Prefab,
+        at: (i32, i32),
+        count: usize,
+        remember: bool,
+    ) -> Vec<Entity> {
+        if prefab.has("Player") {
+            self.status = Some(match place_as_player(state, events, prefab, at) {
+                Ok((made, problems)) => {
+                    self.placed_from.insert(made, prefab.name.clone());
+                    self.requests.push(EngineRequest::PlayerArrived);
+                    match problems.first() {
+                        None => format!("You're here, as {}", prefab.name),
+                        Some(problem) => format!("You're here, as {}, but {problem}", prefab.name),
+                    }
+                }
+                Err(why) => format!("Can't place you there: {why}"),
+            });
+            return Vec::new();
+        }
+        let mut ctx = state.actor_ctx(events);
+        let tiles = spawn::placement_tiles(&ctx, prefab.blocks(), at, count);
+        let mut problems = Vec::new();
+        let mut made_all = Vec::new();
+        for tile in &tiles {
+            let (made, trouble) = prefab::instantiate(&mut ctx, prefab, *tile);
+            if remember {
+                self.placed_from.insert(made, prefab.name.clone());
+            }
+            made_all.push(made);
+            problems.extend(trouble);
+        }
+        problems.dedup();
+        self.status = Some(match (tiles.len(), problems.first()) {
+            (0, _) => "Can't place there: something is in the way".into(),
+            (n, None) => format!("Placed {n} x {}", prefab.name),
+            (n, Some(problem)) => format!("Placed {n} x {}, but {problem}", prefab.name),
+        });
+        state.fov_dirty = true;
+        made_all
+    }
+
+    /// Copy `e` to the clipboard and arm Paste, so each click on the map
+    /// places another. A copy of the player is a copy of their body, not
+    /// another you: it leaves Player behind.
+    pub fn copy_entity(&mut self, world: &World, e: Entity) {
+        let name = world.get::<&crate::components::Name>(e).map(|n| n.0.clone()).unwrap_or_else(|_| "Thing".into());
+        let mut copy = prefab::capture(world, e, &name);
+        if let Some(i) = copy.components.iter().position(|c| c.component == "Player") {
+            copy.remove_at(i);
+        }
+        self.clipboard = Some(copy);
+        self.tool = Some(CursorTool::Paste);
+        self.status = Some(format!("Copied {name}: click to place copies (Ctrl+V pastes at the cursor)"));
+    }
+
+    /// Place one copy of what's on the clipboard at `at`, and look at it.
+    pub fn paste_at(&mut self, state: &mut GameState, events: &mut EventQueue, at: (i32, i32)) {
+        let Some(copy) = self.clipboard.clone() else {
+            self.status = Some("Nothing copied yet (Ctrl+C copies what you're inspecting)".into());
+            return;
+        };
+        if let Some(&made) = self.place_prefab(state, events, &copy, at, 1, false).first() {
+            self.select(at, Some(made));
+        }
+    }
+
+    /// Delete what's being inspected (never the player).
+    pub fn delete_inspected(&mut self, player: Entity) {
+        if let Some(e) = self.inspected.filter(|&e| e != player) {
+            self.commands.push(DevCommand::DeleteEntity(e));
         }
     }
 
@@ -862,10 +922,6 @@ impl DevTools {
                         );
                     }
                 }
-                DevCommand::TeleportPlayerTo(at) => match cheats::teleport(state, at) {
-                    Ok(()) => self.requests.push(EngineRequest::ClearPath),
-                    Err(why) => self.status = Some(format!("Can't teleport there: {why}")),
-                },
             }
         }
     }
@@ -1270,6 +1326,54 @@ mod tests {
         assert!(dev.panel_open && dev.inspect_tile.is_none());
         dev.close_panel();
         assert!(!dev.panel_open && dev.tool == Some(CursorTool::Inspect), "clicks still inspect");
+    }
+
+    /// Copy and paste: copying arms Paste, each paste places a copy and
+    /// looks at it, Paste stays armed whatever panel is opened, and a copy
+    /// of the player is only their body (not another you).
+    #[test]
+    fn copies_paste_where_clicked() {
+        use crate::components::{Name, Player};
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        let mut events = EventQueue::new();
+        let mut vfx = VfxManager::new();
+        let state = engine.state.as_mut().unwrap();
+        let mut dev = DevTools::new();
+        dev.visible = true;
+        dev.open_panel(DevTab::Spawn);
+        dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
+        dev.use_tool(state, &mut events, &mut vfx, (5, 5));
+        dev.close_panel();
+        assert!(dev.press(state, &mut events, &mut vfx, (5, 5)));
+        dev.release();
+        let goblin = dev.inspected.expect("picked the goblin");
+
+        dev.copy_entity(&state.world, goblin);
+        assert_eq!(dev.tool, Some(CursorTool::Paste));
+        dev.open_panel(DevTab::Paint);
+        assert_eq!(dev.tool, Some(CursorTool::Paste), "Paste is no panel's: it stays");
+        for at in [(8, 8), (9, 8)] {
+            assert!(dev.press(state, &mut events, &mut vfx, at));
+            dev.release();
+            let copy = dev.inspected.expect("the copy is looked at");
+            assert_ne!(copy, goblin);
+            assert_eq!(state.world.get::<&Name>(copy).map(|n| n.0.clone()).unwrap(), "Goblin");
+            assert_eq!(state.world.get::<&Position>(copy).map(|p| (p.x, p.y)).unwrap(), at);
+        }
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after pasting");
+
+        let player = crate::engine::spawn_player(&mut state.world, PlayerClass::Druid, Position::new(12, 12));
+        dev.copy_entity(&state.world, player);
+        assert!(dev.clipboard.as_ref().is_some_and(|c| !c.has("Player") && c.has("ClassKit")), "a body, not you");
+
+        dev.select((9, 8), dev.inspected);
+        let pasted = dev.inspected.unwrap();
+        dev.delete_inspected(state.player_entity);
+        dev.apply_commands(state, &mut events, &mut vfx);
+        assert!(!state.world.contains(pasted), "Delete deletes what's inspected");
+        assert!(state.world.get::<&Player>(player).is_ok());
     }
 
     fn free_tile_near(state: &GameState) -> (i32, i32) {

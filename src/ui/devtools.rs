@@ -232,6 +232,9 @@ fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, 
             ui.horizontal(|ui| {
                 ui.heading(format!("{}  {}", dev.tab.icon(), dev.tab.name()))
                     .on_hover_cursor(egui::CursorIcon::Grab);
+                if dev.tab == DevTab::Inspect {
+                    inspected_tile_line(ui, dev, view);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if look::cross_button(ui).on_hover_text("Close this panel").clicked() {
                         open = false;
@@ -677,99 +680,146 @@ fn entity_label(world: &World, e: hecs::Entity) -> String {
     if parts.is_empty() { format!("#{}", e.id()) } else { parts.join(" + ") }
 }
 
+/// Beside the Inspect heading: the tile being looked at and its terrain,
+/// with whether it's in sight and how lit it is on hover.
+fn inspected_tile_line(ui: &mut egui::Ui, dev: &DevTools, view: &DevView) {
+    let Some(tile) = dev.inspect_tile else { return };
+    let Some(cell) = view.grid.get(tile.0, tile.1) else { return };
+    let light = view.grid.illumination.get(tile.1 as usize * view.grid.width + tile.0 as usize).copied().unwrap_or(0.0);
+    let detail = format!(
+        "{}{}, light {light:.2}",
+        if cell.visible { "In sight" } else { "Out of sight" },
+        if cell.explored { ", explored" } else { ", unexplored" },
+    );
+    ui.label(
+        egui::RichText::new(format!("{}, {} · {:?}", tile.0, tile.1, cell.tile_type))
+            .small()
+            .color(look::pal(ui).muted),
+    )
+    .on_hover_text(detail);
+}
+
+/// One thing on the inspected tile, as a small square of its sprite (its
+/// name on hover), filled when it's the one being looked at.
+fn thing_chip(ui: &mut egui::Ui, art: &DevArt, sprite: Option<(SpriteSheet, u32)>, label: &str, selected: bool) -> egui::Response {
+    let p = look::pal(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+    let fill = if selected {
+        p.accent
+    } else if response.hovered() {
+        p.hover
+    } else {
+        p.card
+    };
+    ui.painter().rect_filled(rect, 7.0, fill);
+    match sprite {
+        Some(sprite) => {
+            let (tex, uv) = art.icon(sprite);
+            ui.painter().image(tex, rect.shrink(3.0), uv, egui::Color32::WHITE);
+        }
+        None => {
+            let initial: String = label.chars().take(1).collect();
+            let ink = if selected { p.on_accent } else { p.text };
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initial, egui::TextStyle::Body.resolve(ui.style()), ink);
+        }
+    }
+    response.on_hover_text(label)
+}
+
 fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevArt) {
     use crate::component_registry as registry;
     let world = view.world;
+    let p = look::pal(ui);
     let Some(tile) = dev.inspect_tile else {
-        ui.colored_label(look::pal(ui).muted, "Click the map to look at what's there.");
+        ui.colored_label(p.muted, "Click the map to look at what's there.");
         return;
     };
+    let sprite_of = |e: hecs::Entity| world.get::<&crate::components::Sprite>(e).map(|s| (s.sheet, s.tile_id)).ok();
 
-    look::section(ui, &format!("Tile {}, {}", tile.0, tile.1));
-    if let Some(cell) = view.grid.get(tile.0, tile.1) {
-        let light = view
-            .grid
-            .illumination
-            .get(tile.1 as usize * view.grid.width + tile.0 as usize)
-            .copied()
-            .unwrap_or(0.0);
-        ui.label(format!(
-            "{:?}{}{}, light {:.2}",
-            cell.tile_type,
-            if cell.visible { ", in sight" } else { "" },
-            if cell.explored { ", explored" } else { ", unexplored" },
-            light
-        ));
-    }
+    // More than one thing on the tile: choose between them.
     let here: Vec<hecs::Entity> = world
         .query::<&Position>()
         .iter()
         .filter(|(_, p)| (p.x, p.y) == tile)
         .map(|(id, _)| id)
         .collect();
-    for e in &here {
-        let sprite = world.get::<&crate::components::Sprite>(*e).map(|s| (s.sheet, s.tile_id)).ok();
-        let label = entity_label(world, *e);
-        let selected = dev.inspected == Some(*e);
-        let clicked = match sprite {
-            Some(sprite) => row(ui, art, sprite, &label, selected).clicked(),
-            None => ui.selectable_label(selected, &label).clicked(),
-        };
-        if clicked {
-            dev.select(tile, Some(*e));
-        }
+    if here.len() > 1 {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for &e in &here {
+                if thing_chip(ui, art, sprite_of(e), &entity_label(world, e), dev.inspected == Some(e)).clicked() {
+                    dev.select(tile, Some(e));
+                }
+            }
+        });
     }
 
     let Some(e) = dev.inspected.filter(|e| world.contains(*e)) else {
+        if here.is_empty() {
+            ui.colored_label(p.muted, "Nothing here but the floor.");
+        }
         return;
     };
-    ui.separator();
+
+    // What it is, and what can be done to it.
+    let name = entity_label(world, e);
     ui.horizontal(|ui| {
-        ui.label(look::strong(entity_label(world, e)));
-        ui.colored_label(look::pal(ui).muted, format!("#{}", e.id()));
-    });
-    ui.horizontal_wrapped(|ui| {
-        if e != view.player {
-            if ui.button("Delete").clicked() {
+        if let Some(sprite) = sprite_of(e) {
+            let (tex, uv) = art.icon(sprite);
+            ui.add(egui::Image::new((tex, egui::vec2(26.0, 26.0))).uv(uv));
+        }
+        ui.label(look::strong(&name));
+        ui.label(egui::RichText::new(format!("#{}", e.id())).small().color(p.muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let player = e == view.player;
+            if !player && look::icon_button(ui, "🗑", "Delete it (Del)", true).clicked() {
                 dev.commands.push(DevCommand::DeleteEntity(e));
             }
-            if ui.button("Kill").clicked() {
+            let alive = world.get::<&crate::components::Health>(e).is_ok_and(|h| h.current > 0);
+            if !player && alive && look::icon_button(ui, "☠", "Kill it", true).clicked() {
                 dev.commands.push(DevCommand::KillEntity(e));
             }
-            if ui.button("Save as prefab").clicked() {
-                let name = entity_label(world, e);
+            if look::icon_button(ui, "💾", "Save as a prefab of your own", false).clicked() {
                 dev.prefabs.push(crate::devtools::prefab::capture(world, e, &name));
                 dev.selected_prefab = Some(dev.prefabs.len() - 1);
                 dev.prefabs_dirty = true;
                 dev.open_panel(DevTab::Spawn);
             }
-            // Placed from a prefab and tweaked here: write the tweaks back.
-            let origin = dev
-                .placed_from
-                .get(&e)
-                .and_then(|name| dev.prefabs.iter().position(|p| &p.name == name && !p.built_in));
-            if let Some(index) = origin {
-                let label = format!("Update “{}” from this", dev.prefabs[index].name);
-                if ui.button(label).on_hover_text("Replace the prefab's components with this one's").clicked() {
-                    let name = dev.prefabs[index].name.clone();
-                    dev.prefabs[index] = crate::devtools::prefab::capture(world, e, &name);
-                    dev.selected_prefab = Some(index);
-                    dev.prefabs_dirty = true;
-                }
+            if look::icon_button(ui, "📋", "Copy it, then click the map to place copies (Ctrl+C, Ctrl+V)", false).clicked() {
+                dev.copy_entity(world, e);
             }
-            if ui.button("Teleport me beside it").clicked() {
-                if let Some(at) = world.get::<&Position>(e).ok().map(|p| (p.x, p.y)) {
-                    dev.commands.push(DevCommand::TeleportPlayerTo((at.0 + 1, at.1)));
-                }
-            }
-        }
+        });
     });
+    // Placed from a prefab and tweaked here: write the tweaks back.
+    let origin = dev
+        .placed_from
+        .get(&e)
+        .and_then(|name| dev.prefabs.iter().position(|p| &p.name == name && !p.built_in));
+    if let Some(index) = origin {
+        let label = format!("⟳ Update “{}” from this", dev.prefabs[index].name);
+        if ui.small_button(label).on_hover_text("Replace the prefab's components with this one's").clicked() {
+            let name = dev.prefabs[index].name.clone();
+            dev.prefabs[index] = crate::devtools::prefab::capture(world, e, &name);
+            dev.selected_prefab = Some(index);
+            dev.prefabs_dirty = true;
+        }
+    }
 
     let (known, unknown) = registry::components_of(world, e);
-    ui.add_space(2.0);
-    if look::primary_button(ui, "+  Add").on_hover_text("Search components and building blocks").clicked() {
-        dev.open_palette(crate::devtools::PaletteTarget::Entity(e));
-    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("COMPONENTS")
+                .font(egui::FontId::new(11.5, egui::FontFamily::Name(look::SANS_STRONG.into())))
+                .color(p.muted),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if look::add_pill(ui, "Add").on_hover_text("Search components and building blocks").clicked() {
+                dev.open_palette(crate::devtools::PaletteTarget::Entity(e));
+            }
+        });
+    });
     // Its components, folded into groups by what they do (as the prefab
     // builder shows them), each a compact card; one open at a time.
     use super::devtools_prefab::{part_card, CardAction, PartEdit};
@@ -1145,9 +1195,13 @@ pub fn draw_cursor_ghost(
     let ppp = ctx.pixels_per_point();
     let ghost = egui::Color32::from_white_alpha(DEVTOOLS_GHOST_ALPHA);
     match tool {
-        CursorTool::PlacePrefab(index) => {
+        CursorTool::PlacePrefab(_) | CursorTool::Paste => {
             let rect = tile_rect(camera, ppp, hover.0 as f32 + 0.5, hover.1 as f32 + 0.5);
-            if let Some(sprite) = dev.prefabs.get(index).and_then(|p| p.sprite()) {
+            let prefab = match tool {
+                CursorTool::PlacePrefab(index) => dev.prefabs.get(index),
+                _ => dev.clipboard.as_ref(),
+            };
+            if let Some(sprite) = prefab.and_then(|p| p.sprite()) {
                 let (tex, uv) = art.icon(sprite);
                 painter.image(tex, rect, uv, ghost);
             }

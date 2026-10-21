@@ -156,6 +156,43 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, label: impl Into<egui::WidgetTex
     .inner
 }
 
+/// A small square button that's just an icon, saying what it does on
+/// hover. The icon lights up on hover: in the danger colour if `danger`
+/// (delete, kill), the accent otherwise.
+pub fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str, danger: bool) -> egui::Response {
+    let p = pal(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, Rounding::same(7.0), p.hover);
+    }
+    let ink = match (hovered, danger) {
+        (false, _) => p.muted,
+        (true, true) => p.danger,
+        (true, false) => p.accent,
+    };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, icon, FontId::new(15.0, FontFamily::Name(SANS.into())), ink);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip)
+}
+
+/// A small accent pill with a drawn plus and a word ("+ Add"), for adding
+/// to a list from its header.
+pub fn add_pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let p = pal(ui);
+    let font = FontId::new(12.5, FontFamily::Name(SANS_STRONG.into()));
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, p.on_accent);
+    let size = egui::vec2(galley.size().x + 30.0, 22.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let fill = if response.hovered() { p.warning } else { p.accent };
+    ui.painter().rect_filled(rect, Rounding::same(11.0), fill);
+    let c = egui::pos2(rect.left() + 13.0, rect.center().y);
+    let stroke = Stroke::new(1.8_f32, p.on_accent);
+    ui.painter().line_segment([c - egui::vec2(4.0, 0.0), c + egui::vec2(4.0, 0.0)], stroke);
+    ui.painter().line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
+    ui.painter().galley(egui::pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, p.on_accent);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// A square icon button for the tool rail: the icon alone, its name on
 /// hover. Filled with the accent while `selected` (its panel is open).
 pub fn rail_button(ui: &mut egui::Ui, icon: &str, name: &str, selected: bool) -> egui::Response {
