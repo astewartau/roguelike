@@ -740,9 +740,13 @@ impl GameEngine {
             }
         }
 
-        // Update camera tracking (center of tile, not corner)
-        if let Ok(vis_pos) = state.world.get::<&crate::components::VisualPosition>(state.player_entity) {
-            camera.set_tracking_target(glam::Vec2::new(vis_pos.x + 0.5, vis_pos.y + 0.5));
+        // Update camera tracking (center of tile, not corner). Not in the
+        // editor (the dev tools shown): the view is yours to move, and
+        // carrying the player about mustn't drag it along.
+        if !self.dev.visible {
+            if let Ok(vis_pos) = state.world.get::<&crate::components::VisualPosition>(state.player_entity) {
+                camera.set_tracking_target(glam::Vec2::new(vis_pos.x + 0.5, vis_pos.y + 0.5));
+            }
         }
 
         // Hand over the shakes this frame's events asked for. The camera
@@ -944,6 +948,20 @@ impl GameEngine {
 
     /// Process UI actions from the UI layer.
     /// Does nothing if not playing.
+    /// egui is busy with the pointer (moving or resizing a panel): the press
+    /// that began it wasn't the map's, so drop any pan or tool drag it
+    /// started. (A panel's resize handle reaches just outside the panel,
+    /// where egui doesn't claim the press, so the map saw it too.)
+    pub fn pointer_taken_by_ui(&mut self, camera: &mut Camera) {
+        if self.input.mouse_down {
+            self.input.mouse_down = false;
+            camera.cancel_pan();
+        }
+        if self.dev.is_held() {
+            self.dev.release_without_click();
+        }
+    }
+
     /// Input while the developer tools are shown: the player does nothing
     /// (anything they were walking or aiming is dropped), held WASD / arrow
     /// keys pan the view (faster with Shift), dragging the map still pans
@@ -3116,6 +3134,40 @@ mod tests {
         engine.dev.no_fog = true;
         run_frames(&mut engine, &mut camera, 0.2);
         assert_eq!(count(&engine), (all, all, all), "See everything, while playing");
+    }
+
+    /// In the editor the view stays where you put it: carrying the player
+    /// about doesn't drag the camera after them. In play it follows again.
+    /// And a press the UI turns out to own (a panel's edge, grabbed to
+    /// resize it) stops being a pan of the map.
+    #[test]
+    fn the_editor_camera_stays_put() {
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        let fighter = engine.dev.prefabs.iter().position(|p| p.name == "Fighter (Player)").unwrap();
+        engine.dev.open_panel(crate::devtools::DevTab::Spawn);
+        engine.dev.tool = Some(crate::devtools::CursorTool::PlacePrefab(fighter));
+        {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (10, 10));
+        }
+        run_frames(&mut engine, &mut camera, 1.0);
+        let view = camera.position;
+        {
+            let state = engine.state.as_mut().unwrap();
+            crate::devtools::cheats::teleport(state, (25, 20)).unwrap();
+        }
+        run_frames(&mut engine, &mut camera, 1.0);
+        assert!((camera.position - view).length() < 0.1, "the editor's view stays put: {view} -> {}", camera.position);
+
+        engine.dev.toggle();
+        run_frames(&mut engine, &mut camera, 1.0);
+        assert!((camera.position - glam::Vec2::new(25.5, 20.5)).length() < 1.0, "in play it follows");
+
+        engine.input.mouse_down = true;
+        engine.pointer_taken_by_ui(&mut camera);
+        assert!(!engine.input.mouse_down, "the press was the UI's, not a pan");
     }
 
     /// The editor is lit evenly, player or no player: showing the tools

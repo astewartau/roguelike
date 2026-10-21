@@ -100,6 +100,13 @@ impl Camera {
         self.position += delta;
     }
 
+    /// Drop a pan that turned out not to be one (the press was the UI's),
+    /// without the fling a release gives.
+    pub fn cancel_pan(&mut self) {
+        self.drag_anchor = None;
+        self.velocity = Vec2::ZERO;
+    }
+
     pub fn release_pan(&mut self) {
         // Apply momentum scaling when mouse is released
         self.velocity *= CAMERA_MOMENTUM_SCALE;

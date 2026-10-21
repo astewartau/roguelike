@@ -353,8 +353,10 @@ pub struct DevTools {
     pub inspect_tile: Option<(i32, i32)>,
     pub inspected: Option<Entity>,
     /// What a press on the map picked up (with Inspect), carried by the
-    /// drag until the button comes up.
+    /// drag until the button comes up; and whether it was dragged off its
+    /// tile (if not, letting go is a click, and picks it).
     grabbed: Option<Entity>,
+    grab_moved: bool,
     /// A copied entity, as a prefab (not saved), for Paste to place.
     pub clipboard: Option<prefab::Prefab>,
     /// Inspector edits that didn't parse, kept so the text being typed isn't
@@ -433,6 +435,7 @@ impl Default for DevTools {
             inspect_tile: None,
             inspected: None,
             grabbed: None,
+            grab_moved: false,
             clipboard: None,
             drafts: std::collections::HashMap::new(),
             overlays: Overlays::default(),
@@ -568,18 +571,22 @@ impl DevTools {
     }
 
     /// The mouse went down on `at` with a tool armed: apply it once.
-    /// Inspect picks the thing there (switching to its panel) and picks it
-    /// up, for a drag to carry it; on bare floor it takes nothing, and
-    /// returns false so the press can pan the view instead (a click there
-    /// is `click_floor`'s).
+    /// Inspect picks up the thing there, for a drag to carry it; letting go
+    /// without dragging it is a click, which looks at it in the inspector
+    /// (`release`). With the inspector already showing, it looks at it at
+    /// once, and follows it as it's carried. On bare floor it takes
+    /// nothing, and returns false so the press can pan the view instead (a
+    /// click there is `click_floor`'s).
     pub fn press(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager, at: (i32, i32)) -> bool {
         if self.tool == Some(CursorTool::Inspect) {
             let Some(e) = thing_at(state, at) else {
                 return false;
             };
-            self.select(at, Some(e));
-            self.open_panel(DevTab::Inspect);
+            if self.panel_open && self.tab == DevTab::Inspect {
+                self.select(at, Some(e));
+            }
             self.grabbed = Some(e);
+            self.grab_moved = false;
             self.held_at = Some(at);
             return true;
         }
@@ -604,6 +611,7 @@ impl DevTools {
     pub fn drag(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager, at: (i32, i32)) {
         if let Some(e) = self.grabbed {
             if self.held_at != Some(at) {
+                self.grab_moved = true;
                 self.carry(state, e, at);
             }
             return;
@@ -617,9 +625,22 @@ impl DevTools {
         }
     }
 
+    /// The button came up. A thing picked up and not dragged anywhere was
+    /// clicked: look at it in the inspector.
     pub fn release(&mut self) {
+        if let (Some(e), Some(at), false) = (self.grabbed, self.held_at, self.grab_moved) {
+            self.select(at, Some(e));
+            self.open_panel(DevTab::Inspect);
+        }
+        self.release_without_click();
+    }
+
+    /// Let go of whatever was held, as if nothing had been pressed (the UI
+    /// took the press after all).
+    pub fn release_without_click(&mut self) {
         self.held_at = None;
         self.grabbed = None;
+        self.grab_moved = false;
     }
 
     /// Carry the grabbed entity to `at`, if it can stand there; the
@@ -628,7 +649,9 @@ impl DevTools {
         match cheats::move_entity(state, e, at) {
             Ok(()) => {
                 self.held_at = Some(at);
-                self.inspect_tile = Some(at);
+                if self.inspected == Some(e) {
+                    self.inspect_tile = Some(at);
+                }
                 if e == state.player_entity {
                     self.requests.push(EngineRequest::ClearPath);
                 }
@@ -1277,12 +1300,14 @@ mod tests {
     }
 
     /// A free floor tile near the player.
-    /// With nothing else armed, a press on the map picks what's there and
-    /// switches to the inspector, whatever panel was open, and a drag
-    /// carries it (never into a wall), keeping the spatial cache in step. A
-    /// press on bare floor is left to pan the view; a click there looks at
-    /// the tile only if nothing else is open. Closing the inspector lets go
-    /// of the pick, then puts it away; clicks still inspect.
+    /// With nothing else armed, a press on a thing picks it up. Dragged,
+    /// it's carried (never into a wall), keeping the spatial cache in step,
+    /// and no panel opens; let go without dragging, it's a click, which
+    /// looks at it in the inspector, whatever panel was open. With the
+    /// inspector open, it follows what's carried. A press on bare floor is
+    /// left to pan the view; a click there looks at the tile only if
+    /// nothing else is open. Closing the inspector lets go of the pick,
+    /// then puts it away; clicks still inspect.
     #[test]
     fn the_inspector_picks_and_carries() {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
@@ -1298,12 +1323,24 @@ mod tests {
         dev.tool = None;
         dev.open_panel(DevTab::Spawn);
         assert_eq!(dev.tool, Some(CursorTool::Inspect), "nothing armed: clicks inspect");
-
-        assert!(dev.press(state, &mut events, &mut vfx, (5, 5)));
-        let goblin = dev.inspected.expect("picked the goblin");
-        assert!(dev.panel_open && dev.tab == DevTab::Inspect, "switched to the inspector");
+        let goblin = thing_at(state, (5, 5)).expect("a goblin");
         let at = |state: &GameState| state.world.get::<&Position>(goblin).map(|p| (p.x, p.y)).unwrap();
+
+        // Dragged with Spawn open: carried, and Spawn stays.
+        assert!(dev.press(state, &mut events, &mut vfx, (5, 5)));
         dev.drag(state, &mut events, &mut vfx, (6, 5));
+        dev.release();
+        assert_eq!(at(state), (6, 5));
+        assert_eq!(dev.tab, DevTab::Spawn, "a drag opens nothing");
+
+        // Clicked: looked at, in the inspector.
+        assert!(dev.press(state, &mut events, &mut vfx, (6, 5)));
+        assert_eq!(dev.tab, DevTab::Spawn, "not until the button comes up");
+        dev.release();
+        assert!(dev.panel_open && dev.tab == DevTab::Inspect && dev.inspected == Some(goblin));
+
+        // Carried with the inspector open: it follows.
+        assert!(dev.press(state, &mut events, &mut vfx, (6, 5)));
         dev.drag(state, &mut events, &mut vfx, (7, 6));
         dev.release();
         assert_eq!(at(state), (7, 6));

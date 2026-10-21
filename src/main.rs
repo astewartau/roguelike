@@ -213,6 +213,12 @@ impl AppState {
             )
         };
 
+        // A panel being moved or resized has the pointer, whatever the map
+        // made of the press that began it.
+        if self.egui_glow.egui_ctx.is_using_pointer() {
+            self.engine.pointer_taken_by_ui(&mut self.render_ctx.camera);
+        }
+
         // Process UI actions
         self.engine.process_ui_actions(&ui_actions);
 
