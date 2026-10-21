@@ -31,3 +31,9 @@ rodio = "0.19"
 # instrumentation overhead and open no local port; enable deliberately with
 # `cargo run --release --features profiling`. See src/profiling.rs.
 profiling = ["puffin", "puffin_http"]
+
+[dev-dependencies]
+# Sampling profiler for the benchmarks only (no perf or root needed): with
+# BENCH_FLAMEGRAPH=<path.svg>, `bench_frame_costs` writes a flamegraph of its
+# simulation steps there. Never part of the game binary.
+pprof = { version = "0.15", features = ["flamegraph"] }

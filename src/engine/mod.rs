@@ -2507,6 +2507,79 @@ mod tests {
     use super::*;
 
     /// Start a real run so the rest/sleep paths have live state and ui_state.
+    /// A flamegraph of the simulation: the player walks `PROFILE_MOVES`
+    /// steps (default 1500) on each of three generated floors under a
+    /// sampling profiler, and the graph is written to `BENCH_FLAMEGRAPH`
+    /// (default `target/profile-moves.svg`). Set `BENCH_AWAKE` to have every
+    /// hostile on the floor already hunting the player. Not a regression
+    /// test; run it by hand in release, with line tables for readable frames:
+    ///
+    ///     CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
+    ///         cargo test --release profile_moves -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn profile_moves() {
+        use crate::systems::player_input::PlayerIntent;
+        let moves: usize = std::env::var("PROFILE_MOVES").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
+        let out = std::env::var("BENCH_FLAMEGRAPH").unwrap_or_else(|_| "target/profile-moves.svg".into());
+
+        let mut engine = engine_with_run();
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let guard = pprof::ProfilerGuardBuilder::default()
+            .frequency(2000)
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+            .build()
+            .expect("profiler starts");
+        let start = std::time::Instant::now();
+        for floor in 0..3 {
+            if floor > 0 {
+                engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+            }
+            let st = engine.state.as_mut().expect("run");
+            let player = st.player_entity;
+            if let Ok(mut h) = st.world.get::<&mut Health>(player) {
+                h.max = 1_000_000;
+                h.current = 1_000_000;
+            }
+            if std::env::var("BENCH_AWAKE").is_ok() {
+                let ppos = st.world.get::<&crate::components::Position>(player).map(|p| (p.x, p.y)).unwrap_or((0, 0));
+                let hostiles: Vec<Entity> =
+                    st.world.query::<&crate::components::ChaseAI>().iter().map(|(id, _)| id).collect();
+                for id in hostiles {
+                    let _ = st.world.remove_one::<crate::components::Asleep>(id);
+                    if let Ok(mut ai) = st.world.get::<&mut crate::components::ChaseAI>(id) {
+                        ai.state = crate::components::AIState::Chasing;
+                        ai.add_threat(player, crate::constants::WAKE_THREAT);
+                        ai.update_target_pos(player, ppos);
+                    }
+                }
+            }
+            // Wander: keep going one way until blocked, then turn.
+            let mut dir = (1, 0);
+            for i in 0..moves {
+                let st = engine.state.as_ref().expect("run");
+                let (px, py) = st.world.get::<&crate::components::Position>(st.player_entity).map(|p| (p.x, p.y)).unwrap_or((0, 0));
+                let open = |d: (i32, i32)| st.grid.is_walkable(px + d.0, py + d.1) && !st.spatial_cache.is_blocked((px + d.0, py + d.1));
+                if !open(dir) || i % 17 == 0 {
+                    let turns = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+                    dir = (0..4).map(|k| turns[(i + k) % 4]).find(|&d| open(d)).unwrap_or(dir);
+                }
+                let Some(mut ctx) = engine.sim_ctx() else { break };
+                let _ = execute_player_intent(&mut ctx, PlayerIntent::Move { dx: dir.0, dy: dir.1 });
+            }
+        }
+        let elapsed = start.elapsed();
+        if let Some(st) = engine.state.as_ref() {
+            let archetypes = st.world.archetypes().count();
+            let empty = st.world.archetypes().filter(|a| a.is_empty()).count();
+            println!("{} entities in {archetypes} archetypes ({empty} of them empty)", st.world.iter().count());
+        }
+        let report = guard.report().build().expect("profile report");
+        let file = std::fs::File::create(&out).expect("flamegraph file");
+        report.flamegraph(file).expect("flamegraph written");
+        println!("{} moves in {:.0} ms; flamegraph at {out}", moves * 3, elapsed.as_secs_f64() * 1000.0);
+    }
+
     /// Where the time goes between moves. Not a regression test: run it by
     /// hand in release to see per-call costs on real generated floors.
     ///
