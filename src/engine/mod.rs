@@ -4119,7 +4119,8 @@ mod tests {
             ));
             state.spatial_cache.rebuild_in_place(&state.world);
             state.world.get::<&mut Door>(door).expect("door").is_open = true;
-            let _ = state.world.remove::<(crate::components::BlocksMovement, crate::components::BlocksVision)>(door);
+            let _ = state.world.remove_one::<crate::components::BlocksMovement>(door);
+            let _ = state.world.remove_one::<crate::components::BlocksVision>(door);
             state.spatial_cache.clear_blocking_flags(door);
             door
         };

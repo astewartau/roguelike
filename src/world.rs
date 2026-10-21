@@ -13,7 +13,7 @@
 
 use std::ops::Deref;
 
-use hecs::{Bundle, Component, ComponentError, DynamicBundle, Entity, NoSuchEntity, Query, QueryMut, QueryOneError};
+use hecs::{Component, ComponentError, DynamicBundle, Entity, NoSuchEntity, Query, QueryMut};
 
 /// The game's world. See the module docs.
 #[derive(Default)]
@@ -49,13 +49,9 @@ impl World {
         self.inner.insert_one(entity, component)
     }
 
-    /// Take `T` (a bundle of components) off `entity`. Fails, removing
-    /// nothing, if any of them is missing.
-    pub fn remove<T: Bundle + 'static>(&mut self, entity: Entity) -> Result<T, ComponentError> {
-        self.inner.remove::<T>(entity)
-    }
-
-    /// Take one component off `entity`.
+    /// Take one component off `entity`. (There's deliberately no bundle
+    /// `remove`: hecs's removes nothing at all if any one of the bundle is
+    /// missing, which has caused bugs here before. Remove one at a time.)
     pub fn remove_one<T: Component>(&mut self, entity: Entity) -> Result<T, ComponentError> {
         self.inner.remove_one::<T>(entity)
     }
@@ -65,19 +61,9 @@ impl World {
         self.inner.despawn(entity)
     }
 
-    /// Delete every entity.
-    pub fn clear(&mut self) {
-        self.inner.clear()
-    }
-
     /// Iterate a query with unique access: changes component *values*, not
     /// which components entities have, so it needs no hooks.
     pub fn query_mut<Q: Query>(&mut self) -> QueryMut<'_, Q> {
         self.inner.query_mut::<Q>()
-    }
-
-    /// One entity's query result with unique access (values only, as above).
-    pub fn query_one_mut<Q: Query>(&mut self, entity: Entity) -> Result<Q::Item<'_>, QueryOneError> {
-        self.inner.query_one_mut::<Q>(entity)
     }
 }
