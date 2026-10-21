@@ -110,6 +110,14 @@ impl Camera {
         }
     }
 
+    /// Move the view by `delta` world tiles, by hand: it stops following its
+    /// target until the target next moves (as a drag does).
+    pub fn pan_by(&mut self, delta: Vec2) {
+        self.manual_control = true;
+        self.velocity = Vec2::ZERO;
+        self.position += delta;
+    }
+
     pub fn release_pan(&mut self) {
         // Apply momentum scaling when mouse is released
         self.velocity *= CAMERA_MOMENTUM_SCALE;

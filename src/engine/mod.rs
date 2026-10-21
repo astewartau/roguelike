@@ -500,7 +500,9 @@ impl GameEngine {
                             && (dx.abs() > crate::constants::CLICK_DRAG_THRESHOLD
                                 || dy.abs() > crate::constants::CLICK_DRAG_THRESHOLD);
 
-                        if !was_drag && self.is_playing() {
+                        // With the developer tools shown a click is for them,
+                        // never a step for the player.
+                        if !was_drag && self.is_playing() && !self.dev.visible {
                             if self.input.is_targeting() {
                                 self.input.pending_left_click = true;
                             } else if let Some(ref state) = self.state {
@@ -526,6 +528,9 @@ impl GameEngine {
                             self.input.cancel_targeting();
                         } else if self.dev.has_active_tool() && !self.dev.tool_is_panels() {
                             self.dev.disarm();
+                        } else if self.dev.visible {
+                            // No tile menu or bow shot for the player while
+                            // the developer tools are shown.
                         } else if shift {
                             if self.game_mode == GameMode::Playing {
                                 self.open_tile_menu(camera);
@@ -613,7 +618,7 @@ impl GameEngine {
         // frozen behind the menu.
         let input_result = if self.game_mode == GameMode::Playing {
             profile_scope!("process_input");
-            self.process_input(camera)
+            self.process_input(camera, dt)
         } else {
             InputResult::default()
         };
@@ -927,6 +932,44 @@ impl GameEngine {
 
     /// Process UI actions from the UI layer.
     /// Does nothing if not playing.
+    /// Input while the developer tools are shown: the player does nothing
+    /// (anything they were walking or aiming is dropped), held WASD / arrow
+    /// keys pan the view (faster with Shift), and dragging the map still
+    /// pans it. The keys are read as held rather than consumed, so a held
+    /// key keeps panning.
+    fn process_dev_view_input(&mut self, camera: &mut Camera, dt: f32) -> InputResult {
+        use crate::constants::{CAMERA_KEY_PAN_FAST_MULT, CAMERA_KEY_PAN_SPEED};
+        let input = &mut self.input;
+        input.clear_path();
+        input.cancel_targeting();
+        input.pending_left_click = false;
+        input.pending_right_click = false;
+        input.pending_intent = None;
+
+        let held = |keys: [KeyCode; 2]| keys.iter().any(|k| input.keys_pressed.contains(k));
+        let mut dir = glam::Vec2::ZERO;
+        if held([KeyCode::KeyW, KeyCode::ArrowUp]) {
+            dir.y += 1.0;
+        }
+        if held([KeyCode::KeyS, KeyCode::ArrowDown]) {
+            dir.y -= 1.0;
+        }
+        if held([KeyCode::KeyA, KeyCode::ArrowLeft]) {
+            dir.x -= 1.0;
+        }
+        if held([KeyCode::KeyD, KeyCode::ArrowRight]) {
+            dir.x += 1.0;
+        }
+        if dir != glam::Vec2::ZERO {
+            let fast = if held([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { CAMERA_KEY_PAN_FAST_MULT } else { 1.0 };
+            camera.pan_by(dir.normalize() * CAMERA_KEY_PAN_SPEED * fast * dt / camera.zoom);
+        }
+
+        let show_inventory = self.ui_state.as_ref().is_some_and(|ui| ui.show_inventory);
+        input::process_mouse_drag(input, camera, show_inventory);
+        InputResult { toggle_fullscreen: input.keys_pressed.remove(&KeyCode::F11) }
+    }
+
     pub fn process_ui_actions(&mut self, actions: &UiActions) {
         let ui_result = {
             let Some(mut ctx) = self.sim_ctx() else { return };
@@ -939,14 +982,16 @@ impl GameEngine {
             self.handle_dev_request(request);
         }
 
-        // Handle ability activation from a hotbar slot
-        if let Some(ability_type) = actions.ability_to_use {
-            self.try_use_ability(ability_type);
-        }
-
-        // An entry picked from the right-click tile menu
-        if let Some((tile, ref command)) = actions.tile_choice {
-            self.run_tile_command(tile, command);
+        // Handle ability activation from a hotbar slot, and an entry picked
+        // from the right-click tile menu: not while the developer tools are
+        // shown, when the player takes no actions.
+        if !self.dev.visible {
+            if let Some(ability_type) = actions.ability_to_use {
+                self.try_use_ability(ability_type);
+            }
+            if let Some((tile, ref command)) = actions.tile_choice {
+                self.run_tile_command(tile, command);
+            }
         }
 
         let ui_state = self.ui_state.as_mut().expect("UI state should exist");
@@ -1304,7 +1349,12 @@ impl GameEngine {
     }
 
     /// Process input. Only called when playing (state must exist).
-    fn process_input(&mut self, camera: &mut Camera) -> InputResult {
+    fn process_input(&mut self, camera: &mut Camera, dt: f32) -> InputResult {
+        // While the developer tools are shown, the keyboard and the map drive
+        // the view and the tools, not the player.
+        if self.dev.visible {
+            return self.process_dev_view_input(camera, dt);
+        }
         let state = self.state.as_mut().expect("process_input called without state");
         let ui_state = self.ui_state.as_mut().expect("process_input called without ui_state");
 
@@ -2993,6 +3043,46 @@ mod tests {
         }
         engine.dev.tool = None;
         (engine, camera)
+    }
+
+    /// With the developer tools shown, WASD pans the view and never moves
+    /// the player; hidden, the same key is a step.
+    #[test]
+    fn with_the_dev_tools_shown_wasd_moves_the_view_not_the_player() {
+        use winit::keyboard::KeyCode;
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_game(PlayerClass::Fighter, 77, &mut camera);
+        let player_at = |engine: &GameEngine| {
+            let state = engine.state.as_ref().unwrap();
+            state.world.get::<&crate::components::Position>(state.player_entity).map(|p| (p.x, p.y)).unwrap()
+        };
+        run_frames(&mut engine, &mut camera, 0.5);
+        let start = player_at(&engine);
+
+        engine.dev.visible = true;
+        let view = camera.position;
+        engine.input.keys_pressed.insert(KeyCode::KeyW);
+        run_frames(&mut engine, &mut camera, 0.5);
+        assert_eq!(player_at(&engine), start, "the player stays put");
+        assert!(camera.position.y > view.y + 1.0, "the view pans up: {view} -> {}", camera.position);
+        assert!(engine.input.keys_pressed.contains(&KeyCode::KeyW), "a held key keeps panning");
+
+        engine.input.keys_pressed.clear();
+        engine.dev.visible = false;
+        let open = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            .into_iter()
+            .zip([KeyCode::KeyW, KeyCode::KeyS, KeyCode::KeyD, KeyCode::KeyA])
+            .find(|&((dx, dy), _)| {
+                let state = engine.state.as_ref().unwrap();
+                let to = (start.0 + dx, start.1 + dy);
+                state.grid.is_walkable(to.0, to.1) && !state.spatial_cache.is_blocked(to)
+            })
+            .map(|(_, key)| key)
+            .expect("somewhere to step");
+        engine.input.keys_pressed.insert(open);
+        run_frames(&mut engine, &mut camera, 1.0);
+        assert_ne!(player_at(&engine), start, "hidden again, the key is a step");
     }
 
     /// Run the engine `seconds` of real time at 60 frames a second.

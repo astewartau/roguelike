@@ -19,3 +19,10 @@ pub const CAMERA_VELOCITY_THRESHOLD: f32 = 0.001;
 pub const CAMERA_ZOOM_SNAP_THRESHOLD: f32 = 0.01;
 /// Momentum multiplier when releasing pan
 pub const CAMERA_MOMENTUM_SCALE: f32 = 2.0;
+
+/// How fast WASD / the arrow keys pan the view while the developer tools
+/// are shown, in screen pixels per real second (so it feels the same at any
+/// zoom).
+pub const CAMERA_KEY_PAN_SPEED: f32 = 900.0;
+/// How many times faster that is with Shift held.
+pub const CAMERA_KEY_PAN_FAST_MULT: f32 = 3.0;
