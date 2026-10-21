@@ -136,7 +136,7 @@ mod tests {
         use rand::SeedableRng;
         let mut world = World::new();
         let grid = two_rooms();
-        let player = world.spawn((Position::new(0, 0), crate::components::Player));
+        let player = world.spawn((Position::new(0, 0), crate::components::Player, crate::components::Actor::new(1.0)));
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
         let guard = crate::spawning::enemies::GOBLIN.spawn(&mut world, 9, 2, &mut rng);
         world.get::<&mut ChaseAI>(guard).unwrap().state = AIState::Idle;

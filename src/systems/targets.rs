@@ -58,25 +58,36 @@ pub fn disposition_of(world: &World, e: Entity) -> Disposition {
 
 /// The living creatures that are enemies of `e`, with where they stand.
 pub fn enemies_of(world: &World, e: Entity) -> Vec<(Entity, (i32, i32))> {
+    enemies_near(world, e, (0, 0), i32::MAX)
+}
+
+/// The same, only those within `radius` (Chebyshev) of `center`: an AI
+/// asks this on every turn, and has no use for enemies beyond its sight.
+pub fn enemies_near(world: &World, e: Entity, center: (i32, i32), radius: i32) -> Vec<(Entity, (i32, i32))> {
+    use crate::components::Position;
     let Some(mine) = faction_of(world, e) else {
         return Vec::new();
     };
-    use crate::components::Position;
-    // Only what can take a side: asking every placed thing (water ripples,
-    // loose items) on each AI turn would be wasted work.
-    let mut sided: Vec<Entity> = Vec::new();
-    sided.extend(world.query::<&Faction>().with::<&Position>().iter().map(|(id, _)| id));
-    sided.extend(world.query::<&Player>().with::<&Position>().iter().map(|(id, _)| id));
-    sided.extend(world.query::<&Follower>().with::<&Position>().iter().map(|(id, _)| id));
-    sided.extend(world.query::<&ChaseAI>().with::<&Position>().iter().map(|(id, _)| id));
-    // A stable order, whatever order the world keeps them in: the AI draws
-    // from the run's rng while going through them.
-    sided.sort_unstable();
-    sided.dedup();
-    sided
+    // Only what takes turns can be an enemy. An AI asks this every turn,
+    // and a plain query's cost is mostly matching it against every archetype
+    // in the world (dozens, most of them long empty), so the matching is
+    // prepared once and kept: hecs redoes it only when the world gains an
+    // archetype. Sides are looked up only for the few in range.
+    thread_local! {
+        static ACTORS: std::cell::RefCell<hecs::PreparedQuery<(&'static Position, &'static Actor)>> =
+            std::cell::RefCell::new(hecs::PreparedQuery::new());
+    }
+    let in_range: Vec<(Entity, (i32, i32))> = ACTORS.with(|q| {
+        q.borrow_mut()
+            .query(world)
+            .iter()
+            .filter(|&(id, (p, _))| id != e && (p.x - center.0).abs().max((p.y - center.1).abs()) <= radius)
+            .map(|(id, (p, _))| (id, (p.x, p.y)))
+            .collect()
+    });
+    in_range
         .into_iter()
-        .filter(|&id| id != e && alive(world, id) && faction_of(world, id).is_some_and(|theirs| theirs != mine))
-        .filter_map(|id| world.get::<&Position>(id).ok().map(|p| (id, (p.x, p.y))))
+        .filter(|&(id, _)| alive(world, id) && faction_of(world, id).is_some_and(|theirs| theirs != mine))
         .collect()
 }
 

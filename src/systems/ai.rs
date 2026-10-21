@@ -172,9 +172,9 @@ pub(crate) fn likely_culprit(world: &World, entity: Entity, near: (i32, i32)) ->
 fn unaware_ally_near(world: &World, center: (i32, i32), radius: i32, exclude: Entity) -> bool {
     world.query::<(&Position, &ChaseAI)>().iter().any(|(id, (pos, ai))| {
         id != exclude
-            && crate::systems::targets::same_side(world, exclude, id)
             && ai.state == AIState::Unaware
             && (pos.x - center.0).abs().max((pos.y - center.1).abs()) <= radius
+            && crate::systems::targets::same_side(world, exclude, id)
     })
 }
 
@@ -430,7 +430,7 @@ fn determine_action(
     // Everyone on another side, and how this one meets them. A defensive
     // creature notices nobody of its own accord: only being hurt puts an
     // enemy in its threat table.
-    let potential_targets = crate::systems::targets::enemies_of(world, entity);
+    let potential_targets = crate::systems::targets::enemies_near(world, entity, entity_pos, sight_radius);
     let disposition = crate::systems::targets::disposition_of(world, entity);
     let notices_enemies = disposition != Disposition::Defensive;
 
@@ -1071,9 +1071,9 @@ fn try_support_cast(
         .filter(|&(id, (pos, _, health))| {
             id != entity
                 && health.current > 0
-                && crate::systems::targets::same_side(world, entity, id)
                 && (pos.x - entity_pos.0).abs().max((pos.y - entity_pos.1).abs())
                     <= SHAMAN_SUPPORT_RANGE
+                && crate::systems::targets::same_side(world, entity, id)
                 && has_line_of_sight(grid, spatial_cache, entity_pos.0, entity_pos.1, pos.x, pos.y)
         })
         .map(|(id, (pos, _, health))| (id, (pos.x, pos.y), health.current, health.max))
@@ -1837,6 +1837,7 @@ mod tests {
             crate::components::Player,
             Stats::new(10, 10, 10),
             crate::components::LightExposure(exposure),
+            Actor::new(1.0),
         ));
         let mut rng = rand::rngs::StdRng::seed_from_u64(4);
         let enemy = def.spawn(&mut world, 8, 2, &mut rng);
