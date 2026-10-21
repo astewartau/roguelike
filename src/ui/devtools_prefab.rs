@@ -43,7 +43,11 @@ pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     changed |= needs(ui, &mut dev.prefabs[i]);
 
     ui.add_space(4.0);
-    let label = if dev.picker_open { "Done adding" } else { "+  Add to it" };
+    let label = if dev.picker_open {
+        "Done adding"
+    } else {
+        "+  Add to it"
+    };
     if look::primary_button(ui, label).clicked() {
         dev.picker_open = !dev.picker_open;
     }
@@ -68,18 +72,20 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
             dev.selected_prefab = Some(dev.prefabs.len() - 1);
             dev.prefabs_dirty = true;
         }
-        egui::ComboBox::from_id_salt("prefab_template").selected_text("From a template").show_ui(ui, |ui| {
-            look::apply(ui);
-            for what in spawn::all_spawnables() {
-                if ui.selectable_label(false, what.name()).clicked() {
-                    if let Some(template) = prefab::template(what) {
-                        dev.prefabs.push(template);
-                        dev.selected_prefab = Some(dev.prefabs.len() - 1);
-                        dev.prefabs_dirty = true;
+        egui::ComboBox::from_id_salt("prefab_template")
+            .selected_text("From a template")
+            .show_ui(ui, |ui| {
+                look::apply(ui);
+                for what in spawn::all_spawnables() {
+                    if ui.selectable_label(false, what.name()).clicked() {
+                        if let Some(template) = prefab::template(what) {
+                            dev.prefabs.push(template);
+                            dev.selected_prefab = Some(dev.prefabs.len() - 1);
+                            dev.prefabs_dirty = true;
+                        }
                     }
                 }
-            }
-        });
+            });
     });
     ui.colored_label(
         look::pal(ui).muted,
@@ -93,7 +99,11 @@ fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         ui.horizontal(|ui| {
             let armed = dev.tool == Some(CursorTool::PlacePrefab(i));
             if ui.selectable_label(armed, "Place").clicked() {
-                dev.tool = if armed { None } else { Some(CursorTool::PlacePrefab(i)) };
+                dev.tool = if armed {
+                    None
+                } else {
+                    Some(CursorTool::PlacePrefab(i))
+                };
             }
             if ui.small_button("Copy").clicked() {
                 duplicate = Some(i);
@@ -138,7 +148,8 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 2.0, egui::Color32::BLACK);
                 match prefab.sprite() {
                     Some(sprite) => {
@@ -156,23 +167,36 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                     }
                 }
                 ui.vertical(|ui| {
-                    let name = prefab.value("Name").and_then(|v| v.as_str()).unwrap_or(&prefab.name);
+                    let name = prefab
+                        .value("Name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&prefab.name);
                     ui.label(look::strong(name));
                     ui.horizontal(|ui| {
-                        if let Some(hp) = prefab.value("Health").and_then(|h| h.get("max")).and_then(|v| v.as_i64()) {
+                        if let Some(hp) = prefab
+                            .value("Health")
+                            .and_then(|h| h.get("max"))
+                            .and_then(|v| v.as_i64())
+                        {
                             ui.colored_label(look::pal(ui).danger, format!("{hp} HP"));
                         }
                         if let Some(light) = prefab.value("LightSource") {
                             let rgb = light
                                 .get("color")
                                 .and_then(|c| c.as_array())
-                                .map(|c| c.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect::<Vec<_>>())
+                                .map(|c| {
+                                    c.iter()
+                                        .map(|v| v.as_f64().unwrap_or(1.0) as f32)
+                                        .collect::<Vec<_>>()
+                                })
                                 .filter(|c| c.len() == 3)
                                 .unwrap_or_else(|| vec![1.0, 1.0, 1.0]);
                             let colour = egui::Rgba::from_rgb(rgb[0], rgb[1], rgb[2]);
-                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            let (swatch, _) = ui
+                                .allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                             ui.painter().circle_filled(swatch.center(), 6.0, colour);
-                            let radius = light.get("radius").and_then(|r| r.as_f64()).unwrap_or(0.0);
+                            let radius =
+                                light.get("radius").and_then(|r| r.as_f64()).unwrap_or(0.0);
                             ui.colored_label(look::pal(ui).muted, format!("light {radius:.1}"));
                         }
                     });
@@ -183,8 +207,15 @@ fn preview_card(ui: &mut egui::Ui, art: &DevArt, prefab: &Prefab) {
                         .map(|i| i.phrase)
                         .filter(|p| !p.is_empty())
                         .collect();
-                    let summary = if phrases.is_empty() { "does nothing yet".to_string() } else { phrases.join(" · ") };
-                    ui.add(egui::Label::new(egui::RichText::new(summary).color(look::pal(ui).accent)).wrap());
+                    let summary = if phrases.is_empty() {
+                        "does nothing yet".to_string()
+                    } else {
+                        phrases.join(" · ")
+                    };
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(summary).color(look::pal(ui).accent))
+                            .wrap(),
+                    );
                 });
             });
         });
@@ -195,7 +226,13 @@ fn tint_of(prefab: &Prefab) -> egui::Color32 {
     let Some(t) = prefab.value("SpriteTint") else {
         return egui::Color32::WHITE;
     };
-    let c = |k: &str| (t.get(k).and_then(|v| v.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0) * 255.0) as u8;
+    let c = |k: &str| {
+        (t.get(k)
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0)
+            * 255.0) as u8
+    };
     egui::Color32::from_rgb(c("r"), c("g"), c("b"))
 }
 
@@ -203,8 +240,13 @@ fn tint_of(prefab: &Prefab) -> egui::Color32 {
 /// adds it. Returns whether anything was added.
 fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
     let mut add: Option<&'static str> = None;
-    let unmet: Vec<(String, &'static str)> = prefab.unmet_needs().into_iter().map(|(c, n)| (c.to_string(), n)).collect();
-    let invisible = !prefab.has("Sprite") && !prefab.has("AnimatedSprite") && !prefab.components.is_empty();
+    let unmet: Vec<(String, &'static str)> = prefab
+        .unmet_needs()
+        .into_iter()
+        .map(|(c, n)| (c.to_string(), n))
+        .collect();
+    let invisible =
+        !prefab.has("Sprite") && !prefab.has("AnimatedSprite") && !prefab.components.is_empty();
     if invisible {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(look::pal(ui).warning, "⚠ Nothing to see:");
@@ -216,7 +258,10 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
     for (component, need) in &unmet {
         ui.horizontal_wrapped(|ui| {
             let what = need.replace('|', " or ");
-            ui.colored_label(look::pal(ui).warning, format!("⚠ {component} does nothing without {what}"));
+            ui.colored_label(
+                look::pal(ui).warning,
+                format!("⚠ {component} does nothing without {what}"),
+            );
             for option in need.split('|') {
                 if let Some(entry) = registry::find(option) {
                     if ui.small_button(format!("Add {option}")).clicked() {
@@ -234,7 +279,11 @@ fn needs(ui: &mut egui::Ui, prefab: &mut Prefab) -> bool {
 /// it does in a sentence. Returns the components picked this frame (all of
 /// a block's parts, for a block). Used by the prefab builder and the
 /// inspector alike; it stays open to add more.
-pub(super) fn picker(ui: &mut egui::Ui, dev: &mut DevTools, has: &dyn Fn(&str) -> bool) -> Vec<&'static str> {
+pub(super) fn picker(
+    ui: &mut egui::Ui,
+    dev: &mut DevTools,
+    has: &dyn Fn(&str) -> bool,
+) -> Vec<&'static str> {
     let mut picked = Vec::new();
     look::card(ui, |ui| {
         look::search_box(ui, &mut dev.picker_search, "Search: burn, light, door…");
@@ -246,13 +295,19 @@ pub(super) fn picker(ui: &mut egui::Ui, dev: &mut DevTools, has: &dyn Fn(&str) -
                 || phrase.contains(&search)
         };
 
-        let blocks: Vec<_> = BLOCKS.iter().filter(|b| matches(b.name, b.summary, "")).collect();
+        let blocks: Vec<_> = BLOCKS
+            .iter()
+            .filter(|b| matches(b.name, b.summary, ""))
+            .collect();
         if !blocks.is_empty() {
             look::section(ui, "Building blocks");
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                 for block in blocks {
-                    if look::chip(ui, block.name).on_hover_text(block.summary).clicked() {
+                    if look::chip(ui, block.name)
+                        .on_hover_text(block.summary)
+                        .clicked()
+                    {
                         picked.extend(block.parts.iter().copied().filter(|p| !has(p)));
                     }
                 }
@@ -273,14 +328,22 @@ pub(super) fn picker(ui: &mut egui::Ui, dev: &mut DevTools, has: &dyn Fn(&str) -
                 continue;
             }
             any = true;
-            look::section(ui, group);
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for info in entries {
-                if look::add_row(ui, info.name, info.summary).clicked() {
-                    picked.push(info.name);
-                }
-            }
-            ui.spacing_mut().item_spacing.y = 7.0;
+            let searching = !search.is_empty();
+            look::accordion(
+                ui,
+                ("picker_group", group),
+                group,
+                entries.len(),
+                searching,
+                |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for info in entries {
+                        if look::add_row(ui, info.name, info.summary).clicked() {
+                            picked.push(info.name);
+                        }
+                    }
+                },
+            );
         }
         if !any && !search.is_empty() {
             ui.colored_label(look::pal(ui).muted, "Nothing matches that.");
@@ -297,7 +360,11 @@ pub(super) fn picker(ui: &mut egui::Ui, dev: &mut DevTools, has: &dyn Fn(&str) -
 fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool {
     let mut changed = false;
     let mut remove = None;
-    let group_of = |name: &str| catalog::info_of(name).map(|i| i.group).unwrap_or("Internal");
+    let group_of = |name: &str| {
+        catalog::info_of(name)
+            .map(|i| i.group)
+            .unwrap_or("Internal")
+    };
     for group in GROUPS {
         let indices: Vec<usize> = (0..dev.prefabs[i].components.len())
             .filter(|&n| group_of(&dev.prefabs[i].components[n].component) == group)
@@ -305,55 +372,81 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
         if indices.is_empty() {
             continue;
         }
-        ui.add_space(4.0);
-        look::section(ui, group);
-        for n in indices {
-            let name = dev.prefabs[i].components[n].component.clone();
-            let info = catalog::info_of(&name);
-            egui::Frame::none()
-                .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).border))
-                .inner_margin(egui::Margin::symmetric(6.0, 4.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        let known = registry::find(&name).is_some();
-                        let title = if known { name.clone() } else { format!("{name} (unknown)") };
-                        ui.label(look::strong(title));
-                        if let Some(info) = info {
-                            look::hint(ui, info.summary);
-                        }
-                        if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
-                            ui.colored_label(look::pal(ui).muted, info.phrase);
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if look::cross_button(ui).on_hover_text("Remove").clicked() {
-                                remove = Some(n);
-                            }
-                            if name == "Sprite" || name == "AnimatedSprite" {
-                                let picking = dev.sprite_pick == Some(n);
-                                if ui.selectable_label(picking, "Pick…").clicked() {
-                                    dev.sprite_pick = if picking { None } else { Some(n) };
-                                    if let Some(sheet) = dev.prefabs[i].components[n]
-                                        .value
-                                        .get("sheet")
-                                        .and_then(|s| serde_json::from_value(s.clone()).ok())
-                                    {
-                                        dev.sprite_sheet = sheet;
-                                    }
+        look::accordion(
+            ui,
+            ("prefab_group", i, group),
+            group,
+            indices.len(),
+            false,
+            |ui| {
+                for n in indices {
+                    let name = dev.prefabs[i].components[n].component.clone();
+                    let info = catalog::info_of(&name);
+                    egui::Frame::none()
+                        .stroke(egui::Stroke::new(1.0_f32, look::pal(ui).border))
+                        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let known = registry::find(&name).is_some();
+                                let title = if known {
+                                    name.clone()
+                                } else {
+                                    format!("{name} (unknown)")
+                                };
+                                ui.label(look::strong(title));
+                                if let Some(info) = info {
+                                    look::hint(ui, info.summary);
                                 }
-                                if let Some(sprite) = dev.prefabs[i].sprite() {
-                                    let (tex, uv) = art.icon(sprite);
-                                    ui.add(egui::Image::new(egui::load::SizedTexture::new(tex, egui::vec2(20.0, 20.0))).uv(uv));
+                                if let Some(info) = info.filter(|i| !i.phrase.is_empty()) {
+                                    ui.colored_label(look::pal(ui).muted, info.phrase);
                                 }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if look::cross_button(ui).on_hover_text("Remove").clicked()
+                                        {
+                                            remove = Some(n);
+                                        }
+                                        if name == "Sprite" || name == "AnimatedSprite" {
+                                            let picking = dev.sprite_pick == Some(n);
+                                            if ui.selectable_label(picking, "Pick…").clicked() {
+                                                dev.sprite_pick =
+                                                    if picking { None } else { Some(n) };
+                                                if let Some(sheet) = dev.prefabs[i].components[n]
+                                                    .value
+                                                    .get("sheet")
+                                                    .and_then(|s| {
+                                                        serde_json::from_value(s.clone()).ok()
+                                                    })
+                                                {
+                                                    dev.sprite_sheet = sheet;
+                                                }
+                                            }
+                                            if let Some(sprite) = dev.prefabs[i].sprite() {
+                                                let (tex, uv) = art.icon(sprite);
+                                                ui.add(
+                                                    egui::Image::new(
+                                                        egui::load::SizedTexture::new(
+                                                            tex,
+                                                            egui::vec2(20.0, 20.0),
+                                                        ),
+                                                    )
+                                                    .uv(uv),
+                                                );
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+                            let value = &mut dev.prefabs[i].components[n].value;
+                            if !value.is_null() {
+                                changed |= edit_value(ui, &name, "", value);
                             }
                         });
-                    });
-                    let value = &mut dev.prefabs[i].components[n].value;
-                    if !value.is_null() {
-                        changed |= edit_value(ui, &name, "", value);
-                    }
-                });
-        }
+                }
+            },
+        );
     }
     if let Some(n) = remove {
         dev.prefabs[i].components.remove(n);
@@ -366,7 +459,10 @@ fn cards(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, i: usize) -> bool 
 /// A window showing a whole sprite sheet: click a tile and the component
 /// being picked for takes it.
 fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize) -> bool {
-    let Some(n) = dev.sprite_pick.filter(|n| *n < dev.prefabs[i].components.len()) else {
+    let Some(n) = dev
+        .sprite_pick
+        .filter(|n| *n < dev.prefabs[i].components.len())
+    else {
         dev.sprite_pick = None;
         return false;
     };
@@ -398,12 +494,15 @@ fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize
                         for c in 0..columns {
                             let id = r as u32 * columns + c;
                             let uv = art.tileset.get_egui_uv(sheet, id);
-                            let (rect, response) =
-                                ui.allocate_exact_size(egui::vec2(PICKER_TILE, PICKER_TILE), egui::Sense::click());
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(PICKER_TILE, PICKER_TILE),
+                                egui::Sense::click(),
+                            );
                             if response.hovered() {
                                 ui.painter().rect_filled(rect, 0.0, look::pal(ui).hover);
                             }
-                            ui.painter().image(tex, rect.shrink(2.0), uv, egui::Color32::WHITE);
+                            ui.painter()
+                                .image(tex, rect.shrink(2.0), uv, egui::Color32::WHITE);
                             if response.on_hover_text(format!("#{id}")).clicked() {
                                 chosen = Some((sheet, id));
                             }
@@ -415,7 +514,11 @@ fn sprite_picker(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, i: usize
     let mut changed = false;
     if let Some((sheet, id)) = chosen {
         let part = &mut dev.prefabs[i].components[n];
-        let key = if part.component == "AnimatedSprite" { "base_tile_id" } else { "tile_id" };
+        let key = if part.component == "AnimatedSprite" {
+            "base_tile_id"
+        } else {
+            "tile_id"
+        };
         if let serde_json::Value::Object(fields) = &mut part.value {
             if let Ok(sheet) = serde_json::to_value(sheet) {
                 fields.insert("sheet".into(), sheet);
@@ -438,7 +541,12 @@ mod tests {
     #[test]
     fn a_creature_block_needs_nothing_more() {
         let mut p = Prefab::empty("Test");
-        for part in super::BLOCKS.iter().find(|b| b.name == "Creature").unwrap().parts {
+        for part in super::BLOCKS
+            .iter()
+            .find(|b| b.name == "Creature")
+            .unwrap()
+            .parts
+        {
             p.add(part);
         }
         assert!(p.unmet_needs().is_empty(), "{:?}", p.unmet_needs());

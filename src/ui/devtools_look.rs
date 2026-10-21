@@ -247,6 +247,70 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// A group that folds away: a header row with a chevron, the group's name
+/// and how many things are in it; click it to open or close. Remembers its
+/// state by `id`. `force_open` shows the body regardless (while searching,
+/// so results are never hidden behind a closed group).
+pub fn accordion<R>(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    title: &str,
+    count: usize,
+    force_open: bool,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    let p = pal(ui);
+    let id = ui.make_persistent_id(id);
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    let open = force_open || state.is_open();
+
+    ui.add_space(4.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::click());
+    if response.clicked() && !force_open {
+        state.toggle(ui);
+    }
+    let hovered = response.hovered();
+    ui.painter().rect_filled(rect, Rounding::same(8.0), if hovered { p.hover } else { p.card });
+
+    // Chevron: points right when closed, down when open, turning between.
+    let t = ui.ctx().animate_bool_responsive(id.with("chevron"), open);
+    let c = egui::pos2(rect.left() + 16.0, rect.center().y);
+    let angle = t * std::f32::consts::FRAC_PI_2;
+    let rot = |v: egui::Vec2| egui::vec2(v.x * angle.cos() - v.y * angle.sin(), v.x * angle.sin() + v.y * angle.cos());
+    let ink = if hovered || open { p.accent } else { p.muted };
+    let points = [c + rot(egui::vec2(-2.5, -4.5)), c + rot(egui::vec2(3.0, 0.0)), c + rot(egui::vec2(-2.5, 4.5))];
+    ui.painter().add(egui::Shape::line(points.to_vec(), Stroke::new(1.8_f32, ink)));
+
+    ui.painter().text(
+        egui::pos2(rect.left() + 30.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title.to_uppercase(),
+        FontId::new(12.0, FontFamily::Name(SANS_STRONG.into())),
+        if hovered || open { p.text } else { p.muted },
+    );
+
+    // How many are inside, as a small pill on the right.
+    let badge_font = FontId::new(11.0, FontFamily::Name(SANS_STRONG.into()));
+    let galley = ui.painter().layout_no_wrap(count.to_string(), badge_font, p.muted);
+    let badge = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 12.0 - galley.size().x / 2.0, rect.center().y),
+        galley.size() + egui::vec2(12.0, 4.0),
+    );
+    ui.painter().rect_filled(badge, Rounding::same(badge.height() / 2.0), p.bg);
+    ui.painter().galley(badge.center() - galley.size() / 2.0, galley, p.muted);
+    let _ = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    if force_open {
+        ui.add_space(4.0);
+        return Some(add(ui));
+    }
+    state.show_body_unindented(ui, |ui| {
+        ui.add_space(4.0);
+        add(ui)
+    })
+    .map(|body| body.inner)
+}
+
 /// A filled accent button for the main action in a place.
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let p = pal(ui);

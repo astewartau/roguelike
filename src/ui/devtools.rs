@@ -600,21 +600,41 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
     });
 
     let (known, unknown) = registry::components_of(world, e);
-    for entry in &known {
-        let current = (entry.read)(world, e).unwrap_or(serde_json::Value::Null);
-        let (mut value, error) = match dev.drafts.get(entry.name) {
-            Some((draft, why)) => (draft.clone(), Some(why.clone())),
-            None => (current, None),
-        };
-        egui::CollapsingHeader::new(entry.name).id_salt(("component", entry.name)).default_open(false).show(ui, |ui| {
-            if edit_value(ui, entry.name, "", &mut value) {
-                dev.commands.push(DevCommand::SetComponent { entity: e, name: entry.name, value });
-            }
-            if let Some(why) = error {
-                ui.colored_label(egui::Color32::from_rgb(230, 110, 100), why);
-            }
-            if ui.small_button("Remove").clicked() {
-                dev.commands.push(DevCommand::RemoveComponent { entity: e, name: entry.name });
+    // Its components, folded into groups by what they do (as the prefab
+    // builder shows them), each a card with its settings laid out.
+    use crate::devtools::catalog;
+    let group_of = |name: &str| catalog::info_of(name).map(|i| i.group).unwrap_or("Internal");
+    for group in catalog::GROUPS {
+        let here: Vec<_> = known.iter().filter(|entry| group_of(entry.name) == group).collect();
+        if here.is_empty() {
+            continue;
+        }
+        look::accordion(ui, ("inspect_group", group), group, here.len(), false, |ui| {
+            for entry in here {
+                let current = (entry.read)(world, e).unwrap_or(serde_json::Value::Null);
+                let (mut value, error) = match dev.drafts.get(entry.name) {
+                    Some((draft, why)) => (draft.clone(), Some(why.clone())),
+                    None => (current, None),
+                };
+                look::card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(look::strong(entry.name));
+                        if let Some(info) = catalog::info_of(entry.name) {
+                            look::hint(ui, info.summary);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if look::cross_button(ui).on_hover_text("Remove").clicked() {
+                                dev.commands.push(DevCommand::RemoveComponent { entity: e, name: entry.name });
+                            }
+                        });
+                    });
+                    if !value.is_null() && edit_value(ui, entry.name, "", &mut value) {
+                        dev.commands.push(DevCommand::SetComponent { entity: e, name: entry.name, value });
+                    }
+                    if let Some(why) = error {
+                        ui.colored_label(look::pal(ui).danger, why);
+                    }
+                });
             }
         });
     }
