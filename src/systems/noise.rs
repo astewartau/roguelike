@@ -18,7 +18,7 @@ use std::collections::{BinaryHeap, HashMap};
 use hecs::Entity;
 use crate::world::World;
 
-use crate::components::{AIState, ChaseAI, Door, Player, Position, SecretDoor};
+use crate::components::{AIState, ChaseAI, Door, Position, SecretDoor};
 use crate::constants::*;
 use crate::grid::Grid;
 
@@ -28,9 +28,6 @@ pub fn make_noise(world: &mut World, grid: &Grid, center: (i32, i32), radius: i3
     if radius <= 0 {
         return;
     }
-    let Some(player) = world.query::<&Player>().iter().next().map(|(id, _)| id) else {
-        return;
-    };
     let reach = noise_reach(world, grid, center, radius);
     let hearers: Vec<Entity> = world
         .query::<(&Position, &ChaseAI)>()
@@ -39,7 +36,7 @@ pub fn make_noise(world: &mut World, grid: &Grid, center: (i32, i32), radius: i3
         .map(|(id, _)| id)
         .collect();
     for e in hearers {
-        crate::systems::ai::investigate_noise(world, e, player, center);
+        crate::systems::ai::investigate_noise(world, e, center);
     }
 }
 
@@ -139,7 +136,7 @@ mod tests {
         use rand::SeedableRng;
         let mut world = World::new();
         let grid = two_rooms();
-        let player = world.spawn((Position::new(0, 0), Player));
+        let player = world.spawn((Position::new(0, 0), crate::components::Player));
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
         let guard = crate::spawning::enemies::GOBLIN.spawn(&mut world, 9, 2, &mut rng);
         world.get::<&mut ChaseAI>(guard).unwrap().state = AIState::Idle;

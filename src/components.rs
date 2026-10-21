@@ -1719,6 +1719,62 @@ impl ChaseAI {
     }
 }
 
+/// Which side a creature is on. Creatures on different sides are enemies;
+/// on the same side they leave each other alone (and a stray blow from a
+/// sidemate doesn't turn them). Without one, the player and their followers
+/// are on `Player`'s side and anything else that hunts (`ChaseAI`) is on the
+/// `Dungeon`'s; the coloured sides are for setting creatures against each
+/// other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Faction {
+    Player,
+    Dungeon,
+    Red,
+    Blue,
+    Green,
+    Gold,
+}
+
+impl Faction {
+    pub const ALL: [Faction; 6] =
+        [Faction::Player, Faction::Dungeon, Faction::Red, Faction::Blue, Faction::Green, Faction::Gold];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Faction::Player => "Player's side",
+            Faction::Dungeon => "Dungeon",
+            Faction::Red => "Red",
+            Faction::Blue => "Blue",
+            Faction::Green => "Green",
+            Faction::Gold => "Gold",
+        }
+    }
+}
+
+/// How a hunting creature (`ChaseAI`) meets the enemies of its side.
+/// Without one it is `Aggressive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Disposition {
+    /// Goes for any enemy it notices.
+    Aggressive,
+    /// Leaves enemies be until one hurts it, then fights that one.
+    Defensive,
+    /// Runs from any enemy it notices; fights only when cornered.
+    Timid,
+}
+
+impl Disposition {
+    pub const ALL: [Disposition; 3] = [Disposition::Aggressive, Disposition::Defensive, Disposition::Timid];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Disposition::Aggressive => "Aggressive",
+            Disposition::Defensive => "Defensive",
+            Disposition::Timid => "Timid",
+        }
+    }
+}
+
 /// Visual position for smooth interpolation (separate from logical grid Position)
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct VisualPosition {

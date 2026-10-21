@@ -68,6 +68,8 @@ pub const INFO: &[Info] = &[
     info("Charger", "Mind", "charges", "Charges in a straight line.", &[]),
     info("HitAndRun", "Mind", "hits and runs", "Breaks off after each attack.", &[]),
     info("Tameable", "Mind", "tameable", "A druid can tame it.", &["ChaseAI"]),
+    info("Faction", "Mind", "takes a side", "Which side it's on: it fights the other sides and leaves its own be.", &["ChaseAI|CompanionAI"]),
+    info("Disposition", "Mind", "", "How it meets its enemies: goes for them, fights only once hurt, or runs.", &[]),
     info("DevFrozen", "Mind", "frozen", "Developer tools: it waits forever.", &["Actor"]),
     // Attacks
     info("Venomous", "Attacks", "venomous", "Its hits slow and poison.", &["ChaseAI|CompanionAI"]),
@@ -133,6 +135,7 @@ pub const MODIFIERS: &[(&str, &str, &str)] = &[
     ("Charger", "ChaseAI", "charges"),
     ("HitAndRun", "ChaseAI", "hits and runs"),
     ("WebSpinner", "ChaseAI", "spins webs"),
+    ("Disposition", "ChaseAI", "temperament"),
     ("CanOpenDoors", "ChaseAI|CompanionAI", "opens doors"),
     ("FearImmune", "ChaseAI|CompanionAI", "fearless"),
     ("Venomous", "ChaseAI|CompanionAI", "venomous bite"),

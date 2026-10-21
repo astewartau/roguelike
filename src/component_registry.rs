@@ -283,6 +283,8 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(Lacerating, Lacerating { bleed_chance: 0.3 }),
             plain!(Splits, Splits { generation: 0, spent: false }),
             plain!(DevFrozen, DevFrozen),
+            plain!(Faction, Faction::Red),
+            plain!(Disposition, Disposition::Defensive),
             plain!(BlocksMovement, BlocksMovement),
             plain!(BlocksVision, BlocksVision),
             plain!(Pushable, Pushable),
@@ -384,6 +386,7 @@ pub const REQUIRES: &[(&str, &[&str])] = &[
     ("Charger", &["ChaseAI"]),
     ("HitAndRun", &["ChaseAI"]),
     ("WebSpinner", &["ChaseAI"]),
+    ("Disposition", &["ChaseAI"]),
     // Burning is a status effect.
     ("Combustible", &["StatusEffects"]),
     ("Explosive", &["StatusEffects"]),

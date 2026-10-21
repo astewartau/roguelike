@@ -19,7 +19,7 @@
 use hecs::Entity;
 use crate::world::World;
 
-use crate::components::{AIState, Asleep, ChaseAI, Health, PackHunter, Player, Position, Follower};
+use crate::components::{AIState, Asleep, ChaseAI, Health, PackHunter, Position, Follower};
 use crate::constants::*;
 
 /// Whether `entity` is an untamed pack rat.
@@ -85,19 +85,20 @@ pub fn alert_packmates(world: &mut World, rat: Entity, threat: Entity, threat_po
     }
 }
 
-/// A pack rat was hit: its packmates come running toward the player (damage
-/// carries no attacker here, and the player is who rats are hunting; an
-/// attacking companion is picked up by sight once they arrive).
+/// A pack rat was hit: its packmates come running toward whoever it blames
+/// (damage carries no attacker here; the player, if they're its enemy, as
+/// they are who rats hunt. See `ai::likely_culprit`).
 pub fn alert_pack_of_attack(world: &mut World, rat: Entity) {
     if !is_wild_pack_rat(world, rat) {
         return;
     }
-    let player = world.query::<&Player>().iter().next().map(|(id, _)| id);
-    let Some(player) = player else { return };
-    let Some(toward) = crate::queries::get_entity_position(world, player) else {
+    let Some(here) = crate::queries::get_entity_position(world, rat) else {
         return;
     };
-    alert_packmates(world, rat, player, toward);
+    let Some((culprit, toward)) = crate::systems::ai::likely_culprit(world, rat, here) else {
+        return;
+    };
+    alert_packmates(world, rat, culprit, toward);
 }
 
 #[cfg(test)]

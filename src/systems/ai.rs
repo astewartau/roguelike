@@ -14,7 +14,7 @@ use crate::world::World;
 use rand::Rng;
 
 use crate::engine::ActorCtx;
-use crate::components::{ActionType, Actor, AIState, Channel, ChannelEffect, Asleep, Boss, BossAbility, Summoned, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, Follower, WebSpinner};
+use crate::components::{ActionType, Actor, AIState, Disposition, Channel, ChannelEffect, Asleep, Boss, BossAbility, Summoned, CanOpenDoors, CausesBurning, Charger, ChaseAI, Flanker, PackHunter, CompanionAI, Door, EffectType, Equipment, Health, HitAndRun, Name, Trap, Concealed, Player, Position, RangedCooldown, Sneaking, Stats, SupportAI, Follower, WebSpinner};
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
@@ -30,7 +30,12 @@ use crate::time_system::{self};
 
 /// Generate threat on an enemy from a damage source.
 /// Call this whenever an entity deals damage to an entity that has ChaseAI.
+/// A blow from its own side (a goblin's stray arrow in a goblin) doesn't
+/// turn it on the one who struck.
 pub fn generate_threat(world: &mut World, enemy: Entity, threat_source: Entity, amount: f32) {
+    if crate::systems::targets::same_side(world, enemy, threat_source) {
+        return;
+    }
     if let Ok(mut ai) = world.get::<&mut ChaseAI>(enemy) {
         ai.add_threat(threat_source, amount);
     }
@@ -147,32 +152,57 @@ fn is_within_sight(from: (i32, i32), to: (i32, i32), radius: i32) -> bool {
 // AWARENESS: WAKE, NOISE, SHOUT
 // =============================================================================
 
-/// Find the player entity (single Player marker).
-fn find_player(world: &World) -> Option<Entity> {
-    world.query::<&Player>().iter().next().map(|(id, _)| id)
+/// Who `entity` blames for something it heard or felt with no one to pin
+/// it on: the player, if the player is its enemy (they are who it's hunting),
+/// otherwise its enemy nearest to `near`. None if it has no enemies about.
+pub(crate) fn likely_culprit(world: &World, entity: Entity, near: (i32, i32)) -> Option<(Entity, (i32, i32))> {
+    let enemies = crate::systems::targets::enemies_of(world, entity);
+    enemies
+        .iter()
+        .find(|&&(e, _)| world.get::<&Player>(e).is_ok())
+        .or_else(|| {
+            enemies
+                .iter()
+                .min_by_key(|&&(e, p)| ((p.0 - near.0).abs().max((p.1 - near.1).abs()), e))
+        })
+        .copied()
 }
 
 /// True if any unaware enemy is within `radius` (Chebyshev) of `center`.
 fn unaware_ally_near(world: &World, center: (i32, i32), radius: i32, exclude: Entity) -> bool {
     world.query::<(&Position, &ChaseAI)>().iter().any(|(id, (pos, ai))| {
         id != exclude
+            && crate::systems::targets::same_side(world, exclude, id)
             && ai.state == AIState::Unaware
             && (pos.x - center.0).abs().max((pos.y - center.1).abs()) <= radius
     })
 }
 
 /// Send an enemy that heard something to investigate `toward`: wakes it if
-/// asleep, takes it out of Unaware, and points its search for the player at
-/// the noise. The state machine turns that into Investigating on its next
-/// decision. Used by `systems::noise::make_noise` and by being attacked.
-pub(crate) fn investigate_noise(world: &mut World, entity: Entity, player: Entity, toward: (i32, i32)) {
+/// asleep, takes it out of Unaware, and points its search for whoever it
+/// blames (`likely_culprit`) at the noise. The state machine turns that into
+/// Investigating on its next decision. Used by `systems::noise::make_noise`
+/// and by being attacked. A defensive creature only wakes: it goes looking
+/// for nobody.
+pub(crate) fn investigate_noise(world: &mut World, entity: Entity, toward: (i32, i32)) {
     let _ = world.remove_one::<Asleep>(entity);
+    let culprit = if crate::systems::targets::disposition_of(world, entity) == Disposition::Defensive {
+        None
+    } else {
+        likely_culprit(world, entity, toward)
+    };
     if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
+        let Some((culprit, _)) = culprit else {
+            if ai.state == AIState::Unaware {
+                ai.state = AIState::Idle;
+            }
+            return;
+        };
         if ai.state == AIState::Unaware {
             ai.state = AIState::Investigating;
         }
-        ai.add_threat(player, WAKE_THREAT);
-        ai.update_target_pos(player, toward);
+        ai.add_threat(culprit, WAKE_THREAT);
+        ai.update_target_pos(culprit, toward);
     }
 }
 
@@ -247,8 +277,9 @@ pub fn announce_boss_sightings(world: &mut World, grid: &Grid, events: &mut Even
     }
 }
 
-/// Wake an enemy that was attacked while unaware, sending it after the player.
-/// No-op for already-aware enemies and non-enemies.
+/// Wake an enemy that was attacked while unaware, sending it after whoever
+/// it blames (the player, if they're its enemy). No-op for already-aware
+/// enemies and non-enemies.
 pub fn wake_on_attacked(world: &mut World, entity: Entity) {
     let is_unaware = world
         .get::<&ChaseAI>(entity)
@@ -257,11 +288,9 @@ pub fn wake_on_attacked(world: &mut World, entity: Entity) {
     if !is_unaware {
         return;
     }
-    let Some(player) = find_player(world) else { return };
-    let toward = queries::get_entity_position(world, player).unwrap_or_else(|| {
-        queries::get_entity_position(world, entity).unwrap_or((0, 0))
-    });
-    investigate_noise(world, entity, player, toward);
+    let here = queries::get_entity_position(world, entity).unwrap_or((0, 0));
+    let toward = likely_culprit(world, entity, here).map(|(_, p)| p).unwrap_or(here);
+    investigate_noise(world, entity, toward);
 }
 
 // =============================================================================
@@ -398,15 +427,12 @@ fn determine_action(
             Err(_) => return ActionType::Wait,
         };
 
-    // Is the player sneaking? (reduces detection by unaware/unalerted enemies)
-    let player_sneaking = world.get::<&Sneaking>(player_entity).is_ok();
-    // A sleeping player (Asleep marker from the Sleep action) isn't hiding —
-    // they're far easier to notice. A Tired player is sloppier too.
-    let player_asleep = world.get::<&Asleep>(player_entity).is_ok();
-    let player_tired = world
-        .get::<&crate::components::Fatigue>(player_entity)
-        .map(|f| f.is_tired())
-        .unwrap_or(false);
+    // Everyone on another side, and how this one meets them. A defensive
+    // creature notices nobody of its own accord: only being hurt puts an
+    // enemy in its threat table.
+    let potential_targets = crate::systems::targets::enemies_of(world, entity);
+    let disposition = crate::systems::targets::disposition_of(world, entity);
+    let notices_enemies = disposition != Disposition::Defensive;
 
     // Feared: flee from highest-threat source
     if is_feared && !is_rooted {
@@ -451,19 +477,32 @@ fn determine_action(
     // meter decays back down.
     if current_state == AIState::Unaware {
         let asleep = world.get::<&Asleep>(entity).is_ok();
-        let seen = queries::get_entity_position(world, player_entity).and_then(|p| {
-            if can_see_target(world, grid, entity_pos, p, sight_radius, Some(player_entity), spatial_cache) {
-                Some((entity_pos.0 - p.0).abs().max((entity_pos.1 - p.1).abs()))
-            } else {
-                None
-            }
-        });
+        // The nearest enemy in sight, if it notices enemies at all.
+        let seen = potential_targets
+            .iter()
+            .filter(|_| notices_enemies)
+            .filter_map(|&(t, p)| {
+                let dist = (entity_pos.0 - p.0).abs().max((entity_pos.1 - p.1).abs());
+                (dist <= sight_radius
+                    && can_see_target(world, grid, entity_pos, p, sight_radius, Some(t), spatial_cache))
+                .then_some((t, dist))
+            })
+            .min_by_key(|&(t, dist)| (dist, t));
 
-        let mut woke = false;
-        if let Some(dist) = seen {
+        let mut woke = None;
+        if let Some((seen_entity, dist)) = seen {
+            // How well the one it's looking at hides, read off whoever that
+            // is: their agility, the light they stand in, sneaking, asleep,
+            // tired, wet.
+            let target_sneaking = world.get::<&Sneaking>(seen_entity).is_ok();
+            let target_asleep = world.get::<&Asleep>(seen_entity).is_ok();
+            let target_tired = world
+                .get::<&crate::components::Fatigue>(seen_entity)
+                .map(|f| f.is_tired())
+                .unwrap_or(false);
             // Proximity factor: 1.0 point-blank, ~0 at the edge of sight.
             let proximity = ((sight_radius - dist).max(0) as f32) / (sight_radius.max(1) as f32);
-            let agility = world.get::<&Stats>(player_entity).map(|s| s.agility).unwrap_or(10);
+            let agility = world.get::<&Stats>(seen_entity).map(|s| s.agility).unwrap_or(10);
             let stealth = 1.0 + ((agility - 10).max(0) as f32) * AGILITY_STEALTH_FACTOR;
             let mut gain = ALERTNESS_BASE_GAIN * proximity / stealth;
             if asleep {
@@ -474,27 +513,27 @@ fn determine_action(
             // No exposure recorded (tests, a player the engine hasn't ticked)
             // leaves the gain alone.
             if world.get::<&crate::components::SeesInDark>(entity).is_err() {
-                if let Ok(exposure) = world.get::<&crate::components::LightExposure>(player_entity) {
+                if let Ok(exposure) = world.get::<&crate::components::LightExposure>(seen_entity) {
                     gain *= crate::systems::light::alertness_mult(exposure.0);
                 }
             }
             // Tired players are noticed faster (+25% alertness gain).
-            if player_tired {
+            if target_tired {
                 gain *= TIRED_ALERTNESS_MULT;
             }
-            if player_asleep {
+            if target_asleep {
                 // Lying unconscious in the open: much easier to spot.
                 gain *= SLEEPING_PLAYER_ALERT_MULT;
-            } else if player_sneaking {
+            } else if target_sneaking {
                 gain *= SNEAK_ALERTNESS_MULT;
             }
             // Dripping wet: squelching footsteps carry (stacks with sneaking).
-            if queries::has_status_effect(world, player_entity, crate::components::EffectType::Wet) {
+            if queries::has_status_effect(world, seen_entity, crate::components::EffectType::Wet) {
                 gain *= WET_STEALTH_PENALTY;
             }
             let new_alert = world.get::<&ChaseAI>(entity).map(|a| a.alertness + gain).unwrap_or(0.0);
             if new_alert >= ALERTNESS_WAKE_THRESHOLD {
-                woke = true;
+                woke = Some(seen_entity);
             } else if let Ok(mut a) = world.get::<&mut ChaseAI>(entity) {
                 a.alertness = new_alert;
             }
@@ -502,17 +541,17 @@ fn determine_action(
             a.alertness = (a.alertness - ALERTNESS_DECAY).max(0.0);
         }
 
-        if woke {
+        if let Some(spotted) = woke {
             // Fully roused — commit to the chase (seed threat so a sneaking
             // player can't immediately slip back out of the reduced-sight scan).
             let _ = world.remove_one::<Asleep>(entity);
-            let ppos = queries::get_entity_position(world, player_entity);
+            let spotted_pos = queries::get_entity_position(world, spotted);
             if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
                 ai.state = AIState::Chasing;
                 ai.alertness = 0.0;
-                ai.add_threat(player_entity, WAKE_THREAT);
-                if let Some(p) = ppos {
-                    ai.update_target_pos(player_entity, p);
+                ai.add_threat(spotted, WAKE_THREAT);
+                if let Some(p) = spotted_pos {
+                    ai.update_target_pos(spotted, p);
                 }
             }
             current_state = AIState::Chasing;
@@ -535,23 +574,15 @@ fn determine_action(
         .map(|e| e.has_bow())
         .unwrap_or(false);
 
-    // Build potential targets: player + all living companions
-    let mut potential_targets: Vec<(Entity, (i32, i32))> = Vec::new();
-    if let Some(ppos) = queries::get_entity_position(world, player_entity) {
-        potential_targets.push((player_entity, ppos));
-    }
-    for (comp_id, (comp_pos, _, health)) in world.query::<(&Position, &CompanionAI, &Health)>().iter() {
-        if health.current > 0 {
-            potential_targets.push((comp_id, (comp_pos.x, comp_pos.y)));
-        }
-    }
-
     // Visibility scan: check which targets we can see, add passive threat, update positions
     let mut visible_targets: HashSet<Entity> = HashSet::new();
     for &(target_entity, target_pos) in &potential_targets {
-        // A sneaking player is harder for a not-yet-alerted (Idle) enemy to spot.
-        let eff_sight = if target_entity == player_entity
-            && player_sneaking
+        // Out of sight range: no line to trace.
+        if (target_pos.0 - entity_pos.0).abs().max((target_pos.1 - entity_pos.1).abs()) > sight_radius {
+            continue;
+        }
+        // A sneaker is harder for a not-yet-alerted (Idle) enemy to spot.
+        let eff_sight = if world.get::<&Sneaking>(target_entity).is_ok()
             && current_state == AIState::Idle
         {
             (((sight_radius as f32) * SNEAK_SIGHT_MULT).round() as i32).max(1)
@@ -561,9 +592,13 @@ fn determine_action(
         let can_see = can_see_target(world, grid, entity_pos, target_pos, eff_sight, Some(target_entity), spatial_cache);
         if can_see {
             visible_targets.insert(target_entity);
-            // Passive visibility threat (enemies notice things walking around)
+            // Passive visibility threat (enemies notice things walking
+            // around). A defensive creature only keeps an eye on the ones
+            // already in its table: those that hurt it.
             if let Ok(mut ai) = world.get::<&mut ChaseAI>(entity) {
-                ai.add_threat(target_entity, THREAT_PASSIVE_VISIBILITY);
+                if notices_enemies {
+                    ai.add_threat(target_entity, THREAT_PASSIVE_VISIBILITY);
+                }
                 ai.update_target_pos(target_entity, target_pos);
             }
         }
@@ -583,6 +618,10 @@ fn determine_action(
                     .map(|h| h.current > 0)
                     .unwrap_or(false);
                 if !alive {
+                    continue;
+                }
+                // Changed sides since (the developer tools): no quarrel now.
+                if !crate::systems::targets::hostile_to(world, entity, entry.entity) {
                     continue;
                 }
 
@@ -711,7 +750,7 @@ fn determine_action(
     // haste one that is attacking the player.
     if is_support && is_aware {
         if let Some(action) = try_support_cast(
-            world, grid, spatial_cache, entity, entity_pos, player_entity, events,
+            world, grid, spatial_cache, entity, entity_pos, events,
         ) {
             return action;
         }
@@ -749,10 +788,10 @@ fn determine_action(
         }
     }
 
-    // A pack rat on its own runs from whatever it is aware of rather than
-    // fight it — unless cornered (no step takes it further away), when it
-    // falls through and fights.
-    if is_aware && crate::systems::pack::is_alone(world, entity) {
+    // A pack rat on its own, or anything timid, runs from whatever it is
+    // aware of rather than fight it — unless cornered (no step takes it
+    // further away), when it falls through and fights.
+    if is_aware && (disposition == Disposition::Timid || crate::systems::pack::is_alone(world, entity)) {
         if let Some(target_pos) = move_target {
             if let Some((fdx, fdy)) =
                 flee_step_away(grid, entity_pos, target_pos, &passability, rng)
@@ -855,9 +894,15 @@ fn determine_action(
 
     let action = action_dispatch::determine_action_type(world, grid, entity, dx, dy);
 
-    // Don't attack fellow enemies - if we pathfound through one, just wait
+    // Only swing at an enemy it means to fight: one on its own side, or
+    // (for a creature that doesn't go looking) one it has no quarrel with
+    // yet, that it pathed into, it waits behind.
     if let ActionType::Attack { target } = action {
-        if world.get::<&ChaseAI>(target).is_ok() {
+        let quarrel = world
+            .get::<&ChaseAI>(entity)
+            .map(|ai| ai.threat_table.iter().any(|t| t.entity == target))
+            .unwrap_or(false);
+        if !crate::systems::targets::hostile_to(world, entity, target) || (!notices_enemies && !quarrel) {
             return ActionType::Wait;
         }
     }
@@ -1009,7 +1054,6 @@ fn try_support_cast(
     spatial_cache: &SpatialCache,
     entity: Entity,
     entity_pos: (i32, i32),
-    player_entity: Entity,
     events: &mut EventQueue,
 ) -> Option<ActionType> {
     let ready = world
@@ -1020,13 +1064,14 @@ fn try_support_cast(
         return None;
     }
 
-    // Visible living allies within support range.
+    // Visible living allies (its own side) within support range.
     let allies: Vec<(Entity, (i32, i32), i32, i32)> = world
         .query::<(&Position, &ChaseAI, &Health)>()
         .iter()
         .filter(|&(id, (pos, _, health))| {
             id != entity
                 && health.current > 0
+                && crate::systems::targets::same_side(world, entity, id)
                 && (pos.x - entity_pos.0).abs().max((pos.y - entity_pos.1).abs())
                     <= SHAMAN_SUPPORT_RANGE
                 && has_line_of_sight(grid, spatial_cache, entity_pos.0, entity_pos.1, pos.x, pos.y)
@@ -1070,14 +1115,14 @@ fn try_support_cast(
         }
     }
 
-    // Priority 2: haste an unhastened ally that is attacking the player.
+    // Priority 2: haste an unhastened ally that is in a fight.
     let haste_target: Option<(Entity, (i32, i32))> = allies
         .iter()
         .filter(|&&(id, ..)| {
             !queries::has_status_effect(world, id, EffectType::SpeedBoost)
                 && world
                     .get::<&ChaseAI>(id)
-                    .map(|ai| ai.threat_table.iter().any(|e| e.entity == player_entity))
+                    .map(|ai| ai.current_target.is_some())
                     .unwrap_or(false)
         })
         .map(|&(id, pos, ..)| (id, pos))
@@ -1674,6 +1719,112 @@ fn flee_from_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{DevFrozen, Faction};
+    use crate::systems::actions::TestArena;
+
+    /// A clear 16x16 arena with nobody playing, and an awake goblin at each
+    /// spot on the given side, of the given temperament.
+    fn goblins_without_a_player(at: &[((i32, i32), Faction, Disposition)]) -> (TestArena, Vec<Entity>) {
+        let mut arena = TestArena::new((0, 0));
+        let player = arena.player;
+        arena.world.despawn(player).unwrap();
+        let goblins: Vec<Entity> = at
+            .iter()
+            .map(|&((x, y), faction, disposition)| {
+                let g = crate::spawning::enemies::GOBLIN.spawn(&mut arena.world, x, y, &mut arena.rng);
+                let _ = arena.world.remove_one::<Asleep>(g);
+                arena.world.get::<&mut ChaseAI>(g).unwrap().state = AIState::Idle;
+                arena.world.insert(g, (faction, disposition)).unwrap();
+                g
+            })
+            .collect();
+        arena.cache.rebuild_in_place(&arena.world);
+        arena.tracker.initialize_from_world(&arena.world, None);
+        for &g in &goblins {
+            crate::engine::initialize_single_ai_actor(&mut arena.ctx(), g);
+        }
+        (arena, goblins)
+    }
+
+    fn hurt(arena: &TestArena, e: Entity) -> bool {
+        arena.world.get::<&Health>(e).map(|h| h.current < h.max).unwrap_or(true)
+    }
+
+    fn knows_of(arena: &TestArena, e: Entity, other: Entity) -> bool {
+        arena.world.get::<&ChaseAI>(e).unwrap().threat_table.iter().any(|t| t.entity == other)
+    }
+
+    #[test]
+    fn creatures_on_rival_sides_fight_with_nobody_playing() {
+        use Disposition::Aggressive;
+        let (mut arena, g) = goblins_without_a_player(&[
+            ((4, 4), Faction::Red, Aggressive),
+            ((8, 4), Faction::Blue, Aggressive),
+        ]);
+        crate::engine::advance_world_to(&mut arena.ctx(), 30.0);
+        assert!(hurt(&arena, g[0]) || hurt(&arena, g[1]), "blows were traded");
+    }
+
+    #[test]
+    fn creatures_on_one_side_leave_each_other_be() {
+        use Disposition::Aggressive;
+        let (mut arena, g) = goblins_without_a_player(&[
+            ((4, 4), Faction::Red, Aggressive),
+            ((6, 4), Faction::Red, Aggressive),
+        ]);
+        crate::engine::advance_world_to(&mut arena.ctx(), 30.0);
+        assert!(!hurt(&arena, g[0]) && !hurt(&arena, g[1]));
+        assert!(!knows_of(&arena, g[0], g[1]) && !knows_of(&arena, g[1], g[0]));
+    }
+
+    #[test]
+    fn defensive_creatures_ignore_enemies_until_hurt() {
+        use Disposition::Defensive;
+        let (mut arena, g) = goblins_without_a_player(&[
+            ((4, 4), Faction::Red, Defensive),
+            ((6, 4), Faction::Blue, Defensive),
+        ]);
+        crate::engine::advance_world_to(&mut arena.ctx(), 30.0);
+        assert!(!hurt(&arena, g[0]) && !hurt(&arena, g[1]), "neither starts it");
+        assert!(!knows_of(&arena, g[0], g[1]) && !knows_of(&arena, g[1], g[0]));
+    }
+
+    #[test]
+    fn a_defensive_creature_fights_back_once_hit() {
+        let (mut arena, g) = goblins_without_a_player(&[
+            ((4, 4), Faction::Red, Disposition::Aggressive),
+            ((6, 4), Faction::Blue, Disposition::Defensive),
+        ]);
+        crate::engine::advance_world_to(&mut arena.ctx(), 30.0);
+        assert!(hurt(&arena, g[1]), "the aggressor struck");
+        assert!(knows_of(&arena, g[1], g[0]), "and the defender knows who did it");
+        assert!(hurt(&arena, g[0]), "and hit back");
+    }
+
+    #[test]
+    fn a_timid_creature_runs_from_an_enemy_it_sees() {
+        let (mut arena, g) = goblins_without_a_player(&[
+            ((7, 7), Faction::Red, Disposition::Timid),
+            ((5, 7), Faction::Blue, Disposition::Aggressive),
+        ]);
+        // The enemy only stands there; the timid one should still back off.
+        arena.world.insert_one(g[1], DevFrozen).unwrap();
+        crate::engine::advance_world_to(&mut arena.ctx(), 10.0);
+        let (a, b) = (arena.pos(g[0]), arena.pos(g[1]));
+        let gap = (a.0 - b.0).abs().max((a.1 - b.1).abs());
+        assert!(gap > 2, "it put distance between them (gap {gap})");
+        assert!(!hurt(&arena, g[1]), "and never swung");
+    }
+
+    #[test]
+    fn a_blow_from_its_own_side_does_not_turn_a_creature() {
+        let (mut arena, g) = goblins_without_a_player(&[
+            ((4, 4), Faction::Red, Disposition::Aggressive),
+            ((6, 4), Faction::Red, Disposition::Aggressive),
+        ]);
+        generate_threat(&mut arena.world, g[0], g[1], 50.0);
+        assert!(!knows_of(&arena, g[0], g[1]));
+    }
 
     /// One noticing step by an awake-but-unaware `def` six tiles from a player
     /// at the given light exposure; returns the alertness it built.

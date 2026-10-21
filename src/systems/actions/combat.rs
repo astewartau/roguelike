@@ -508,19 +508,11 @@ pub fn apply_boss_ground_slam(ctx: &mut EffectCtx, boss: Entity) -> ActionResult
     let in_radius = |p: &Position| {
         (p.x - center.0).abs().max((p.y - center.1).abs()) <= BOSS_SLAM_RADIUS
     };
-    let mut victims: Vec<(Entity, (i32, i32))> = world
-        .query::<(&Position, &Player)>()
-        .iter()
-        .filter(|(_, (p, _))| in_radius(p))
-        .map(|(id, (p, _))| (id, (p.x, p.y)))
+    // Everyone on another side within the shockwave.
+    let victims: Vec<(Entity, (i32, i32))> = crate::systems::targets::enemies_of(world, boss)
+        .into_iter()
+        .filter(|&(_, (x, y))| in_radius(&Position::new(x, y)))
         .collect();
-    victims.extend(
-        world
-            .query::<(&Position, &CompanionAI, &Health)>()
-            .iter()
-            .filter(|(_, (p, _, h))| h.current > 0 && in_radius(p))
-            .map(|(id, (p, _, _))| (id, (p.x, p.y))),
-    );
 
     for (victim, vpos) in victims {
         // Guarding through the slam: most of it is blocked, the guard keeps

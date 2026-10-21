@@ -9,7 +9,7 @@
 
 use hecs::Entity;
 
-use crate::components::{Actor, ChaseAI, Follower, Health, Player, Raisable, Tameable};
+use crate::components::{Actor, ChaseAI, Disposition, Faction, Follower, Health, Player, Raisable, Tameable};
 use crate::world::World;
 
 /// Alive: it has no Health to lose, or some left.
@@ -20,6 +20,64 @@ fn alive(world: &World, e: Entity) -> bool {
 /// A living creature: something that takes turns and hasn't died.
 pub fn is_living_creature(world: &World, e: Entity) -> bool {
     world.get::<&Actor>(e).is_ok() && alive(world, e)
+}
+
+/// The side `e` is on: its `Faction` if it has one; otherwise the player's
+/// side for the player and anyone following someone, the dungeon's for
+/// anything else that hunts, and no side at all for things (a barrel, a
+/// lantern) that take no part.
+pub fn faction_of(world: &World, e: Entity) -> Option<Faction> {
+    if let Ok(f) = world.get::<&Faction>(e) {
+        return Some(*f);
+    }
+    if world.get::<&Player>(e).is_ok() {
+        return Some(Faction::Player);
+    }
+    if let Ok(leader) = world.get::<&Follower>(e).map(|f| f.leader) {
+        // A follower is on its leader's side (one step: a leader's own
+        // following, if any, isn't chased further).
+        return Some(world.get::<&Faction>(leader).map(|f| *f).unwrap_or(Faction::Player));
+    }
+    world.get::<&ChaseAI>(e).ok().map(|_| Faction::Dungeon)
+}
+
+/// Enemies: both take a side, and not the same one.
+pub fn hostile_to(world: &World, a: Entity, b: Entity) -> bool {
+    a != b && matches!((faction_of(world, a), faction_of(world, b)), (Some(x), Some(y)) if x != y)
+}
+
+/// On the same side as each other (a creature is on its own side).
+pub fn same_side(world: &World, a: Entity, b: Entity) -> bool {
+    a == b || matches!((faction_of(world, a), faction_of(world, b)), (Some(x), Some(y)) if x == y)
+}
+
+/// How `e` meets its enemies (`Aggressive` unless it says otherwise).
+pub fn disposition_of(world: &World, e: Entity) -> Disposition {
+    world.get::<&Disposition>(e).map(|d| *d).unwrap_or(Disposition::Aggressive)
+}
+
+/// The living creatures that are enemies of `e`, with where they stand.
+pub fn enemies_of(world: &World, e: Entity) -> Vec<(Entity, (i32, i32))> {
+    let Some(mine) = faction_of(world, e) else {
+        return Vec::new();
+    };
+    use crate::components::Position;
+    // Only what can take a side: asking every placed thing (water ripples,
+    // loose items) on each AI turn would be wasted work.
+    let mut sided: Vec<Entity> = Vec::new();
+    sided.extend(world.query::<&Faction>().with::<&Position>().iter().map(|(id, _)| id));
+    sided.extend(world.query::<&Player>().with::<&Position>().iter().map(|(id, _)| id));
+    sided.extend(world.query::<&Follower>().with::<&Position>().iter().map(|(id, _)| id));
+    sided.extend(world.query::<&ChaseAI>().with::<&Position>().iter().map(|(id, _)| id));
+    // A stable order, whatever order the world keeps them in: the AI draws
+    // from the run's rng while going through them.
+    sided.sort_unstable();
+    sided.dedup();
+    sided
+        .into_iter()
+        .filter(|&id| id != e && alive(world, id) && faction_of(world, id).is_some_and(|theirs| theirs != mine))
+        .filter_map(|id| world.get::<&Position>(id).ok().map(|p| (id, (p.x, p.y))))
+        .collect()
 }
 
 /// Can be tamed: a living, hostile creature marked Tameable (taming
