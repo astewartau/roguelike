@@ -2,7 +2,7 @@
 //! their settings, to place as many times as you like.
 //!
 //! Made from scratch, captured from an entity in the world, or started from
-//! anything the Spawn tab can place (built in a scratch world and
+//! anything the Spawn panel can place (built in a scratch world and
 //! captured). Kept in `PREFAB_FILE` in the working directory; reading and
 //! writing it is best effort, like the run history: a prefab that doesn't
 //! parse is skipped, a write that fails is logged.
@@ -137,7 +137,7 @@ pub fn capture(world: &World, e: Entity, name: &str) -> Prefab {
     Prefab { name: name.to_string(), components }
 }
 
-/// A prefab of something the Spawn tab places: built in a scratch world (so
+/// A prefab of something the Spawn panel places: built in a scratch world (so
 /// nothing in the run is touched) and captured.
 pub fn template(what: Spawnable) -> Option<Prefab> {
     let mut world = World::new();
@@ -236,6 +236,17 @@ pub fn save(path: &Path, prefabs: &[Prefab]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Spawn panel offers "Make a prefab from this" on every built-in,
+    /// items included: each has to come out as a prefab.
+    #[test]
+    fn every_built_in_can_be_made_into_a_prefab() {
+        let items = crate::systems::item_defs::ITEM_DEFS.iter().map(|d| Spawnable::Item(d.item_type));
+        for what in spawn::all_spawnables().into_iter().chain(items) {
+            let made = template(what);
+            assert!(made.is_some_and(|p| !p.components.is_empty()), "{} made no prefab", what.name());
+        }
+    }
 
     #[test]
     fn a_template_saves_loads_and_builds_the_same_thing() {

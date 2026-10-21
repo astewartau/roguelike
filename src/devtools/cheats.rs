@@ -200,23 +200,51 @@ pub fn wake_all(world: &mut World) -> usize {
 
 /// Move the player to a free floor tile, telling the spatial cache.
 pub fn teleport(state: &mut GameState, to: (i32, i32)) -> Result<(), &'static str> {
+    if !state.world.contains(state.player_entity) {
+        return Err("no player");
+    }
+    move_entity(state, state.player_entity, to)
+}
+
+/// Pick `entity` up and put it down on `to` (the inspector's Move): a
+/// floor tile, and a free one if it blocks movement. The spatial cache
+/// follows it, and a creature partway through an action (a step, a swing)
+/// drops it and decides afresh where it now stands, rather than finishing
+/// it from where it was.
+pub fn move_entity(state: &mut GameState, entity: Entity, to: (i32, i32)) -> Result<(), &'static str> {
+    let Some(from) = state.world.get::<&Position>(entity).ok().map(|p| (p.x, p.y)) else {
+        return Err("it isn't anywhere on the map");
+    };
+    if from == to {
+        return Ok(());
+    }
     if !state.grid.is_walkable(to.0, to.1) {
         return Err("not a floor tile");
     }
-    if state.spatial_cache.is_blocked(to) {
+    let blocks = state.world.get::<&crate::components::BlocksMovement>(entity).is_ok();
+    if blocks && state.spatial_cache.is_blocked(to) {
         return Err("something is standing there");
     }
-    let player = state.player_entity;
-    let Some(from) = state.world.get::<&Position>(player).ok().map(|p| (p.x, p.y)) else {
-        return Err("no player");
-    };
-    if let Ok(mut pos) = state.world.get::<&mut Position>(player) {
+    if let Ok(mut pos) = state.world.get::<&mut Position>(entity) {
         *pos = Position::new(to.0, to.1);
     }
-    if let Ok(mut vis) = state.world.get::<&mut VisualPosition>(player) {
+    if let Ok(mut vis) = state.world.get::<&mut VisualPosition>(entity) {
         *vis = VisualPosition { x: to.0 as f32, y: to.1 as f32 };
     }
-    state.spatial_cache.update_position(player, from, to);
+    state.spatial_cache.update_position(entity, from, to);
+    if entity != state.player_entity {
+        let was_busy = state
+            .world
+            .get::<&mut crate::components::Actor>(entity)
+            .map(|mut actor| actor.current_action.take().is_some())
+            .unwrap_or(false);
+        if was_busy {
+            // An entry with no action behind it: completing it is a no-op,
+            // and the simulation then asks the AI for its next action.
+            state.action_scheduler.cancel_for_entity(entity);
+            state.action_scheduler.schedule(entity, state.game_clock.time);
+        }
+    }
     state.fov_dirty = true;
     Ok(())
 }

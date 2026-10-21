@@ -197,7 +197,9 @@ impl Spawnable {
     }
 }
 
-/// Everything but items that the Spawn tab places, for templates.
+/// Everything but items that the Spawn panel places (for checking each
+/// can be made into a prefab).
+#[cfg(test)]
 pub fn all_spawnables() -> Vec<Spawnable> {
     (0..ENEMIES.len())
         .map(Spawnable::Enemy)

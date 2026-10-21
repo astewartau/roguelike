@@ -51,19 +51,17 @@ pub enum DevTab {
     Player,
     World,
     Inspect,
-    Prefabs,
     Overlays,
     Effects,
 }
 
 impl DevTab {
-    pub const ALL: [DevTab; 8] = [
+    pub const ALL: [DevTab; 7] = [
         DevTab::Spawn,
         DevTab::Paint,
         DevTab::Player,
         DevTab::World,
         DevTab::Inspect,
-        DevTab::Prefabs,
         DevTab::Overlays,
         DevTab::Effects,
     ];
@@ -75,7 +73,6 @@ impl DevTab {
             DevTab::Player => "Player",
             DevTab::World => "World",
             DevTab::Inspect => "Inspect",
-            DevTab::Prefabs => "Prefabs",
             DevTab::Overlays => "Overlays",
             DevTab::Effects => "Effects",
         }
@@ -89,7 +86,6 @@ impl DevTab {
             DevTab::Player => "👤",
             DevTab::World => "🌍",
             DevTab::Inspect => "🔍",
-            DevTab::Prefabs => "📦",
             DevTab::Overlays => "👁",
             DevTab::Effects => "✨",
         }
@@ -337,6 +333,11 @@ pub struct DevTools {
     /// The tile and entity the Inspect tab is looking at.
     pub inspect_tile: Option<(i32, i32)>,
     pub inspected: Option<Entity>,
+    /// The inspector's Move switch: while it's on, dragging the inspected
+    /// entity on the map carries it along. And what's being carried, while
+    /// the button is held.
+    pub move_inspected: bool,
+    grabbed: Option<Entity>,
     /// Inspector edits that didn't parse, kept so the text being typed isn't
     /// lost, with why: component name -> (draft, error).
     pub drafts: std::collections::HashMap<&'static str, (serde_json::Value, String)>,
@@ -409,6 +410,8 @@ impl Default for DevTools {
             advance_seconds: 10.0,
             inspect_tile: None,
             inspected: None,
+            move_inspected: false,
+            grabbed: None,
             drafts: std::collections::HashMap::new(),
             overlays: Overlays::default(),
             explosion_radius: 2,
@@ -453,20 +456,46 @@ impl DevTools {
         self.sync_panel_tool();
     }
 
-    /// Close the open panel (and drop its own tool).
+    /// Close the open panel (and drop its own tool). The inspector's panel
+    /// only shows what's picked: closing it lets go of that and carries on
+    /// picking, until it's closed again with nothing picked.
     pub fn close_panel(&mut self) {
+        if self.panel_open && self.tab == DevTab::Inspect && self.inspect_tile.is_some() {
+            self.deselect();
+        } else {
+            self.leave_panel();
+        }
+    }
+
+    /// Put the open panel away entirely (inspecting included).
+    fn leave_panel(&mut self) {
+        if self.tab == DevTab::Inspect {
+            self.deselect();
+        }
         self.panel_open = false;
         self.sync_panel_tool();
     }
 
-    /// A rail icon was clicked: open its panel, or close it if it's the one
-    /// already open.
+    /// A rail icon was clicked: open its panel, or put it away if it's the
+    /// one already open. Inspect starts with nothing picked, so its panel
+    /// waits for a click on the map.
     pub fn rail_clicked(&mut self, tab: DevTab) {
         if self.panel_open && self.tab == tab {
-            self.close_panel();
+            self.leave_panel();
         } else {
+            if tab == DevTab::Inspect {
+                self.deselect();
+            }
             self.open_panel(tab);
         }
+    }
+
+    /// Stop inspecting what's picked.
+    fn deselect(&mut self) {
+        self.inspect_tile = None;
+        self.inspected = None;
+        self.drafts.clear();
+        self.grabbed = None;
     }
 
     /// The tool the open panel arms whenever nothing else is: the inspector
@@ -511,12 +540,28 @@ impl DevTools {
     /// The mouse went down on `at` with a tool armed: apply it once.
     pub fn press(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager, at: (i32, i32)) {
         self.held_at = Some(at);
+        // With Move on, pressing on the inspected entity picks it up (to be
+        // carried by `drag`) rather than picking again.
+        if self.tool == Some(CursorTool::Inspect) && self.move_inspected {
+            if let Some(e) = self.inspected {
+                if state.world.get::<&crate::components::Position>(e).is_ok_and(|p| (p.x, p.y) == at) {
+                    self.grabbed = Some(e);
+                    return;
+                }
+            }
+        }
         self.use_tool(state, events, vfx, at);
     }
 
     /// The mouse is held at `at`: a dragging tool applies again on each new
     /// tile it passes over.
     pub fn drag(&mut self, state: &mut GameState, events: &mut EventQueue, vfx: &mut VfxManager, at: (i32, i32)) {
+        if let Some(e) = self.grabbed {
+            if self.held_at != Some(at) {
+                self.carry(state, e, at);
+            }
+            return;
+        }
         let Some(tool) = self.tool else {
             return;
         };
@@ -528,6 +573,23 @@ impl DevTools {
 
     pub fn release(&mut self) {
         self.held_at = None;
+        self.grabbed = None;
+    }
+
+    /// Carry the grabbed entity to `at`, if it can stand there; the
+    /// inspector follows it.
+    fn carry(&mut self, state: &mut GameState, e: Entity, at: (i32, i32)) {
+        match cheats::move_entity(state, e, at) {
+            Ok(()) => {
+                self.held_at = Some(at);
+                self.inspect_tile = Some(at);
+                if e == state.player_entity {
+                    self.requests.push(EngineRequest::ClearPath);
+                }
+                self.status = None;
+            }
+            Err(why) => self.status = Some(format!("Can't move it there: {why}")),
+        }
     }
 
     pub fn is_held(&self) -> bool {
@@ -1074,6 +1136,54 @@ mod tests {
     }
 
     /// A free floor tile near the player.
+    /// Inspect waits for a pick before it has anything to show; with Move
+    /// on, what's picked can be dragged to another tile (never into a
+    /// wall), keeping the spatial cache in step; closing its panel lets go
+    /// of the pick, and closing it again stops inspecting.
+    #[test]
+    fn the_inspector_picks_and_carries() {
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        let mut events = EventQueue::new();
+        let mut vfx = VfxManager::new();
+        let state = engine.state.as_mut().unwrap();
+        let mut dev = DevTools::new();
+        dev.visible = true;
+        dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
+        dev.use_tool(state, &mut events, &mut vfx, (5, 5));
+        dev.tool = None;
+
+        dev.rail_clicked(DevTab::Inspect);
+        assert!(dev.panel_open && dev.inspect_tile.is_none(), "nothing picked, so nothing to show");
+        dev.press(state, &mut events, &mut vfx, (5, 5));
+        dev.release();
+        let goblin = dev.inspected.expect("picked the goblin");
+        let at = |state: &GameState| state.world.get::<&Position>(goblin).map(|p| (p.x, p.y)).unwrap();
+
+        dev.move_inspected = true;
+        dev.press(state, &mut events, &mut vfx, (5, 5));
+        dev.drag(state, &mut events, &mut vfx, (6, 5));
+        dev.drag(state, &mut events, &mut vfx, (7, 6));
+        dev.release();
+        assert_eq!(at(state), (7, 6));
+        assert_eq!(dev.inspected, Some(goblin));
+        assert_eq!(dev.inspect_tile, Some((7, 6)), "the inspector follows it");
+        assert!(state.spatial_cache.is_blocked((7, 6)) && !state.spatial_cache.is_blocked((5, 5)));
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after a move");
+
+        dev.press(state, &mut events, &mut vfx, (7, 6));
+        dev.drag(state, &mut events, &mut vfx, (0, 6));
+        dev.release();
+        assert_eq!(at(state), (7, 6), "not into the wall");
+        assert!(dev.status.as_deref().is_some_and(|s| s.starts_with("Can't move it")));
+
+        dev.close_panel();
+        assert!(dev.panel_open && dev.inspect_tile.is_none() && dev.tool == Some(CursorTool::Inspect));
+        dev.close_panel();
+        assert!(!dev.panel_open && dev.tool.is_none());
+    }
+
     fn free_tile_near(state: &GameState) -> (i32, i32) {
         let p = state.world.get::<&Position>(state.player_entity).map(|p| (p.x, p.y)).unwrap();
         (1..8)

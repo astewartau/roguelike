@@ -1,5 +1,7 @@
-//! The Prefabs tab: the prefab library, and the builder for the one being
-//! edited.
+//! Prefabs in the Spawn panel: your own things to place, listed above the
+//! built-in ones (any of which can be made into a prefab with a
+//! right-click), and the builder for the one being edited, which takes over
+//! the panel while it's open.
 //!
 //! The builder is meant to be put together from what things do, not from
 //! remembering component names: a preview card says what the prefab is so
@@ -19,19 +21,19 @@ use super::devtools_look as look;
 
 
 /// Which prefab is being edited, if any (and still exists).
-fn editing(dev: &DevTools) -> Option<usize> {
+pub(super) fn editing(dev: &DevTools) -> Option<usize> {
     dev.selected_prefab.filter(|i| *i < dev.prefabs.len())
 }
 
-/// The part of the Prefabs tab that stays put above the scrolling list:
-/// while a prefab is being edited, a way back to the library, its name,
-/// what it is so far, and the buttons to place it and add to it. (Nothing
-/// while the library is showing.)
+/// The part of the builder that stays put above the scrolling parts: a way
+/// back to the Spawn list, the prefab's name, what it is so far, and the
+/// buttons to place it and add to it. (Nothing unless a prefab is being
+/// edited.)
 pub(super) fn prefabs_pinned(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     let Some(i) = editing(dev) else { return };
     let mut changed = false;
     ui.horizontal(|ui| {
-        if ui.button("← Prefabs").on_hover_text("Back to the library").clicked() {
+        if ui.button("← Spawn").on_hover_text("Back to everything there is to place").clicked() {
             dev.selected_prefab = None;
             dev.palette = None;
             dev.expanded_part = None;
@@ -60,90 +62,106 @@ pub(super) fn prefabs_pinned(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt
     }
 }
 
-/// The scrolling part of the Prefabs tab: the library, or the parts of the
-/// prefab being edited.
-pub(super) fn prefabs_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
-    match editing(dev) {
-        None => library(ui, dev, art),
-        Some(i) => {
-            if cards(ui, dev, art, i) {
-                dev.prefabs_dirty = true;
-            }
+/// The scrolling part of the prefab builder: the parts of the prefab being
+/// edited.
+pub(super) fn prefab_parts(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
+    if let Some(i) = editing(dev) {
+        if cards(ui, dev, art, i) {
+            dev.prefabs_dirty = true;
         }
     }
 }
 
-/// New, from a template, and the list of prefabs with Place / Copy / delete.
-fn library(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
-    ui.horizontal(|ui| {
-        if ui.button("New empty").clicked() {
-            dev.prefabs.push(Prefab::empty("New prefab"));
-            dev.selected_prefab = Some(dev.prefabs.len() - 1);
+/// Start building `prefab`: add it to the library and open it.
+fn start_building(dev: &mut DevTools, prefab: Prefab) {
+    dev.prefabs.push(prefab);
+    dev.selected_prefab = Some(dev.prefabs.len() - 1);
+    dev.prefabs_dirty = true;
+}
+
+/// A built-in's row in the Spawn panel: right-click to make a prefab of
+/// your own from it.
+pub(super) fn offer_as_prefab(response: &egui::Response, dev: &mut DevTools, what: spawn::Spawnable) {
+    response.context_menu(|ui| {
+        look::apply(ui);
+        if ui.button("Make a prefab from this").clicked() {
+            if let Some(template) = prefab::template(what) {
+                start_building(dev, template);
+            }
+            ui.close_menu();
+        }
+    });
+}
+
+/// Your own prefabs, at the top of the Spawn panel: click one to place it,
+/// the pencil to change it, right-click to copy or delete it; and a way to
+/// start a new one.
+pub(super) fn my_prefabs(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
+    let search = dev.search.to_lowercase();
+    egui::CollapsingHeader::new("My prefabs").default_open(true).show(ui, |ui| {
+        if dev.prefabs.is_empty() {
+            ui.label(
+                egui::RichText::new(
+                    "Right-click anything below to make a prefab from it, or use Save as prefab when inspecting.",
+                )
+                .small()
+                .color(look::pal(ui).muted),
+            );
+        }
+        let mut delete = None;
+        let mut duplicate = None;
+        for i in 0..dev.prefabs.len() {
+            let (name, sprite) = (dev.prefabs[i].name.clone(), dev.prefabs[i].sprite());
+            if !search.is_empty() && !name.to_lowercase().contains(&search) {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                if ui.small_button("✏").on_hover_text("Change it").clicked() {
+                    dev.selected_prefab = Some(i);
+                }
+                let armed = dev.tool == Some(CursorTool::PlacePrefab(i));
+                let response = match sprite {
+                    Some(sprite) => row(ui, art, sprite, &name, armed),
+                    None => ui.selectable_label(armed, &name),
+                };
+                if response.clicked() {
+                    dev.tool = if armed { None } else { Some(CursorTool::PlacePrefab(i)) };
+                }
+                response.context_menu(|ui| {
+                    look::apply(ui);
+                    if ui.button("Change it").clicked() {
+                        dev.selected_prefab = Some(i);
+                        ui.close_menu();
+                    }
+                    if ui.button("Make a copy").clicked() {
+                        duplicate = Some(i);
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete").clicked() {
+                        delete = Some(i);
+                        ui.close_menu();
+                    }
+                });
+            });
+        }
+        if ui.button("+  New prefab").on_hover_text("Start from nothing and add parts").clicked() {
+            start_building(dev, Prefab::empty("New prefab"));
+        }
+        if let Some(i) = duplicate {
+            let mut copy = dev.prefabs[i].clone();
+            copy.name = format!("{} copy", copy.name);
+            dev.prefabs.push(copy);
             dev.prefabs_dirty = true;
         }
-        egui::ComboBox::from_id_salt("prefab_template")
-            .selected_text("From a template")
-            .show_ui(ui, |ui| {
-                look::apply(ui);
-                for what in spawn::all_spawnables() {
-                    if ui.selectable_label(false, what.name()).clicked() {
-                        if let Some(template) = prefab::template(what) {
-                            dev.prefabs.push(template);
-                            dev.selected_prefab = Some(dev.prefabs.len() - 1);
-                            dev.prefabs_dirty = true;
-                        }
-                    }
-                }
-            });
-    });
-    ui.colored_label(
-        look::pal(ui).muted,
-        "Or Save as prefab from the Inspect tab. Saved to dev_prefabs.json; the Spawn tab's count applies.",
-    );
-
-    let mut delete = None;
-    let mut duplicate = None;
-    for i in 0..dev.prefabs.len() {
-        let (name, sprite) = (dev.prefabs[i].name.clone(), dev.prefabs[i].sprite());
-        ui.horizontal(|ui| {
-            let armed = dev.tool == Some(CursorTool::PlacePrefab(i));
-            if ui.selectable_label(armed, "Place").clicked() {
-                dev.tool = if armed {
-                    None
-                } else {
-                    Some(CursorTool::PlacePrefab(i))
-                };
+        if let Some(i) = delete {
+            dev.prefabs.remove(i);
+            dev.selected_prefab = None;
+            if matches!(dev.tool, Some(CursorTool::PlacePrefab(_))) {
+                dev.disarm();
             }
-            if ui.small_button("Copy").clicked() {
-                duplicate = Some(i);
-            }
-            if look::cross_button(ui).on_hover_text("Delete").clicked() {
-                delete = Some(i);
-            }
-            let selected = dev.selected_prefab == Some(i);
-            let clicked = match sprite {
-                Some(sprite) => row(ui, art, sprite, &name, selected).clicked(),
-                None => ui.selectable_label(selected, &name).clicked(),
-            };
-            if clicked {
-                dev.selected_prefab = if selected { None } else { Some(i) };
-            }
-        });
-    }
-    if let Some(i) = duplicate {
-        let mut copy = dev.prefabs[i].clone();
-        copy.name = format!("{} copy", copy.name);
-        dev.prefabs.push(copy);
-        dev.prefabs_dirty = true;
-    }
-    if let Some(i) = delete {
-        dev.prefabs.remove(i);
-        dev.selected_prefab = None;
-        if matches!(dev.tool, Some(CursorTool::PlacePrefab(_))) {
-            dev.disarm();
+            dev.prefabs_dirty = true;
         }
-        dev.prefabs_dirty = true;
-    }
+    });
 }
 
 /// What the prefab is so far: its look, name, health and light, and in a

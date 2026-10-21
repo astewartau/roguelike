@@ -194,6 +194,11 @@ fn rail(ctx: &egui::Context, dev: &mut DevTools) -> egui::Rect {
 /// taller than the panel. Each tool's panel can be resized from its left
 /// and bottom edges, and keeps its own size. Returns where it was drawn.
 fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, right: f32) -> Option<egui::Rect> {
+    // Inspecting is a way of clicking the map: its panel only appears once
+    // something has been picked.
+    if dev.tab == DevTab::Inspect && dev.inspect_tile.is_none() {
+        return None;
+    }
     let screen = ctx.screen_rect();
     let tallest = screen.height() - 2.0 * DEVTOOLS_EDGE_GAP;
     let mut open = true;
@@ -217,16 +222,22 @@ fn panel(ctx: &egui::Context, dev: &mut DevTools, art: &DevArt, view: &DevView, 
                 });
             });
             ui.add_space(4.0);
-            if dev.tab == DevTab::Prefabs {
+            // Spawn's pinned top: the prefab being built (with the way
+            // back), or the search over everything there is to place.
+            let building = dev.tab == DevTab::Spawn && super::devtools_prefab::editing(dev).is_some();
+            if building {
                 super::devtools_prefab::prefabs_pinned(ui, dev, art);
+            } else if dev.tab == DevTab::Spawn {
+                look::search_box(ui, &mut dev.search, "Search everything");
+                ui.add_space(4.0);
             }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match dev.tab {
+                DevTab::Spawn if building => super::devtools_prefab::prefab_parts(ui, dev, art),
                 DevTab::Spawn => spawn_tab(ui, dev, art),
                 DevTab::Paint => paint_tab(ui, dev, art),
                 DevTab::Player => player_tab(ui, dev, view),
                 DevTab::World => world_tab(ui, dev, view),
                 DevTab::Inspect => inspect_tab(ui, dev, view, art),
-                DevTab::Prefabs => super::devtools_prefab::prefabs_tab(ui, dev, art),
                 DevTab::Overlays => overlays_tab(ui, dev),
                 DevTab::Effects => effects_tab(ui, dev),
             });
@@ -271,18 +282,18 @@ fn place_list(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt, items: &[Spaw
             continue;
         }
         let selected = dev.tool == Some(CursorTool::Place(what));
-        if row(ui, art, what.sprite(), &name, selected).clicked() {
+        let response = row(ui, art, what.sprite(), &name, selected);
+        if response.clicked() {
             dev.tool = if selected { None } else { Some(CursorTool::Place(what)) };
         }
+        super::devtools_prefab::offer_as_prefab(&response, dev, what);
     }
 }
 
+/// Everything there is to place: your own prefabs first, then what's built
+/// in. Right-click a built-in to make a prefab from it.
 fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
-    ui.horizontal(|ui| {
-        ui.label("Search");
-        ui.text_edit_singleline(&mut dev.search);
-    });
-    ui.add_space(4.0);
+    super::devtools_prefab::my_prefabs(ui, dev, art);
 
     egui::CollapsingHeader::new("You").default_open(true).show(ui, |ui| {
         ui.label(
@@ -367,9 +378,11 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
                 if ui.small_button("Give").clicked() {
                     dev.commands.push(DevCommand::GiveItem { kind: def.item_type, count: dev.spawn_options.count });
                 }
-                if row(ui, art, def.sprite, def.name, selected).clicked() {
+                let response = row(ui, art, def.sprite, def.name, selected);
+                if response.clicked() {
                     dev.tool = if selected { None } else { Some(CursorTool::Place(what)) };
                 }
+                super::devtools_prefab::offer_as_prefab(&response, dev, what);
             });
         }
     });
@@ -702,6 +715,10 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
         ui.label(look::strong(entity_label(world, e)));
         ui.colored_label(look::pal(ui).muted, format!("#{}", e.id()));
     });
+    if world.get::<&Position>(e).is_ok() {
+        look::toggle(ui, &mut dev.move_inspected, "Move: drag it on the map")
+            .on_hover_text("Press on it and drag to carry it to another tile");
+    }
     ui.horizontal_wrapped(|ui| {
         if e != view.player {
             if ui.button("Delete").clicked() {
@@ -715,7 +732,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                 dev.prefabs.push(crate::devtools::prefab::capture(world, e, &name));
                 dev.selected_prefab = Some(dev.prefabs.len() - 1);
                 dev.prefabs_dirty = true;
-                dev.open_panel(DevTab::Prefabs);
+                dev.open_panel(DevTab::Spawn);
             }
             // Placed from a prefab and tweaked here: write the tweaks back.
             let origin = dev.placed_from.get(&e).and_then(|name| dev.prefabs.iter().position(|p| &p.name == name));
