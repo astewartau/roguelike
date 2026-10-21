@@ -251,18 +251,22 @@ pub const CONTEXT_MENU_MIN_WIDTH: f32 = 150.0;
 /// does not sit on top of the first entry's label.
 pub const CONTEXT_MENU_CURSOR_OFFSET: f32 = 4.0;
 
-/// Width of a developer tools panel (the one a rail icon opens), in egui
-/// points. It floats over the map beside the rail.
+/// Starting width of a developer tools panel (the one a rail icon opens), in
+/// egui points. It floats over the map beside the rail, and can be resized.
 pub const DEVTOOLS_PANEL_WIDTH: f32 = 340.0;
-/// Height of the developer tools' toolbar across the top of the screen (run
-/// info, the world clock, the armed tool), in egui points. The game's HUD
-/// moves down by this much while the tools are open.
-pub const DEVTOOLS_TOOLBAR_HEIGHT: f32 = 44.0;
-/// Width of the developer tools' icon rail down the right edge, in egui
-/// points. The camera centres the map in what's left beside it.
-pub const DEVTOOLS_RAIL_WIDTH: f32 = 56.0;
-/// Size of one square icon button on the rail, in egui points.
+/// Starting height of a developer tools panel, as a share of the screen's
+/// height (less the edge gaps). Lower leaves more map showing below it.
+pub const DEVTOOLS_PANEL_HEIGHT_SHARE: f32 = 0.8;
+/// The smallest a developer tools panel can be resized to, in egui points.
+pub const DEVTOOLS_PANEL_MIN_SIZE: [f32; 2] = [260.0, 220.0];
+/// Gap between the developer tools' bars and panels and the screen's edge,
+/// and between each other, in egui points.
+pub const DEVTOOLS_EDGE_GAP: f32 = 8.0;
+/// Size of one square icon button on the tool rail, in egui points.
 pub const DEVTOOLS_RAIL_BUTTON: f32 = 42.0;
+/// Widest the toolbar's status line ("Placed 3 Goblins") gets before it's
+/// cut short, in egui points (the whole line shows on hover).
+pub const DEVTOOLS_STATUS_MAX_WIDTH: f32 = 240.0;
 /// Opacity of the cursor's ghost preview of what a dev tool will place
 /// (0-255). Enough to see where it lands, little enough to see under it.
 pub const DEVTOOLS_GHOST_ALPHA: u8 = 150;

@@ -259,7 +259,8 @@ impl GameEngine {
 
     /// Start a sandbox: an empty walled arena, nobody in it, the developer
     /// tools open on the spawn tab with the fog lifted and the world clock
-    /// running. Placing a player there makes them `class`.
+    /// on Hold (Run sets it going). Placing a player there makes them
+    /// `class`.
     pub fn start_sandbox(&mut self, class: PlayerClass, camera: &mut Camera) {
         self.finalize_run_record();
         let state = GameState::new_sandbox(class);
@@ -272,8 +273,7 @@ impl GameEngine {
         self.dev.visible = true;
         self.dev.open_panel(crate::devtools::DevTab::Spawn);
         self.dev.no_fog = true;
-        self.dev.clock_running = true;
-        self.dev.status = Some("An empty world. Place a player, or creatures, and watch.".into());
+        self.dev.status = Some("An empty world. Place a player, or creatures, then Run the clock.".into());
     }
 
     fn begin(&mut self, state: GameState, ui_state: GameUiState) {
@@ -387,12 +387,17 @@ impl GameEngine {
                     }
                 }
                 // 3. Close the dev tools' add palette, drop the armed dev
-                //    tool, then close the dev panel.
+                //    tool, close the open dev panel (which drops its own
+                //    tool), then hide the dev tools.
                 if self.dev.palette.take().is_some() {
                     return None;
                 }
-                if self.dev.tool.is_some() {
+                if self.dev.tool.is_some() && !self.dev.tool_is_panels() {
                     self.dev.disarm();
+                    return None;
+                }
+                if self.dev.visible && self.dev.panel_open {
+                    self.dev.close_panel();
                     return None;
                 }
                 if self.dev.visible {
@@ -520,7 +525,7 @@ impl GameEngine {
                             || self.input.keys_pressed.contains(&KeyCode::ShiftRight);
                         if self.input.is_targeting() {
                             self.input.cancel_targeting();
-                        } else if self.dev.has_active_tool() {
+                        } else if self.dev.has_active_tool() && !self.dev.tool_is_panels() {
                             self.dev.disarm();
                         } else if shift {
                             if self.game_mode == GameMode::Playing {
@@ -2979,6 +2984,7 @@ mod tests {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
         engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.dev.clock_running = true;
         let goblin = crate::devtools::spawn::ENEMIES.iter().position(|d| d.name == "Goblin").expect("goblins exist");
         for &(at, faction) in goblins {
             engine.dev.spawn_options.faction = Some(faction);
@@ -2998,12 +3004,17 @@ mod tests {
     }
 
     #[test]
-    fn a_sandbox_starts_empty_with_its_clock_running() {
-        let (mut engine, mut camera) = sandbox_with(&[]);
+    fn a_sandbox_starts_empty_on_hold_and_runs_when_asked() {
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
         let state = engine.state.as_ref().unwrap();
         assert!(state.sandbox && !state.has_player());
-        assert!(engine.dev.visible && engine.dev.clock_running);
+        assert!(engine.dev.visible && !engine.dev.clock_running, "starts on Hold");
         assert_eq!(state.grid.get(0, 0).unwrap().tile_type, crate::tile::TileType::Wall);
+        run_frames(&mut engine, &mut camera, 0.5);
+        assert_eq!(engine.game_time(), 0.0, "nothing passes on Hold");
+        engine.dev.clock_running = true;
         run_frames(&mut engine, &mut camera, 2.0);
         assert!(engine.game_time() > 1.5, "time passes with nobody there");
         assert_eq!(engine.game_mode, GameMode::Playing);

@@ -178,11 +178,11 @@ pub fn rail_button(ui: &mut egui::Ui, icon: &str, name: &str, selected: bool) ->
     })
 }
 
-/// The frame of a bar fixed to a screen edge (the toolbar, the rail): the
-/// panel's colours with a hairline border, square to the screen.
-pub fn bar_frame(margin: egui::Margin) -> egui::Frame {
-    let p = PALETTE;
-    egui::Frame::none().fill(p.bg).stroke(Stroke::new(1.0_f32, p.border)).inner_margin(margin)
+/// The frame of something floating over the map (the toolbar, the rail, a
+/// tool's panel): `panel_frame`'s rounded card and shadow, placed by its
+/// owner rather than with a margin of its own.
+pub fn floating_frame(margin: egui::Margin) -> egui::Frame {
+    panel_frame().outer_margin(egui::Margin::ZERO).inner_margin(margin)
 }
 
 /// Text in the heavier face and full text colour, for titles. (egui's own

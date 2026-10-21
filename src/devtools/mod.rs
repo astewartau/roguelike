@@ -450,15 +450,44 @@ impl DevTools {
     pub fn open_panel(&mut self, tab: DevTab) {
         self.tab = tab;
         self.panel_open = true;
+        self.sync_panel_tool();
+    }
+
+    /// Close the open panel (and drop its own tool).
+    pub fn close_panel(&mut self) {
+        self.panel_open = false;
+        self.sync_panel_tool();
     }
 
     /// A rail icon was clicked: open its panel, or close it if it's the one
     /// already open.
     pub fn rail_clicked(&mut self, tab: DevTab) {
         if self.panel_open && self.tab == tab {
-            self.panel_open = false;
+            self.close_panel();
         } else {
             self.open_panel(tab);
+        }
+    }
+
+    /// The tool the open panel arms whenever nothing else is: the inspector
+    /// picks whatever is clicked on the map, with no need to ask it to.
+    fn panel_tool(&self) -> Option<CursorTool> {
+        (self.visible && self.panel_open && self.tab == DevTab::Inspect).then_some(CursorTool::Inspect)
+    }
+
+    /// Whether the armed tool is the open panel's own (so dropping it means
+    /// closing the panel).
+    pub fn tool_is_panels(&self) -> bool {
+        self.tool.is_some() && self.tool == self.panel_tool()
+    }
+
+    /// Arm the open panel's own tool if nothing is armed, and drop it once
+    /// its panel is closed.
+    fn sync_panel_tool(&mut self) {
+        match self.panel_tool() {
+            Some(tool) if self.tool.is_none() => self.tool = Some(tool),
+            None if self.tool == Some(CursorTool::Inspect) => self.disarm(),
+            _ => {}
         }
     }
 
@@ -750,6 +779,7 @@ impl DevTools {
     /// Every frame: keep god mode and full meters going, and let go of god
     /// mode's Invulnerable once it's switched off.
     pub fn maintain(&mut self, state: &mut GameState) {
+        self.sync_panel_tool();
         cheats::maintain(state, self.god_mode, self.keep_fed);
         if self.god_mode_applied && !self.god_mode {
             cheats::end_god_mode(state);
@@ -1201,6 +1231,32 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             crate::ui::draw_dev_overlays(ctx, &dev, &camera, &state.world, &state.grid, player, at);
         });
+    }
+
+    /// The inspector picks whatever is clicked while its panel is open,
+    /// with no button to arm it; closing the panel drops it, and it never
+    /// replaces a tool armed some other way.
+    #[test]
+    fn the_inspect_panel_arms_inspect_while_open() {
+        let mut dev = DevTools::new();
+        dev.visible = true;
+        dev.rail_clicked(DevTab::Inspect);
+        assert_eq!(dev.tool, Some(CursorTool::Inspect));
+        assert!(dev.tool_is_panels());
+        dev.rail_clicked(DevTab::Inspect);
+        assert!(!dev.panel_open);
+        assert_eq!(dev.tool, None, "closing the panel drops its tool");
+
+        dev.tool = Some(CursorTool::Teleport);
+        dev.open_panel(DevTab::Inspect);
+        assert_eq!(dev.tool, Some(CursorTool::Teleport), "an armed tool is left alone");
+        assert!(!dev.tool_is_panels());
+        dev.close_panel();
+        assert_eq!(dev.tool, Some(CursorTool::Teleport));
+
+        dev.tool = None;
+        dev.open_panel(DevTab::Spawn);
+        assert_eq!(dev.tool, None, "other panels arm nothing");
     }
 
     #[test]
