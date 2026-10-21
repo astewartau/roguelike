@@ -322,6 +322,15 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(XpMultiplier, XpMultiplier(2)),
             plain!(BarrelFuse, BarrelFuse::new(3.0, FuseCause::Fire)),
             plain!(Equipment, Equipment::empty()),
+            plain!(Player, Player),
+            plain!(Inventory, Inventory::new()),
+            plain!(Experience, Experience::new()),
+            plain!(Hunger, Hunger::new()),
+            plain!(Fatigue, Fatigue::new()),
+            plain!(ClassAbility, ClassAbility::new(PlayerClass::Fighter.ability(), PlayerClass::Fighter.ability_cooldown())),
+            plain!(SecondaryAbility, SecondaryAbility::new(AbilityType::Stun, crate::constants::STUN_COOLDOWN)),
+            plain!(LearnedAbilities, LearnedAbilities::default()),
+            plain!(ClassKit, ClassKit::for_class(PlayerClass::Fighter)),
             plain!(Channel, Channel {
                 effect: ChannelEffect::Shout { radius: 5 },
                 target: None,
@@ -402,6 +411,12 @@ pub const REQUIRES: &[(&str, &[&str])] = &[
     ("FriendlyNPC", &["Dialogue"]),
     ("Vendor", &["FriendlyNPC"]),
     ("OverlaySprite", &["Sprite"]),
+    // Whoever you play takes turns, can be hurt, carries, levels, eats and
+    // tires: the player's own code reads all of these.
+    (
+        "Player",
+        &["Actor", "Health", "Stats", "StatusEffects", "Inventory", "Equipment", "Experience", "Hunger", "Fatigue"],
+    ),
 ];
 
 /// The requirement table by component type: what each requires, and what

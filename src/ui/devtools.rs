@@ -321,19 +321,6 @@ pub(super) fn spawn_group(dev: &DevTools, title: &str) -> egui::CollapsingHeader
 fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     super::devtools_prefab::my_prefabs(ui, dev, art);
 
-    spawn_group(dev, "You").show(ui, |ui| {
-        ui.label(
-            egui::RichText::new("A fresh character on the clicked tile, in place of the one there is.")
-                .small()
-                .color(look::pal(ui).muted),
-        );
-        ui.horizontal_wrapped(|ui| {
-            for class in crate::components::PlayerClass::ALL {
-                tool_button(ui, dev, CursorTool::PlacePlayer(class), class.name(), "Click the map to put yourself there");
-            }
-        });
-    });
-
     spawn_group(dev, "Creatures").show(ui, |ui| {
         let options = &mut dev.spawn_options;
         ui.horizontal(|ui| {
@@ -761,7 +748,10 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
                 dev.open_panel(DevTab::Spawn);
             }
             // Placed from a prefab and tweaked here: write the tweaks back.
-            let origin = dev.placed_from.get(&e).and_then(|name| dev.prefabs.iter().position(|p| &p.name == name));
+            let origin = dev
+                .placed_from
+                .get(&e)
+                .and_then(|name| dev.prefabs.iter().position(|p| &p.name == name && !p.built_in));
             if let Some(index) = origin {
                 let label = format!("Update “{}” from this", dev.prefabs[index].name);
                 if ui.button(label).on_hover_text("Replace the prefab's components with this one's").clicked() {

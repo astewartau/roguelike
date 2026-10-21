@@ -121,7 +121,7 @@ impl PlayerClass {
 // =============================================================================
 
 /// Types of class abilities
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AbilityType {
     /// Fighter: Attack all adjacent enemies
     Cleave,
@@ -322,7 +322,7 @@ impl AbilityType {
 /// innate spell-list ability (the Necromancer's Raise Dead). Effort comes from
 /// [`AbilityType::energy_cost`]; the cooldown is stored per entry and is the
 /// only thing gating use.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct LearnedSpell {
     pub ability: AbilityType,
     /// Seconds remaining on cooldown (0 = ready)
@@ -333,7 +333,7 @@ pub struct LearnedSpell {
 
 /// The player's spell list: permanently learned abilities with individual
 /// long cooldowns. Ticked alongside the other ability cooldowns.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LearnedAbilities {
     pub spells: Vec<LearnedSpell>,
 }
@@ -375,7 +375,7 @@ impl LearnedAbilities {
 }
 
 /// Tracks the player's class ability and its cooldown state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClassAbility {
     pub ability_type: AbilityType,
     /// Seconds remaining on cooldown (0 = ready)
@@ -405,7 +405,7 @@ impl ClassAbility {
 }
 
 /// Optional secondary class ability (currently only Druid has this)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SecondaryAbility {
     pub ability_type: AbilityType,
     /// Seconds remaining on cooldown (0 = ready)
@@ -607,7 +607,7 @@ impl AnimatedSprite {
 }
 
 /// Player marker component
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Player;
 
 /// Marker for an entity that is sneaking (player crouch toggle): slower movement,
@@ -632,7 +632,7 @@ pub enum HungerState {
 
 /// Hunger meter (player-only — enemies never hunger). Starts full and drains
 /// over game time (see `systems::survival`); eating food restores it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Hunger {
     /// Current fullness, 0.0 (starving) to `HUNGER_MAX` (fully fed).
     pub value: f32,
@@ -703,7 +703,7 @@ pub enum FatigueState {
 /// It is deliberately a long meter: nothing is gated on it until it maxes out,
 /// at which point actions slow down. Fighting should cost you over the course
 /// of a run, not throttle you in the middle of a fight.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Fatigue {
     /// Current fatigue, 0.0 (fully rested) to `FATIGUE_MAX` (exhausted).
     pub value: f32,
@@ -831,7 +831,7 @@ impl Stats {
 }
 
 /// Experience component - pure data for XP and level
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Experience {
     pub current: u32,
     pub level: u32,
@@ -1229,7 +1229,7 @@ impl StatusEffects {
 
 
 /// Inventory component - pure data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Inventory {
     pub items: Vec<ItemInstance>,
     pub current_weight_kg: f32,
@@ -3007,7 +3007,7 @@ pub struct SecretDoor;
 // =============================================================================
 
 /// One ability in a [`ClassKit`], with its own cooldown.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct KitAbility {
     pub ability: AbilityType,
     /// Seconds remaining on cooldown (0 = ready)
@@ -3021,7 +3021,7 @@ pub struct KitAbility {
 /// Every class gets one at init (see [`ClassKit::for_class`]); it sits beside
 /// the single [`ClassAbility`] / [`SecondaryAbility`] slots rather than
 /// replacing them. Replaces the Ranger-only `RangerAbilities` array.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClassKit {
     pub abilities: Vec<KitAbility>,
 }

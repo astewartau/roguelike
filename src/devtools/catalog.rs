@@ -9,7 +9,8 @@
 
 /// Groups, by what the components in them do, in the order the picker shows
 /// them.
-pub const GROUPS: [&str; 8] = ["Looks", "Body", "Mind", "Attacks", "Fire & light", "Things", "Allies & people", "Internal"];
+pub const GROUPS: [&str; 9] =
+    ["Looks", "Body", "Mind", "Attacks", "Fire & light", "Things", "Allies & people", "Player", "Internal"];
 
 /// One component, as the builder describes it.
 pub struct Info {
@@ -55,7 +56,7 @@ pub const INFO: &[Info] = &[
     info("Equipment", "Body", "", "What it wields and wears; its weapon sets its melee damage.", &["Actor"]),
     info("XpMultiplier", "Body", "worth extra XP", "Worth this many times the usual XP when killed.", &["Health"]),
     // Mind
-    info("Actor", "Mind", "", "Takes turns. Speed is how fast it acts.", &["ChaseAI|CompanionAI"]),
+    info("Actor", "Mind", "", "Takes turns. Speed is how fast it acts.", &["ChaseAI|CompanionAI|Player"]),
     info("ChaseAI", "Mind", "hunts you", "Hostile: wanders, notices you, chases and attacks.", &[]),
     info("Asleep", "Mind", "asleep", "Asleep until something wakes it.", &[]),
     info("CanOpenDoors", "Mind", "opens doors", "Opens doors, and shouts to wake its allies.", &["ChaseAI|CompanionAI"]),
@@ -109,6 +110,16 @@ pub const INFO: &[Info] = &[
     info("FriendlyNPC", "Allies & people", "friendly", "Can be talked to, never attacked by bumping.", &["Name"]),
     info("Vendor", "Allies & people", "sells things", "Buys and sells: its stock and gold.", &[]),
     info("Dialogue", "Allies & people", "", "What it says when talked to.", &["FriendlyNPC"]),
+    // Player
+    info("Player", "Player", "you play it", "You control it. Placing one makes it you, in place of whoever you were; it drops any mind of its own.", &[]),
+    info("Inventory", "Player", "", "What it carries, and its gold.", &["Player"]),
+    info("Experience", "Player", "", "Its experience and level.", &["Player"]),
+    info("Hunger", "Player", "", "Grows hungry over time; eating fills it.", &["Player"]),
+    info("Fatigue", "Player", "", "Tires with effort; rest and sleep clear it.", &["Player"]),
+    info("ClassAbility", "Player", "", "Its class's main ability, on the hotbar, with its cooldown.", &["Player"]),
+    info("SecondaryAbility", "Player", "", "A second class ability.", &["Player"]),
+    info("LearnedAbilities", "Player", "", "Spells it has learned (from scrolls), each with its own cooldown.", &["Player"]),
+    info("ClassKit", "Player", "", "Its class's extra abilities, each with its own cooldown.", &["Player"]),
     // Internal: state the game keeps for itself, hidden from the picker by
     // default.
     info("Position", "Internal", "", "Where it is (set by where it's placed).", &[]),

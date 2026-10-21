@@ -26,6 +26,10 @@ pub const PREFAB_FILE: &str = "dev_prefabs.json";
 pub struct Prefab {
     pub name: String,
     pub components: Vec<PrefabComponent>,
+    /// One of the game's own (the player classes): listed with yours but
+    /// never changed or saved; changing one makes a copy of your own.
+    #[serde(skip)]
+    pub built_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,7 +41,7 @@ pub struct PrefabComponent {
 
 impl Prefab {
     pub fn empty(name: &str) -> Self {
-        Self { name: name.to_string(), components: Vec::new() }
+        Self { name: name.to_string(), components: Vec::new(), built_in: false }
     }
 
     /// The names of the components it has.
@@ -134,7 +138,28 @@ pub fn capture(world: &World, e: Entity, name: &str) -> Prefab {
             Some(PrefabComponent { component: entry.name.to_string(), value: (entry.read)(world, e)? })
         })
         .collect();
-    Prefab { name: name.to_string(), components }
+    Prefab { name: name.to_string(), components, built_in: false }
+}
+
+/// The game's own prefabs, listed before yours: each player class as it
+/// starts out ("Fighter (Player)"), built by the same code that starts a
+/// run, in a scratch world, and captured.
+pub fn built_ins() -> Vec<Prefab> {
+    crate::components::PlayerClass::ALL
+        .iter()
+        .map(|&class| {
+            let mut world = World::new();
+            let e = crate::engine::spawn_player(&mut world, class, Position::new(0, 0));
+            let mut prefab = capture(&world, e, &format!("{} (Player)", class.name()));
+            prefab.built_in = true;
+            prefab
+        })
+        .collect()
+}
+
+/// Your own copy of `prefab`, to change (a built-in one stays as it is).
+pub fn copy_of(prefab: &Prefab) -> Prefab {
+    Prefab { name: format!("{} copy", prefab.name), built_in: false, ..prefab.clone() }
 }
 
 /// A prefab of something the Spawn panel places: built in a scratch world (so
@@ -223,7 +248,9 @@ fn migrate(mut prefab: Prefab) -> Prefab {
 /// Write every prefab to the file. Failures are logged and otherwise
 /// ignored: losing a dev convenience must never stop the game.
 pub fn save(path: &Path, prefabs: &[Prefab]) {
-    match serde_json::to_string_pretty(prefabs) {
+    // The built-in ones are the game's, made afresh each time.
+    let yours: Vec<&Prefab> = prefabs.iter().filter(|p| !p.built_in).collect();
+    match serde_json::to_string_pretty(&yours) {
         Ok(text) => {
             if let Err(err) = std::fs::write(path, text) {
                 eprintln!("Couldn't save prefabs to {}: {err}", path.display());
@@ -236,6 +263,26 @@ pub fn save(path: &Path, prefabs: &[Prefab]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every class is a built-in player prefab, read-only: never written
+    /// to the file, and a copy of one is your own to change.
+    #[test]
+    fn the_classes_are_built_in_player_prefabs() {
+        let built = built_ins();
+        assert_eq!(built.len(), crate::components::PlayerClass::ALL.len());
+        for prefab in &built {
+            assert!(prefab.built_in && prefab.has("Player") && prefab.has("ClassKit"), "{}", prefab.name);
+            assert!(prefab.name.ends_with(" (Player)"));
+        }
+        let path = std::env::temp_dir().join(format!("prefabs-{}.json", std::process::id()));
+        let mut all = built.clone();
+        all.push(copy_of(&built[0]));
+        save(&path, &all);
+        let back = load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(back.len(), 1, "only your own are saved");
+        assert!(!back[0].built_in && back[0].name == format!("{} copy", built[0].name));
+    }
 
     /// The Spawn panel offers "Make a prefab from this" on every built-in,
     /// items included: each has to come out as a prefab.

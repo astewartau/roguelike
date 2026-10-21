@@ -2947,7 +2947,9 @@ mod tests {
 
         let pool: Vec<&'static crate::component_registry::ComponentEntry> = crate::component_registry::entries()
             .iter()
-            .filter(|e| e.name != "Position")
+            // Being the player is a role taken by placing it, not a part any
+            // random thing can have (there is one player).
+            .filter(|e| e.name != "Position" && e.name != "Player")
             .collect();
         let tools = [CursorTool::Blast, CursorTool::Ignite, CursorTool::Douse, CursorTool::Kill, CursorTool::Delete];
 
@@ -3172,7 +3174,9 @@ mod tests {
     fn a_player_placed_in_the_sandbox_plays_and_dying_leaves_the_world_running() {
         use crate::devtools::CursorTool;
         let (mut engine, mut camera) = sandbox_with(&[]);
-        engine.dev.tool = Some(CursorTool::PlacePlayer(PlayerClass::Ranger));
+        let ranger = engine.dev.prefabs.iter().position(|p| p.name == "Ranger (Player)").expect("the built-in Ranger");
+        engine.dev.open_panel(crate::devtools::DevTab::Spawn);
+        engine.dev.tool = Some(CursorTool::PlacePrefab(ranger));
         {
             let state = engine.state.as_mut().unwrap();
             engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (20, 15));
@@ -3182,7 +3186,8 @@ mod tests {
         }
         let state = engine.state.as_ref().unwrap();
         assert!(state.has_player());
-        assert_eq!(state.player_class, PlayerClass::Ranger);
+        let name = state.world.get::<&crate::components::Name>(state.player_entity).map(|n| n.0.clone()).unwrap();
+        assert_eq!(name, "Ranger");
         let ui = engine.ui_state.as_ref().unwrap();
         assert!(ui.hotbar_main.iter().any(Option::is_some), "their hotbar is filled");
 
@@ -3204,6 +3209,77 @@ mod tests {
         assert!(engine.dev.clock_running);
     }
 
+    /// Anything can be played. A skeleton made into a prefab with Player
+    /// added becomes you when placed: no mind of its own, on your side,
+    /// with what a player needs, and it walks where you send it. Giving
+    /// Player to something in the inspector makes that you instead.
+    #[test]
+    fn anything_with_player_can_be_played() {
+        use crate::components::{ChaseAI, Faction, Inventory, Name, Position};
+        use crate::devtools::{spawn::ENEMIES, CursorTool, DevCommand, DevTab, Spawnable};
+        let (mut engine, mut camera) = sandbox_with(&[]);
+        let skeleton = ENEMIES.iter().position(|d| d.name == "Skeleton").expect("skeletons exist");
+        let mut prefab = crate::devtools::prefab::template(Spawnable::Enemy(skeleton)).expect("a skeleton prefab");
+        assert!(prefab.add("Player"));
+        for needed in ["Inventory", "Hunger", "Fatigue", "Experience", "Equipment"] {
+            assert!(prefab.has(needed), "Player brings {needed}");
+        }
+        engine.dev.prefabs.push(prefab);
+        engine.dev.open_panel(DevTab::Spawn);
+        engine.dev.tool = Some(CursorTool::PlacePrefab(engine.dev.prefabs.len() - 1));
+        {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (10, 10));
+        }
+        for request in engine.dev.take_requests() {
+            engine.handle_dev_request(request);
+        }
+        let me = {
+            let state = engine.state.as_ref().unwrap();
+            let me = state.player_entity;
+            assert_eq!(state.world.get::<&Name>(me).map(|n| n.0.clone()).unwrap(), "Skeleton");
+            assert!(state.world.get::<&ChaseAI>(me).is_err(), "no mind of its own");
+            assert_eq!(crate::systems::targets::faction_of(&state.world, me), Some(Faction::Player));
+            me
+        };
+
+        engine.dev.visible = false;
+        let started = {
+            let mut ctx = engine.sim_ctx().unwrap();
+            execute_player_intent(&mut ctx, crate::systems::player_input::PlayerIntent::Move { dx: 1, dy: 0 })
+        };
+        assert_eq!(started.turn_result, simulation::TurnResult::Started);
+        run_frames(&mut engine, &mut camera, 1.0);
+        let state = engine.state.as_ref().unwrap();
+        assert_eq!(state.world.get::<&Position>(me).map(|p| (p.x, p.y)).unwrap(), (11, 10), "it walked");
+
+        // Player given to a goblin in the inspector: the goblin is you now.
+        engine.dev.visible = true;
+        engine.dev.open_panel(DevTab::Spawn);
+        engine.dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
+        let goblin = {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (5, 5));
+            state.world.query::<(&Position, &ChaseAI)>().iter().find(|(_, (p, _))| (p.x, p.y) == (5, 5)).map(|(e, _)| e)
+        }
+        .expect("a goblin");
+        engine.dev.commands.push(DevCommand::AddComponent { entity: goblin, name: "Player" });
+        {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.apply_commands(state, &mut engine.events, &mut engine.vfx);
+        }
+        for request in engine.dev.take_requests() {
+            engine.handle_dev_request(request);
+        }
+        run_frames(&mut engine, &mut camera, 0.5);
+        let state = engine.state.as_ref().unwrap();
+        assert_eq!(state.player_entity, goblin);
+        assert!(!state.world.contains(me), "the skeleton you were is gone");
+        assert!(state.world.get::<&ChaseAI>(goblin).is_err());
+        assert!(state.world.get::<&Inventory>(goblin).is_ok());
+        state.spatial_cache.assert_coherent_with_world(&state.world, "after changing who you are");
+    }
+
     /// `random_component_combinations_hold_up`, in a sandbox with no player:
     /// random builds (sides and temperaments among them) left to the world
     /// clock, with blasts, fires, kills and deletes, and the same checks.
@@ -3214,7 +3290,9 @@ mod tests {
 
         let pool: Vec<&'static crate::component_registry::ComponentEntry> = crate::component_registry::entries()
             .iter()
-            .filter(|e| e.name != "Position")
+            // Being the player is a role taken by placing it, not a part any
+            // random thing can have (there is one player).
+            .filter(|e| e.name != "Position" && e.name != "Player")
             .collect();
         let tools = [CursorTool::Blast, CursorTool::Ignite, CursorTool::Douse, CursorTool::Kill, CursorTool::Delete];
         let seeds: u64 = std::env::var("FUZZ_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);

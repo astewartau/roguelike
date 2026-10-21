@@ -22,7 +22,8 @@ use super::devtools_look as look;
 
 /// Which prefab is being edited, if any (and still exists).
 pub(super) fn editing(dev: &DevTools) -> Option<usize> {
-    dev.selected_prefab.filter(|i| *i < dev.prefabs.len())
+    // The built-in ones aren't changed (a copy of one is).
+    dev.selected_prefab.filter(|&i| dev.prefabs.get(i).is_some_and(|p| !p.built_in))
 }
 
 /// The part of the builder that stays put above the scrolling parts: a way
@@ -93,65 +94,75 @@ pub(super) fn offer_as_prefab(response: &egui::Response, dev: &mut DevTools, wha
     });
 }
 
-/// Your own prefabs, at the top of the Spawn panel: click one to place it,
-/// the pencil to change it, right-click to copy or delete it; and a way to
-/// start a new one.
+/// The prefabs, at the top of the Spawn panel: the game's own first (the
+/// player classes, "Fighter (Player)"), then yours. Click one to place it
+/// (one with Player makes it you); the pencil changes one of yours, or
+/// makes your own copy of a built-in to change; right-click for the rest.
+/// And a way to start a new one.
 pub(super) fn my_prefabs(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
     let search = dev.search.to_lowercase();
-    super::devtools::spawn_group(dev, "My prefabs").show(ui, |ui| {
-        if dev.prefabs.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "Right-click anything below to make a prefab from it, or use Save as prefab when inspecting.",
-                )
-                .small()
-                .color(look::pal(ui).muted),
-            );
-        }
+    super::devtools::spawn_group(dev, "Prefabs").show(ui, |ui| {
         let mut delete = None;
         let mut duplicate = None;
         for i in 0..dev.prefabs.len() {
-            let (name, sprite) = (dev.prefabs[i].name.clone(), dev.prefabs[i].sprite());
+            let (name, sprite, built_in) =
+                (dev.prefabs[i].name.clone(), dev.prefabs[i].sprite(), dev.prefabs[i].built_in);
             if !search.is_empty() && !name.to_lowercase().contains(&search) {
                 continue;
             }
             ui.horizontal(|ui| {
-                if ui.small_button("✏").on_hover_text("Change it").clicked() {
-                    dev.selected_prefab = Some(i);
+                let pencil = if built_in { "Built in: make your own copy to change" } else { "Change it" };
+                if ui.small_button("✏").on_hover_text(pencil).clicked() {
+                    if built_in {
+                        duplicate = Some(i);
+                    } else {
+                        dev.selected_prefab = Some(i);
+                    }
                 }
                 let armed = dev.tool == Some(CursorTool::PlacePrefab(i));
-                let response = match sprite {
+                let mut response = match sprite {
                     Some(sprite) => row(ui, art, sprite, &name, armed),
                     None => ui.selectable_label(armed, &name),
                 };
+                if built_in {
+                    response = response.on_hover_text("Built in. Click to place it; it can't be changed, but a copy can.");
+                }
                 if response.clicked() {
                     dev.tool = if armed { None } else { Some(CursorTool::PlacePrefab(i)) };
                 }
                 response.context_menu(|ui| {
                     look::apply(ui);
-                    if ui.button("Change it").clicked() {
+                    if !built_in && ui.button("Change it").clicked() {
                         dev.selected_prefab = Some(i);
                         ui.close_menu();
                     }
-                    if ui.button("Make a copy").clicked() {
+                    let copy = if built_in { "Make your own copy" } else { "Make a copy" };
+                    if ui.button(copy).clicked() {
                         duplicate = Some(i);
                         ui.close_menu();
                     }
-                    if ui.button("Delete").clicked() {
+                    if !built_in && ui.button("Delete").clicked() {
                         delete = Some(i);
                         ui.close_menu();
                     }
                 });
             });
         }
+        if !dev.prefabs.iter().any(|p| !p.built_in) {
+            ui.label(
+                egui::RichText::new(
+                    "Right-click anything below to make a prefab of your own from it, or use Save as prefab when inspecting.",
+                )
+                .small()
+                .color(look::pal(ui).muted),
+            );
+        }
         if ui.button("+  New prefab").on_hover_text("Start from nothing and add parts").clicked() {
             start_building(dev, Prefab::empty("New prefab"));
         }
         if let Some(i) = duplicate {
-            let mut copy = dev.prefabs[i].clone();
-            copy.name = format!("{} copy", copy.name);
-            dev.prefabs.push(copy);
-            dev.prefabs_dirty = true;
+            // A copy is opened to change: that's what one is made for.
+            start_building(dev, prefab::copy_of(&dev.prefabs[i]));
         }
         if let Some(i) = delete {
             dev.prefabs.remove(i);

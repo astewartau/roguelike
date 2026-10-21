@@ -122,9 +122,6 @@ pub enum CursorTool {
     LookOfExplosion { fiery: bool },
     /// Fire a projectile from the player at the tile, for real.
     Shoot(Shot),
-    /// Put a fresh player of this class on the tile, in place of any
-    /// player already there.
-    PlacePlayer(crate::components::PlayerClass),
 }
 
 /// What the effects bench can fire.
@@ -206,7 +203,6 @@ impl CursorTool {
             CursorTool::LookOfExplosion { fiery: true } => "Explosion (look only)".into(),
             CursorTool::LookOfExplosion { fiery: false } => "Shockwave (look only)".into(),
             CursorTool::Shoot(shot) => format!("Shoot {}", shot.name()),
-            CursorTool::PlacePlayer(class) => format!("Place yourself ({})", class.name()),
         }
     }
 
@@ -214,7 +210,7 @@ impl CursorTool {
     /// open.
     pub fn panel(self) -> DevTab {
         match self {
-            CursorTool::Place(_) | CursorTool::PlacePrefab(_) | CursorTool::PlacePlayer(_) => DevTab::Spawn,
+            CursorTool::Place(_) | CursorTool::PlacePrefab(_) => DevTab::Spawn,
             CursorTool::Paint(_) => DevTab::Paint,
             CursorTool::Teleport
             | CursorTool::Ignite
@@ -435,7 +431,10 @@ impl Default for DevTools {
             drafts: std::collections::HashMap::new(),
             overlays: Overlays::default(),
             explosion_radius: 2,
-            prefabs: prefab::load(std::path::Path::new(prefab::PREFAB_FILE)),
+            prefabs: prefab::built_ins()
+                .into_iter()
+                .chain(prefab::load(std::path::Path::new(prefab::PREFAB_FILE)))
+                .collect(),
             selected_prefab: None,
             prefabs_dirty: false,
             palette: None,
@@ -699,15 +698,6 @@ impl DevTools {
                 let radius = self.explosion_radius;
                 vfx.spawn(x, y, crate::vfx::VfxType::Explosion { radius, fiery });
             }
-            CursorTool::PlacePlayer(class) => {
-                self.status = Some(match place_player(state, events, class, at) {
-                    Ok(()) => {
-                        self.requests.push(EngineRequest::PlayerArrived);
-                        format!("You're here, as a {}", class.name())
-                    }
-                    Err(why) => format!("Can't place you there: {why}"),
-                });
-            }
             CursorTool::Shoot(shot) => match shoot(state, events, &mut self.rng, shot, at) {
                 Ok(()) => self.requests.push(EngineRequest::WaitForShots),
                 Err(why) => self.status = Some(format!("Can't shoot there: {why}")),
@@ -717,6 +707,21 @@ impl DevTools {
                     self.disarm();
                     return;
                 };
+                // A player prefab places one, and it's you.
+                if prefab.has("Player") {
+                    self.status = Some(match place_as_player(state, events, &prefab, at) {
+                        Ok((made, problems)) => {
+                            self.placed_from.insert(made, prefab.name.clone());
+                            self.requests.push(EngineRequest::PlayerArrived);
+                            match problems.first() {
+                                None => format!("You're here, as {}", prefab.name),
+                                Some(problem) => format!("You're here, as {}, but {problem}", prefab.name),
+                            }
+                        }
+                        Err(why) => format!("Can't place you there: {why}"),
+                    });
+                    return;
+                }
                 let mut ctx = state.actor_ctx(events);
                 let tiles = spawn::placement_tiles(&ctx, prefab.blocks(), at, self.spawn_options.count.max(1) as usize);
                 let mut problems = Vec::new();
@@ -813,6 +818,12 @@ impl DevTools {
                     if let Some(entry) = registry::find(name) {
                         let _ = (entry.write)(&mut state.world, entity, (entry.default)());
                         resync(state, entity);
+                        // Giving something Player makes it you.
+                        if entry.name == "Player" && entity != state.player_entity {
+                            become_player(state, entity);
+                            self.requests.push(EngineRequest::PlayerArrived);
+                            self.status = Some("You're it now".into());
+                        }
                     }
                 }
                 DevCommand::RemoveComponent { entity, name } => {
@@ -1034,37 +1045,53 @@ fn resync(state: &mut GameState, e: Entity) {
     state.fov_dirty = true;
 }
 
-/// Put one of `kind` in `player`'s pack, ignoring the weight limit. Gear is
-/// rolled at the panel's rarity (accessories at least Magic, as they carry
-/// nothing else).
-/// A fresh `class` player at `at`, in place of any player there was (the
-/// old one is removed, pack and all).
-fn place_player(
+/// Make `e` the player, in place of whoever was (they go). It drops any
+/// mind of its own, which would fight you for it, and anything it was in
+/// the middle of; from now on it acts when you do.
+fn become_player(state: &mut GameState, e: Entity) {
+    use crate::components::{Actor, ChaseAI, CompanionAI, Follower, Player};
+    let old = state.player_entity;
+    if old != e && state.world.contains(old) {
+        let _ = state.world.despawn(old);
+    }
+    let _ = state.world.remove_one::<ChaseAI>(e);
+    let _ = state.world.remove_one::<CompanionAI>(e);
+    let _ = state.world.remove_one::<Follower>(e);
+    if state.world.get::<&Player>(e).is_err() {
+        let _ = state.world.insert_one(e, Player);
+    }
+    let busy = state.world.get::<&mut Actor>(e).map(|mut a| a.current_action.take().is_some()).unwrap_or(false);
+    if busy {
+        state.action_scheduler.cancel_for_entity(e);
+    }
+    state.sync_world_changes();
+    state.active_ai_tracker.remove_entity(e);
+    state.player_entity = e;
+    let at = state.world.get::<&crate::components::Position>(e).ok().map(|p| (p.x, p.y));
+    state.active_ai_tracker.initialize_from_world(&state.world, at);
+    state.fov_dirty = true;
+}
+
+/// Place one of `prefab` (which has `Player`) at `at` and make it the
+/// player. The tile has to be floor, and free but for the player there now
+/// (who is replaced).
+fn place_as_player(
     state: &mut GameState,
     events: &mut EventQueue,
-    class: crate::components::PlayerClass,
+    prefab: &prefab::Prefab,
     at: (i32, i32),
-) -> Result<(), &'static str> {
+) -> Result<(Entity, Vec<String>), &'static str> {
     if !state.grid.is_walkable(at.0, at.1) {
         return Err("not a floor tile");
     }
     let old = state.player_entity;
-    if state.spatial_cache.is_blocked(at) && !state.world.get::<&crate::components::Position>(old).is_ok_and(|p| (p.x, p.y) == at) {
+    let old_here = state.world.get::<&crate::components::Position>(old).is_ok_and(|p| (p.x, p.y) == at);
+    if prefab.blocks() && state.spatial_cache.is_blocked(at) && !old_here {
         return Err("something is in the way");
     }
-    if state.world.contains(old) {
-        let _ = state.world.despawn(old);
-        state.sync_world_changes();
-    }
-    let player = crate::engine::spawn_player(&mut state.world, class, crate::components::Position::new(at.0, at.1));
-    state.player_entity = player;
-    state.player_class = class;
-    let mut ctx = state.actor_ctx(events);
-    spawn::adopt(&mut ctx, player);
-    let player_pos = Some(at);
-    ctx.tracker.initialize_from_world(ctx.world, player_pos);
-    state.fov_dirty = true;
-    Ok(())
+    let (e, problems) = prefab::instantiate(&mut state.actor_ctx(events), prefab, at);
+    become_player(state, e);
+    Ok((e, problems))
 }
 
 fn give_item(world: &mut World, player: Entity, kind: ItemType, options: &SpawnOptions, rng: &mut StdRng) {
