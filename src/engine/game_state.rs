@@ -157,6 +157,7 @@ impl GameState {
         for tile in &mut grid.tiles {
             tile.explored = true;
         }
+        crate::walls::orient_all(&mut grid.tiles, w, h);
         let world = World::new();
         let spatial_cache = SpatialCache::rebuild_from_world(&world);
         let seed = rand::random::<u64>();

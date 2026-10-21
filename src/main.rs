@@ -28,6 +28,7 @@ mod spawning;
 mod systems;
 mod tile;
 mod tile_occupancy;
+mod walls;
 mod time_system;
 mod ui;
 mod vfx;

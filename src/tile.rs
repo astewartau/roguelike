@@ -460,6 +460,8 @@ pub struct Tile {
     pub revealed_until: Option<f32>,
     /// Optional sprite override (for oriented walls, etc.)
     pub sprite_override: Option<(SpriteSheet, u32)>,
+    /// What it's made of, if it's a wall (see `walls`).
+    pub wall_style: crate::walls::WallStyle,
 }
 
 impl Tile {
@@ -477,6 +479,7 @@ impl Tile {
             visible: false,
             revealed_until: None,
             sprite_override: None,
+            wall_style: crate::walls::WallStyle::Brick,
         }
     }
 

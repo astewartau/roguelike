@@ -19,7 +19,8 @@ pub const PAINTABLE: [TileType; 8] = [
 
 /// Paint `tile` over the square of side `2 * brush + 1` centred on `at`.
 /// Keeps the water list and its animation entities in step and moves the
-/// stairs markers; the caller sets `fov_dirty`. Returns whether anything
+/// stairs markers, and turns the walls in and around it to face as they
+/// should (`walls`); the caller sets `fov_dirty`. Returns whether anything
 /// changed.
 pub fn paint(world: &mut crate::world::World, grid: &mut Grid, at: (i32, i32), brush: i32, tile: TileType) -> bool {
     let mut changed = false;
@@ -28,10 +29,16 @@ pub fn paint(world: &mut crate::world::World, grid: &mut Grid, at: (i32, i32), b
             changed |= paint_tile(world, grid, (at.0 + dx, at.1 + dy), tile);
         }
     }
+    if changed {
+        let (min, max) = ((at.0 - brush, at.1 - brush), (at.0 + brush, at.1 + brush));
+        crate::walls::orient_around(&mut grid.tiles, grid.width, grid.height, min, max);
+    }
     changed
 }
 
 fn paint_tile(world: &mut crate::world::World, grid: &mut Grid, (x, y): (i32, i32), tile: TileType) -> bool {
+    // A new wall is built in the style of the walls beside it.
+    let style = crate::walls::style_from_neighbours(&grid.tiles, grid.width, grid.height, x, y);
     let Some(cell) = grid.get_mut(x, y) else {
         return false;
     };
@@ -40,8 +47,9 @@ fn paint_tile(world: &mut crate::world::World, grid: &mut Grid, (x, y): (i32, i3
     }
     let was = cell.tile_type;
     cell.tile_type = tile;
-    // Walls carry an oriented sprite for their neighbours; whatever is
-    // painted now draws as itself.
+    cell.wall_style = style;
+    // Whatever is painted draws as itself (a wall is given its sprite by
+    // `paint`, once its neighbours are painted too).
     cell.sprite_override = None;
     cell.explored = true;
 
@@ -88,5 +96,22 @@ mod tests {
         assert!(!grid.water_positions.contains(&(4, 4)));
         assert_eq!(world.query::<&AnimatedSprite>().iter().count(), 8);
         assert!(!paint(&mut world, &mut grid, (4, 4), 0, TileType::Floor), "nothing left to change");
+    }
+
+    /// Painted walls follow the walls' rule: a block of them shows its
+    /// face along its open bottom edge and its cap above that, and
+    /// painting floor under a wall turns that wall to face it.
+    #[test]
+    fn painted_walls_face_the_way_walls_do() {
+        let mut world = crate::world::World::new();
+        let mut grid = Grid::filled(9, 9, TileType::Floor);
+        paint(&mut world, &mut grid, (4, 4), 1, TileType::Wall);
+        let sprite = |grid: &Grid, x, y| grid.get(x, y).unwrap().sprite();
+        assert_eq!(sprite(&grid, 4, 3), tile_ids::WALL, "bottom row: floor below, face");
+        assert_eq!(sprite(&grid, 4, 4), tile_ids::WALL_TOP, "wall below: cap");
+        assert_eq!(sprite(&grid, 4, 5), tile_ids::WALL_TOP);
+
+        paint(&mut world, &mut grid, (4, 3), 0, TileType::Floor);
+        assert_eq!(sprite(&grid, 4, 4), tile_ids::WALL, "opened up below: face");
     }
 }

@@ -1,6 +1,7 @@
 use crate::constants::*;
 use crate::grid::Decal;
 use crate::tile::{tile_ids, Tile, TileType};
+use crate::walls::WallStyle;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -723,155 +724,52 @@ impl DungeonGenerator {
         }
     }
 
-    /// Set wall sprite overrides based on orientation and room theme.
-    /// Walls adjacent to floor tiles on north/south get the "top" sprite (horizontal edge).
-    /// Walls adjacent to floor tiles on east/west get the "side" sprite (vertical edge).
-    /// Walls are themed based on the room they're adjacent to (Overgrown -> rough stone, Crypt -> skull walls).
-    /// Works per tile on neighbour walkability, so the irregular outline of a
-    /// Cavern needs no special handling beyond its sprite choice.
+    /// Give every wall its style and sprite. A wall is in the style of the
+    /// room it borders (rough stone by an overgrown room, skulls by a
+    /// crypt, dirt by a cavern, the odd one showing ore), counting a corner
+    /// that only touches the room diagonally; then each shows its face or
+    /// its cap by the one rule all walls follow (`walls`).
+    ///
+    /// The ore rolls are made exactly as they always were (one per wall
+    /// beside a cavern, in this order), so a seeded floor is unchanged.
     fn set_wall_orientations(&mut self, themed_rooms: &[ThemedRoom], rng: &mut impl Rng) {
-        let width = self.width as i32;
-        let height = self.height as i32;
-
-        // First pass: collect wall orientation data
-        let mut overrides: Vec<(usize, (crate::tile::SpriteSheet, u32))> = Vec::new();
-
+        let (width, height) = (self.width as i32, self.height as i32);
+        const CARDINAL: [(i32, i32); 4] = [(0, -1), (0, 1), (1, 0), (-1, 0)];
+        const DIAGONAL: [(i32, i32); 4] = [(1, 1), (-1, 1), (1, -1), (-1, -1)];
         for y in 0..height {
             for x in 0..width {
                 let idx = y as usize * self.width + x as usize;
                 if self.tiles[idx].tile_type != TileType::Wall {
                     continue;
                 }
-
-                // Check neighbors for walkable tiles and their positions
-                let neighbors = [
-                    (0, -1, y > 0),              // north
-                    (0, 1, y < height - 1),      // south
-                    (1, 0, x < width - 1),       // east
-                    (-1, 0, x > 0),              // west
-                ];
-
-                let mut north_walkable = false;
-                let mut south_walkable = false;
-                let mut east_walkable = false;
-                let mut west_walkable = false;
-                let mut adjacent_theme: Option<RoomTheme> = None;
-
-                for (dx, dy, in_bounds) in neighbors {
-                    if !in_bounds {
-                        continue;
+                // The theme of the room on the other side of a neighbour.
+                let theme_of = |&(dx, dy): &(i32, i32)| {
+                    let (nx, ny) = (x + dx, y + dy);
+                    let open = nx >= 0
+                        && ny >= 0
+                        && nx < width
+                        && ny < height
+                        && self.tiles[ny as usize * self.width + nx as usize].tile_type.is_walkable();
+                    if !open {
+                        return None;
                     }
-                    let nx = x + dx;
-                    let ny = y + dy;
-                    let nidx = ny as usize * self.width + nx as usize;
-                    let is_walkable = self.tiles[nidx].tile_type.is_walkable();
-
-                    if is_walkable {
-                        // Track which direction is walkable
-                        match (dx, dy) {
-                            (0, -1) => north_walkable = true,
-                            (0, 1) => south_walkable = true,
-                            (1, 0) => east_walkable = true,
-                            (-1, 0) => west_walkable = true,
-                            _ => {}
-                        }
-
-                        // Find theme of adjacent room (if any)
-                        if adjacent_theme.is_none() {
-                            for room in themed_rooms {
-                                if room.rect.contains(nx, ny) {
-                                    adjacent_theme = Some(room.theme);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Determine sprite based on adjacent walkable tiles
-                // Vertical walls (floor to east/west) use "top" sprite
-                // Horizontal walls (floor to north/south) use "side" sprite (default)
-                let has_horizontal_neighbor = east_walkable || west_walkable;
-
-                // Check all diagonal neighbors for corner detection
-                let ne_walkable = if x < width - 1 && y > 0 {
-                    self.tiles[(y - 1) as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
-                } else {
-                    false
+                    themed_rooms.iter().find(|room| room.rect.contains(nx, ny)).map(|room| room.theme)
                 };
-                let nw_walkable = if x > 0 && y > 0 {
-                    self.tiles[(y - 1) as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
-                let _se_walkable = if x < width - 1 && y < height - 1 {
-                    self.tiles[(y + 1) as usize * self.width + (x + 1) as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
-                let _sw_walkable = if x > 0 && y < height - 1 {
-                    self.tiles[(y + 1) as usize * self.width + (x - 1) as usize].tile_type.is_walkable()
-                } else {
-                    false
-                };
-
-                // Use WALL_TOP variant for:
-                // 1. Pure vertical walls (floor only to east/west)
-                // 2. Top corners with direct horizontal floor neighbor
-                // 3. Top corner vertices: no cardinal floor neighbors, but floor diagonally to NE or NW
-                //    (top of room = higher Y, floor is at lower Y = north direction)
-                let is_vertical_wall = has_horizontal_neighbor && !north_walkable && !south_walkable;
-                let is_top_corner_direct = south_walkable && has_horizontal_neighbor && !north_walkable;
-                let is_top_corner_vertex = !north_walkable && !south_walkable && !east_walkable && !west_walkable
-                    && (ne_walkable || nw_walkable);
-                let use_top_sprite = is_vertical_wall || is_top_corner_direct || is_top_corner_vertex;
-
-                // Select themed wall sprites
-                let sprite = match adjacent_theme {
-                    Some(RoomTheme::Overgrown) => {
-                        if use_top_sprite {
-                            tile_ids::WALL_ROUGH_TOP
-                        } else {
-                            tile_ids::WALL_ROUGH
-                        }
-                    }
-                    Some(RoomTheme::Crypt) => {
-                        if use_top_sprite {
-                            tile_ids::WALL_CRYPT_TOP
-                        } else {
-                            tile_ids::WALL_CRYPT
-                        }
-                    }
+                let style = match CARDINAL.iter().find_map(theme_of) {
                     Some(RoomTheme::Cavern) => {
-                        // Warm brown dirt, with the odd ore vein showing
-                        // through. The ore is decoration -- there is no
-                        // mining action.
                         if rng.gen_bool(CAVERN_ORE_WALL_CHANCE) {
-                            tile_ids::CAVE_ORE_WALL
-                        } else if use_top_sprite {
-                            tile_ids::WALL_DIRT_TOP
+                            WallStyle::DirtOre
                         } else {
-                            tile_ids::WALL_DIRT
+                            WallStyle::Dirt
                         }
                     }
-                    _ => {
-                        // Normal, Flooded, Storage, or no adjacent room - use default walls
-                        if use_top_sprite {
-                            tile_ids::WALL_TOP
-                        } else {
-                            continue; // No override needed for default wall (side)
-                        }
-                    }
+                    Some(theme) => WallStyle::for_theme(Some(theme)),
+                    None => WallStyle::for_theme(DIAGONAL.iter().find_map(theme_of)),
                 };
-
-                overrides.push((idx, sprite));
+                self.tiles[idx].wall_style = style;
             }
         }
-
-        // Apply overrides
-        for (idx, sprite) in overrides {
-            self.tiles[idx].sprite_override = Some(sprite);
-        }
+        crate::walls::orient_all(&mut self.tiles, self.width, self.height);
     }
 
     fn carve_room(&mut self, room: &Rect) {
