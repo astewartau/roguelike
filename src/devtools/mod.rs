@@ -210,6 +210,23 @@ impl CursorTool {
         }
     }
 
+    /// The panel it's chosen from. It stays armed only while that panel is
+    /// open.
+    pub fn panel(self) -> DevTab {
+        match self {
+            CursorTool::Place(_) | CursorTool::PlacePrefab(_) | CursorTool::PlacePlayer(_) => DevTab::Spawn,
+            CursorTool::Paint(_) => DevTab::Paint,
+            CursorTool::Teleport
+            | CursorTool::Ignite
+            | CursorTool::Douse
+            | CursorTool::Blast
+            | CursorTool::Kill
+            | CursorTool::Delete => DevTab::World,
+            CursorTool::Inspect => DevTab::Inspect,
+            CursorTool::ParticleFire | CursorTool::LookOfExplosion { .. } | CursorTool::Shoot(_) => DevTab::Effects,
+        }
+    }
+
     /// Whether holding the button and dragging keeps applying it.
     pub fn drags(&self) -> bool {
         matches!(self, CursorTool::Paint(_))
@@ -510,13 +527,16 @@ impl DevTools {
         self.tool.is_some() && self.tool == self.panel_tool()
     }
 
-    /// Arm the open panel's own tool if nothing is armed, and drop it once
-    /// its panel is closed.
+    /// Drop the armed tool once the panel it came from isn't open (closed,
+    /// or another opened), so nothing is placed or painted with its panel
+    /// gone; and arm the open panel's own tool if nothing is armed.
     fn sync_panel_tool(&mut self) {
-        match self.panel_tool() {
-            Some(tool) if self.tool.is_none() => self.tool = Some(tool),
-            None if self.tool == Some(CursorTool::Inspect) => self.disarm(),
-            _ => {}
+        let open = (self.visible && self.panel_open).then_some(self.tab);
+        if self.tool.is_some_and(|tool| Some(tool.panel()) != open) {
+            self.disarm();
+        }
+        if self.tool.is_none() {
+            self.tool = self.panel_tool();
         }
     }
 
@@ -1344,10 +1364,10 @@ mod tests {
     }
 
     /// The inspector picks whatever is clicked while its panel is open,
-    /// with no button to arm it; closing the panel drops it, and it never
-    /// replaces a tool armed some other way.
+    /// with no button to arm it; and a tool lasts only as long as the panel
+    /// it was chosen from is open.
     #[test]
-    fn the_inspect_panel_arms_inspect_while_open() {
+    fn tools_last_only_while_their_panel_is_open() {
         let mut dev = DevTools::new();
         dev.visible = true;
         dev.rail_clicked(DevTab::Inspect);
@@ -1357,16 +1377,23 @@ mod tests {
         assert!(!dev.panel_open);
         assert_eq!(dev.tool, None, "closing the panel drops its tool");
 
-        dev.tool = Some(CursorTool::Teleport);
-        dev.open_panel(DevTab::Inspect);
-        assert_eq!(dev.tool, Some(CursorTool::Teleport), "an armed tool is left alone");
-        assert!(!dev.tool_is_panels());
-        dev.close_panel();
-        assert_eq!(dev.tool, Some(CursorTool::Teleport));
-
-        dev.tool = None;
         dev.open_panel(DevTab::Spawn);
         assert_eq!(dev.tool, None, "other panels arm nothing");
+        dev.tool = Some(CursorTool::Place(Spawnable::Enemy(3)));
+        dev.sync_panel_tool();
+        assert!(dev.tool.is_some(), "kept while Spawn is open");
+        dev.rail_clicked(DevTab::Spawn);
+        assert_eq!(dev.tool, None, "closing Spawn stops the spawning");
+
+        dev.rail_clicked(DevTab::World);
+        dev.tool = Some(CursorTool::Teleport);
+        dev.rail_clicked(DevTab::Paint);
+        assert_eq!(dev.tool, None, "opening another panel drops it too");
+
+        dev.rail_clicked(DevTab::Effects);
+        dev.tool = Some(CursorTool::ParticleFire);
+        dev.rail_clicked(DevTab::Inspect);
+        assert_eq!(dev.tool, Some(CursorTool::Inspect), "Inspect takes over");
     }
 
     #[test]
