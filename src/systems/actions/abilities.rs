@@ -527,7 +527,7 @@ fn complete_raise_dead(
 /// it held to a ground pile on the same tile so no loot is destroyed. Shared
 /// by Raise Dead and Corpse Explosion. Corpses never block movement, so there
 /// is nothing to release in the spatial cache.
-pub(super) fn consume_corpse(world: &mut World, corpse: Entity, pos: (i32, i32)) {
+pub(crate) fn consume_corpse(world: &mut World, corpse: Entity, pos: (i32, i32)) {
     let (x, y) = pos;
     // Take the loot out of the bones, then consume them.
     let (items, gold) = world
@@ -677,7 +677,11 @@ fn advance_channel(
 /// creature for a tame or a drain, remains for raising the dead.
 fn channel_target_still_fits(world: &World, channel: &Channel, target: Entity) -> bool {
     match channel.effect {
-        ChannelEffect::Tame => world.get::<&crate::components::Tameable>(target).is_ok(),
+        // A creature that died mid-channel isn't tamed as a corpse.
+        ChannelEffect::Tame => {
+            world.get::<&crate::components::Tameable>(target).is_ok()
+                && world.get::<&Health>(target).map(|h| h.current > 0).unwrap_or(true)
+        }
         ChannelEffect::RaiseDead => world.get::<&crate::components::Raisable>(target).is_ok(),
         ChannelEffect::LifeDrain { .. } => world.get::<&Health>(target).is_ok_and(|h| h.current > 0),
         ChannelEffect::Shout { .. } => true,
@@ -767,6 +771,14 @@ fn complete_taming(
     // Add companion components
     let _ = world.insert_one(target, Follower { leader: tamer });
     let _ = world.insert_one(target, CompanionAI::new());
+
+    // It's yours now: no longer something to tame, awake (it was asleep for
+    // good otherwise: noise and blows only wake hostile minds), and whatever
+    // it was in the middle of (a swing at you) is dropped, so its first act
+    // as a companion is its own choice.
+    let _ = world.remove_one::<crate::components::Tameable>(target);
+    let _ = world.remove_one::<crate::components::Asleep>(target);
+    let _ = world.insert_one(target, crate::components::PendingInterrupt);
 
     // Emit event
     events.push(GameEvent::TamingCompleted { tamer, target });
@@ -1275,4 +1287,41 @@ mod tests {
         break_channel_on_move(&mut world, tamer, &mut events);
         assert!(world.get::<&Channel>(tamer).is_err(), "but not a step");
     }
+
+    /// A tamed creature wakes, stops being a tame target, and drops whatever
+    /// it was doing; and one that dies mid-channel isn't tamed as a corpse.
+    #[test]
+    fn taming_wakes_it_and_a_corpse_cannot_be_tamed() {
+        use crate::components::{Asleep, PendingInterrupt, StatusEffects, Tameable};
+        let grid = Grid::filled(10, 10, crate::tile::TileType::Floor);
+        let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(9);
+        let tame = |world: &mut World, events: &mut EventQueue, rng: &mut rand::rngs::StdRng, tamer, rat| {
+            assert_eq!(apply_start_taming(world, tamer, rat, events), ActionResult::Completed);
+            let mut spatial = SpatialCache::rebuild_from_world(world);
+            let waits = (TAME_DURATION / ACTION_WAIT_DURATION).ceil() as usize;
+            for _ in 0..waits {
+                advance_channel(world, &grid, &mut spatial, tamer, ACTION_WAIT_DURATION, events, rng);
+            }
+        };
+
+        let mut world = World::new();
+        let mut events = EventQueue::new();
+        let druid = world.spawn((Position::new(2, 2), Health::new(20)));
+        let rat = world.spawn((Position::new(3, 2), Health::new(5), StatusEffects::new(), Tameable, Asleep));
+        tame(&mut world, &mut events, &mut rng, druid, rat);
+        assert!(world.get::<&Follower>(rat).is_ok_and(|f| f.leader == druid), "tamed");
+        assert!(world.get::<&Asleep>(rat).is_err(), "awake");
+        assert!(world.get::<&Tameable>(rat).is_err(), "no longer a tame target");
+        assert!(world.get::<&PendingInterrupt>(rat).is_ok(), "drops what it was doing");
+
+        // Dies mid-channel: the tame fails.
+        let other = world.spawn((Position::new(2, 3), Health::new(5), Tameable));
+        assert_eq!(apply_start_taming(&mut world, druid, other, &mut events), ActionResult::Completed);
+        world.get::<&mut Health>(other).unwrap().current = 0;
+        let mut spatial = SpatialCache::rebuild_from_world(&world);
+        advance_channel(&mut world, &grid, &mut spatial, druid, ACTION_WAIT_DURATION, &mut events, &mut rng);
+        assert!(world.get::<&Follower>(other).is_err(), "a corpse isn't tamed");
+        assert!(world.get::<&Channel>(druid).is_err(), "the channel ends");
+    }
 }
+

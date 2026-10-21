@@ -126,6 +126,13 @@ impl ActionScheduler {
     }
 
     /// Remove all completions for a specific entity (e.g., on death)
+    /// How many completions are queued for `entity` (at most one, if the
+    /// scheduling is right).
+    #[cfg(test)]
+    pub fn scheduled_count(&self, entity: Entity) -> usize {
+        self.pending_completions.iter().filter(|sc| sc.entity == entity).count()
+    }
+
     pub fn cancel_for_entity(&mut self, entity: Entity) {
         // Rebuild the heap without the cancelled entity
         let remaining: Vec<_> = self

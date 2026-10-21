@@ -2707,6 +2707,41 @@ mod tests {
         engine
     }
 
+    /// A creature that appears mid-game (a split slime, a boss's brood, a
+    /// coffin's skeleton, anything the dev tools place) is handed to the AI
+    /// with `initialize_single_ai_actor`. It must have exactly one turn
+    /// queued, however many times the player acts: a second queued
+    /// completion would give it two turns for everyone else's one.
+    #[test]
+    fn a_creature_spawned_mid_game_gets_one_turn_at_a_time() {
+        let mut engine = engine_with_run();
+        let goblin = {
+            let state = engine.state.as_mut().unwrap();
+            let at = state.world.get::<&crate::components::Position>(state.player_entity).map(|p| (p.x, p.y)).unwrap();
+            let spot = (-3..=3)
+                .flat_map(|dy| (-3..=3).map(move |dx| (at.0 + dx, at.1 + dy)))
+                .find(|&(x, y)| (x, y) != at && state.grid.is_walkable(x, y) && !state.spatial_cache.is_blocked((x, y)))
+                .expect("room beside the start");
+            let goblin = crate::spawning::enemies::GOBLIN.spawn(&mut state.world, spot.0, spot.1, &mut state.rng);
+            let _ = state.world.remove_one::<crate::components::Asleep>(goblin);
+            state.spatial_cache.register_entity(goblin, spot, true, false);
+            let mut events = EventQueue::new();
+            let mut ctx = state.actor_ctx(&mut events);
+            crate::engine::initialize_single_ai_actor(&mut ctx, goblin);
+            goblin
+        };
+        for turn in 0..6 {
+            let mut ctx = engine.sim_ctx().expect("run started");
+            execute_player_intent(&mut ctx, crate::systems::player_input::PlayerIntent::Wait);
+            let state = engine.state.as_ref().unwrap();
+            if !state.world.contains(goblin) {
+                break;
+            }
+            let queued = state.action_scheduler.scheduled_count(goblin);
+            assert!(queued <= 1, "turn {turn}: the goblin has {queued} turns queued");
+        }
+    }
+
     /// Stun interrupts an enemy mid-action. It used to land only at the
     /// enemy's next decision, so a step already under way still finished (and
     /// a swing already under way still hit), with the stun ticking down the
@@ -3043,7 +3078,7 @@ mod tests {
         // being scheduled on arrival (they used to never act).
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=fe8fd330";
+        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=f251b362";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,

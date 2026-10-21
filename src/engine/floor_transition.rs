@@ -67,10 +67,15 @@ pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloo
 
 /// Components that are only a moment's presentation, never worth keeping
 /// when the player leaves a floor.
-fn passing_component_types() -> [std::any::TypeId; 3] {
-    use crate::components::{HitFlash, LastDamageSource, LungeAnimation};
+fn passing_component_types() -> [std::any::TypeId; 4] {
+    use crate::components::{HitFlash, LastDamageSource, LungeAnimation, PendingInterrupt};
     use std::any::TypeId;
-    [TypeId::of::<HitFlash>(), TypeId::of::<LungeAnimation>(), TypeId::of::<LastDamageSource>()]
+    [
+        TypeId::of::<HitFlash>(),
+        TypeId::of::<LungeAnimation>(),
+        TypeId::of::<LastDamageSource>(),
+        TypeId::of::<PendingInterrupt>(),
+    ]
 }
 
 /// Clear all non-player entities from the world.

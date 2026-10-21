@@ -963,6 +963,31 @@ pub(super) mod tests {
         boss
     }
 
+    /// The necromancer boss raising the dead uses up the bones but drops
+    /// what they held, as the player's Raise Dead does; it used to delete the
+    /// corpse, loot and all.
+    #[test]
+    fn a_boss_raising_the_dead_leaves_the_loot() {
+        use crate::components::{Container, GroundItemPile, ItemInstance, ItemType, Position, Raisable};
+        let mut arena = Arena::new((5, 5));
+        let boss = crate::spawning::spawn_boss(&mut arena.world, 9, 8, 5, &mut arena.rng).expect("floor 9 has a boss");
+        arena.world.get::<&mut Boss>(boss).unwrap().cooldown = 0.0;
+        arena.hunt(boss, 1.0);
+        let mut corpse = Container::corpse(vec![ItemInstance::plain(ItemType::HealthPotion)], 7);
+        corpse.is_open = true;
+        let bones = arena.world.spawn((Position::new(9, 6), corpse, Raisable));
+
+        crate::systems::ai::decide_action(&mut arena.ctx(), boss);
+        assert!(!arena.world.contains(bones), "the bones are used up");
+        let pile: Vec<(i32, i32, u32, usize)> = arena
+            .world
+            .query::<(&Position, &Container, &GroundItemPile)>()
+            .iter()
+            .map(|(_, (p, c, _))| (p.x, p.y, c.gold, c.items.len()))
+            .collect();
+        assert_eq!(pile, vec![(9, 6, 7, 1)], "their loot drops where they lay");
+    }
+
     /// The slam winds up first and lands at completion on whoever is still
     /// inside the radius.
     #[test]

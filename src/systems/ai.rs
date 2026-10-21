@@ -312,7 +312,9 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
 
     // Frozen by the developer tools: wait, and check again after.
     if world.get::<&crate::components::DevFrozen>(entity).is_ok() {
-        let _ = time_system::start_action_with_events(world, entity, ActionType::Wait, clock, scheduler, Some(events));
+        if time_system::start_action_with_events(world, entity, ActionType::Wait, clock, scheduler, Some(events)).is_ok() {
+            active_tracker.mark_active(entity);
+        }
         return;
     }
 
@@ -334,7 +336,12 @@ pub fn decide_action(ctx: &mut ActorCtx, entity: Entity) {
         determine_action(world, grid, entity, player_entity, spatial_cache, events, rng)
     };
 
-    let _ = time_system::start_action_with_events(world, entity, action_type, clock, scheduler, Some(events));
+    // It has a turn queued now, so it's active: without this a creature
+    // first handed to the AI here (spawned mid-game) stayed "dormant", and
+    // the player's next move woke it again, queueing a second turn.
+    if time_system::start_action_with_events(world, entity, action_type, clock, scheduler, Some(events)).is_ok() {
+        active_tracker.mark_active(entity);
+    }
 }
 
 // =============================================================================
@@ -962,7 +969,9 @@ fn try_boss_ability(
                 .map(|(id, (pos, _))| (id, (pos.x, pos.y)));
             let (bones_id, bones_pos) = bones?;
 
-            let _ = world.despawn(bones_id);
+            // The bones are used up; whatever they held drops to the floor,
+            // as when the player raises the dead.
+            crate::systems::actions::consume_corpse(world, bones_id, bones_pos);
             events.push(GameEvent::BossAbilityUsed { boss: entity, ability, position: entity_pos });
             events.push(GameEvent::CoffinSkeletonSpawn { position: bones_pos });
             if let Ok(mut boss) = world.get::<&mut Boss>(entity) {
