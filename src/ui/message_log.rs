@@ -966,14 +966,29 @@ pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
     let line_height = ctx.fonts(|f| f.row_height(&font));
     let screen = ctx.screen_rect().size();
 
+    // Its backing shows only while the cursor is over it (or being used to
+    // resize it), easing in and out; otherwise the lines float on the map,
+    // the top ones fading away.
+    let id = egui::Id::new("message_log");
+    let pointer_over = match (ctx.pointer_hover_pos(), ctx.memory(|m| m.area_rect(id))) {
+        (Some(p), Some(rect)) => rect.expand(LOG_HOVER_MARGIN).contains(p),
+        _ => false,
+    };
+    // A press that began over it (resizing it) keeps it up wherever the
+    // cursor goes until it's let go.
+    let was_hot = ctx.data(|d| d.get_temp::<bool>(id.with("hot"))).unwrap_or(false);
+    let hot = pointer_over || (was_hot && ctx.input(|i| i.pointer.any_down()));
+    ctx.data_mut(|d| d.insert_temp(id.with("hot"), hot));
+    let backing = ctx.animate_bool(id.with("backing"), hot);
+
     egui::Window::new("Messages")
-        .id(egui::Id::new("message_log"))
+        .id(id)
         .title_bar(false)
         .order(egui::Order::Middle)
         .frame(
             egui::Frame::none()
-                .fill(colors::PANEL_BG.gamma_multiply(0.78))
-                .stroke(egui::Stroke::new(super::style::BORDER_WIDTH, colors::PANEL_BORDER))
+                .fill(colors::PANEL_BG.gamma_multiply(0.78 * backing))
+                .stroke(egui::Stroke::new(super::style::BORDER_WIDTH, colors::PANEL_BORDER.gamma_multiply(backing)))
                 .inner_margin(egui::Margin::symmetric(8.0, 6.0)),
         )
         .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
@@ -985,10 +1000,18 @@ pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
             let height = ui.available_height();
             // Scrolls back through everything kept, held at the newest line
             // unless you've scrolled up to read.
+            let scroll_bar = if backing > 0.5 {
+                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+            } else {
+                egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+            };
+            // The top fade, in points: none while the backing is up.
+            let top_fade = line_height * LOG_TOP_FADE_LINES * (1.0 - backing);
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .max_height(height)
+                .scroll_bar_visibility(scroll_bar)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     let width = ui.available_width();
@@ -1006,16 +1029,17 @@ pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
                     // Oldest first, newest at the bottom.
                     for (i, msg) in log.messages.iter().enumerate() {
                         let age = log.messages.len() - 1 - i;
-                        draw_line(ui, msg, age, &font, width);
+                        draw_line(ui, msg, age, &font, width, top_fade);
                     }
                 });
         });
 }
 
 /// Draw one log line, wrapped to `width`: faded by how many lines sit below
-/// it, and — if it only just arrived — sliding up into place, brighter than
-/// it will settle at.
-fn draw_line(ui: &mut egui::Ui, msg: &LogMessage, age: usize, font: &egui::FontId, width: f32) {
+/// it and, within `top_fade` points of the top of the log, to nothing at
+/// the very top; and — if it only just arrived — sliding up into place,
+/// brighter than it will settle at.
+fn draw_line(ui: &mut egui::Ui, msg: &LogMessage, age: usize, font: &egui::FontId, width: f32, top_fade: f32) {
     // How far through its entrance the line is.
     let t = (msg.arrived.elapsed().as_secs_f32() / LOG_LINE_ARRIVE_DURATION).clamp(0.0, 1.0);
     let settled = ease::out_cubic(t);
@@ -1027,8 +1051,16 @@ fn draw_line(ui: &mut egui::Ui, msg: &LogMessage, age: usize, font: &egui::FontI
     let color = style::brighten(msg.color, 1.0 + LOG_LINE_ARRIVE_LIFT * (1.0 - settled))
         .gamma_multiply(age_alpha * settled);
 
+    let height = ui.fonts(|f| f.layout(msg.text.clone(), font.clone(), color, width)).size().y;
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    // Near the top of the log (the scroll area's view), fade away.
+    let color = if top_fade > 0.0 {
+        let below_top = row.center().y - ui.clip_rect().top();
+        color.gamma_multiply((below_top / top_fade).clamp(0.0, 1.0))
+    } else {
+        color
+    };
     let galley = ui.fonts(|f| f.layout(msg.text.clone(), font.clone(), color, width));
-    let (row, _) = ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
     // Clipped to its own row so the slide never spills onto the line above.
     let painter = ui.painter().with_clip_rect(row);
     let rise = (1.0 - settled) * LOG_LINE_SLIDE_DISTANCE;
@@ -1083,9 +1115,19 @@ mod tests {
         }
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
-        for _ in 0..3 {
-            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+        // Laid out, then hovered (its backing comes up), then left again.
+        let hot = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<bool>(egui::Id::new("message_log").with("hot")));
+        for (pointer, over) in [
+            (None, false),
+            (None, false),
+            (Some(egui::pos2(100.0, 690.0)), true),
+            (Some(egui::pos2(100.0, 690.0)), true),
+            (Some(egui::pos2(900.0, 100.0)), false),
+        ] {
+            let events = pointer.map(egui::Event::PointerMoved).into_iter().collect();
+            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
             let _ = ctx.run(input, |ctx| draw_message_log(ctx, &log));
+            assert_eq!(hot(&ctx), Some(over), "its backing is up only with the cursor over it ({pointer:?})");
         }
         let rect = ctx.memory(|m| m.area_rect(egui::Id::new("message_log"))).expect("the log is drawn");
         assert!(rect.width() < crate::constants::LOG_WIDTH + 40.0, "as wide as it was made: {rect:?}");

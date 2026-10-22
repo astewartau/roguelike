@@ -153,6 +153,12 @@ pub const EFFECT_PIP_FONT_SIZE: f32 = 10.0;
 /// Starting width of the message-log panel, in points (it can be resized).
 /// Wide enough that a typical combat line does not wrap.
 pub const LOG_WIDTH: f32 = 360.0;
+/// How far the message log's top fade reaches, in lines: while the cursor
+/// isn't over the log, lines fade to nothing over this much of its top.
+pub const LOG_TOP_FADE_LINES: f32 = 2.5;
+/// How far around the message log the cursor still counts as over it, in
+/// points: enough to reach the resize edges just outside it.
+pub const LOG_HOVER_MARGIN: f32 = 8.0;
 /// The narrowest and shortest the message log can be resized to, in points.
 pub const LOG_MIN_SIZE: [f32; 2] = [180.0, 40.0];
 /// The widest the message log can be resized to, as a share of the screen's
