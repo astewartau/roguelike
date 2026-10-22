@@ -1,7 +1,7 @@
 //! World initialization - creates the game world and spawns initial entities.
 
 use crate::components::{
-    AbilityType, Actor, AnimatedSprite, BlocksMovement, BlocksVision, ClassAbility,
+    Actor, AnimatedSprite, BlocksMovement, BlocksVision, ClassAbility,
     Container, Door, Equipment, Experience, Health, Inventory, ItemInstance, ItemType, Name, Player,
     PlayerClass, Position, ClassKit, SecondaryAbility, Sprite, Stats, StatusEffects, VisualPosition,
 };
@@ -817,27 +817,18 @@ pub fn spawn_player(world: &mut World, player_class: PlayerClass, at: Position) 
         ),
     );
 
-    // Fighter gets a secondary ability (Stun)
-    if player_class == PlayerClass::Fighter {
-        let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Stun, STUN_COOLDOWN));
-    }
-
-    // Druid gets a secondary ability (Barkskin)
-    if player_class == PlayerClass::Druid {
-        let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Barkskin, BARKSKIN_COOLDOWN));
-    }
-
-    // Necromancer gets a secondary ability (Fear)
-    if player_class == PlayerClass::Necromancer {
-        let _ = world.insert_one(player_entity, SecondaryAbility::new(AbilityType::Fear, FEAR_ABILITY_COOLDOWN));
+    // Fighter, Druid and Necromancer get a secondary ability (Stun,
+    // Barkskin, Fear).
+    if let Some((ability, cooldown)) = player_class.secondary_ability() {
+        let _ = world.insert_one(player_entity, SecondaryAbility::new(ability, cooldown));
     }
 
     // Every class carries a spell list (filled by studying scrolls); the
     // Necromancer starts with Raise Dead in it.
     {
         let mut learned = crate::components::LearnedAbilities::default();
-        if player_class == PlayerClass::Necromancer {
-            learned.learn(AbilityType::RaiseDead);
+        for &spell in player_class.starting_spells() {
+            learned.learn(spell);
         }
         let _ = world.insert_one(player_entity, learned);
     }

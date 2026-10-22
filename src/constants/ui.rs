@@ -297,3 +297,156 @@ pub const DEV_CLOCK_SPEEDS: [f32; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 16.0];
 /// lower keeps the world from lurching, higher keeps high speeds honest on
 /// slow frames.
 pub const DEV_CLOCK_MAX_STEP: f32 = 0.5;
+
+// =============================================================================
+// MENUS (start, pause, game over)
+// =============================================================================
+// Shared by the full-screen menus in `src/ui/start_screen.rs`,
+// `pause_screen.rs` and `game_over_screen.rs`, painted through the helpers in
+// `src/ui/style.rs` and `src/ui/menu_backdrop.rs`.
+
+/// Font size of a menu's title ("Roguelike", "Paused", "You Died"), in points.
+pub const MENU_TITLE_SIZE: f32 = 56.0;
+/// Extra space between the title's letters, in points. Spaced capitals read
+/// as carved lettering; past about 10 the word falls apart into letters.
+pub const MENU_TITLE_LETTER_SPACING: f32 = 6.0;
+/// How far down-right the title's hard shadow falls, in points. Same idea as
+/// [`PANEL_SHADOW_OFFSET`]: a hard offset, never a blur.
+pub const MENU_TITLE_SHADOW_OFFSET: f32 = 3.0;
+/// Width of the ornamental rule drawn under a menu title, in points.
+pub const MENU_RULE_WIDTH: f32 = 320.0;
+/// Half-size of the brass diamond in the middle of that rule, in points.
+pub const MENU_RULE_DIAMOND: f32 = 4.0;
+
+/// Size of a seed-mode chip on the start screen, in points.
+pub const MENU_CHIP_SIZE: [f32; 2] = [76.0, 24.0];
+/// Size of a menu button, in points.
+pub const MENU_BUTTON_SIZE: [f32; 2] = [260.0, 40.0];
+/// Size of a secondary menu button (Sandbox, Past Runs), in points.
+pub const MENU_BUTTON_SMALL_SIZE: [f32; 2] = [124.0, 30.0];
+/// Font size of a menu button's label, in points.
+pub const MENU_BUTTON_FONT_SIZE: f32 = 20.0;
+/// Font size of a secondary menu button's label, in points.
+pub const MENU_BUTTON_SMALL_FONT_SIZE: f32 = 14.0;
+/// Vertical gap between stacked menu buttons, in points.
+pub const MENU_BUTTON_SPACING: f32 = 8.0;
+/// Seconds a menu button takes to warm up to its highlight and cool back
+/// down. Short enough that keyboard navigation never feels laggy.
+pub const MENU_HIGHLIGHT_FADE: f32 = 0.08;
+/// How far down-right a menu button's hard shadow falls, in points. Half the
+/// panels' [`PANEL_SHADOW_OFFSET`], since a button sits lower than a panel.
+pub const MENU_BUTTON_SHADOW_OFFSET: f32 = 2.0;
+/// Half-height of the brass pointer triangles beside a highlighted menu
+/// button, in points.
+pub const MENU_POINTER_SIZE: f32 = 5.0;
+
+/// Edge length of one backdrop tile on the start screen, in points. The
+/// sheet's tiles are 32px, so this must stay an integer multiple of 32 to
+/// keep the pixels square.
+pub const MENU_BACKDROP_TILE_SIZE: f32 = 64.0;
+/// Rows of wall across the top of the backdrop. The last of them is drawn as
+/// the wall's face, the rest as its top.
+pub const MENU_BACKDROP_WALL_ROWS: usize = 2;
+/// Horizontal distance of each brazier from the screen centre, in points.
+pub const MENU_BRAZIER_OFFSET_X: f32 = 340.0;
+/// Radius of a brazier's glow on the start screen, in points.
+pub const MENU_BRAZIER_GLOW_RADIUS: f32 = 360.0;
+/// Peak strength of a brazier's glow, 0-1. The glow is added to what is under
+/// it, so this is how far the floor next to a brazier is lifted towards the
+/// glow colour.
+pub const MENU_BRAZIER_GLOW_STRENGTH: f32 = 0.55;
+/// How much the brazier glow's radius swells and shrinks with the flicker, as a
+/// fraction of [`MENU_BRAZIER_GLOW_RADIUS`]. Uses the in-game light flicker, so
+/// the braziers breathe like the lights in the dungeon.
+pub const MENU_BRAZIER_FLICKER: f32 = 0.08;
+/// Embers rising from each brazier at any moment.
+pub const MENU_EMBER_COUNT: usize = 7;
+/// Seconds an ember lives, from leaving the flame to going out.
+pub const MENU_EMBER_LIFETIME: f32 = 3.2;
+/// How fast an ember rises, in points per second.
+pub const MENU_EMBER_RISE_SPEED: f32 = 34.0;
+/// How far an ember sways side to side as it rises, in points.
+pub const MENU_EMBER_SWAY: f32 = 10.0;
+/// Edge length of an ember, in points. Square, and pinned to whole pixels.
+pub const MENU_EMBER_SIZE: f32 = 2.0;
+/// Segments around a round glow or vignette. Up is smoother and costs more
+/// triangles; below about 24 the glow's edge visibly facets.
+pub const UI_GLOW_SEGMENTS: usize = 48;
+/// Cells along each side of the vignette's vertex grid. More is a smoother
+/// falloff; below about 8 the grid shows as faint diagonal banding.
+pub const UI_VIGNETTE_GRID: usize = 16;
+/// Opacity of the vignette at the very edges of a menu screen, 0-255.
+pub const MENU_VIGNETTE_ALPHA: u8 = 235;
+/// How far in from the edges the vignette reaches before it is fully clear,
+/// as a fraction of the half-width/half-height of the screen.
+pub const MENU_VIGNETTE_REACH: f32 = 0.55;
+
+/// Size of a class card on the start screen, in points.
+pub const MENU_CLASS_CARD_SIZE: [f32; 2] = [144.0, 132.0];
+/// Gap between class cards, in points.
+pub const MENU_CLASS_CARD_GAP: f32 = 16.0;
+/// Size of the class sprite on its card, in points. 2x the 32px sheet tile.
+pub const MENU_CLASS_SPRITE_SIZE: f32 = 64.0;
+/// How far the selected class's sprite bobs, in points. Whole pixels only, so
+/// the bob reads as a two-frame idle rather than a smooth float.
+pub const MENU_CLASS_BOB_AMPLITUDE: f32 = 2.0;
+/// How fast the selected class's sprite bobs, in radians per second.
+pub const MENU_CLASS_BOB_SPEED: f32 = 4.0;
+/// Radius of the warm glow behind the selected class's sprite, in points.
+pub const MENU_CLASS_GLOW_RADIUS: f32 = 56.0;
+/// Strength of that glow, 0-1, as for [`MENU_BRAZIER_GLOW_STRENGTH`].
+pub const MENU_CLASS_GLOW_STRENGTH: f32 = 0.22;
+/// Width of the selected class's details panel, in points. Matches the row
+/// of class cards above it (four cards and three gaps), and is wide enough
+/// for the Necromancer's seven starting abilities beside the stat pips.
+pub const MENU_DETAILS_WIDTH: f32 = 624.0;
+/// The stat value a full row of pips stands for on the class details panel.
+/// Starting stats run 10-18, so 20 leaves headroom and keeps the classes'
+/// differences visible.
+pub const MENU_STAT_PIPS: i32 = 20;
+/// Size of one stat pip, in points.
+pub const MENU_STAT_PIP_SIZE: [f32; 2] = [6.0, 10.0];
+/// Gap between stat pips, in points.
+pub const MENU_STAT_PIP_GAP: f32 = 2.0;
+/// Size of an item or ability icon on the class details panel, in points.
+/// The sheet's 32px tiles at 1:1.
+pub const MENU_KIT_ICON_SIZE: f32 = 32.0;
+
+/// Width of the centred panel holding the pause and game over menus, in
+/// points.
+pub const MENU_PANEL_WIDTH: f32 = 360.0;
+
+// =============================================================================
+// CHARACTER WINDOW
+// =============================================================================
+// The paper doll, stats and inventory grid in `src/ui/inventory.rs`.
+
+/// Edge length of an item socket (equipment slot or inventory cell), in
+/// points. Holds a [`CHARACTER_SOCKET_ICON_SIZE`] icon with a recess around it.
+pub const CHARACTER_SOCKET_SIZE: f32 = 40.0;
+/// Edge length of the item icon inside a socket, in points. 1:1 with the
+/// sheet's 32px tiles, so icons stay crisp.
+pub const CHARACTER_SOCKET_ICON_SIZE: f32 = 32.0;
+/// Gap between inventory cells, in points.
+pub const CHARACTER_GRID_GAP: f32 = 4.0;
+/// Cells per row of the inventory grid.
+pub const CHARACTER_GRID_COLUMNS: usize = 7;
+/// Rows the inventory grid always shows, filled or not, so a near-empty pack
+/// still reads as a pack with room in it rather than a stray icon.
+pub const CHARACTER_GRID_MIN_ROWS: usize = 5;
+/// Opacity of the silhouette in an empty equipment socket, 0-1. Enough to say
+/// what goes there; any more and an empty slot looks filled.
+pub const CHARACTER_SILHOUETTE_ALPHA: f32 = 0.16;
+/// Width of the left-hand column (paper doll and stats), in points.
+pub const CHARACTER_LEFT_WIDTH: f32 = 236.0;
+/// Height of the paper doll, in points.
+pub const CHARACTER_DOLL_HEIGHT: f32 = 180.0;
+/// Size of the character sprite in the middle of the paper doll, in points.
+/// 2x the 32px sheet tile.
+pub const CHARACTER_DOLL_SPRITE_SIZE: f32 = 64.0;
+/// Height of a tab in the character window, in points.
+pub const CHARACTER_TAB_HEIGHT: f32 = 26.0;
+/// Height of the weight bar, in points.
+pub const CHARACTER_WEIGHT_BAR_HEIGHT: f32 = 12.0;
+/// Size of an ability icon in the spellbook list, in points.
+pub const CHARACTER_SPELL_ICON_SIZE: f32 = 32.0;

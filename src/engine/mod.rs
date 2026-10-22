@@ -1364,7 +1364,7 @@ impl GameEngine {
                     })
                     .unwrap_or_default();
 
-                let choice = crate::ui::run_game_over_screen(egui_glow, window, &stats);
+                let choice = crate::ui::run_game_over_screen(egui_glow, window, ui_icons, &stats);
 
                 let mut actions = crate::ui::UiActions::default();
                 match choice {
@@ -1376,7 +1376,7 @@ impl GameEngine {
             }
             GameMode::Paused => {
                 let choice =
-                    crate::ui::run_pause_screen(egui_glow, window, &mut self.pause_selected);
+                    crate::ui::run_pause_screen(egui_glow, window, ui_icons, &mut self.pause_selected);
 
                 let mut actions = crate::ui::UiActions::default();
                 match choice {

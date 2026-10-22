@@ -102,6 +102,10 @@ pub const FIRE_TRAP_BURST_DAMAGE: i32 = 15;
 pub const ARROW_WEIGHT: f32 = 0.05;
 /// Starting arrow count for Ranger
 pub const STARTING_ARROW_COUNT: u32 = 20;
+
+/// Kilograms the player can carry per point of strength, as shown on the
+/// character window's weight bar.
+pub const CARRY_CAPACITY_PER_STRENGTH: f32 = 2.0;
 // Stacking limits are not enforced yet. `FIRE_ARROW_STACK_MAX` below documents
 // itself against ARROW_STACK_MAX and FIRE_ARROW_BUNDLE_COUNT is live, so these
 // two stay as the plain-arrow half of the same pair.

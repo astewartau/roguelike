@@ -17,6 +17,7 @@ mod hotbar;
 mod icons;
 mod inventory;
 mod loot_window;
+mod menu_backdrop;
 mod message_log;
 mod pause_screen;
 mod shop_window;
@@ -648,7 +649,7 @@ pub fn run_ui(
                 viewport_width,
                 viewport_height,
             };
-            draw_inventory_window(ctx, world, player_entity, &inv_data, icons, ui_state, &mut actions);
+            draw_inventory_window(ctx, world, player_entity, &inv_data, icons, tileset, ui_state, &mut actions);
         }
 
         // Right-click tile menu (over everything but the drag ghost)

@@ -158,6 +158,52 @@ pub mod colors {
     pub const DUNGEON_GOLD: Color32 = Color32::from_rgb(210, 180, 100);
     pub const DUNGEON_GREEN: Color32 = Color32::from_rgb(80, 140, 80);
 
+    // Item sockets (equipment slots, inventory cells): a recess darker than
+    // the panel, so an empty socket reads as a hole waiting for something.
+    pub const SOCKET_BG: Color32 = Color32::from_rgb(15, 13, 12);
+    /// Faint warm wash over a socket the pointer is on.
+    pub const SOCKET_HOVER_FILL: Color32 = Color32::from_rgb(34, 28, 22);
+    /// Tint for the silhouette in an empty equipment socket (faded further by
+    /// `CHARACTER_SILHOUETTE_ALPHA`).
+    pub const SOCKET_SILHOUETTE: Color32 = Color32::from_rgb(200, 185, 160);
+
+    // Character window
+    /// A stat raised by gear.
+    pub const STAT_BONUS: Color32 = Color32::from_rgb(140, 200, 115);
+    /// A stat lowered by gear, and identified curse lines.
+    pub const CURSE: Color32 = Color32::from_rgb(205, 90, 80);
+    /// Carried weight, and the recess it fills.
+    pub const WEIGHT_BAR: Color32 = Color32::from_rgb(150, 128, 92);
+    pub const WEIGHT_BAR_BG: Color32 = Color32::from_rgb(34, 29, 22);
+    /// An unlit pip in a stat row on the start screen.
+    pub const PIP_EMPTY: Color32 = Color32::from_rgb(42, 37, 32);
+
+    // Menus
+    /// Behind the start screen's tiles, wherever they do not reach.
+    pub const MENU_BACKDROP: Color32 = Color32::from_rgb(8, 7, 6);
+    /// Multiplied into the start screen's tiles: dark, and warm, so the cold
+    /// blue-grey stone reads as a room lit by fire rather than by daylight.
+    pub const MENU_BACKDROP_TINT: Color32 = Color32::from_rgb(88, 72, 58);
+    /// Firelight added over the start screen's floor around a torch.
+    pub const TORCH_GLOW: Color32 = Color32::from_rgb(255, 160, 70);
+    /// A rising ember.
+    pub const EMBER: Color32 = Color32::from_rgb(255, 175, 80);
+    /// The darkness the menu vignettes fade to at the screen edges.
+    pub const VIGNETTE: Color32 = Color32::from_rgb(4, 3, 3);
+    /// The hard shadow under a menu title.
+    pub const TITLE_SHADOW: Color32 = Color32::from_black_alpha(230);
+    /// Dims the frozen dungeon behind the pause menu.
+    pub const PAUSE_DIM: Color32 = Color32::from_rgba_premultiplied(5, 4, 3, 190);
+    /// Dims the frozen dungeon behind the game over screen, with a trace of
+    /// red in it.
+    pub const DEATH_DIM: Color32 = Color32::from_rgba_premultiplied(14, 3, 3, 215);
+    /// "You Died".
+    pub const DEATH_TITLE: Color32 = Color32::from_rgb(185, 45, 40);
+    /// Fill of the primary button on a menu ("Enter the Dungeon", "Retry"):
+    /// the ordinary button stone with brass worked into it.
+    pub const BUTTON_PRIMARY: Color32 = Color32::from_rgb(58, 44, 28);
+    pub const BUTTON_PRIMARY_HOVER: Color32 = Color32::from_rgb(78, 59, 34);
+
     // Item rarity tiers
     pub const RARITY_COMMON: Color32 = TEXT_PRIMARY;
     pub const RARITY_MAGIC: Color32 = Color32::from_rgb(110, 160, 230);
@@ -245,6 +291,14 @@ pub fn rarity_color(rarity: crate::components::Rarity) -> Color32 {
 
 /// Border width for panels and buttons
 pub const BORDER_WIDTH: f32 = 1.0;
+
+/// Mix `a` towards `b` by `t` (0 is all `a`), channel by channel including
+/// alpha. For highlight fades, where both ends are palette colours.
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let ch = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_premultiplied(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()), ch(a.a(), b.a()))
+}
 
 /// Create the dungeon-themed visuals
 pub fn dungeon_visuals() -> Visuals {
@@ -510,6 +564,12 @@ fn panel_texture_rect(window: Rect, content_top: f32) -> Rect {
 /// actually creates the hierarchy — it gives each section a visible top edge.
 pub fn panel_header(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).heading().strong());
+    panel_rule(ui);
+}
+
+/// The hairline rule from [`panel_header`] on its own, across the panel, for
+/// dividing sections that need no title.
+pub fn panel_rule(ui: &mut egui::Ui) {
     let width = ui.available_width();
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(width, PANEL_HEADER_RULE_HEIGHT), egui::Sense::hover());
@@ -570,7 +630,7 @@ fn panel_texture_shape(ctx: &egui::Context, rect: Rect) -> egui::Shape {
 /// Paint a panel's bevel and corner rivets over the panel at `rect`. These go
 /// on top of the contents, unlike the texture, because they belong to the
 /// panel's edge where no content is drawn.
-fn paint_panel_edges(painter: &Painter, icons: &UiIcons, rect: Rect) {
+pub fn paint_panel_edges(painter: &Painter, icons: &UiIcons, rect: Rect) {
     // Bevel: a lighter line down the top and left inner edges, a darker one
     // down the bottom and right. Rounded onto pixel centres, or a 1px line at
     // an arbitrary sub-pixel position is drawn as two half-lit pixels and the
@@ -686,6 +746,362 @@ fn panel_noise_image() -> ColorImage {
         .collect();
 
     ColorImage { size: [size, size], pixels }
+}
+
+
+// =============================================================================
+// SOCKETS, GLOWS AND MENU PIECES
+// =============================================================================
+// Painted pieces shared by the menus and the character window. Same rules as
+// the panel chrome above: square corners, 1px lines on pixel centres, hard
+// shadows, nothing blurred.
+
+/// Shadow, stone and border for a slab at `rect`, as one shape, so it can fill
+/// a placeholder laid down before the slab's contents.
+pub fn stone_shape(ctx: &egui::Context, rect: Rect, border: Color32) -> egui::Shape {
+    let shadow = egui::vec2(PANEL_SHADOW_OFFSET, PANEL_SHADOW_OFFSET);
+    egui::Shape::Vec(vec![
+        egui::Shape::rect_filled(rect.translate(shadow), Rounding::ZERO, colors::PANEL_SHADOW),
+        panel_texture_shape(ctx, rect),
+        egui::Shape::rect_stroke(rect, Rounding::ZERO, Stroke::new(BORDER_WIDTH, border)),
+    ])
+}
+
+/// Lay `add_contents` out on a stone slab: the shadow, texture, bevel and
+/// rivets of a [`dungeon_window`], for a panel that sits inside a layout
+/// (the start screen's class details, the pause menu) rather than floating as
+/// a window of its own.
+pub fn stone_panel<R>(
+    ui: &mut egui::Ui,
+    icons: &UiIcons,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let backdrop = ui.painter().add(egui::Shape::Noop);
+    // Top to bottom whatever the parent's layout is: a panel dropped into a
+    // row would otherwise lay its own contents out sideways.
+    let inner = Frame::none()
+        .inner_margin(Margin::same(PANEL_INNER_MARGIN))
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), add_contents).inner
+        });
+    let rect = ui.painter().round_rect_to_pixels(inner.response.rect);
+    ui.painter().set(backdrop, stone_shape(ui.ctx(), rect, colors::PANEL_BORDER));
+    paint_panel_edges(ui.painter(), icons, rect);
+    inner
+}
+
+/// Paint a recessed socket at `rect`: `fill`, a 1px inset bevel (dark along
+/// the top and left, light along the bottom and right) and a hairline frame.
+/// The same recess the HUD bars sit in, so an item slot reads as cut into the
+/// panel rather than pasted onto it.
+pub fn paint_recess(painter: &Painter, rect: Rect, fill: Color32) {
+    let rect = painter.round_rect_to_pixels(rect);
+    painter.rect_filled(rect, Rounding::ZERO, fill);
+    let inner = rect.shrink(BORDER_WIDTH);
+    let centre = |pos| painter.round_pos_to_pixel_center(pos);
+    let dark = Stroke::new(BORDER_WIDTH, colors::BAR_BEVEL_DARK);
+    let light = Stroke::new(BORDER_WIDTH, colors::BAR_BEVEL_LIGHT);
+    painter.line_segment([centre(inner.left_top()), centre(inner.right_top())], dark);
+    painter.line_segment([centre(inner.left_top()), centre(inner.left_bottom())], dark);
+    painter.line_segment([centre(inner.left_bottom()), centre(inner.right_bottom())], light);
+    painter.line_segment([centre(inner.right_top()), centre(inner.right_bottom())], light);
+    painter.rect_stroke(rect, Rounding::ZERO, Stroke::new(BORDER_WIDTH, colors::BAR_FRAME));
+}
+
+/// Light added by a glow of `color` at `strength` (0-1): the colour scaled
+/// down, with zero alpha. Under egui's premultiplied blending a zero-alpha
+/// colour is added to what is underneath rather than covering it, so a glow
+/// over a dark floor lights the floor instead of fogging it.
+fn additive(color: Color32, strength: f32) -> Color32 {
+    let scale = |c: u8| (c as f32 * strength.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgba_premultiplied(scale(color.r()), scale(color.g()), scale(color.b()), 0)
+}
+
+/// Add a round glow of `color` centred on `centre`, at full `strength` in the
+/// middle and gone by `radius`. The falloff is steeper than linear, which is
+/// what makes it read as a light source rather than a coloured disc.
+pub fn paint_glow(painter: &Painter, centre: Pos2, radius: f32, color: Color32, strength: f32) {
+    // (fraction of the radius, fraction of the strength): roughly a squared
+    // falloff, in few enough rings to stay cheap.
+    const RINGS: [(f32, f32); 4] = [(0.0, 1.0), (0.3, 0.55), (0.65, 0.18), (1.0, 0.0)];
+    let mut mesh = egui::Mesh::default();
+    let segments = UI_GLOW_SEGMENTS as u32;
+    for (fraction, falloff) in RINGS {
+        let vertex_color = additive(color, strength * falloff);
+        for i in 0..segments {
+            let angle = i as f32 / segments as f32 * std::f32::consts::TAU;
+            let offset = egui::vec2(angle.cos(), angle.sin()) * radius * fraction;
+            mesh.colored_vertex(centre + offset, vertex_color);
+        }
+    }
+    for ring in 0..RINGS.len() as u32 - 1 {
+        let (inner, outer) = (ring * segments, (ring + 1) * segments);
+        for i in 0..segments {
+            let j = (i + 1) % segments;
+            mesh.add_triangle(inner + i, outer + i, outer + j);
+            mesh.add_triangle(inner + i, outer + j, inner + j);
+        }
+    }
+    painter.add(mesh);
+}
+
+/// Darken the edges of `rect` towards `color` at `max_alpha`, clear in an
+/// ellipse covering the middle `1 - reach` of it. Pulls the eye to the centre
+/// of a menu screen and lets whatever is behind it fall away into the dark.
+///
+/// A grid of vertices, each shaded by how far out along the ellipse it sits,
+/// so the darkness reaches right into the corners with no seams.
+pub fn paint_vignette(painter: &Painter, rect: Rect, color: Color32, max_alpha: u8, reach: f32) {
+    let cells = UI_VIGNETTE_GRID as u32;
+    let clear = 1.0 - reach.clamp(0.01, 1.0);
+    let half = rect.size() / 2.0;
+    let mut mesh = egui::Mesh::default();
+    for row in 0..=cells {
+        for column in 0..=cells {
+            let pos = rect.min + egui::vec2(column as f32, row as f32) / cells as f32 * rect.size();
+            let from_centre = (pos - rect.center()) / half;
+            let t = ((from_centre.length() - clear) / (1.0 - clear)).clamp(0.0, 1.0);
+            // Eased, so the dark gathers at the edges instead of starting as a
+            // visible ring.
+            let alpha = (max_alpha as f32 * t * t * (3.0 - 2.0 * t)).round() as u8;
+            mesh.colored_vertex(pos, Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha));
+        }
+    }
+    let stride = cells + 1;
+    for row in 0..cells {
+        for column in 0..cells {
+            let a = row * stride + column;
+            mesh.add_triangle(a, a + 1, a + stride + 1);
+            mesh.add_triangle(a, a + stride + 1, a + stride);
+        }
+    }
+    painter.add(mesh);
+}
+
+/// A menu title: spaced capitals in `color` over a hard drop shadow, centred
+/// in the available width.
+pub fn menu_title(ui: &mut egui::Ui, text: &str, color: Color32) {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::default();
+    job.append(
+        &text.to_uppercase(),
+        0.0,
+        TextFormat {
+            font_id: egui::FontId::proportional(MENU_TITLE_SIZE),
+            extra_letter_spacing: MENU_TITLE_LETTER_SPACING,
+            color,
+            ..Default::default()
+        },
+    );
+    let galley = ui.fonts(|f| f.layout_job(job));
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), galley.size().y),
+        egui::Sense::hover(),
+    );
+    // Letter spacing also follows the last letter, so the text is a spacing
+    // wider than it looks; shift by half of that to centre what is seen.
+    let x = rect.center().x - (galley.size().x - MENU_TITLE_LETTER_SPACING) / 2.0;
+    let pos = ui.painter().round_pos_to_pixels(Pos2::new(x, rect.top()));
+    let shadow = egui::vec2(MENU_TITLE_SHADOW_OFFSET, MENU_TITLE_SHADOW_OFFSET);
+    let painter = ui.painter();
+    painter.galley_with_override_text_color(pos + shadow, galley.clone(), colors::TITLE_SHADOW);
+    painter.galley(pos, galley, color);
+}
+
+/// An ornamental rule `width` wide, centred: a hairline that fades out
+/// towards both ends, with a small brass diamond at its middle. Goes under a
+/// menu title or between sections of a menu.
+pub fn ornament_rule(ui: &mut egui::Ui, width: f32) {
+    let d = MENU_RULE_DIAMOND;
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), d * 2.0 + 2.0),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    let centre = painter.round_pos_to_pixel_center(row.center());
+    let half = width / 2.0;
+    // Each half of the line is a 1px quad, solid by the diamond and
+    // transparent at the far end.
+    let line = colors::BUTTON_BORDER;
+    let mut mesh = egui::Mesh::default();
+    for (near, far) in [(centre.x - d * 2.0, centre.x - half), (centre.x + d * 2.0, centre.x + half)] {
+        let base = mesh.vertices.len() as u32;
+        let (top, bottom) = (centre.y - 0.5, centre.y + 0.5);
+        mesh.colored_vertex(Pos2::new(near, top), line);
+        mesh.colored_vertex(Pos2::new(far, top), Color32::TRANSPARENT);
+        mesh.colored_vertex(Pos2::new(far, bottom), Color32::TRANSPARENT);
+        mesh.colored_vertex(Pos2::new(near, bottom), line);
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
+    }
+    painter.add(mesh);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            centre + egui::vec2(0.0, -d),
+            centre + egui::vec2(d, 0.0),
+            centre + egui::vec2(0.0, d),
+            centre + egui::vec2(-d, 0.0),
+        ],
+        colors::TEXT_ACCENT,
+        Stroke::NONE,
+    ));
+}
+
+/// How much a menu button stands out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonWeight {
+    /// The one thing the screen is for ("Enter the Dungeon", "Retry"): brass
+    /// worked into the stone, gold lettering.
+    Primary,
+    /// An ordinary full-size menu entry.
+    Normal,
+    /// A smaller secondary action beside the main ones.
+    Small,
+}
+
+/// A menu button: a stone slab with a bevel and a hard shadow, warming to
+/// brass with a pointer either side while `highlighted` (the keyboard
+/// selection) or hovered.
+///
+/// Painted rather than an `egui::Button` so the highlight can fade, which a
+/// stock button cannot do, and so every menu shares exactly one look.
+pub fn menu_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    weight: ButtonWeight,
+    highlighted: bool,
+) -> egui::Response {
+    let (size, font_size) = match weight {
+        ButtonWeight::Small => (MENU_BUTTON_SMALL_SIZE, MENU_BUTTON_SMALL_FONT_SIZE),
+        _ => (MENU_BUTTON_SIZE, MENU_BUTTON_FONT_SIZE),
+    };
+    let (rect, response) = ui.allocate_exact_size(size.into(), egui::Sense::click());
+    let enabled = ui.is_enabled();
+    let lit = enabled && (highlighted || response.hovered());
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("menu_button_lit"), lit, MENU_HIGHLIGHT_FADE);
+
+    let (base, hover, text, text_lit) = match weight {
+        ButtonWeight::Primary => (
+            colors::BUTTON_PRIMARY,
+            colors::BUTTON_PRIMARY_HOVER,
+            colors::DUNGEON_GOLD,
+            brighten(colors::DUNGEON_GOLD, 1.15),
+        ),
+        _ => (colors::BUTTON_BG, colors::BUTTON_HOVER, colors::TEXT_PRIMARY, colors::DUNGEON_GOLD),
+    };
+    let fill = if response.is_pointer_button_down_on() {
+        colors::BUTTON_ACTIVE
+    } else {
+        mix(base, hover, t)
+    };
+    let text_color = if enabled { mix(text, text_lit, t) } else { colors::TEXT_MUTED.gamma_multiply(0.6) };
+    let border = mix(colors::BUTTON_BORDER, colors::TEXT_ACCENT, t);
+
+    let painter = ui.painter();
+    let rect = painter.round_rect_to_pixels(rect);
+    let shadow = egui::vec2(MENU_BUTTON_SHADOW_OFFSET, MENU_BUTTON_SHADOW_OFFSET);
+    painter.rect_filled(rect.translate(shadow), Rounding::ZERO, colors::PANEL_SHADOW);
+    painter.rect_filled(rect, Rounding::ZERO, fill);
+    // Raised bevel: lit along the top and left, shaded along the bottom and
+    // right, the opposite of a socket's recess.
+    let inner = rect.shrink(BORDER_WIDTH);
+    let centre = |pos| painter.round_pos_to_pixel_center(pos);
+    let light = Stroke::new(BORDER_WIDTH, brighten(fill, 1.45));
+    let dark = Stroke::new(BORDER_WIDTH, mix(fill, Color32::BLACK, 0.4));
+    painter.line_segment([centre(inner.left_top()), centre(inner.right_top())], light);
+    painter.line_segment([centre(inner.left_top()), centre(inner.left_bottom())], light);
+    painter.line_segment([centre(inner.left_bottom()), centre(inner.right_bottom())], dark);
+    painter.line_segment([centre(inner.right_top()), centre(inner.right_bottom())], dark);
+    painter.rect_stroke(rect, Rounding::ZERO, Stroke::new(BORDER_WIDTH, border));
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(font_size),
+        text_color,
+    );
+
+    // Brass pointers either side, pointing in, fading with the highlight.
+    if t > 0.0 && weight != ButtonWeight::Small {
+        let s = MENU_POINTER_SIZE;
+        let colour = colors::TEXT_ACCENT.gamma_multiply(t);
+        let y = rect.center().y;
+        for (tip, back) in [
+            (rect.left() - s * 1.5, rect.left() - s * 3.0),
+            (rect.right() + s * 1.5, rect.right() + s * 3.0),
+        ] {
+            painter.add(egui::Shape::convex_polygon(
+                vec![Pos2::new(back, y - s), Pos2::new(tip, y), Pos2::new(back, y + s)],
+                colour,
+                Stroke::NONE,
+            ));
+        }
+    }
+
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
+}
+
+/// A small toggle for picking one of a few options (the start screen's seed
+/// mode): a recess when off, a lit brass-edged slab when `selected`.
+pub fn menu_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(MENU_CHIP_SIZE.into(), egui::Sense::click());
+    let hovered = response.hovered();
+    let painter = ui.painter();
+    let rect = painter.round_rect_to_pixels(rect);
+    if selected {
+        painter.rect_filled(rect, Rounding::ZERO, colors::BUTTON_PRIMARY);
+        painter.rect_stroke(rect, Rounding::ZERO, Stroke::new(BORDER_WIDTH, colors::TEXT_ACCENT));
+    } else {
+        paint_recess(painter, rect, if hovered { colors::SOCKET_HOVER_FILL } else { colors::SOCKET_BG });
+    }
+    let text = if selected {
+        colors::DUNGEON_GOLD
+    } else if hovered {
+        colors::TEXT_PRIMARY
+    } else {
+        colors::TEXT_MUTED
+    };
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(MENU_BUTTON_SMALL_FONT_SIZE - 1.0),
+        text,
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Lay out a dimmed, vignetted full-screen overlay with a centred stone panel
+/// on it: the shared shape of the pause and game over screens. `dim` covers
+/// the frozen dungeon; the panel is [`MENU_PANEL_WIDTH`] wide and holds
+/// whatever `add_contents` puts in it.
+pub fn menu_overlay(
+    ctx: &egui::Context,
+    icons: &UiIcons,
+    dim: Color32,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::CentralPanel::default()
+        .frame(Frame::none().fill(dim))
+        .show(ctx, |ui| {
+            let screen = ui.max_rect();
+            paint_vignette(ui.painter(), screen, colors::VIGNETTE, MENU_VIGNETTE_ALPHA, MENU_VIGNETTE_REACH);
+        });
+    egui::Area::new(egui::Id::new("menu_overlay_panel"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            stone_panel(ui, icons, |ui| {
+                ui.set_width(MENU_PANEL_WIDTH);
+                ui.vertical_centered(add_contents);
+            });
+        });
 }
 
 #[cfg(test)]
