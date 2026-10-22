@@ -21,7 +21,8 @@ use crate::events::{DamageKind, GameEvent, StairDirection};
 
 /// Maximum number of distinct lines retained in the log.
 const MAX_MESSAGES: usize = 100;
-/// Number of lines shown on screen at once.
+/// How many lines tall the log starts (it can be resized; as many of the
+/// newest as fit are shown).
 const VISIBLE_MESSAGES: usize = 6;
 
 /// Colors used for log lines, themed to match the rest of the UI.
@@ -950,50 +951,66 @@ fn capitalize(s: &str) -> String {
 
 /// Draw the message log in the bottom-left corner.
 ///
-/// Rendered as a non-interactive area so it never steals clicks from the
-/// world or other UI. It sits at the windows' level, `Middle`, not
-/// `Background`: the world-space overlays (`ui::vfx`) paint on `Background`,
-/// and there egui draws painter layers over areas, so effects would cover it.
+/// A window pinned there, resizable from its top and right edges: as many
+/// of the newest lines as fit its height show, oldest at the top, and a
+/// line longer than its width wraps. Being resizable, it takes clicks over
+/// itself (nothing beyond it). It sits at the windows' level, `Middle`, not
+/// `Background`: the world-space overlays (`ui::vfx`) paint on
+/// `Background`, and there egui draws painter layers over areas, so effects
+/// would cover it.
 pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
     if log.messages.is_empty() {
         return;
     }
+    let font = egui::TextStyle::Monospace.resolve(&ctx.style());
+    let line_height = ctx.fonts(|f| f.row_height(&font));
+    let screen = ctx.screen_rect().size();
 
-    egui::Area::new(egui::Id::new("message_log"))
+    egui::Window::new("Messages")
+        .id(egui::Id::new("message_log"))
+        .title_bar(false)
         .order(egui::Order::Middle)
-        .interactable(false)
-        .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
-        .show(ctx, |ui| {
+        .frame(
             egui::Frame::none()
                 .fill(colors::PANEL_BG.gamma_multiply(0.78))
                 .stroke(egui::Stroke::new(super::style::BORDER_WIDTH, colors::PANEL_BORDER))
-                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
-                .show(ui, |ui| {
-                    ui.set_min_width(LOG_WIDTH);
-                    ui.spacing_mut().item_spacing.y = 1.0;
+                .inner_margin(egui::Margin::symmetric(8.0, 6.0)),
+        )
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
+        .resizable(true)
+        .default_size([LOG_WIDTH, VISIBLE_MESSAGES as f32 * (line_height + 1.0)])
+        .min_size(LOG_MIN_SIZE)
+        .max_size([screen.x * LOG_MAX_SCREEN_SHARE[0], screen.y * LOG_MAX_SCREEN_SHARE[1]])
+        .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            let width = ui.available_width();
+            let height = ui.available_height();
 
-                    let font = egui::TextStyle::Monospace.resolve(ui.style());
-                    let line_height = ui.fonts(|f| f.row_height(&font));
-
-                    // Oldest of the visible window first, newest at the bottom.
-                    let start = log.messages.len().saturating_sub(VISIBLE_MESSAGES);
-                    for (i, msg) in log.messages.iter().enumerate().skip(start) {
-                        let age = log.messages.len() - 1 - i;
-                        draw_line(ui, msg, age, &font, line_height);
-                    }
-                });
+            // The newest lines that fit, working up from the bottom.
+            let mut shown: Vec<(usize, f32)> = Vec::new();
+            let mut used = 0.0;
+            for (i, msg) in log.messages.iter().enumerate().rev() {
+                let galley = ui.fonts(|f| f.layout(msg.text.clone(), font.clone(), egui::Color32::WHITE, width));
+                let h = galley.size().y.max(line_height) + 1.0;
+                if used + h > height && !shown.is_empty() {
+                    break;
+                }
+                used += h;
+                shown.push((i, h));
+            }
+            // Oldest of them first, newest at the bottom.
+            ui.add_space((height - used).max(0.0));
+            for &(i, _) in shown.iter().rev() {
+                let age = log.messages.len() - 1 - i;
+                draw_line(ui, &log.messages[i], age, &font, width);
+            }
         });
 }
 
-/// Draw one log line: faded by how many lines sit below it, and — if it only
-/// just arrived — sliding up into place, brighter than it will settle at.
-fn draw_line(
-    ui: &mut egui::Ui,
-    msg: &LogMessage,
-    age: usize,
-    font: &egui::FontId,
-    line_height: f32,
-) {
+/// Draw one log line, wrapped to `width`: faded by how many lines sit below
+/// it, and — if it only just arrived — sliding up into place, brighter than
+/// it will settle at.
+fn draw_line(ui: &mut egui::Ui, msg: &LogMessage, age: usize, font: &egui::FontId, width: f32) {
     // How far through its entrance the line is.
     let t = (msg.arrived.elapsed().as_secs_f32() / LOG_LINE_ARRIVE_DURATION).clamp(0.0, 1.0);
     let settled = ease::out_cubic(t);
@@ -1005,21 +1022,19 @@ fn draw_line(
     let color = style::brighten(msg.color, 1.0 + LOG_LINE_ARRIVE_LIFT * (1.0 - settled))
         .gamma_multiply(age_alpha * settled);
 
-    let (row, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), line_height),
-        egui::Sense::hover(),
-    );
+    let galley = ui.fonts(|f| f.layout(msg.text.clone(), font.clone(), color, width));
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
     // Clipped to its own row so the slide never spills onto the line above.
     let painter = ui.painter().with_clip_rect(row);
     let rise = (1.0 - settled) * LOG_LINE_SLIDE_DISTANCE;
     let origin = row.left_top() + egui::vec2(0.0, rise);
 
-    let galley = painter.layout_no_wrap(msg.text.clone(), font.clone(), color);
-    let text_width = galley.size().x;
+    // The badge goes after the end of the last line of text.
+    let end = galley.rows.last().map(|r| egui::vec2(r.rect.max.x, r.rect.min.y)).unwrap_or_default();
     painter.galley(origin, galley, color);
 
     if msg.count > 1 {
-        draw_count_badge(&painter, origin + egui::vec2(text_width, 0.0), msg, font, color);
+        draw_count_badge(&painter, origin + end, msg, font, color);
     }
 }
 
@@ -1046,4 +1061,30 @@ fn draw_count_badge(
         font.clone(),
         color,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The log keeps to its own corner: as wide as it was made, not across
+    /// the screen (each line used to claim all the width it was offered),
+    /// in the bottom-left, inside the screen, however long its lines.
+    #[test]
+    fn the_log_keeps_to_its_corner() {
+        let mut log = MessageLog::new(hecs::Entity::DANGLING);
+        for i in 0..20 {
+            log.system(format!("Message {i}: a long line of text that goes on and on about what happened in the dungeon just now"));
+        }
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
+        for _ in 0..3 {
+            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let _ = ctx.run(input, |ctx| draw_message_log(ctx, &log));
+        }
+        let rect = ctx.memory(|m| m.area_rect(egui::Id::new("message_log"))).expect("the log is drawn");
+        assert!(rect.width() < crate::constants::LOG_WIDTH + 40.0, "as wide as it was made: {rect:?}");
+        assert!(rect.left() < 20.0 && rect.bottom() > 700.0, "bottom-left: {rect:?}");
+        assert!(screen.contains_rect(rect), "on screen: {rect:?}");
+    }
 }
