@@ -21,8 +21,8 @@ use crate::events::{DamageKind, GameEvent, StairDirection};
 
 /// Maximum number of distinct lines retained in the log.
 const MAX_MESSAGES: usize = 100;
-/// How many lines tall the log starts (it can be resized; as many of the
-/// newest as fit are shown).
+/// How many lines tall the log starts (it can be resized, and scrolls back
+/// through the rest).
 const VISIBLE_MESSAGES: usize = 6;
 
 /// Colors used for log lines, themed to match the rest of the UI.
@@ -951,9 +951,9 @@ fn capitalize(s: &str) -> String {
 
 /// Draw the message log in the bottom-left corner.
 ///
-/// A window pinned there, resizable from its top and right edges: as many
-/// of the newest lines as fit its height show, oldest at the top, and a
-/// line longer than its width wraps. Being resizable, it takes clicks over
+/// A window pinned there, resizable from its top and right edges, that
+/// scrolls back through every line kept (held at the newest, at the bottom,
+/// unless you scroll up); a line longer than its width wraps. Being resizable, it takes clicks over
 /// itself (nothing beyond it). It sits at the windows' level, `Middle`, not
 /// `Background`: the world-space overlays (`ui::vfx`) paint on
 /// `Background`, and there egui draws painter layers over areas, so effects
@@ -982,28 +982,33 @@ pub fn draw_message_log(ctx: &egui::Context, log: &MessageLog) {
         .min_size(LOG_MIN_SIZE)
         .max_size([screen.x * LOG_MAX_SCREEN_SHARE[0], screen.y * LOG_MAX_SCREEN_SHARE[1]])
         .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing.y = 1.0;
-            let width = ui.available_width();
             let height = ui.available_height();
-
-            // The newest lines that fit, working up from the bottom.
-            let mut shown: Vec<(usize, f32)> = Vec::new();
-            let mut used = 0.0;
-            for (i, msg) in log.messages.iter().enumerate().rev() {
-                let galley = ui.fonts(|f| f.layout(msg.text.clone(), font.clone(), egui::Color32::WHITE, width));
-                let h = galley.size().y.max(line_height) + 1.0;
-                if used + h > height && !shown.is_empty() {
-                    break;
-                }
-                used += h;
-                shown.push((i, h));
-            }
-            // Oldest of them first, newest at the bottom.
-            ui.add_space((height - used).max(0.0));
-            for &(i, _) in shown.iter().rev() {
-                let age = log.messages.len() - 1 - i;
-                draw_line(ui, &log.messages[i], age, &font, width);
-            }
+            // Scrolls back through everything kept, held at the newest line
+            // unless you've scrolled up to read.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .max_height(height)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    let width = ui.available_width();
+                    // Fewer lines than fill it: they sit at the bottom.
+                    let total: f32 = log
+                        .messages
+                        .iter()
+                        .map(|msg| {
+                            let galley =
+                                ui.fonts(|f| f.layout(msg.text.clone(), font.clone(), egui::Color32::WHITE, width));
+                            galley.size().y.max(line_height) + 1.0
+                        })
+                        .sum();
+                    ui.add_space((height - total).max(0.0));
+                    // Oldest first, newest at the bottom.
+                    for (i, msg) in log.messages.iter().enumerate() {
+                        let age = log.messages.len() - 1 - i;
+                        draw_line(ui, msg, age, &font, width);
+                    }
+                });
         });
 }
 
