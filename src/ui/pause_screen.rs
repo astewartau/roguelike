@@ -1,10 +1,13 @@
 //! Pause menu UI component.
 //!
 //! Shown when the player presses Escape with no other menu open. Drawn as a
-//! translucent overlay over the frozen dungeon. Keyboard- and mouse-navigable.
+//! dimmed, vignetted overlay over the frozen dungeon with the menu on a stone
+//! panel in the middle. Keyboard- and mouse-navigable.
 
-use super::style;
-use egui::{Color32, RichText};
+use super::icons::UiIcons;
+use super::style::{self, colors, ButtonWeight};
+use crate::constants::*;
+use egui::RichText;
 use egui_glow::EguiGlow;
 use winit::window::Window;
 
@@ -40,6 +43,7 @@ fn choice_for(idx: usize) -> PauseChoice {
 pub fn run_pause_screen(
     egui_glow: &mut EguiGlow,
     window: &Window,
+    icons: &UiIcons,
     selected: &mut usize,
 ) -> PauseChoice {
     let mut choice = PauseChoice::None;
@@ -61,50 +65,35 @@ pub fn run_pause_screen(
             i.pointer.delta() != egui::Vec2::ZERO
         });
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_rgba_unmultiplied(8, 8, 14, 200)))
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(110.0);
-                    ui.heading(
-                        RichText::new("Paused")
-                            .size(48.0)
-                            .color(style::colors::DUNGEON_GOLD),
-                    );
-                    ui.add_space(36.0);
+        style::menu_overlay(ctx, icons, colors::PAUSE_DIM, |ui| {
+            ui.add_space(14.0);
+            style::menu_title(ui, "Paused", colors::DUNGEON_GOLD);
+            ui.add_space(4.0);
+            style::ornament_rule(ui, MENU_RULE_WIDTH * 0.75);
+            ui.add_space(20.0);
 
-                    for (idx, label) in OPTIONS.iter().enumerate() {
-                        let is_selected = idx == *selected;
-                        let fill = if is_selected {
-                            style::colors::SELECTED
-                        } else {
-                            style::colors::BUTTON_BG
-                        };
-                        let button = egui::Button::new(
-                            RichText::new(*label).size(22.0).color(Color32::WHITE),
-                        )
-                        .min_size(egui::vec2(240.0, 46.0))
-                        .fill(fill);
-                        let response = ui.add(button);
-                        // Mouse hover moves the highlight only when the pointer is moving,
-                        // so a resting mouse doesn't fight keyboard navigation.
-                        if response.hovered() && pointer_moved {
-                            *selected = idx;
-                        }
-                        if response.clicked() {
-                            choice = choice_for(idx);
-                        }
-                        ui.add_space(12.0);
-                    }
+            for (idx, label) in OPTIONS.iter().enumerate() {
+                let weight = if idx == 0 { ButtonWeight::Primary } else { ButtonWeight::Normal };
+                let response = style::menu_button(ui, label, weight, idx == *selected);
+                // Mouse hover moves the highlight only when the pointer is
+                // moving, so a resting mouse doesn't fight keyboard navigation.
+                if response.hovered() && pointer_moved {
+                    *selected = idx;
+                }
+                if response.clicked() {
+                    choice = choice_for(idx);
+                }
+                ui.add_space(MENU_BUTTON_SPACING);
+            }
 
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("↑/↓ select   •   Enter confirm   •   Esc resume")
-                            .size(12.0)
-                            .color(style::colors::TEXT_MUTED),
-                    );
-                });
-            });
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("↑/↓ select   •   Enter confirm   •   Esc resume")
+                    .size(12.0)
+                    .color(colors::TEXT_MUTED),
+            );
+            ui.add_space(6.0);
+        });
     });
 
     choice

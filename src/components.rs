@@ -105,6 +105,25 @@ impl PlayerClass {
         }
     }
 
+    /// Secondary ability and its cooldown, for the classes that have one.
+    pub fn secondary_ability(&self) -> Option<(AbilityType, f32)> {
+        match self {
+            PlayerClass::Fighter => Some((AbilityType::Stun, STUN_COOLDOWN)),
+            PlayerClass::Ranger => None,
+            PlayerClass::Druid => Some((AbilityType::Barkskin, BARKSKIN_COOLDOWN)),
+            PlayerClass::Necromancer => Some((AbilityType::Fear, FEAR_ABILITY_COOLDOWN)),
+        }
+    }
+
+    /// Spells the class already knows at the start of a run, before any
+    /// scroll is studied.
+    pub fn starting_spells(&self) -> &'static [AbilityType] {
+        match self {
+            PlayerClass::Necromancer => &[AbilityType::RaiseDead],
+            _ => &[],
+        }
+    }
+
     /// Cooldown duration for class ability
     pub fn ability_cooldown(&self) -> f32 {
         match self {
