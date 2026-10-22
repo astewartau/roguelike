@@ -421,7 +421,16 @@ pub(super) fn part_card(
         .inner_margin(egui::Margin::symmetric(8.0, 5.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let header = ui.horizontal(|ui| {
+            // The header line opens and closes it. Its click area is laid
+            // down first, and the line drawn over it, so the ? and the
+            // remove cross on top take their own clicks.
+            let (header_rect, toggle) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
+            let mut header = ui.new_child(
+                egui::UiBuilder::new().max_rect(header_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            {
+                let ui = &mut header;
                 let known = registry::find(name).is_some();
                 ui.label(look::strong(if known { name.to_string() } else { format!("{name} (unknown)") }));
                 if let Some((sheet, id)) = super::devtools_tiles::as_tile(value) {
@@ -447,9 +456,7 @@ pub(super) fn part_card(
                         look::hint(ui, info.summary);
                     }
                 });
-            });
-            // The whole header line opens and closes it.
-            let toggle = ui.interact(header.response.rect, ui.id().with("open"), egui::Sense::click());
+            }
             if toggle.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && out.action.is_none() {
                 out.action = Some(CardAction::Toggle);
             }

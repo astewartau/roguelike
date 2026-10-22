@@ -71,6 +71,9 @@ pub fn apply(ui: &mut egui::Ui) {
     // Labels are words to read, not text to select (a drag across one
     // painted it in the selection colour).
     style.interaction.selectable_labels = false;
+    // Scroll bars beside the contents rather than floating over them, where
+    // they sat on the right-hand end of a row (a card's remove cross).
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
 
     let v = &mut style.visuals;
     v.dark_mode = true;
@@ -133,27 +136,33 @@ pub fn section(ui: &mut egui::Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-/// A switch for an on/off setting. Clicking the label toggles it too.
+/// A switch for an on/off setting, with its label beside it; clicking
+/// either toggles it. One widget of a known width, so a wrapping row wraps
+/// it whole rather than letting it run off the edge.
 pub fn toggle(ui: &mut egui::Ui, on: &mut bool, label: impl Into<egui::WidgetText>) -> egui::Response {
     let p = pal(ui);
-    ui.horizontal(|ui| {
-        let size = egui::vec2(34.0, 19.0);
-        let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
-        let label = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
-        if response.clicked() || label.clicked() {
-            *on = !*on;
-            response.mark_changed();
-        }
-        let t = ui.ctx().animate_bool_responsive(response.id, *on);
-        let track = if *on { p.accent } else { p.border };
-        ui.painter().rect_filled(rect, Rounding::same(rect.height() / 2.0), track);
-        let r = rect.height() / 2.0 - 2.5;
-        let x = egui::lerp((rect.left() + r + 2.5)..=(rect.right() - r - 2.5), t);
-        let knob = if *on { p.on_accent } else { p.text };
-        ui.painter().circle_filled(egui::pos2(x, rect.center().y), r, knob);
-        response | label
-    })
-    .inner
+    let track = egui::vec2(34.0, 19.0);
+    let gap = 8.0;
+    let text: egui::WidgetText = label.into();
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let text_width = if galley.size().x > 0.0 { gap + galley.size().x } else { 0.0 };
+    let size = egui::vec2(track.x + text_width, track.y.max(galley.size().y));
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    let switch = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - track.y / 2.0), track);
+    let t = ui.ctx().animate_bool_responsive(response.id, *on);
+    let fill = if *on { p.accent } else { p.border };
+    ui.painter().rect_filled(switch, Rounding::same(switch.height() / 2.0), fill);
+    let r = switch.height() / 2.0 - 2.5;
+    let x = egui::lerp((switch.left() + r + 2.5)..=(switch.right() - r - 2.5), t);
+    let knob = if *on { p.on_accent } else { p.text };
+    ui.painter().circle_filled(egui::pos2(x, switch.center().y), r, knob);
+    let text_pos = egui::pos2(switch.right() + gap, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley, p.text);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// A small square button that's just an icon, saying what it does on
@@ -389,5 +398,28 @@ mod tests {
         assert!(contrast(p.text, bg) >= 7.0, "text {}", contrast(p.text, bg));
         assert!(contrast(p.muted, bg) >= 3.0, "muted {}", contrast(p.muted, bg));
         assert!(contrast(p.on_accent, p.accent) >= 3.0, "on accent {}", contrast(p.on_accent, p.accent));
+    }
+    /// A row of switches wraps at the edge of its space instead of running
+    /// past it (each was a little row of its own, placed before its width
+    /// was known, so a wrapping row couldn't wrap it).
+    #[test]
+    fn switches_wrap_rather_than_run_off_the_edge() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut rects = Vec::new();
+        let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+        let _ = ctx.run(input, |ctx| {
+            egui::Area::new(egui::Id::new("switches")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
+                ui.set_max_width(200.0);
+                ui.horizontal_wrapped(|ui| {
+                    for label in ["Asleep", "Sees in the dark", "Can be tamed", "Flanks", "Hunts in packs", "Charges"] {
+                        let mut on = false;
+                        rects.push(super::toggle(ui, &mut on, label).rect);
+                    }
+                });
+            });
+        });
+        assert!(rects.iter().all(|r| r.right() <= 200.5), "all within the edge: {rects:?}");
+        assert!(rects.iter().any(|r| r.top() > rects[0].top()), "they wrapped onto more rows");
     }
 }
