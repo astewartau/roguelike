@@ -371,6 +371,22 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
     }
 }
 
+/// How long the fire `id` on `at` burns: its fuel's usual `base`, longer
+/// or shorter by up to `FIRE_BURN_TIME_SPREAD`, so fires lit together don't
+/// all go out together. Fixed by the fire and its tile (a hash, not the
+/// game's rng), so a seeded run stays the same and no other draw shifts.
+/// A fire that never goes out (`f32::INFINITY`) still never does.
+pub fn burn_time(base: f32, id: Entity, at: (i32, i32)) -> f32 {
+    let mut h = (id.id() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= (at.0 as u32 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= (at.1 as u32 as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+    h ^= h >> 29;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 32;
+    let unit = (h % 10_000) as f32 / 9_999.0; // 0..=1
+    base * (1.0 + crate::constants::FIRE_BURN_TIME_SPREAD * (2.0 * unit - 1.0))
+}
+
 /// Set a fuel entity alight, the way its `Fuel::ignition` says. No-op if the
 /// entity isn't fuel or is already burning.
 ///
@@ -388,7 +404,9 @@ pub fn ignite_fuel(world: &mut World, id: Entity) {
         Ignition::InPlace => {
             // Its flames and light are the fuel's own (drawn and lit from
             // `Fuel` while `OnFire`), never written over the entity's.
-            let _ = world.insert(id, (OnFire { remaining: fuel.burn_time }, CausesBurning));
+            let at = crate::queries::get_entity_position(world, id).unwrap_or((0, 0));
+            let remaining = burn_time(fuel.burn_time, id, at);
+            let _ = world.insert(id, (OnFire { remaining }, CausesBurning));
         }
         Ignition::Replace => {
             let Some((x, y)) = crate::queries::get_entity_position(world, id) else {
@@ -949,6 +967,33 @@ fn explode_barrel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fires lit together don't burn for one fixed time: a spread of fire
+    /// patches each gets its own, within FIRE_BURN_TIME_SPREAD of the usual,
+    /// the same for the same fire every time; and a fire that never goes
+    /// out still never does.
+    #[test]
+    fn fires_lit_together_burn_for_different_times() {
+        use crate::constants::{FIRE_BURN_TIME_SPREAD, GRASS_BURN_DURATION};
+        let mut world = World::new();
+        let times: Vec<f32> = (0..12)
+            .map(|x| {
+                let fire = crate::spawning::spawn_fire_patch(&mut world, x, 3);
+                world.get::<&OnFire>(fire).unwrap().remaining
+            })
+            .collect();
+        let (low, high) = (GRASS_BURN_DURATION * (1.0 - FIRE_BURN_TIME_SPREAD), GRASS_BURN_DURATION * (1.0 + FIRE_BURN_TIME_SPREAD));
+        assert!(times.iter().all(|&t| t >= low - 1e-3 && t <= high + 1e-3), "within the spread: {times:?}");
+        let mut distinct = times.clone();
+        distinct.sort_by(f32::total_cmp);
+        distinct.dedup();
+        assert!(distinct.len() >= 10, "each its own: {times:?}");
+        assert!(distinct[distinct.len() - 1] - distinct[0] > GRASS_BURN_DURATION * 0.3, "a real spread: {times:?}");
+
+        let some = world.spawn(());
+        assert_eq!(burn_time(10.0, some, (4, 4)), burn_time(10.0, some, (4, 4)), "the same fire, the same time");
+        assert!(burn_time(f32::INFINITY, some, (4, 4)).is_infinite());
+    }
     use crate::components::Combustible;
     use crate::tile::Tile;
 

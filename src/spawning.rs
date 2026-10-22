@@ -1189,13 +1189,10 @@ pub fn spawn_fire_patch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     use crate::components::{CausesBurning, Fuel, OnFire};
 
     let pos = Position::new(x, y);
-    world.spawn((
-        pos,
-        VisualPosition::from_position(&pos),
-        CausesBurning,
-        Fuel::grass_fire(),
-        OnFire { remaining: crate::constants::GRASS_BURN_DURATION },
-    ))
+    let fire = world.spawn((pos, VisualPosition::from_position(&pos), CausesBurning, Fuel::grass_fire()));
+    let remaining = crate::systems::fire::burn_time(crate::constants::GRASS_BURN_DURATION, fire, (x, y));
+    let _ = world.insert_one(fire, OnFire { remaining });
+    fire
 }
 
 /// Spawn a brazier, burning. Fuel like a campfire (`Fuel::hearth`); a
@@ -1351,14 +1348,16 @@ pub fn spawn_dropped_torch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     use crate::constants::DROPPED_TORCH_BURN_DURATION;
 
     let pos = Position::new(x, y);
-    world.spawn((
+    let torch = world.spawn((
         pos,
         VisualPosition::from_position(&pos),
         Fuel::dropped_torch(),
-        OnFire { remaining: DROPPED_TORCH_BURN_DURATION },
         Container::ground_pile(vec![ItemInstance::plain(ItemType::Torch)]),
         GroundItemPile,
-    ))
+    ));
+    let remaining = crate::systems::fire::burn_time(DROPPED_TORCH_BURN_DURATION, torch, (x, y));
+    let _ = world.insert_one(torch, OnFire { remaining });
+    torch
 }
 
 /// Spawn a hidden dungeon floor trap. No sprite: it is invisible until the

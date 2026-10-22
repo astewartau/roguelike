@@ -125,6 +125,12 @@ pub const BLEED_DURATION: f32 = 6.0;
 /// How long (game-time seconds) a tall-grass tile burns before reverting to floor.
 /// Long enough that a burning field smoulders for a while rather than flashing.
 pub const GRASS_BURN_DURATION: f32 = 12.0;
+/// How much one fire's burn time varies from its fuel's usual, either way,
+/// as a share of it: 0.35 burns each between 65% and 135% as long. So a
+/// spread of fires (a barrel's blast, a grass fire) gutters out a few at a
+/// time rather than all at once. 0 makes every fire of a fuel last exactly
+/// as long.
+pub const FIRE_BURN_TIME_SPREAD: f32 = 0.35;
 /// Game-time between fire spread rolls (discrete steps regardless of frame rate).
 pub const FIRE_STEP_INTERVAL: f32 = 0.5;
 /// Per-step chance a burning grass tile ignites an adjacent grass tile (the main
