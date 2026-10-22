@@ -201,6 +201,7 @@ mod tests {
             stalagmite_positions: Vec::new(),
             mushroom_positions: Vec::new(),
             crystal_positions: Vec::new(),
+            outdoors: false,
         }
     }
 

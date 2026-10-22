@@ -36,8 +36,12 @@ const TILE_SIZE: u32 = 32;
 
 struct SheetSpec {
     sheet: SpriteSheet,
+    /// Relative to the 32rogues directory.
     filename: &'static str,
     columns: u32,
+    /// The game runs without it: a sheet of our own art rather than the
+    /// pack's, which whatever draws from it checks for (`has_tile`).
+    optional: bool,
 }
 
 const SHEET_SPECS: &[SheetSpec] = &[
@@ -45,26 +49,39 @@ const SHEET_SPECS: &[SheetSpec] = &[
         sheet: SpriteSheet::Tiles,
         filename: "tiles.png",
         columns: 17,
+        optional: false,
     },
     SheetSpec {
         sheet: SpriteSheet::Rogues,
         filename: "rogues.png",
         columns: 7,
+        optional: false,
     },
     SheetSpec {
         sheet: SpriteSheet::Monsters,
         filename: "monsters.png",
         columns: 12,
+        optional: false,
     },
     SheetSpec {
         sheet: SpriteSheet::Items,
         filename: "items.png",
         columns: 11,
+        optional: false,
     },
     SheetSpec {
         sheet: SpriteSheet::AnimatedTiles,
         filename: "animated-tiles.png",
         columns: 11,
+        optional: false,
+    },
+    // Drawn by tools/make_outdoor_tiles.py into assets/custom. Without it,
+    // outdoor ground draws as the stock tiles nearest to it.
+    SheetSpec {
+        sheet: SpriteSheet::Outdoor,
+        filename: "../custom/outdoor.png",
+        columns: crate::outdoor::OUTDOOR_COLS,
+        optional: true,
     },
 ];
 
@@ -75,6 +92,13 @@ impl MultiTileset {
 
         for spec in SHEET_SPECS {
             let png_path = base_path.join(spec.filename);
+            if spec.optional && !png_path.exists() {
+                eprintln!(
+                    "{} not found: outdoor ground will draw as stock tiles (python3 tools/make_outdoor_tiles.py draws it)",
+                    png_path.display()
+                );
+                continue;
+            }
             let sheet_data = Self::load_sheet(&gl, &png_path, spec.columns)?;
             sheets.insert(spec.sheet, sheet_data);
         }
@@ -214,6 +238,11 @@ impl MultiTileset {
         self.sheets
             .get(&sheet)
             .is_some_and(|s| tile_id < s.columns * s.rows)
+    }
+
+    /// Whether a sheet is loaded (an optional one may not be).
+    pub fn has_sheet(&self, sheet: SpriteSheet) -> bool {
+        self.sheets.contains_key(&sheet)
     }
 
     /// How many rows and columns of tiles a sheet has (0 if it isn't

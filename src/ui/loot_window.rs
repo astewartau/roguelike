@@ -1,29 +1,29 @@
 //! Loot window UI component.
 //!
 //! Displays the contents of everything lootable on one tile: an opened chest,
-//! or every corpse and dropped pile underfoot, each in its own section so it
+//! or every corpse and dropped item underfoot, each in its own section so it
 //! is clear which corpse held what. Stackable items (arrows) show as one row
 //! with a count.
 
 use super::icons::UiIcons;
 use super::style;
 use super::UiActions;
-use crate::components::{Container, ItemInstance};
-use crate::systems::{loot_source_label, loot_sources, stack_items};
-use hecs::Entity;
+use crate::components::ItemInstance;
+use crate::systems::{held, loot_source_label, loot_sources, source_gold, source_items, stack_items, LootSource};
 use crate::world::World;
+use hecs::Entity;
 
 /// One row in a loot section: a single item, or a stack of one kind.
 pub struct LootRow {
-    /// Index of the row's first item in its container (what a click takes)
-    pub index: usize,
+    /// The row's first item (what a click takes, with the rest of its stack)
+    pub item: Entity,
     pub count: u32,
     pub instance: ItemInstance,
 }
 
-/// One container's worth of the loot window.
+/// One source's worth of the loot window.
 pub struct LootSection {
-    pub container: Entity,
+    pub source: LootSource,
     /// "Chest", "Goblin's corpse", "On the ground"
     pub label: String,
     pub rows: Vec<LootRow>,
@@ -54,22 +54,18 @@ pub fn get_loot_window_data(
     open_chest?;
     let sections: Vec<LootSection> = loot_sources(world, open_chest, loot_tile)
         .into_iter()
-        .filter_map(|id| {
-            let container = world.get::<&Container>(id).ok()?;
-            let rows = stack_items(&container.items)
+        .map(|source| {
+            let items = source_items(world, source);
+            let values = held::instances(world, &items);
+            let rows = stack_items(&values)
                 .into_iter()
                 .map(|stack| LootRow {
-                    index: stack.first_index,
+                    item: items[stack.first_index],
                     count: stack.count,
-                    instance: container.items[stack.first_index].clone(),
+                    instance: values[stack.first_index].clone(),
                 })
                 .collect();
-            Some(LootSection {
-                container: id,
-                label: loot_source_label(world, id),
-                rows,
-                gold: container.gold,
-            })
+            LootSection { source, label: loot_source_label(world, source), rows, gold: source_gold(world, source) }
         })
         .collect();
     if sections.is_empty() {
@@ -167,7 +163,7 @@ fn draw_loot_section(
                 .on_hover_text(format!("{} Gold\n\nClick to take", section.gold))
                 .clicked()
             {
-                actions.chest_take_gold = Some(section.container);
+                actions.chest_take_gold = Some(section.source);
             }
             ui.label(format!("{} gold", section.gold));
         });
@@ -217,7 +213,7 @@ fn draw_loot_section(
                 ))
                 .clicked()
             {
-                actions.chest_item_to_take = Some((section.container, row.index));
+                actions.chest_item_to_take = Some((section.source, row.item));
             }
             ui.label(egui::RichText::new(label).color(style::rarity_color(instance.rarity)));
         });

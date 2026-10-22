@@ -222,6 +222,7 @@ mod tests {
             stalagmite_positions: Vec::new(),
             mushroom_positions: Vec::new(),
             crystal_positions: Vec::new(),
+            outdoors: false,
         };
         for &(x, y) in walls {
             if let Some(tile) = grid.get_mut(x, y) {

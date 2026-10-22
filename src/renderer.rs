@@ -10,12 +10,14 @@ use std::sync::Arc;
 
 /// Texture unit the light map is bound to (sprites use unit 0).
 const LIGHT_MAP_UNIT: u32 = 1;
+/// Texture unit the map of how seen each tile is lives on (`RevealFade`).
+const SEEN_MAP_UNIT: u32 = 2;
 
 const VERTEX_SHADER_SRC: &str = r#"#version 330 core
 layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec4 aInstanceUV;  // u0, v0, u1, v1
-layout (location = 3) in float aFogMult;    // Base illumination (fog of war)
+layout (location = 3) in float aFogMult;    // The tile's illumination (unused: see uSeen)
 layout (location = 4) in float aAlpha;      // Transparency (1.0 = opaque)
 layout (location = 5) in vec3 aTint;        // Color tint (for water, etc.)
 
@@ -61,6 +63,9 @@ uniform float uPlayerFocused;  // extra brightness of the pool at your feet
 uniform float uAmbientTint;
 uniform sampler2D uLightMap;  // RGB light from the world, one texel per tile
 uniform vec2 uGridSize;       // grid size in tiles, to map world -> texel
+uniform vec3 uSkyLight;       // the sky's light over an outdoor map; 0 underground
+uniform float uFogShare;      // remembered tiles get this share of the ambient light
+uniform sampler2D uSeen;      // how seen each tile is, 0 (remembered) to 1 (in view)
 
 out vec4 FragColor;
 
@@ -70,31 +75,35 @@ void main() {
 
     // Accumulated light is a colour, not a scalar: each source adds its own
     // tint, so a tile lit by a brazier and a crystal at once gets both.
-    vec3 light;
-    if (vFogBase < 0.25) {
-        // Fog of war: explored but not visible, so no light colour at all -
-        // a remembered tile is grey, not tinted by a fire it cannot see.
-        light = vec3(vFogBase);
-    } else {
-        // Calculate smooth per-pixel lighting from player
-        float distToPlayer = distance(vWorldPos, uPlayerPos);
-        float t = clamp(1.0 - distToPlayer / uPlayerLightRadius, 0.0, 1.0);
-        // The focused falloff always carries the light's full colour; the
-        // flat ambient term only takes `uAmbientTint` of it. Tinting the
-        // ambient fully washes every surface in the room with the light's
-        // hue, and a warm wash over this tileset's blue-grey stone reads as
-        // khaki rather than as firelight.
-        light = mix(vec3(1.0), uPlayerLightColor, uAmbientTint) * uPlayerAmbient
-              + uPlayerLightColor * (uPlayerFocused * t * t);
+    // The ambient light: the player's soft light everywhere in view and the
+    // sky's (daylight, dusk or moonlight). The focused falloff below always
+    // carries the player's light's full colour; this flat term only takes
+    // `uAmbientTint` of it. Tinting the ambient fully washes every surface in
+    // the room with the light's hue, and a warm wash over this tileset's
+    // blue-grey stone reads as khaki rather than as firelight.
+    vec3 ambient = mix(vec3(1.0), uPlayerLightColor, uAmbientTint) * uPlayerAmbient + uSkyLight;
+    // A remembered tile (explored, out of sight) is lit by a share of that
+    // and nothing else: not by a lamp or a fire it cannot see.
+    vec3 remembered = ambient * uFogShare;
 
-        // Light from braziers, campfires, fires, fungus...: traced on the
-        // CPU through walls, doors and objects, tile by tile. Tile (x, y)
-        // spans world [x, x+1), so dividing by the grid size lands each
-        // tile's centre on its texel's centre.
-        light += texture(uLightMap, vWorldPos / uGridSize).rgb;
+    // What a tile in view is lit by: the ambient, the pool of the player's
+    // light at their feet, and every lamp and fire.
+    float distToPlayer = distance(vWorldPos, uPlayerPos);
+    float t = clamp(1.0 - distToPlayer / uPlayerLightRadius, 0.0, 1.0);
+    vec3 lit = ambient + uPlayerLightColor * (uPlayerFocused * t * t);
+    // Light from braziers, campfires, fires, fungus...: traced on the CPU
+    // through walls, doors and objects, tile by tile. Tile (x, y) spans
+    // world [x, x+1), so dividing by the grid size lands each tile's centre
+    // on its texel's centre.
+    lit += texture(uLightMap, vWorldPos / uGridSize).rgb;
+    lit = min(lit, vec3(1.5));  // Allow slight overbrightness
 
-        light = min(light, vec3(1.5));  // Allow slight overbrightness
-    }
+    // How seen this spot is (`RevealFade::seen_map`): 1 in view, 0
+    // remembered, between where a tile fades in or out of view and across
+    // the soft edge of your sight. Sampled smoothly, so it's a gradient,
+    // not a tile's hard edge.
+    float seen = texture(uSeen, vWorldPos / uGridSize).r;
+    vec3 light = mix(remembered, lit, seen);
 
     vec3 color = texColor.rgb * light * vTint;
     FragColor = vec4(color, texColor.a * vAlpha);
@@ -329,8 +338,14 @@ pub struct Renderer {
     player_ambient_loc: NativeUniformLocation,
     player_focused_loc: NativeUniformLocation,
     ambient_tint_loc: NativeUniformLocation,
+    sky_light_loc: NativeUniformLocation,
+    fog_level_loc: NativeUniformLocation,
     light_map_loc: NativeUniformLocation,
     grid_size_loc: NativeUniformLocation,
+    seen_map_loc: NativeUniformLocation,
+    /// How seen each tile is (`RevealFade::seen_map`), uploaded every frame
+    /// on texture unit `SEEN_MAP_UNIT`.
+    seen_map_texture: NativeTexture,
     /// Per-frame light map (see `systems::light::LightMap`), re-uploaded
     /// every frame on texture unit `LIGHT_MAP_UNIT`.
     light_map_texture: NativeTexture,
@@ -412,6 +427,12 @@ impl Renderer {
             let ambient_tint_loc = gl
                 .get_uniform_location(program, "uAmbientTint")
                 .ok_or("Failed to get ambient tint uniform location")?;
+            let sky_light_loc = gl
+                .get_uniform_location(program, "uSkyLight")
+                .ok_or("Failed to get sky light uniform location")?;
+            let fog_level_loc = gl
+                .get_uniform_location(program, "uFogShare")
+                .ok_or("Failed to get fog level uniform location")?;
             let light_map_loc = gl
                 .get_uniform_location(program, "uLightMap")
                 .ok_or("Failed to get light map uniform location")?;
@@ -422,6 +443,19 @@ impl Renderer {
             // Light map texture: float RGB so light can exceed 1.0 near a
             // source, linear filtering so it blends between tile centres, and
             // clamped edges so the map's border doesn't wrap round.
+            let seen_map_loc = gl
+                .get_uniform_location(program, "uSeen")
+                .ok_or("Failed to get seen map uniform location")?;
+            let seen_map_texture = gl
+                .create_texture()
+                .map_err(|e| format!("Failed to create seen map texture: {}", e))?;
+            gl.bind_texture(TEXTURE_2D, Some(seen_map_texture));
+            gl.tex_parameter_i32(TEXTURE_2D, TEXTURE_MIN_FILTER, LINEAR as i32);
+            gl.tex_parameter_i32(TEXTURE_2D, TEXTURE_MAG_FILTER, LINEAR as i32);
+            gl.tex_parameter_i32(TEXTURE_2D, TEXTURE_WRAP_S, CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(TEXTURE_2D, TEXTURE_WRAP_T, CLAMP_TO_EDGE as i32);
+            gl.bind_texture(TEXTURE_2D, None);
+
             let light_map_texture = gl
                 .create_texture()
                 .map_err(|e| format!("Failed to create light map texture: {}", e))?;
@@ -739,8 +773,12 @@ impl Renderer {
                 player_ambient_loc,
                 player_focused_loc,
                 ambient_tint_loc,
+                sky_light_loc,
+                fog_level_loc,
                 light_map_loc,
                 grid_size_loc,
+                seen_map_loc,
+                seen_map_texture,
                 light_map_texture,
                 grid_program,
                 grid_vao,
@@ -766,14 +804,18 @@ impl Renderer {
         grid: &Grid,
         tileset: &MultiTileset,
         lighting: crate::render::SceneLighting<'_>,
+        reveal: &crate::render::RevealFade,
         show_grid_lines: bool,
     ) -> Result<(), String> {
         let crate::render::SceneLighting {
             player_pos,
+            even,
             player_light_radius,
             player_light_color,
             light_map,
             highlight_tile,
+            sky,
+            fog,
         } = lighting;
         unsafe {
             self.gl.clear(COLOR_BUFFER_BIT);
@@ -781,17 +823,31 @@ impl Renderer {
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
 
-            // Bind Tiles sheet texture (all terrain is from Tiles sheet)
-            tileset.bind(&self.gl, SpriteSheet::Tiles, 0);
             self.gl.uniform_1_i32(Some(&self.tileset_loc), 0);
 
             // Set lighting uniforms. Without the player's light (the editor,
             // player or no player): an even, untinted brightness and no pool
-            // anywhere.
-            let (pos, color, ambient, focused) = match player_pos {
-                Some(pos) => (pos, player_light_color, LIGHT_PLAYER_AMBIENT, LIGHT_PLAYER_FOCUSED),
-                None => ((0.0, 0.0), (1.0, 1.0, 1.0), LIGHT_EDITOR_AMBIENT, 0.0),
+            // anywhere, or under an open sky, only the sky's light, so the
+            // editor shows the time of day as it will look. The player's own
+            // light fades as daylight comes up: by day the sky lights you.
+            // As in play, editor or not: the player's light (an ambient
+            // everywhere in view and a pool at their feet) fading as daylight
+            // comes up. With no player there's no pool, the ambient the same.
+            // Lit evenly (the editor's toggle), a flat bright ambient instead,
+            // or only the sky outdoors.
+            let night = 1.0 - sky.map_or(0.0, |s| s.daylight);
+            let (pos, color, ambient, focused) = match (even, player_pos, sky) {
+                (true, _, Some(_)) => ((0.0, 0.0), (1.0, 1.0, 1.0), 0.0, 0.0),
+                (true, _, None) => ((0.0, 0.0), (1.0, 1.0, 1.0), LIGHT_EDITOR_AMBIENT, 0.0),
+                (false, Some(pos), _) => {
+                    (pos, player_light_color, LIGHT_PLAYER_AMBIENT * night, LIGHT_PLAYER_FOCUSED * night)
+                }
+                (false, None, _) => ((0.0, 0.0), player_light_color, LIGHT_PLAYER_AMBIENT * night, 0.0),
             };
+            let sky_rgb = sky.map_or((0.0, 0.0, 0.0), |s| s.rgb());
+            self.gl.uniform_3_f32(Some(&self.sky_light_loc), sky_rgb.0, sky_rgb.1, sky_rgb.2);
+            // How remembered tiles are lit: a share of the ambient light.
+            self.gl.uniform_1_f32(Some(&self.fog_level_loc), fog);
             self.gl.uniform_2_f32(Some(&self.player_pos_loc), pos.0, pos.1);
             self.gl.uniform_1_f32(Some(&self.player_light_radius_loc), player_light_radius);
             self.gl.uniform_3_f32(Some(&self.player_light_color_loc), color.0, color.1, color.2);
@@ -821,6 +877,28 @@ impl Renderer {
             }
             self.gl.active_texture(TEXTURE0);
             self.gl.uniform_1_i32(Some(&self.light_map_loc), LIGHT_MAP_UNIT as i32);
+
+            // And how seen each tile is, on its own unit: in view, fading,
+            // remembered, softened at the edge of sight. Every pass with this
+            // program reads it, so sprites fade with the tiles they're on.
+            let seen = reveal.seen_map(grid.width, grid.height);
+            self.gl.active_texture(TEXTURE0 + SEEN_MAP_UNIT);
+            self.gl.bind_texture(TEXTURE_2D, Some(self.seen_map_texture));
+            if grid.width > 0 && grid.height > 0 {
+                self.gl.tex_image_2d(
+                    TEXTURE_2D,
+                    0,
+                    R32F as i32,
+                    grid.width as i32,
+                    grid.height as i32,
+                    0,
+                    RED,
+                    FLOAT,
+                    Some(as_u8_slice(&seen)),
+                );
+            }
+            self.gl.active_texture(TEXTURE0);
+            self.gl.uniform_1_i32(Some(&self.seen_map_loc), SEEN_MAP_UNIT as i32);
             self.gl.uniform_2_f32(
                 Some(&self.grid_size_loc),
                 light_map.width.max(1) as f32,
@@ -830,9 +908,18 @@ impl Renderer {
             // Get visible bounds
             let (min_x, max_x, min_y, max_y) = camera.get_visible_bounds();
 
-            // Build instance data for visible tiles
+            // Build instance data for visible tiles, one batch per sheet
+            // (terrain is mostly Tiles; outdoor ground is on its own sheet),
+            // in two layers: the ground, then whatever stands on it.
             // Layout: pos(2) + uv(4) + fog(1) + alpha(1) + tint(3) = 11 floats per instance
-            let mut instance_data = Vec::new();
+            let mut ground_batches: Vec<(SpriteSheet, Vec<f32>)> = Vec::new();
+            let mut top_batches: Vec<(SpriteSheet, Vec<f32>)> = Vec::new();
+            let push = |batches: &mut Vec<(SpriteSheet, Vec<f32>)>, sheet: SpriteSheet, instance: [f32; 11]| {
+                match batches.iter_mut().find(|(s, _)| *s == sheet) {
+                    Some((_, data)) => data.extend_from_slice(&instance),
+                    None => batches.push((sheet, instance.to_vec())),
+                }
+            };
 
             for y in min_y..=max_y {
                 for x in min_x..=max_x {
@@ -842,67 +929,73 @@ impl Renderer {
                             continue;
                         }
 
-                        // Tall grass draws grassy ground here; the grass blades
-                        // themselves are drawn above entities in render_grass_canopy
-                        // (so characters appear concealed in the grass).
-                        let (sheet, tile_id) = if tile.tile_type == crate::tile::TileType::TallGrass {
-                            let variants = &crate::tile::tile_ids::GRASS_VARIANTS;
-                            variants[((x + y).rem_euclid(variants.len() as i32)) as usize]
-                        } else {
-                            tile.sprite()
+                        // What's drawn: the ground, and what stands on it if
+                        // that has ground of its own beneath (`Tile::under`).
+                        // Tall grass draws only its ground here; the grass
+                        // blades themselves are drawn above entities in
+                        // render_grass_canopy (so characters appear concealed
+                        // in the grass). The dungeon's own tall grass has no
+                        // ground recorded, and grows on grassy floor.
+                        let on_top = tile.tile_type.stands_on_ground();
+                        let (ground, top) = match tile.under.filter(|_| on_top) {
+                            Some(under) => {
+                                let top = (tile.tile_type != crate::tile::TileType::TallGrass).then(|| tile.sprite());
+                                ((under.sprite(), under.tile_type), top)
+                            }
+                            None if tile.tile_type == crate::tile::TileType::TallGrass => {
+                                let variants = &crate::tile::tile_ids::GRASS_VARIANTS;
+                                let sprite = variants[((x + y).rem_euclid(variants.len() as i32)) as usize];
+                                ((sprite, crate::tile::TileType::Grass), None)
+                            }
+                            None => ((tile.sprite(), tile.tile_type), None),
                         };
-                        let uv = tileset.get_uv(sheet, tile_id);
                         // Use pre-computed illumination for fog of war (low values)
                         // Per-pixel lighting handles visible tiles
                         let idx = y as usize * grid.width + x as usize;
                         let fog = grid.illumination.get(idx).copied().unwrap_or(0.5);
-
-                        // Water tiles get a blue tint
-                        let mut tint = match tile.tile_type {
-                            crate::tile::TileType::Water => (0.6, 0.8, 1.0),
-                            _ => (1.0, 1.0, 1.0),
-                        };
+                        // Fading into view or out of it (`RevealFade`).
                         // The tile under the cursor is drawn a little lighter.
-                        if highlight_tile == Some((x, y)) {
-                            tint = (
-                                tint.0 * HOVER_TILE_BRIGHTEN,
-                                tint.1 * HOVER_TILE_BRIGHTEN,
-                                tint.2 * HOVER_TILE_BRIGHTEN,
-                            );
-                        }
+                        let lift = if highlight_tile == Some((x, y)) { HOVER_TILE_BRIGHTEN } else { 1.0 };
 
-                        instance_data.push(x as f32);
-                        instance_data.push(y as f32);
-                        instance_data.push(uv.u0);
-                        instance_data.push(uv.v0);
-                        instance_data.push(uv.u1);
-                        instance_data.push(uv.v1);
-                        instance_data.push(fog);
-                        instance_data.push(1.0); // alpha (opaque for tiles)
-                        instance_data.push(tint.0);
-                        instance_data.push(tint.1);
-                        instance_data.push(tint.2);
+                        let layers = [Some((ground, false)), top.map(|sprite| ((sprite, tile.tile_type), true))];
+                        for ((sprite, terrain), is_top) in layers.into_iter().flatten() {
+                            // A sheet that isn't there (the outdoor one is
+                            // optional) draws the terrain's stock look instead.
+                            let (sheet, tile_id) =
+                                if tileset.has_tile(sprite.0, sprite.1) { sprite } else { terrain.fallback_sprite() };
+                            let uv = tileset.get_uv(sheet, tile_id);
+                            // Water tiles get a blue tint
+                            let tint = match terrain {
+                                crate::tile::TileType::Water => (0.6, 0.8, 1.0),
+                                _ => (1.0, 1.0, 1.0),
+                            };
+                            let instance = [
+                                x as f32,
+                                y as f32,
+                                uv.u0,
+                                uv.v0,
+                                uv.u1,
+                                uv.v1,
+                                fog,
+                                1.0, // alpha (opaque for tiles)
+                                tint.0 * lift,
+                                tint.1 * lift,
+                                tint.2 * lift,
+                            ];
+                            push(if is_top { &mut top_batches } else { &mut ground_batches }, sheet, instance);
+                        }
                     }
                 }
             }
 
-            if !instance_data.is_empty() {
-                self.gl.bind_buffer(ARRAY_BUFFER, Some(self.instance_vbo));
-                self.gl.buffer_data_u8_slice(
-                    ARRAY_BUFFER,
-                    as_u8_slice(&instance_data),
-                    DYNAMIC_DRAW,
-                );
-
-                let projection = camera.projection_matrix();
-                self.gl.uniform_matrix_4_f32_slice(
-                    Some(&self.projection_loc),
-                    false,
-                    projection.as_ref(),
-                );
-
-                let instance_count = instance_data.len() / 11;
-                self.gl.draw_arrays_instanced(TRIANGLES, 0, 6, instance_count as i32);
+            let projection = camera.projection_matrix();
+            self.gl.uniform_matrix_4_f32_slice(
+                Some(&self.projection_loc),
+                false,
+                projection.as_ref(),
+            );
+            for (sheet, instance_data) in ground_batches.iter().chain(&top_batches) {
+                self.draw_sprite_batch(*sheet, instance_data, tileset);
             }
 
             self.gl.bind_vertex_array(None);
@@ -962,7 +1055,12 @@ impl Renderer {
     }
 
     /// Render decorative decals (on top of floor, below entities)
-    pub fn render_decals(&mut self, camera: &Camera, grid: &Grid, tileset: &MultiTileset) -> Result<(), String> {
+    pub fn render_decals(
+        &mut self,
+        camera: &Camera,
+        grid: &Grid,
+        tileset: &MultiTileset,
+    ) -> Result<(), String> {
         if grid.decals.is_empty() {
             return Ok(());
         }
@@ -1043,7 +1141,12 @@ impl Renderer {
     /// Render the tall-grass "canopy" — the grass blades drawn on top of entities
     /// so characters standing in grass appear concealed by it. The grassy ground
     /// itself is drawn in the base tile pass (see `render`).
-    pub fn render_grass_canopy(&mut self, camera: &Camera, grid: &Grid, tileset: &MultiTileset) -> Result<(), String> {
+    pub fn render_grass_canopy(
+        &mut self,
+        camera: &Camera,
+        grid: &Grid,
+        tileset: &MultiTileset,
+    ) -> Result<(), String> {
         unsafe {
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
@@ -1099,7 +1202,12 @@ impl Renderer {
     }
 
     /// Render entities - groups by sprite sheet for multi-texture rendering
-    pub fn render_entities(&mut self, camera: &Camera, entities: &[RenderEntity], tileset: &MultiTileset) -> Result<(), String> {
+    pub fn render_entities(
+        &mut self,
+        camera: &Camera,
+        entities: &[RenderEntity],
+        tileset: &MultiTileset,
+    ) -> Result<(), String> {
         if entities.is_empty() {
             return Ok(());
         }
@@ -1147,6 +1255,7 @@ impl Renderer {
                     let uv = tileset.get_uv(sprite.sheet, sprite.tile_id);
                     // Swapping the u ends draws the cell flipped left to right.
                     let (u0, u1) = if mirrored { (uv.u1, uv.u0) } else { (uv.u0, uv.u1) };
+                    // Fading into view with the tile it's on.
                     instance_data.extend_from_slice(&[
                         entity.x + dx,
                         entity.y + dy,

@@ -23,10 +23,8 @@
 use hecs::Entity;
 use crate::world::World;
 
-use crate::components::{
-    CarriedTorch, Container, Equipment, GroundItemPile, ItemInstance, ItemType,
-    OnFire, Position,
-};
+use crate::components::{CarriedTorch, Equipment, ItemInstance, ItemType, OnFire, Position};
+use crate::systems::held;
 use crate::events::{EventQueue, GameEvent};
 use crate::grid::Grid;
 
@@ -35,10 +33,19 @@ fn lit_torch(world: &World, entity: Entity) -> bool {
 }
 
 fn held_kind(world: &World, entity: Entity) -> Option<ItemType> {
-    world
-        .get::<&Equipment>(entity)
-        .ok()
-        .and_then(|e| e.off_hand.as_ref().map(|i| i.kind))
+    held_torch(world, entity).and_then(|e| held::kind(world, e))
+}
+
+/// The item in `entity`'s off hand.
+fn held_torch(world: &World, entity: Entity) -> Option<Entity> {
+    world.get::<&Equipment>(entity).ok().and_then(|e| e.off_hand)
+}
+
+/// Turn item `e` into a `kind` (a torch lit or put out).
+fn turn_into(world: &mut World, e: Entity, kind: ItemType) {
+    if let Ok(mut item) = world.get::<&mut ItemInstance>(e) {
+        item.kind = kind;
+    }
 }
 
 /// Make an entity's carried light match what is in its off hand: a `Torch`
@@ -71,10 +78,8 @@ pub fn douse_torch(world: &mut World, entity: Entity, events: &mut EventQueue) {
         return;
     }
     if held_kind(world, entity) == Some(ItemType::Torch) {
-        if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
-            if let Some(torch) = equipment.off_hand.as_mut() {
-                torch.kind = ItemType::UnlitTorch;
-            }
+        if let Some(torch) = held_torch(world, entity) {
+            turn_into(world, torch, ItemType::UnlitTorch);
         }
         sync_held_torch(world, entity);
     } else {
@@ -173,10 +178,8 @@ pub fn use_held_torch_on(
 ) -> bool {
     match held_kind(world, entity) {
         Some(ItemType::UnlitTorch) if fire_at(world, x, y) => {
-            if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
-                if let Some(torch) = equipment.off_hand.as_mut() {
-                    torch.kind = ItemType::Torch;
-                }
+            if let Some(torch) = held_torch(world, entity) {
+                turn_into(world, torch, ItemType::Torch);
             }
             sync_held_torch(world, entity);
             events.push(GameEvent::TorchLit { entity });
@@ -209,71 +212,43 @@ pub fn use_held_torch_on(
     }
 }
 
-/// A torch-bearer died: its torch falls burning onto its tile as an item you
-/// can pick up, and the corpse sheds no more light. An unlit torch just goes
-/// with the body.
+/// A torch-bearer died: its torch falls burning onto its tile, the torch
+/// itself (the one in its hand, or for a goblin, whose torch is part of its
+/// kit, a new one), to be picked up. The corpse sheds no more light. An unlit
+/// torch just goes with the body.
 pub fn drop_torch(world: &mut World, entity: Entity) {
     let Ok(torch) = world.get::<&CarriedTorch>(entity).map(|t| *t) else {
         return;
     };
     let pos = world.get::<&Position>(entity).map(|p| (p.x, p.y)).ok();
     stop_carrying(world, entity);
-    if let (true, Some((x, y))) = (torch.lit, pos) {
-        crate::spawning::spawn_dropped_torch(world, x, y);
-    }
-}
-
-/// A burning torch lying on the floor goes out — it burnt down, or got
-/// doused, or someone picked the torch up. Everything in its pile stays on the
-/// floor as ordinary items, with the torch itself turned into `leaves` (an
-/// unlit torch) if it is still there.
-pub fn put_out_dropped_torch(world: &mut World, torch: Entity, leaves: Option<ItemType>) {
-    let pos = world.get::<&Position>(torch).map(|p| (p.x, p.y)).ok();
-    let (items, gold): (Vec<ItemInstance>, u32) = world
-        .get::<&mut Container>(torch)
-        .map(|mut c| (std::mem::take(&mut c.items), std::mem::take(&mut c.gold)))
-        .unwrap_or_default();
-    crate::systems::used_up::use_up(world, torch, &["Container", "GroundItemPile", "Fuel", "OnFire", "CausesBurning"]);
-    let Some((x, y)) = pos else {
+    let (true, Some((x, y))) = (torch.lit, pos) else {
         return;
     };
-    // Gold dropped with the torch stays on the floor too (it used to vanish).
-    if gold > 0 {
-        let mut coins = Container::ground_pile(Vec::new());
-        coins.gold = gold;
-        let at = Position::new(x, y);
-        world.spawn((
-            at,
-            crate::components::VisualPosition::from_position(&at),
-            crate::components::Sprite::from_ref(crate::tile::tile_ids::COINS),
-            coins,
-            GroundItemPile,
-        ));
-    }
-    for mut item in items {
-        if item.kind == ItemType::Torch {
-            match leaves {
-                Some(kind) => item.kind = kind,
-                None => continue,
-            }
+    let in_hand = world.get::<&mut Equipment>(entity).ok().and_then(|mut e| {
+        let lit = e.off_hand.filter(|&t| held::kind(world, t) == Some(ItemType::Torch));
+        if lit.is_some() {
+            e.off_hand = None;
         }
-        crate::systems::inventory::spawn_ground_item(world, x, y, item);
+        lit
+    });
+    match in_hand {
+        Some(item) => held::put_down(world, item, x, y),
+        None => {
+            held::drop_new(world, x, y, ItemInstance::plain(ItemType::Torch));
+        }
     }
 }
 
-/// Once the torch has been picked up off a burning floor torch, the fire goes
-/// with it: put out any dropped torch whose pile no longer holds a torch
-/// (keeping whatever else was dropped there).
-pub fn tick_dropped_torches(world: &mut World) {
-    let taken: Vec<Entity> = world
-        .query::<(&Container, &OnFire)>()
-        .with::<&GroundItemPile>()
-        .iter()
-        .filter(|(_, (c, _))| !c.items.iter().any(|i| i.kind == ItemType::Torch))
-        .map(|(id, _)| id)
-        .collect();
-    for id in taken {
-        put_out_dropped_torch(world, id, None);
+/// A burning item lying on the floor goes out, burnt down or doused: it
+/// stops burning and is a `leaves` now (a lit torch, an unlit one), still
+/// lying there to be picked up.
+pub fn item_goes_out(world: &mut World, item: Entity, leaves: ItemType) {
+    crate::systems::fire::extinguish(world, item);
+    let _ = world.remove_one::<crate::components::Fuel>(item);
+    turn_into(world, item, leaves);
+    if let Ok(mut sprite) = world.get::<&mut crate::components::Sprite>(item) {
+        *sprite = crate::components::Sprite::from_ref(crate::systems::item_defs::get_def(leaves).sprite);
     }
 }
 
@@ -400,16 +375,16 @@ mod tests {
     /// A player-like entity with an empty inventory and these items in it.
     fn holder(world: &mut World, items: &[ItemType]) -> Entity {
         let mut inv = Inventory::new();
-        inv.items = items.iter().map(|k| ItemInstance::plain(*k)).collect();
+        inv.items = held::spawn_items(world, items.iter().map(|k| ItemInstance::plain(*k)));
         world.spawn((Position::new(4, 4), Equipment::empty(), inv, StatusEffects::new()))
     }
 
     fn index_of(world: &World, e: Entity, kind: ItemType) -> usize {
-        world.get::<&Inventory>(e).unwrap().items.iter().position(|i| i.kind == kind).unwrap()
+        world.get::<&Inventory>(e).unwrap().items.iter().position(|&i| held::kind(world, i) == Some(kind)).unwrap()
     }
 
     fn in_pack(world: &World, e: Entity, kind: ItemType) -> bool {
-        world.get::<&Inventory>(e).unwrap().items.iter().any(|i| i.kind == kind)
+        world.get::<&Inventory>(e).unwrap().items.iter().any(|&i| held::kind(world, i) == Some(kind))
     }
 
     fn equip(world: &mut World, e: Entity, kind: ItemType, events: &mut EventQueue) {
@@ -478,7 +453,7 @@ mod tests {
 
         crate::systems::effects::add_effect_to_entity(&mut world, p, crate::components::EffectType::Wet, crate::constants::WET_DURATION);
         douse_wet_torches(&mut world, &mut events);
-        let held = world.get::<&Equipment>(p).unwrap().off_hand.as_ref().map(|i| i.kind);
+        let held = held_kind(&world, p);
         assert_eq!(held, Some(ItemType::UnlitTorch), "the torch is out");
         assert!(!lit_torch(&world, p));
 
@@ -501,32 +476,50 @@ mod tests {
         );
     }
 
+    /// The torch a goblin drops is the torch: it burns on the floor as
+    /// itself, and picking it up takes it, flame and all, leaving nothing
+    /// burning behind.
     #[test]
-    fn a_dropped_torch_can_be_picked_up_and_otherwise_gutters_out() {
-        // Picked up: the fire goes with it, and anything else dropped there stays.
+    fn a_dropped_torch_picked_up_leaves_no_flame_behind() {
+        use crate::systems::inventory::{take_item, LootSource};
         let mut world = World::new();
-        let torch = crate::spawning::spawn_dropped_torch(&mut world, 3, 3);
-        crate::systems::inventory::spawn_ground_item(&mut world, 3, 3, ItemInstance::plain(ItemType::Apple));
-        world.get::<&mut Container>(torch).unwrap().items.retain(|i| i.kind != ItemType::Torch);
-        tick_dropped_torches(&mut world);
-        assert!(!world.contains(torch), "no torch, no fire");
-        let left: Vec<ItemType> = world
-            .query::<&Container>()
-            .iter()
-            .flat_map(|(_, c)| c.items.iter().map(|i| i.kind).collect::<Vec<_>>())
-            .collect();
-        assert_eq!(left, vec![ItemType::Apple], "the apple is still on the floor");
+        let g = goblin(&mut world, 3, 3);
+        drop_torch(&mut world, g);
+        let on_floor = held::on_ground_at(&world, (3, 3));
+        assert_eq!(on_floor.len(), 1, "one torch lies there");
+        let torch = on_floor[0];
+        assert_eq!(held::kind(&world, torch), Some(ItemType::Torch));
+        assert!(world.get::<&OnFire>(torch).is_ok(), "it burns, as itself");
 
-        // Left alone, it burns down to an unlit torch you can still pick up.
-        let mut world = World::new();
-        let torch = crate::spawning::spawn_dropped_torch(&mut world, 3, 3);
-        put_out_dropped_torch(&mut world, torch, Some(ItemType::UnlitTorch));
-        let left: Vec<ItemType> = world
-            .query::<&Container>()
-            .iter()
-            .flat_map(|(_, c)| c.items.iter().map(|i| i.kind).collect::<Vec<_>>())
-            .collect();
-        assert_eq!(left, vec![ItemType::UnlitTorch]);
-        assert!(crate::systems::light::light_emitters(&world).is_empty(), "and it's dark");
+        let player = world.spawn((Position::new(3, 3), Inventory::new()));
+        assert!(take_item(&mut world, player, LootSource::Ground((3, 3)), torch, None));
+        assert!(world.get::<&Inventory>(player).unwrap().items.contains(&torch), "the same torch, now carried");
+        assert!(held::on_ground_at(&world, (3, 3)).is_empty());
+        assert!(world.query::<&OnFire>().iter().next().is_none(), "nothing left burning on the floor");
+        assert!(
+            !crate::systems::light::light_emitters(&world).iter().any(|(at, _)| *at == (3, 3)),
+            "and no light where it lay"
+        );
+    }
+
+    /// Left alone, a dropped torch burns down where it lies, or is doused,
+    /// into an unlit torch: the same item, still there to pick up.
+    #[test]
+    fn a_dropped_torch_left_alone_burns_down_to_an_unlit_one() {
+        for doused in [false, true] {
+            let mut world = World::new();
+            let torch = crate::spawning::spawn_dropped_torch(&mut world, 3, 3);
+            if doused {
+                crate::systems::fire::douse_fuel(&mut world, torch);
+            } else {
+                let remaining = world.get::<&OnFire>(torch).unwrap().remaining;
+                world.get::<&mut OnFire>(torch).unwrap().remaining = 0.0;
+                assert!(remaining > 0.0);
+                item_goes_out(&mut world, torch, ItemType::UnlitTorch);
+            }
+            assert_eq!(held::on_ground_at(&world, (3, 3)), vec![torch], "still lying there");
+            assert_eq!(held::kind(&world, torch), Some(ItemType::UnlitTorch));
+            assert!(crate::systems::light::light_emitters(&world).is_empty(), "and it's dark");
+        }
     }
 }

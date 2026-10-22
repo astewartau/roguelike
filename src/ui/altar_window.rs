@@ -30,9 +30,10 @@ pub fn get_altar_window_data(
 ) -> Option<AltarWindowData> {
     open_altar?;
     let inventory = world.get::<&Inventory>(player).ok()?;
-    let items = crate::systems::stack_items(&inventory.items)
+    let values = crate::systems::held::instances(world, &inventory.items);
+    let items = crate::systems::stack_items(&values)
         .into_iter()
-        .map(|s| (s.first_index, s.count, inventory.items[s.first_index].clone()))
+        .map(|s| (s.first_index, s.count, values[s.first_index].clone()))
         .collect();
     Some(AltarWindowData {
         items,

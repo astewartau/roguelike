@@ -397,13 +397,13 @@ fn draw_bar(
     let count_of = |item: ItemType| -> u32 {
         inventory
             .as_ref()
-            .map(|inv| inv.items.iter().filter(|t| t.kind == item).count() as u32)
+            .map(|inv| inv.items.iter().filter(|&&t| crate::systems::held::kind(world, t) == Some(item)).count() as u32)
             .unwrap_or(0)
     };
     let first_index_of = |item: ItemType| -> Option<usize> {
         inventory
             .as_ref()
-            .and_then(|inv| inv.items.iter().position(|t| t.kind == item))
+            .and_then(|inv| inv.items.iter().position(|&t| crate::systems::held::kind(world, t) == Some(item)))
     };
 
     for i in 0..slots.len() {

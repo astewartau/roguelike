@@ -18,6 +18,7 @@ mod game;
 mod grid;
 mod input;
 mod multi_tileset;
+mod outdoor;
 mod pathfinding;
 mod queries;
 mod render;
@@ -270,13 +271,17 @@ impl AppState {
                     entities: &tick_result.entities,
                     vfx_effects: self.engine.vfx_effects(),
                     fires: self.engine.fires(),
+                    reveal: self.engine.reveal_fade(),
                 },
                 crate::render::SceneLighting {
                     player_pos: self.engine.player_light_pos(),
+                    even: self.engine.even_light(),
                     player_light_radius: self.engine.player_light_radius(),
                     player_light_color: self.engine.player_light_color(),
                     light_map: &light_map,
                     highlight_tile: self.engine.hover_highlight_tile(),
+                    sky: self.engine.sky_light(),
+                    fog: self.engine.fog_level(),
                 },
                 self.engine.show_grid_lines(),
             );

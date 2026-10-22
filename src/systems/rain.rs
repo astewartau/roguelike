@@ -110,8 +110,8 @@ mod tests {
             crate::components::Equipment::empty(),
             StatusEffects::new(),
         ));
-        world.get::<&mut crate::components::Equipment>(hero).unwrap().off_hand =
-            Some(crate::components::ItemInstance::plain(crate::components::ItemType::Torch));
+        let torch = crate::systems::held::spawn_item(&mut world, crate::components::ItemInstance::plain(crate::components::ItemType::Torch));
+        world.get::<&mut crate::components::Equipment>(hero).unwrap().off_hand = Some(torch);
         crate::systems::torches::sync_held_torch(&mut world, hero);
         world.spawn((
             Position::new(5, 5),

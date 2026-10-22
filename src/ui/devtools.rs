@@ -13,7 +13,7 @@ use crate::constants::{
     DEVTOOLS_EDGE_GAP, DEVTOOLS_GHOST_ALPHA, DEVTOOLS_PANEL_MIN_WIDTH, DEVTOOLS_PANEL_WIDTH,
     DEVTOOLS_STATUS_MAX_WIDTH,
 };
-use crate::devtools::paint::PAINTABLE;
+use crate::devtools::paint::{Paint, INDOOR_GROUND, INDOOR_ON_TOP, OUTDOOR_GRASS, OUTDOOR_ON_TOP, OUTDOOR_PATHS};
 use crate::devtools::spawn::{DoorKind, BOSSES, ENEMIES};
 use crate::devtools::{CursorTool, DevCommand, DevTab, DevTools, Spawnable, Wakefulness};
 use crate::components::{BlocksMovement, FurnitureKind, TrapEffect, LanternStyle, Position, Rarity};
@@ -34,8 +34,20 @@ pub struct DevArt<'a> {
 }
 
 impl DevArt<'_> {
+    /// The texture and UV to draw `sprite` with. One on a sheet that isn't
+    /// loaded (the outdoor sheet is optional) shows as an empty tile.
     pub(super) fn icon(&self, sprite: (SpriteSheet, u32)) -> (egui::TextureId, egui::Rect) {
+        let sprite = if self.tileset.has_sheet(sprite.0) { sprite } else { crate::tile::tile_ids::EMPTY };
         (self.icons.texture_for_sheet(sprite.0), self.tileset.get_egui_uv(sprite.0, sprite.1))
+    }
+
+    /// `sprite`, or `fallback` if its sheet isn't loaded or doesn't reach it.
+    pub(super) fn or(&self, sprite: (SpriteSheet, u32), fallback: (SpriteSheet, u32)) -> (SpriteSheet, u32) {
+        if self.tileset.has_tile(sprite.0, sprite.1) {
+            sprite
+        } else {
+            fallback
+        }
     }
 }
 
@@ -45,6 +57,8 @@ pub struct DevView<'a> {
     pub grid: &'a Grid,
     pub player: hecs::Entity,
     pub game_time: f32,
+    /// The time of day and the sky.
+    pub sky: crate::systems::sky::Sky,
     /// Right edge of the HUD's Status window at the top left (0 if it
     /// isn't showing), for panels to open beside rather than over.
     pub hud_left: f32,
@@ -140,8 +154,14 @@ fn clock_controls(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         }
     }
     ui.add_space(6.0);
-    ui.label(egui::RichText::new(format!("{:.1} s", view.game_time)).color(p.muted))
-        .on_hover_text("Game time");
+    let hour = view.sky.hour(view.game_time);
+    ui.label(egui::RichText::new(format!("{:02}:{:02}", hour as u32, (hour.fract() * 60.0) as u32)).color(p.muted))
+        .on_hover_text(format!(
+            "{} ({}), {:.1} s of game time",
+            view.sky.clock_text(view.game_time),
+            view.sky.part_of_day(view.game_time).to_lowercase(),
+            view.game_time
+        ));
 }
 
 /// The armed tool, with a way to drop it (unless it's the open panel's own,
@@ -455,6 +475,8 @@ fn spawn_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
                 Spawnable::Stalagmites,
                 Spawnable::GlowMushrooms,
                 Spawnable::CrystalCluster,
+                Spawnable::Tree { young: false },
+                Spawnable::Tree { young: true },
             ],
         );
     });
@@ -468,12 +490,35 @@ fn paint_tab(ui: &mut egui::Ui, dev: &mut DevTools, art: &DevArt) {
         }
     });
     ui.label(egui::RichText::new("Click or drag on the map to paint.").color(look::pal(ui).muted));
-    for tile in PAINTABLE {
-        let selected = dev.tool == Some(CursorTool::Paint(tile));
-        if row(ui, art, tile.sprite_ref(), &format!("{tile:?}"), selected).clicked() {
-            dev.tool = if selected { None } else { Some(CursorTool::Paint(tile)) };
+    let mut list = |ui: &mut egui::Ui, items: &[Paint]| {
+        for &what in items {
+            let selected = dev.tool == Some(CursorTool::Paint(what));
+            let (icon, stock) = what.icon();
+            if row(ui, art, art.or(icon, stock), &what.name(), selected).clicked() {
+                dev.tool = if selected { None } else { Some(CursorTool::Paint(what)) };
+            }
         }
+    };
+    let muted = |ui: &mut egui::Ui, text: &str| {
+        ui.label(egui::RichText::new(text).color(look::pal(ui).muted));
+    };
+    muted(ui, "Ground goes under whatever stands on it: paint a lawn under tall grass, or clear a wall to find the floor it stood on.");
+    list(ui, &[Paint::ClearTop]);
+
+    look::section(ui, "Indoors");
+    list(ui, &INDOOR_GROUND);
+    muted(ui, "On top");
+    list(ui, &INDOOR_ON_TOP);
+
+    look::section(ui, "Outdoors");
+    if !art.tileset.has_sheet(SpriteSheet::Outdoor) {
+        muted(ui, "The outdoor sheet isn't there, so these paint as stock tiles: run tools/make_outdoor_tiles.py.");
     }
+    list(ui, &OUTDOOR_GRASS);
+    muted(ui, "Paths: edges and corners follow the paths beside them, of any kind");
+    list(ui, &OUTDOOR_PATHS);
+    muted(ui, "On top");
+    list(ui, &OUTDOOR_ON_TOP);
 }
 
 /// A tool button: armed while selected; clicking toggles it.
@@ -647,6 +692,8 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         }
     });
 
+    sky_section(ui, dev, view);
+
     look::section(ui, "Time");
     ui.horizontal(|ui| {
         ui.add(egui::DragValue::new(&mut dev.advance_seconds).range(0.5..=600.0).suffix(" s"));
@@ -669,6 +716,111 @@ fn world_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
         view.world.len(),
         dev.fps
     ));
+}
+
+/// Whether this floor is outdoors, and the time of day and the sky over it.
+/// Edits go through `DevCommand::SetSky` on a copy of the sky.
+fn sky_section(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView) {
+    let muted = |ui: &mut egui::Ui, text: &str| {
+        ui.label(egui::RichText::new(text).color(look::pal(ui).muted));
+    };
+    let clock = view.game_time;
+    let mut sky = view.sky;
+    look::section(ui, "Sky");
+    let mut outdoors = view.grid.outdoors;
+    if look::toggle(ui, &mut outdoors, "Outdoors").on_hover_text("Lit by the sky and the time of day").changed() {
+        dev.commands.push(DevCommand::SetOutdoors(outdoors));
+    }
+    muted(
+        ui,
+        &format!(
+            "{}, {}.{}",
+            sky.clock_text(clock),
+            sky.part_of_day(clock).to_lowercase(),
+            if outdoors { "" } else { " Indoors, the sky isn't seen." }
+        ),
+    );
+
+    let mut hour = sky.hour(clock);
+    let time = ui.add(
+        egui::Slider::new(&mut hour, 0.0..=23.99)
+            .text("time of day")
+            .custom_formatter(|h, _| format!("{:02}:{:02}", h as u32, (h.fract() * 60.0) as u32)),
+    );
+    if time.changed() {
+        sky.set_hour(clock, hour);
+    }
+    ui.horizontal(|ui| {
+        let noon = (sky.sunrise + sky.sunset) / 2.0;
+        for (label, at) in [("Dawn", sky.sunrise), ("Noon", noon), ("Dusk", sky.sunset), ("Midnight", 0.0)] {
+            if ui.button(label).clicked() {
+                sky.set_hour(clock, at);
+            }
+        }
+    });
+    ui.add(egui::Slider::new(&mut sky.sunrise, 3.0..=10.0).text("sunrise").custom_formatter(|h, _| {
+        format!("{:02}:{:02}", h as u32, (h.fract() * 60.0) as u32)
+    }));
+    ui.add(egui::Slider::new(&mut sky.sunset, 14.0..=22.0).text("sunset").custom_formatter(|h, _| {
+        format!("{:02}:{:02}", h as u32, (h.fract() * 60.0) as u32)
+    }));
+    ui.add(egui::Slider::new(&mut sky.moon, 0.0..=1.0).text("moon").custom_formatter(|m, _| {
+        match m {
+            m if m < 0.05 => "new".to_string(),
+            m if m > 0.95 => "full".to_string(),
+            m => format!("{:.0}%", m * 100.0),
+        }
+    }))
+    .on_hover_text("How bright moonlit nights are");
+    let mut length = sky.day_length;
+    if ui
+        .add(egui::DragValue::new(&mut length).range(60.0..=86_400.0).speed(10.0).prefix("a day is ").suffix(" s"))
+        .on_hover_text("Game seconds from one midnight to the next (a step takes 1 s)")
+        .changed()
+    {
+        sky.set_day_length(clock, length);
+    }
+
+    // How the sky lights things, and the fog of war.
+    egui::CollapsingHeader::new("Light and colour").id_salt("sky_look").show(ui, |ui| {
+        let look = &mut sky.look;
+        muted(ui, "Brightness is on the light map's scale: about 0.8 reads as full daylight.");
+        ui.add(egui::Slider::new(&mut look.noon, 0.0..=1.5).text("daylight at noon"));
+        ui.add(egui::Slider::new(&mut look.horizon, 0.0..=1.5).text("daylight at sunrise and sunset"));
+        ui.add(egui::Slider::new(&mut look.starlight, 0.0..=0.5).text("starlight"));
+        ui.add(egui::Slider::new(&mut look.moonlight, 0.0..=0.8).text("a full moon adds"));
+        ui.add(egui::Slider::new(&mut look.twilight_hours, 0.1..=3.0).text("dawn and dusk last (h either side)"));
+        ui.add(egui::Slider::new(&mut look.twilight_strength, 0.0..=1.0).text("dawn and dusk tint"));
+        let colour = |ui: &mut egui::Ui, c: &mut (f32, f32, f32), label: &str| {
+            ui.horizontal(|ui| {
+                let mut rgb = [c.0, c.1, c.2];
+                if ui.color_edit_button_rgb(&mut rgb).changed() {
+                    *c = (rgb[0], rgb[1], rgb[2]);
+                }
+                ui.label(label);
+            });
+        };
+        colour(ui, &mut look.day_color, "daylight colour");
+        colour(ui, &mut look.twilight_color, "dawn and dusk colour");
+        colour(ui, &mut look.night_color, "night colour");
+        ui.add_space(4.0);
+        ui.add(
+            egui::Slider::new(&mut look.fog, 0.0..=1.0)
+                .text("fog of war")
+                .custom_formatter(|v, _| format!("{:.0}% of the ambient light", v * 100.0)),
+        )
+        .on_hover_text(
+            "How bright remembered places out of sight are: this share of the ambient light \
+             (the sky's, and your own soft light), never a lamp's or a fire's",
+        );
+        if ui.button("Reset light and colour").clicked() {
+            *look = crate::systems::sky::SkyLook::default();
+        }
+    });
+
+    if sky != view.sky {
+        dev.commands.push(DevCommand::SetSky(sky));
+    }
 }
 
 /// A short name for an entity: its `Name`, else what it's made of.
@@ -887,7 +1039,7 @@ fn inspect_tab(ui: &mut egui::Ui, dev: &mut DevTools, view: &DevView, art: &DevA
 fn enum_options(component: &str, key: &str) -> Option<Vec<String>> {
     let list = |names: &[&str]| Some(names.iter().map(|n| n.to_string()).collect());
     match (component, key) {
-        (_, "sheet") => list(&["Tiles", "Rogues", "Monsters", "Items", "AnimatedTiles"]),
+        (_, "sheet") => list(&["Tiles", "Rogues", "Monsters", "Items", "AnimatedTiles", "Outdoor"]),
         ("ChaseAI", "state") => list(&["Unaware", "Idle", "Chasing", "Investigating"]),
         (_, "targeting") => list(&["Freely", "OnPurpose", "Never"]),
         (_, "style") => list(&["Warm", "Ghost"]),
@@ -1092,10 +1244,13 @@ pub(super) fn edit_value(ui: &mut egui::Ui, art: &DevArt, component: &str, key: 
 }
 
 fn overlays_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
-    let o = &mut dev.overlays;
     let muted = |ui: &mut egui::Ui, text: &str| {
         ui.label(egui::RichText::new(text).color(look::pal(ui).muted));
     };
+    look::section(ui, "Lighting");
+    look::toggle(ui, &mut dev.even_light, "Light evenly");
+    muted(ui, "Off, the editor is lit exactly as play is: your own light, lamps, the sky. On, everything is evenly lit, to work in the dark.");
+    let o = &mut dev.overlays;
     look::section(ui, "Map");
     look::toggle(ui, &mut o.light, "Light level");
     muted(ui, "Dark blue is pitch black, yellow is fully lit (explored tiles).");
@@ -1255,15 +1410,19 @@ pub fn draw_cursor_ghost(
             let high = tile_rect(camera, ppp, hover.0 as f32 + 1.5, hover.1 as f32 + 1.5);
             painter.rect_stroke(low.union(high), 2.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(110, 170, 240)));
         }
-        CursorTool::Paint(tile) => {
+        CursorTool::Paint(what) => {
             let b = dev.brush as f32;
             let low = tile_rect(camera, ppp, hover.0 as f32 - b + 0.5, hover.1 as f32 - b + 0.5);
             let high = tile_rect(camera, ppp, hover.0 as f32 + b + 0.5, hover.1 as f32 + b + 0.5);
             let rect = low.union(high);
-            let (tex, uv) = art.icon(tile.sprite_ref());
             for dy in -dev.brush..=dev.brush {
                 for dx in -dev.brush..=dev.brush {
-                    let cell = tile_rect(camera, ppp, (hover.0 + dx) as f32 + 0.5, (hover.1 + dy) as f32 + 0.5);
+                    let (x, y) = (hover.0 + dx, hover.1 + dy);
+                    let Some((look, stock)) = what.preview_at(x, y) else {
+                        continue;
+                    };
+                    let (tex, uv) = art.icon(art.or(look, stock));
+                    let cell = tile_rect(camera, ppp, x as f32 + 0.5, y as f32 + 0.5);
                     painter.image(tex, cell, uv, ghost);
                 }
             }

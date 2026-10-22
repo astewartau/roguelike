@@ -40,14 +40,15 @@ fn spawn_chests(
             .unwrap_or(false);
         let container = if in_secret_room {
             let boosted_floor = floor + SECRET_CHEST_FLOOR_BONUS;
-            let mut container = generate_chest_contents(boosted_floor, rng);
+            let mut container = generate_chest_contents(world, boosted_floor, rng);
             // A hidden hoard always holds at least one piece of gear.
             if let Some(&kind) = GEAR_POOL.choose(rng) {
-                container.items.push(roll_gear(kind, boosted_floor, rng));
+                let gear = crate::systems::held::spawn_item(world, roll_gear(kind, boosted_floor, rng));
+                container.items.push(gear);
             }
             container
         } else {
-            generate_chest_contents(floor, rng)
+            generate_chest_contents(world, floor, rng)
         };
         world.spawn((
             pos,
@@ -210,11 +211,12 @@ fn spawn_coffins(
         // 40% chance to spawn a skeleton when opened
         let spawn_chance = 0.4;
 
+        let held_items = crate::systems::held::spawn_items(world, items);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::COFFIN_CLOSED),
-            Container::coffin(items, gold, spawn_chance),
+            Container::coffin(held_items, gold, spawn_chance),
             crate::components::Name::new("Coffin"),
             BlocksMovement,
         ));
@@ -469,11 +471,12 @@ fn spawn_barrels(
             vec![]
         };
 
+        let held_items = crate::systems::held::spawn_items(world, items);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::BARREL),
-            Container::barrel(items),
+            Container::barrel(held_items),
             crate::components::Name::new("Barrel"),
             BlocksMovement,
             crate::components::Pushable,
@@ -651,19 +654,20 @@ fn spawn_boss_encounter(
         }
         let gold = rng.gen_range(30..=60);
         let pos = Position::new(chx, chy);
+        let held_items = crate::systems::held::spawn_items(world, items);
         world.spawn((
             pos,
             VisualPosition::from_position(&pos),
             Sprite::from_ref(tile_ids::CHEST_CLOSED),
-            Container::chest(items, gold),
+            Container::chest(held_items, gold),
             crate::components::Name::new("Chest"),
             BlocksMovement,
         ));
     }
 }
 
-/// Generate randomized chest contents.
-pub(crate) fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Container {
+/// Generate randomized chest contents, its items made in `world`.
+pub(crate) fn generate_chest_contents(world: &mut World, floor: u32, rng: &mut impl Rng) -> Container {
     // Common items (higher weight)
     let common_items = [
         ItemType::HealthPotion,
@@ -757,7 +761,7 @@ pub(crate) fn generate_chest_contents(floor: u32, rng: &mut impl Rng) -> Contain
         }
     }
 
-    Container::chest(instances, gold)
+    Container::chest(crate::systems::held::spawn_items(world, instances), gold)
 }
 
 /// Spawn the player as `player_class` starts out at `at`: their stats,
@@ -769,6 +773,7 @@ pub fn spawn_player(world: &mut World, player_class: PlayerClass, at: Position) 
     let mut starting_inventory = Inventory::new();
     for item in player_class.starting_inventory() {
         starting_inventory.current_weight_kg += item_weight(item.kind);
+        let item = crate::systems::held::spawn_item(world, item);
         starting_inventory.items.push(item);
     }
 

@@ -8,6 +8,7 @@ use crate::components::{
 };
 use crate::events::{EventQueue, GameEvent};
 use crate::queries;
+use crate::systems::held;
 
 use super::ActionResult;
 
@@ -43,23 +44,19 @@ fn equipped_weapon_for_kind(kind: ItemType) -> Option<EquippedWeapon> {
     })
 }
 
-/// Reconstruct a plain `ItemInstance` from an equipped weapon's `item`.
-/// Used as a fallback when no `weapon_source` is recorded (e.g. the player's
-/// starting weapon set directly on `Equipment`). Returns `None` for enemy
-/// weapons like claws, which are not real items.
-fn equipped_weapon_to_instance(weapon: &EquippedWeapon) -> Option<ItemInstance> {
-    let kind = match weapon {
-        EquippedWeapon::Melee(w) => w.item?,
-        EquippedWeapon::Ranged(_) => ItemType::Bow,
-    };
-    Some(ItemInstance::plain(kind))
+/// The item kind an equipped weapon is, if it's a real item (not claws).
+fn equipped_weapon_item_kind(weapon: &EquippedWeapon) -> Option<ItemType> {
+    match weapon {
+        EquippedWeapon::Melee(w) => w.item,
+        EquippedWeapon::Ranged(_) => Some(ItemType::Bow),
+    }
 }
 
 /// The equipment field behind a worn slot.
 fn slot_mut(
     equipment: &mut Equipment,
     slot: crate::systems::item_defs::ArmorSlot,
-) -> &mut Option<ItemInstance> {
+) -> &mut Option<Entity> {
     use crate::systems::item_defs::ArmorSlot;
     match slot {
         ArmorSlot::Body => &mut equipment.body,
@@ -71,12 +68,40 @@ fn slot_mut(
 }
 
 /// The item kind of the equipped weapon, if it's a real item (not claws).
-fn equipped_weapon_kind(equipment: &Equipment) -> Option<ItemType> {
+fn equipped_weapon_kind(world: &World, equipment: &Equipment) -> Option<ItemType> {
     equipment
         .weapon_source
-        .as_ref()
-        .map(|inst| inst.kind)
-        .or_else(|| equipment.weapon.as_ref().and_then(equipped_weapon_to_instance).map(|i| i.kind))
+        .and_then(|e| held::kind(world, e))
+        .or_else(|| equipment.weapon.as_ref().and_then(equipped_weapon_item_kind))
+}
+
+fn max_health_bonus(world: &World, item: Option<Entity>) -> i32 {
+    item.and_then(|e| held::item(world, e).map(|i| i.max_health_bonus())).unwrap_or(0)
+}
+
+/// Take the equipped weapon off `entity`, as an item: its backing item, or
+/// (a weapon set straight on `Equipment`, with nothing recorded behind it)
+/// a new plain one of its kind. None if it holds no real weapon (claws).
+fn take_weapon(world: &mut World, entity: Entity) -> Option<Entity> {
+    let (source, kind) = {
+        let mut equipment = world.get::<&mut Equipment>(entity).ok()?;
+        equipment.weapon.as_ref()?;
+        let kind = equipment.weapon.as_ref().and_then(equipped_weapon_item_kind);
+        (equipment.weapon_source.take(), kind)
+    };
+    let item = match source {
+        Some(item) => item,
+        None => held::spawn_item(world, ItemInstance::plain(kind?)),
+    };
+    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
+        equipment.weapon = None;
+    }
+    Some(item)
+}
+
+/// The item at `item_index` in `entity`'s pack.
+fn pack_item(world: &World, entity: Entity, item_index: usize) -> Option<Entity> {
+    world.get::<&Inventory>(entity).ok()?.items.get(item_index).copied()
 }
 
 /// Put whatever is in the off hand back in the pack, to free the hand for a
@@ -84,26 +109,21 @@ fn equipped_weapon_kind(equipment: &Equipment) -> Option<ItemType> {
 fn stow_off_hand(world: &mut World, entity: Entity, events: &mut EventQueue) {
     let held = world.get::<&mut Equipment>(entity).ok().and_then(|mut e| e.off_hand.take());
     if let Some(item) = held {
-        adjust_max_health(world, entity, -item.max_health_bonus());
-        events.push(GameEvent::ItemStowed { entity, item: item.kind });
-        crate::systems::inventory::add_item_to_inventory(world, entity, item);
+        adjust_max_health(world, entity, -max_health_bonus(world, Some(item)));
+        if let Some(kind) = held::kind(world, item) {
+            events.push(GameEvent::ItemStowed { entity, item: kind });
+        }
+        crate::systems::inventory::add_to_inventory(world, entity, item);
     }
 }
 
 /// Put a two-handed weapon back in the pack, to free a hand for the off-hand
 /// slot. One-handed weapons stay where they are.
 fn stow_two_handed_weapon(world: &mut World, entity: Entity, events: &mut EventQueue) {
-    let two_handed = world
-        .get::<&Equipment>(entity)
-        .ok()
-        .and_then(|e| equipped_weapon_kind(&e))
-        .is_some_and(crate::systems::item_defs::is_two_handed);
-    if two_handed {
-        let kind = world.get::<&Equipment>(entity).ok().and_then(|e| equipped_weapon_kind(&e));
-        if apply_unequip_weapon(world, entity) == ActionResult::Completed {
-            if let Some(kind) = kind {
-                events.push(GameEvent::ItemStowed { entity, item: kind });
-            }
+    let kind = world.get::<&Equipment>(entity).ok().and_then(|e| equipped_weapon_kind(world, &e));
+    if kind.is_some_and(crate::systems::item_defs::is_two_handed) && apply_unequip_weapon(world, entity) == ActionResult::Completed {
+        if let Some(kind) = kind {
+            events.push(GameEvent::ItemStowed { entity, item: kind });
         }
     }
 }
@@ -115,55 +135,41 @@ pub fn apply_equip_weapon(
     item_index: usize,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // Get the full instance from inventory (carries rarity/affixes)
-    let new_instance = {
-        let Ok(inventory) = world.get::<&Inventory>(entity) else {
-            return ActionResult::Invalid;
-        };
-        if item_index >= inventory.items.len() {
-            return ActionResult::Invalid;
-        }
-        inventory.items[item_index].clone()
+    let Some(new_item) = pack_item(world, entity, item_index) else {
+        return ActionResult::Invalid;
+    };
+    let Some(new_kind) = held::kind(world, new_item) else {
+        return ActionResult::Invalid;
     };
 
     // Create the combat weapon for this kind
-    let Some(new_weapon) = equipped_weapon_for_kind(new_instance.kind) else {
+    let Some(new_weapon) = equipped_weapon_for_kind(new_kind) else {
         return ActionResult::Invalid; // Not a weapon
     };
+    if world.get::<&Equipment>(entity).is_err() {
+        return ActionResult::Invalid;
+    }
 
     // A two-handed weapon needs the off hand free.
-    if crate::systems::item_defs::is_two_handed(new_instance.kind) {
+    if crate::systems::item_defs::is_two_handed(new_kind) {
         stow_off_hand(world, entity, events);
     }
 
-    // Take the previously equipped weapon's source instance to return to inventory
-    // (falling back to a plain reconstruction for the starting weapon).
-    let old_source = {
-        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
-            return ActionResult::Invalid;
-        };
-        match equipment.weapon_source.take() {
-            Some(inst) => Some(inst),
-            None => equipment.weapon.as_ref().and_then(equipped_weapon_to_instance),
-        }
-    };
+    // Take the previously equipped weapon off, back to the pack.
+    let old = take_weapon(world, entity);
 
     // Swap MaxHealth affix contributions (new gear on, old gear off)
-    let health_delta = new_instance.max_health_bonus()
-        - old_source.as_ref().map_or(0, |o| o.max_health_bonus());
+    let health_delta = max_health_bonus(world, Some(new_item)) - max_health_bonus(world, old);
 
-    // Remove the item we're equipping from inventory
-    crate::systems::items::remove_item_from_inventory(world, entity, item_index);
-
-    // Add the old weapon back to inventory if there was one
-    if let Some(old) = old_source {
-        crate::systems::inventory::add_item_to_inventory(world, entity, old);
+    crate::systems::inventory::remove_from_inventory(world, entity, new_item);
+    if let Some(old) = old {
+        crate::systems::inventory::add_to_inventory(world, entity, old);
     }
 
-    // Equip the new weapon, recording its source instance
+    // Equip the new weapon, recording the item behind it
     if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
         equipment.weapon = Some(new_weapon);
-        equipment.weapon_source = Some(new_instance);
+        equipment.weapon_source = Some(new_item);
     }
 
     adjust_max_health(world, entity, health_delta);
@@ -182,21 +188,16 @@ pub fn apply_equip_armor(
 ) -> ActionResult {
     use crate::systems::item_defs::{armor_slot, ArmorSlot};
 
-    // Get the full instance from inventory (carries rarity/affixes)
-    let new_instance = {
-        let Ok(inventory) = world.get::<&Inventory>(entity) else {
-            return ActionResult::Invalid;
-        };
-        if item_index >= inventory.items.len() {
-            return ActionResult::Invalid;
-        }
-        inventory.items[item_index].clone()
+    let Some(new_item) = pack_item(world, entity, item_index) else {
+        return ActionResult::Invalid;
     };
-
     // Determine which slot this armor occupies
-    let Some(slot) = armor_slot(new_instance.kind) else {
+    let Some(slot) = held::kind(world, new_item).and_then(armor_slot) else {
         return ActionResult::Invalid; // Not armor
     };
+    if world.get::<&Equipment>(entity).is_err() {
+        return ActionResult::Invalid;
+    }
 
     // Taking something in the off hand means putting down a two-hander.
     if slot == ArmorSlot::OffHand {
@@ -204,28 +205,17 @@ pub fn apply_equip_armor(
     }
 
     // Swap the previously equipped piece (if any) out of the slot
-    let old_piece = {
-        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
-            return ActionResult::Invalid;
-        };
-        slot_mut(&mut equipment, slot).take()
-    };
+    let old_piece = world.get::<&mut Equipment>(entity).ok().and_then(|mut e| slot_mut(&mut e, slot).take());
 
     // Swap MaxHealth affix contributions (new gear on, old gear off)
-    let health_delta = new_instance.max_health_bonus()
-        - old_piece.as_ref().map_or(0, |o| o.max_health_bonus());
+    let health_delta = max_health_bonus(world, Some(new_item)) - max_health_bonus(world, old_piece);
 
-    // Remove the item we're equipping from inventory
-    crate::systems::items::remove_item_from_inventory(world, entity, item_index);
-
-    // Return the old piece to inventory
+    crate::systems::inventory::remove_from_inventory(world, entity, new_item);
     if let Some(old) = old_piece {
-        crate::systems::inventory::add_item_to_inventory(world, entity, old);
+        crate::systems::inventory::add_to_inventory(world, entity, old);
     }
-
-    // Equip the new piece into its slot
     if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
-        *slot_mut(&mut equipment, slot) = Some(new_instance);
+        *slot_mut(&mut equipment, slot) = Some(new_item);
     }
 
     adjust_max_health(world, entity, health_delta);
@@ -240,17 +230,11 @@ pub fn apply_unequip_armor(
     entity: Entity,
     slot: crate::systems::item_defs::ArmorSlot,
 ) -> ActionResult {
-    let piece = {
-        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
-            return ActionResult::Invalid;
-        };
-        slot_mut(&mut equipment, slot).take()
-    };
-
+    let piece = world.get::<&mut Equipment>(entity).ok().and_then(|mut e| slot_mut(&mut e, slot).take());
     match piece {
-        Some(instance) => {
-            adjust_max_health(world, entity, -instance.max_health_bonus());
-            crate::systems::inventory::add_item_to_inventory(world, entity, instance);
+        Some(item) => {
+            adjust_max_health(world, entity, -max_health_bonus(world, Some(item)));
+            crate::systems::inventory::add_to_inventory(world, entity, item);
             crate::systems::torches::sync_held_torch(world, entity);
             ActionResult::Completed
         }
@@ -263,69 +247,35 @@ pub fn apply_unequip_weapon(
     world: &mut World,
     entity: Entity,
 ) -> ActionResult {
-    // Get the currently equipped weapon's source instance (with affixes), or
-    // reconstruct a plain instance for the starting weapon.
-    let weapon_item = {
-        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
-            return ActionResult::Invalid;
-        };
-        if equipment.weapon.is_none() {
-            return ActionResult::Invalid; // Nothing to unequip
-        }
-        match equipment.weapon_source.take() {
-            Some(inst) => inst,
-            None => match equipment.weapon.as_ref().and_then(equipped_weapon_to_instance) {
-                Some(inst) => inst,
-                None => return ActionResult::Invalid,
-            },
-        }
+    let Some(item) = take_weapon(world, entity) else {
+        return ActionResult::Invalid; // Nothing to unequip
     };
-
-    adjust_max_health(world, entity, -weapon_item.max_health_bonus());
-
-    // Add the weapon to inventory
-    crate::systems::inventory::add_item_to_inventory(world, entity, weapon_item);
-
-    // Remove weapon from equipment
-    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
-        equipment.weapon = None;
-    }
-
+    adjust_max_health(world, entity, -max_health_bonus(world, Some(item)));
+    crate::systems::inventory::add_to_inventory(world, entity, item);
     ActionResult::Completed
 }
 
-/// Apply drop item action - removes item from inventory and spawns on ground
+/// Apply drop item action - takes the item out of the pack and lays it on
+/// the ground
 pub fn apply_drop_item(
     world: &mut World,
     entity: Entity,
     item_index: usize,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // Get entity position
-    let (x, y) = match queries::get_entity_position(world, entity) {
-        Some(p) => p,
-        None => return ActionResult::Invalid,
+    let Some((x, y)) = queries::get_entity_position(world, entity) else {
+        return ActionResult::Invalid;
+    };
+    let Some(item) = pack_item(world, entity, item_index) else {
+        return ActionResult::Invalid;
+    };
+    let Some(item_kind) = held::kind(world, item) else {
+        return ActionResult::Invalid;
     };
 
-    // Get the full instance from inventory (carries rarity/affixes)
-    let item_instance = {
-        let Ok(inventory) = world.get::<&Inventory>(entity) else {
-            return ActionResult::Invalid;
-        };
-        if item_index >= inventory.items.len() {
-            return ActionResult::Invalid;
-        }
-        inventory.items[item_index].clone()
-    };
-    let item_kind = item_instance.kind;
+    crate::systems::inventory::remove_from_inventory(world, entity, item);
+    held::put_down(world, item, x, y);
 
-    // Remove from inventory
-    crate::systems::items::remove_item_from_inventory(world, entity, item_index);
-
-    // Spawn on ground
-    crate::systems::inventory::spawn_ground_item(world, x, y, item_instance);
-
-    // Emit event
     events.push(GameEvent::ItemDropped {
         entity,
         item: item_kind,
@@ -341,42 +291,18 @@ pub fn apply_drop_equipped_weapon(
     entity: Entity,
     events: &mut EventQueue,
 ) -> ActionResult {
-    // Get entity position
-    let (x, y) = match queries::get_entity_position(world, entity) {
-        Some(p) => p,
-        None => return ActionResult::Invalid,
+    let Some((x, y)) = queries::get_entity_position(world, entity) else {
+        return ActionResult::Invalid;
     };
-
-    // Get the currently equipped weapon's source instance (with affixes), or
-    // reconstruct a plain instance for the starting weapon.
-    let weapon_instance = {
-        let Ok(mut equipment) = world.get::<&mut Equipment>(entity) else {
-            return ActionResult::Invalid;
-        };
-        if equipment.weapon.is_none() {
-            return ActionResult::Invalid; // Nothing to drop
-        }
-        match equipment.weapon_source.take() {
-            Some(inst) => inst,
-            None => match equipment.weapon.as_ref().and_then(equipped_weapon_to_instance) {
-                Some(inst) => inst,
-                None => return ActionResult::Invalid,
-            },
-        }
+    let Some(item) = take_weapon(world, entity) else {
+        return ActionResult::Invalid; // Nothing to drop
     };
-    let item_kind = weapon_instance.kind;
+    let Some(item_kind) = held::kind(world, item) else {
+        return ActionResult::Invalid;
+    };
+    adjust_max_health(world, entity, -max_health_bonus(world, Some(item)));
+    held::put_down(world, item, x, y);
 
-    adjust_max_health(world, entity, -weapon_instance.max_health_bonus());
-
-    // Remove weapon from equipment
-    if let Ok(mut equipment) = world.get::<&mut Equipment>(entity) {
-        equipment.weapon = None;
-    }
-
-    // Spawn on ground
-    crate::systems::inventory::spawn_ground_item(world, x, y, weapon_instance);
-
-    // Emit event
     events.push(GameEvent::ItemDropped {
         entity,
         item: item_kind,
@@ -406,7 +332,7 @@ mod tests {
         };
 
         let mut inventory = Inventory::new();
-        inventory.items.push(armor);
+        inventory.items.push(held::spawn_item(&mut world, armor));
 
         let mut health = Health::new(30);
         health.current = 20; // wounded

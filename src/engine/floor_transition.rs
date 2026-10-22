@@ -47,12 +47,16 @@ pub fn can_transition_floor(current_floor: u32, direction: crate::events::StairD
 /// flight) can't come back as it was, so it isn't saved at all, rather than
 /// coming back as a stray sprite. Passing visual state (a hit flash, a
 /// lunge) doesn't count against it: it's simply dropped.
+///
+/// Held items aren't saved on their own: whatever holds one writes it out
+/// in full (`component_registry`), and the player's go with the player.
 pub fn save_floor(world: &World, grid: Grid, player_entity: Entity) -> SavedFloor {
     let passing = passing_component_types();
     let entities = world
         .iter()
         .map(|e| e.entity())
         .filter(|&id| id != player_entity)
+        .filter(|&id| !is_held_item(world, id))
         .filter(|&id| {
             let (known, unknown) = component_registry::components_of(world, id);
             let passing_here = world
@@ -79,12 +83,19 @@ fn passing_component_types() -> [std::any::TypeId; 4] {
     ]
 }
 
-/// Clear all non-player entities from the world.
+/// An item in something's pack, gear or container (not lying anywhere).
+fn is_held_item(world: &World, id: Entity) -> bool {
+    world.get::<&crate::components::ItemInstance>(id).is_ok() && world.get::<&Position>(id).is_err()
+}
+
+/// Clear all non-player entities from the world, but for what the player
+/// carries and wears, which goes with them.
 pub fn clear_floor_entities(world: &mut World, player_entity: Entity, scheduler: &mut ActionScheduler) {
+    let keep = crate::systems::held::held_by_all(world, player_entity);
     let to_remove: Vec<Entity> = world
         .iter()
         .map(|e| e.entity())
-        .filter(|&id| id != player_entity)
+        .filter(|&id| id != player_entity && !keep.contains(&id))
         .collect();
 
     for entity in &to_remove {

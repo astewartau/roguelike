@@ -105,6 +105,29 @@ saves beside it as `animated-tiles.stock.png` the first time, so re-running
 redoes it from scratch. To go back to the stock flames, copy that file over
 `animated-tiles.png`. Skip the step and the game just shows the stock fire.
 
+## Optional: `assets/custom/outdoor.png`
+
+Outdoor ground for the developer tools' Paint tab: nine looks of grass
+(short, lush, meadow flowers, clover, moss, dry, fallen leaves, pebbly, a
+worn patch) and four paths (dirt track, cobbles, flagstones, gravel), each
+path a 47-tile autotile set covering every edge, corner and junction. It is
+original art in the 32rogues palette, drawn by
+[`tools/make_outdoor_tiles.py`](../tools/make_outdoor_tiles.py) (tracked,
+Pillow only), which also writes `outdoor.txt` beside it listing every slot
+in `row.letter` notation:
+
+```bash
+python3 tools/make_outdoor_tiles.py                   # writes assets/custom/outdoor.png + outdoor.txt
+python3 tools/make_outdoor_tiles.py --preview /tmp/o  # plus a magnified sheet and a demo scene
+```
+
+16 columns, 512×448. `SHEET_SPECS` marks it optional, so the game starts
+without it. Painted grass then shows the stock grass, and paths show the
+stock floor nearest to them (dirt for the dirt track and gravel, stone for
+cobbles and flagstones). The path layout on the sheet is mirrored by
+`LAYOUT` in [src/outdoor.rs](../src/outdoor.rs), so changing one means
+changing the other.
+
 ## Required for sound: `assets/sounds/`
 
 [src/audio.rs](../src/audio.rs) reads **only** `assets/sounds/`, in five
@@ -170,7 +193,9 @@ assets/
 │   ├── *.txt                     (sheet documentation, unread)
 │   └── LICENSE.txt
 ├── custom/
-│   └── *.png                     (output of tools/make_tiles.py)
+│   ├── outdoor.png               (optional: grass and paths, tools/make_outdoor_tiles.py)
+│   ├── outdoor.txt               (its slot list)
+│   └── *.png                     (previews from tools/make_tiles.py)
 ├── fonts/                        (optional, developer tools only)
 │   ├── AdwaitaSans-Regular.ttf
 │   └── NotoSans-Medium.ttf

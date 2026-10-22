@@ -42,7 +42,7 @@ use crate::world::World;
 
 use crate::components::{
     AbilityType, Actor, Asleep, BarrelFuse, Targeting, BlocksMovement, Topples,
-    CausesBurning, OnFire, ClassAbility, ClassKit, Container, GroundItemPile,
+    CausesBurning, OnFire, ClassAbility, ClassKit, Container,
     Concealed, Dialogue, Door, EffectType, Equipment, EquippedWeapon,
     FriendlyNPC, Furniture, Health, Inventory, ItemType, LearnedAbilities, Name,
     Explosive, Player, Trap, Position, Summoned,
@@ -281,13 +281,14 @@ fn terrain_name(tile_type: TileType) -> &'static str {
         TileType::Stone => "Stone",
         TileType::StairsDown => "Stairs down",
         TileType::StairsUp => "Stairs up",
+        TileType::Path(kind) => kind.name(),
     }
 }
 
 /// Up to `ITEM_PILE_NAMES_SHOWN` item names (stacks counted), then "+N more".
-fn item_list(container: &Container) -> String {
+fn item_list(world: &World, items: &[Entity], gold: u32) -> String {
     let mut names: Vec<(String, u32)> = Vec::new();
-    for item in &container.items {
+    for item in crate::systems::held::instances(world, items) {
         let name = item.display_name();
         match names.iter_mut().find(|(n, _)| *n == name) {
             Some((_, count)) => *count += 1,
@@ -299,8 +300,8 @@ fn item_list(container: &Container) -> String {
         .take(TILE_INFO_ITEM_NAMES_SHOWN)
         .map(|(n, c)| if *c > 1 { format!("{n} x{c}") } else { n.clone() })
         .collect();
-    if container.gold > 0 {
-        shown.push(format!("{} gold", container.gold));
+    if gold > 0 {
+        shown.push(format!("{gold} gold"));
     }
     let hidden = names.len().saturating_sub(TILE_INFO_ITEM_NAMES_SHOWN);
     if hidden > 0 {
@@ -319,13 +320,6 @@ fn container_feature(world: &World, e: Entity, c: &Container) -> Option<String> 
             "open".to_string()
         }
     };
-    // Loose items are described by what they are.
-    if has::<GroundItemPile>(world, e) {
-        if c.is_empty() {
-            return None;
-        }
-        return Some(format!("Items: {}", item_list(c)));
-    }
     let name = world.get::<&Name>(e).map(|n| n.0.clone()).unwrap_or_else(|_| "Container".to_string());
     // Something standing (a chest) is opened; something lying there (remains)
     // is searched.
@@ -356,6 +350,10 @@ fn features_of(world: &World, player: Entity, e: Entity, visible: bool, out: &mu
         if let Some(f) = container_feature(world, e, &c) {
             out.push(f);
         }
+        return;
+    }
+    // Loose items are listed together, by `describe_tile`.
+    if crate::systems::held::on_ground(world, e) {
         return;
     }
     let burning = has::<OnFire>(world, e);
@@ -439,6 +437,11 @@ pub fn describe_tile(world: &World, grid: &Grid, player: Entity, tile: (i32, i32
             continue;
         }
         features_of(world, player, e, visible, &mut info.features);
+    }
+    // Whatever lies loose here, described by what it is.
+    let loose = crate::systems::held::on_ground_at(world, tile);
+    if !loose.is_empty() {
+        info.features.push(format!("Items: {}", item_list(world, &loose, 0)));
     }
     // The player first in their own tile's list; then hostiles before others.
     info.creatures.sort_by_key(|c| match c.relation {
@@ -570,7 +573,9 @@ fn attack_label(world: &World, player: Entity) -> String {
         .ok()
         .and_then(|e| match &e.weapon {
             Some(EquippedWeapon::Melee(w)) => Some(
-                e.weapon_source.as_ref().map(|s| s.display_name()).unwrap_or_else(|| w.name.clone()),
+                e.weapon_source
+                    .and_then(|s| crate::systems::held::item(world, s).map(|i| i.display_name()))
+                    .unwrap_or_else(|| w.name.clone()),
             ),
             _ => None,
         })
@@ -584,7 +589,9 @@ fn bow_name(world: &World, player: Entity) -> String {
         .ok()
         .and_then(|e| match &e.weapon {
             Some(EquippedWeapon::Ranged(b)) => Some(
-                e.weapon_source.as_ref().map(|s| s.display_name()).unwrap_or_else(|| b.name.clone()),
+                e.weapon_source
+                    .and_then(|s| crate::systems::held::item(world, s).map(|i| i.display_name()))
+                    .unwrap_or_else(|| b.name.clone()),
             ),
             _ => None,
         })
@@ -594,7 +601,11 @@ fn bow_name(world: &World, player: Entity) -> String {
 fn has_ammo(world: &World, player: Entity) -> bool {
     world
         .get::<&Inventory>(player)
-        .map(|inv| inv.items.iter().any(|i| matches!(i.kind, ItemType::Arrow | ItemType::FireArrow)))
+        .map(|inv| {
+            inv.items
+                .iter()
+                .any(|&i| matches!(crate::systems::held::kind(world, i), Some(ItemType::Arrow | ItemType::FireArrow)))
+        })
         .unwrap_or(false)
 }
 
@@ -746,12 +757,7 @@ pub fn context_actions(
         let Ok(c) = world.get::<&Container>(e) else { continue };
         let blocks = has::<BlocksMovement>(world, e);
         let noun = world.get::<&Name>(e).map(|n| n.0.to_lowercase()).unwrap_or_else(|_| "container".to_string());
-        let label = if has::<GroundItemPile>(world, e) {
-            if c.is_empty() {
-                continue;
-            }
-            "Pick up items".to_string()
-        } else if blocks {
+        let label = if blocks {
             if c.is_looted() || (c.is_open && c.is_empty()) {
                 continue;
             }
@@ -773,6 +779,11 @@ pub fn context_actions(
         if blocks {
             break; // One blocking container per tile.
         }
+    }
+    // Whatever lies loose here.
+    if !crate::systems::held::on_ground_at(world, tile).is_empty() {
+        offers_loot = true;
+        out.push(ContextAction::new("Pick up items", click.clone()).gate(reachable(world, grid, player, from, tile)));
     }
 
     // --- Push -------------------------------------------------------------
@@ -1374,7 +1385,7 @@ mod tests {
         assert!(labels(&acts).contains(&"Attack (fists)".to_string()));
 
         let mut inv = Inventory::new();
-        inv.items.push(ItemInstance::plain(ItemType::Arrow));
+        inv.items.push(crate::systems::held::spawn_item(&mut arena.world, ItemInstance::plain(ItemType::Arrow)));
         let _ = arena.world.insert_one(arena.player, inv);
         assert!(find(&actions_at(&arena, (9, 5)), "Shoot (Bow)").enabled);
     }

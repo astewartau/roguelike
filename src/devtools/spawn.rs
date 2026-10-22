@@ -58,6 +58,8 @@ pub enum Spawnable {
     Stalagmites,
     GlowMushrooms,
     CrystalCluster,
+    /// A tree: grown (blocks sight too) or young.
+    Tree { young: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +142,8 @@ impl Spawnable {
             Spawnable::Door(DoorKind::Grated) => "Grated door".into(),
             Spawnable::SecretDoor => "Secret door".into(),
             Spawnable::Stalagmites => "Stalagmites".into(),
+            Spawnable::Tree { young: false } => "Tree".into(),
+            Spawnable::Tree { young: true } => "Young tree".into(),
             Spawnable::GlowMushrooms => "Glow mushrooms".into(),
             Spawnable::CrystalCluster => "Crystal cluster".into(),
         }
@@ -175,6 +179,8 @@ impl Spawnable {
             Spawnable::Door(DoorKind::Grated) => Door::grated().closed_sprite,
             Spawnable::SecretDoor => tile_ids::WALL,
             Spawnable::Stalagmites => tile_ids::CAVE_STALAGMITES,
+            Spawnable::Tree { young: false } => tile_ids::TREE,
+            Spawnable::Tree { young: true } => tile_ids::TREE_SMALL,
             Spawnable::GlowMushrooms => tile_ids::CAVE_GLOW_MUSHROOMS,
             Spawnable::CrystalCluster => tile_ids::CAVE_CRYSTAL_CLUSTER,
         }
@@ -231,6 +237,8 @@ pub fn all_spawnables() -> Vec<Spawnable> {
             Spawnable::Stalagmites,
             Spawnable::GlowMushrooms,
             Spawnable::CrystalCluster,
+            Spawnable::Tree { young: false },
+            Spawnable::Tree { young: true },
         ])
         .collect()
 }
@@ -357,7 +365,7 @@ fn spawn_one(
             e
         }
         Spawnable::Chest => {
-            let container: Container = crate::engine::initialization::generate_chest_contents(floor, rng);
+            let container: Container = crate::engine::initialization::generate_chest_contents(world, floor, rng);
             let pos = Position::new(x, y);
             world.spawn((
                 pos,
@@ -388,6 +396,7 @@ fn spawn_one(
             spawning::spawn_secret_door(world, x, y, wall)
         }
         Spawnable::Stalagmites => spawning::spawn_stalagmites(world, x, y),
+        Spawnable::Tree { young } => spawning::spawn_tree(world, x, y, young),
         Spawnable::GlowMushrooms => spawning::spawn_glow_mushrooms(world, x, y),
         Spawnable::CrystalCluster => spawning::spawn_crystal_cluster(world, x, y),
     };

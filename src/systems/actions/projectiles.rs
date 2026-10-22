@@ -4,7 +4,7 @@ use hecs::Entity;
 use crate::world::World;
 
 use crate::components::{
-    ActiveAmmo, ChaseAI, EffectType, Equipment, Health, Inventory, ItemType, Player, Position,
+    ActiveAmmo, ChaseAI, EffectType, Equipment, Health, ItemType, Player, Position,
     Projectile, ProjectileMarker, RangedCooldown, Sprite, SpriteTint, StatusEffects,
     VisualPosition,
 };
@@ -59,21 +59,9 @@ pub fn apply_shoot_bow(
             ItemType::FireArrow
         };
 
-        if let Ok(mut inventory) = world.get::<&mut Inventory>(shooter) {
-            let slot = inventory
-                .items
-                .iter()
-                .position(|i| i.kind == preferred)
-                .or_else(|| inventory.items.iter().position(|i| i.kind == fallback));
-            match slot {
-                Some(idx) => {
-                    is_fire_arrow = inventory.items[idx].kind == ItemType::FireArrow;
-                    inventory.items.remove(idx);
-                }
-                None => return ActionResult::Blocked, // No ammo! Can't shoot
-            }
-        } else {
-            return ActionResult::Blocked;
+        match crate::systems::inventory::use_up_first_of(world, shooter, &[preferred, fallback]) {
+            Some(kind) => is_fire_arrow = kind == ItemType::FireArrow,
+            None => return ActionResult::Blocked, // No ammo! Can't shoot
         }
     }
 
@@ -85,7 +73,7 @@ pub fn apply_shoot_bow(
             Some(bow) => (
                 bow.base_damage,
                 bow.arrow_speed,
-                equipment.as_ref().map_or(0, |e| e.affix_damage_bonus()),
+                equipment.as_ref().map_or(0, |e| e.affix_damage_bonus(world)),
             ),
             None => return ActionResult::Blocked,
         }

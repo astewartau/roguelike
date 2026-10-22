@@ -258,6 +258,202 @@ fn chase_ai_entry() -> ComponentEntry {
     }
 }
 
+// ---------------------------------------------------------------- holders
+
+/// An item as the tools see it, written out in full: an object of its
+/// components (`{"ItemInstance": {...}, "Fuel": {...}}`). Items are entities
+/// (`systems::held`), and a holder's JSON carries its items this way so that
+/// a prefab, a floor save or the inspector has them whole.
+fn item_json(world: &World, item: Entity) -> Value {
+    Value::Object(snapshot(world, item).into_iter().map(|(name, v)| (name.to_string(), v)).collect())
+}
+
+/// Make the item `item_json` wrote. A bare `ItemInstance` (`{"kind": ...}`,
+/// what a holder's JSON held before items were entities) is read too.
+fn item_from_json(world: &mut World, value: Value) -> Result<Entity, String> {
+    let Value::Object(fields) = value else {
+        return Err("an item is an object".to_string());
+    };
+    if fields.contains_key("kind") {
+        let item: ItemInstance = serde_json::from_value(Value::Object(fields)).map_err(|err| err.to_string())?;
+        return Ok(crate::systems::held::spawn_item(world, item));
+    }
+    let e = world.spawn(());
+    for (name, v) in fields {
+        let written = match find(&name) {
+            Some(entry) => (entry.write)(world, e, v),
+            None => Err(format!("no component {name}")),
+        };
+        if let Err(err) = written {
+            let _ = world.despawn(e);
+            return Err(format!("{name}: {err}"));
+        }
+    }
+    if world.get::<&ItemInstance>(e).is_err() {
+        let _ = world.despawn(e);
+        return Err("an item needs an ItemInstance".to_string());
+    }
+    Ok(e)
+}
+
+/// Read a list of items written by `item_json`.
+fn items_from_json(world: &mut World, value: Option<Value>) -> Result<Vec<Entity>, String> {
+    let list = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(list)) => list,
+        Some(_) => return Err("items is a list".to_string()),
+    };
+    let mut made = Vec::new();
+    for v in list {
+        match item_from_json(world, v) {
+            Ok(e) => made.push(e),
+            Err(err) => {
+                for e in made {
+                    let _ = world.despawn(e);
+                }
+                return Err(err);
+            }
+        }
+    }
+    Ok(made)
+}
+
+/// A holder's default JSON, as `read` writes it: `keys` holding no items.
+fn with_no_items(value: serde_json::Result<Value>, keys: &[&str], empty: Value) -> Value {
+    let mut value = value.unwrap_or(Value::Null);
+    if let Some(fields) = value.as_object_mut() {
+        for key in keys {
+            fields.insert(key.to_string(), empty.clone());
+        }
+    }
+    value
+}
+
+/// The item slots of `Equipment`, by their JSON keys.
+const EQUIPMENT_SLOTS: [&str; 6] = ["weapon_source", "body", "head", "ring", "amulet", "off_hand"];
+
+fn equipment_slot<'a>(equipment: &'a mut Equipment, key: &str) -> &'a mut Option<Entity> {
+    match key {
+        "weapon_source" => &mut equipment.weapon_source,
+        "body" => &mut equipment.body,
+        "head" => &mut equipment.head,
+        "ring" => &mut equipment.ring,
+        "amulet" => &mut equipment.amulet,
+        _ => &mut equipment.off_hand,
+    }
+}
+
+/// Put `component` on `e` in place of what it had, and despawn the items
+/// the old one held: they're replaced, not added to.
+fn replace_holder<T: hecs::Component>(world: &mut World, e: Entity, component: T, held: impl Fn(&T) -> Vec<Entity>) -> Result<(), String> {
+    let old = world.remove_one::<T>(e).ok();
+    world.insert_one(e, component).map_err(|err| err.to_string())?;
+    if let Some(old) = old {
+        for item in held(&old) {
+            let _ = world.despawn(item);
+        }
+    }
+    Ok(())
+}
+
+fn inventory_entry() -> ComponentEntry {
+    ComponentEntry {
+        name: "Inventory",
+        type_id: || TypeId::of::<Inventory>(),
+        read: |world, e| {
+            let inventory = world.get::<&Inventory>(e).ok()?;
+            let mut value = serde_json::to_value(&*inventory).ok()?;
+            let items = inventory.items.iter().map(|&i| item_json(world, i)).collect();
+            value.as_object_mut()?.insert("items".to_string(), Value::Array(items));
+            Some(value)
+        },
+        write: |world, e, mut value| {
+            let items = value.as_object_mut().and_then(|o| o.remove("items"));
+            let mut inventory: Inventory = serde_json::from_value(value).map_err(|err| err.to_string())?;
+            inventory.items = items_from_json(world, items)?;
+            replace_holder(world, e, inventory, |i| i.items.clone())
+        },
+        remove: |world, e| {
+            if let Ok(old) = world.remove_one::<Inventory>(e) {
+                for item in old.items {
+                    let _ = world.despawn(item);
+                }
+            }
+        },
+        default: || with_no_items(serde_json::to_value(Inventory::new()), &["items"], Value::Array(Vec::new())),
+    }
+}
+
+fn container_entry() -> ComponentEntry {
+    ComponentEntry {
+        name: "Container",
+        type_id: || TypeId::of::<Container>(),
+        read: |world, e| {
+            let container = world.get::<&Container>(e).ok()?;
+            let mut value = serde_json::to_value(&*container).ok()?;
+            let items = container.items.iter().map(|&i| item_json(world, i)).collect();
+            value.as_object_mut()?.insert("items".to_string(), Value::Array(items));
+            Some(value)
+        },
+        write: |world, e, mut value| {
+            let items = value.as_object_mut().and_then(|o| o.remove("items"));
+            let mut container: Container = serde_json::from_value(value).map_err(|err| err.to_string())?;
+            container.items = items_from_json(world, items)?;
+            replace_holder(world, e, container, |c| c.items.clone())
+        },
+        remove: |world, e| {
+            if let Ok(old) = world.remove_one::<Container>(e) {
+                for item in old.items {
+                    let _ = world.despawn(item);
+                }
+            }
+        },
+        default: || with_no_items(serde_json::to_value(Container::chest(Vec::new(), 0)), &["items"], Value::Array(Vec::new())),
+    }
+}
+
+fn equipment_entry() -> ComponentEntry {
+    ComponentEntry {
+        name: "Equipment",
+        type_id: || TypeId::of::<Equipment>(),
+        read: |world, e| {
+            let mut equipment = { let held = world.get::<&Equipment>(e).ok()?; Equipment::clone(&held) };
+            let mut value = serde_json::to_value(&equipment).ok()?;
+            let fields = value.as_object_mut()?;
+            for key in EQUIPMENT_SLOTS {
+                let slot = equipment_slot(&mut equipment, key).map_or(Value::Null, |i| item_json(world, i));
+                fields.insert(key.to_string(), slot);
+            }
+            Some(value)
+        },
+        write: |world, e, mut value| {
+            let mut slots = Vec::new();
+            if let Some(fields) = value.as_object_mut() {
+                for key in EQUIPMENT_SLOTS {
+                    slots.push((key, fields.remove(key)));
+                }
+            }
+            let mut equipment: Equipment = serde_json::from_value(value).map_err(|err| err.to_string())?;
+            for (key, slot) in slots {
+                let item = match slot {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(item_from_json(world, v)?),
+                };
+                *equipment_slot(&mut equipment, key) = item;
+            }
+            replace_holder(world, e, equipment, |q| q.equipped_items().collect())
+        },
+        remove: |world, e| {
+            if let Ok(old) = world.remove_one::<Equipment>(e) {
+                for item in old.equipped_items() {
+                    let _ = world.despawn(item);
+                }
+            }
+        },
+        default: || with_no_items(serde_json::to_value(Equipment::empty()), &EQUIPMENT_SLOTS, Value::Null),
+    }
+}
+
 /// Every registered component, in the order the inspector lists them.
 pub fn entries() -> &'static [ComponentEntry] {
     static ENTRIES: std::sync::OnceLock<Vec<ComponentEntry>> = std::sync::OnceLock::new();
@@ -306,7 +502,7 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(Topples, Topples { toppled: false }),
             plain!(Shatters, Shatters),
             plain!(CarriedTorch, CarriedTorch { lit: true }),
-            plain!(Container, Container::chest(Vec::new(), 0)),
+            container_entry(),
             plain!(Door, Door::new()),
             plain!(Trap, Trap { effect: TrapEffect::spike(), owner: None }),
             plain!(Concealed, {
@@ -317,13 +513,13 @@ pub fn entries() -> &'static [ComponentEntry] {
             plain!(VisualPosition, VisualPosition { x: 0.0, y: 0.0 }),
             plain!(OverlaySprite, OverlaySprite::from_ref(tile_ids::BOW)),
             plain!(SecretDoor, SecretDoor),
-            plain!(GroundItemPile, GroundItemPile),
+            plain!(ItemInstance, ItemInstance::plain(ItemType::Apple)),
             plain!(Raisable, Raisable),
             plain!(XpMultiplier, XpMultiplier(2)),
             plain!(BarrelFuse, BarrelFuse::new(3.0, FuseCause::Fire)),
-            plain!(Equipment, Equipment::empty()),
+            equipment_entry(),
             plain!(Player, Player),
-            plain!(Inventory, Inventory::new()),
+            inventory_entry(),
             plain!(Experience, Experience::new()),
             plain!(Hunger, Hunger::new()),
             plain!(Fatigue, Fatigue::new()),
@@ -403,8 +599,7 @@ pub const REQUIRES: &[(&str, &[&str])] = &[
     ("OnFire", &["Fuel"]),
     ("Splits", &["Health"]),
     ("Pushable", &["BlocksMovement"]),
-    // Remains and loose items are containers of what they hold.
-    ("GroundItemPile", &["Container"]),
+    // Remains are containers of what they hold.
     ("Raisable", &["Container"]),
     // Someone you can talk to has something to say (without it, talking
     // opened no window and swallowed all input); a shopkeeper is one.

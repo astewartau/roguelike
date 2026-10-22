@@ -15,12 +15,13 @@ use super::devtools_look as look;
 const PICKER_TILE: f32 = 28.0;
 
 /// The sheets, in the order the picker offers them.
-const SHEETS: [(SpriteSheet, &str); 5] = [
+const SHEETS: [(SpriteSheet, &str); 6] = [
     (SpriteSheet::Monsters, "Monsters"),
     (SpriteSheet::Rogues, "People"),
     (SpriteSheet::Items, "Items"),
     (SpriteSheet::Tiles, "Tiles"),
     (SpriteSheet::AnimatedTiles, "Animated"),
+    (SpriteSheet::Outdoor, "Outdoor"),
 ];
 
 /// The keys a picture's tile number goes by.

@@ -35,6 +35,7 @@ use crate::world::World;
 use crate::components::{Actor, BlocksMovement, BlocksVision, Door, EffectType, LightExposure, LightSource, Position, SecretDoor, StatusEffects, Fuel, OnFire, CarriedTorch};
 use crate::constants::*;
 use crate::grid::Grid;
+use crate::systems::sky::SkyLight;
 use crate::tile::TileType;
 
 /// Every light in the world as `(tile, light)`: entities with a
@@ -251,6 +252,71 @@ impl LightMap {
         }
         Self { width, height, rgb }
     }
+
+    /// The light as it looks from where you stand, for drawing. `in_view`
+    /// says which tiles you can see (row-major, as the map), or None to count
+    /// every side of everything (no one to see from).
+    ///
+    /// A solid tile (a wall, a closed door: what stops light) shows only the
+    /// light on the sides of it you can see: the brightest of the open tiles
+    /// straight beside it that are in view, or, with none, the diagonal ones
+    /// (an outer corner). The light that reached the tile itself from a lamp
+    /// behind it is on its far face, out of sight. You still see a lamp's
+    /// glow on a wall when the lamp itself is hidden, so long as the ground
+    /// in front of that wall is lit and in view.
+    ///
+    /// A tile out of view carries no light at all: it's drawn as remembered,
+    /// and its light would otherwise bleed into its neighbours where the
+    /// shader blends between tiles (the far edge of a wall, the soft edge of
+    /// sight).
+    ///
+    /// Only for drawing: the light the game reckons with (`light_at`, for
+    /// sneaking) is untouched.
+    pub fn as_seen(&mut self, occlusion: &LightOcclusion, in_view: Option<&[bool]>) {
+        let (w, h) = (self.width as i32, self.height as i32);
+        if (occlusion.width, occlusion.height) != (w, h) || self.rgb.len() != self.width * self.height * 3 {
+            return;
+        }
+        if in_view.is_some_and(|v| v.len() != self.width * self.height) {
+            return;
+        }
+        let seen = |x: i32, y: i32| {
+            x >= 0 && y >= 0 && x < w && y < h && in_view.is_none_or(|v| v[(y * w + x) as usize])
+        };
+        let open = |x: i32, y: i32| occlusion.at(x, y) > 0.0;
+        let original = self.rgb.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) as usize * 3;
+                if !seen(x, y) {
+                    self.rgb[i..i + 3].fill(0.0);
+                    continue;
+                }
+                if open(x, y) {
+                    continue;
+                }
+                let brightest = |sides: &[(i32, i32)]| {
+                    let mut best: Option<[f32; 3]> = None;
+                    for &(dx, dy) in sides {
+                        let (nx, ny) = (x + dx, y + dy);
+                        if !(seen(nx, ny) && open(nx, ny)) {
+                            continue;
+                        }
+                        let j = (ny * w + nx) as usize * 3;
+                        let b = best.get_or_insert([0.0; 3]);
+                        for c in 0..3 {
+                            b[c] = b[c].max(original[j + c]);
+                        }
+                    }
+                    best
+                };
+                let light = brightest(&[(1, 0), (-1, 0), (0, 1), (0, -1)])
+                    .or_else(|| brightest(&[(1, 1), (-1, 1), (1, -1), (-1, -1)]))
+                    .unwrap_or([0.0; 3]);
+                self.rgb[i..i + 3].copy_from_slice(&light);
+            }
+        }
+    }
 }
 
 /// How much of one light reaches tile `pos`: its brightness there (see the
@@ -277,14 +343,16 @@ pub fn light_at(world: &World, grid: &Grid, pos: (i32, i32)) -> f32 {
         .sum()
 }
 
-/// Refresh the player's `LightExposure` from where they stand now. Called
-/// once per frame from the engine tick, so the AI reads a cached value rather
-/// than tracing every light for every enemy.
-pub fn update_light_exposure(world: &mut World, grid: &Grid, player: Entity) {
+/// Refresh the player's `LightExposure` from where they stand now: the
+/// lights that reach them, and the sky's light if they're outdoors
+/// (`GameState::sky_light`). Called once per frame from the engine tick, so
+/// the AI reads a cached value rather than tracing every light for every
+/// enemy.
+pub fn update_light_exposure(world: &mut World, grid: &Grid, player: Entity, sky: Option<SkyLight>) {
     let Some(pos) = crate::queries::get_entity_position(world, player) else {
         return;
     };
-    let level = light_at(world, grid, pos);
+    let level = light_at(world, grid, pos) + sky.map_or(0.0, |s| s.level);
     let _ = world.insert_one(player, LightExposure(level));
 }
 
@@ -407,5 +475,46 @@ mod tests {
         assert_eq!(alertness_mult(LIGHT_LIT_LEVEL * 3.0), LIT_ALERTNESS_MULT);
         let mid = alertness_mult(LIGHT_LIT_LEVEL / 2.0);
         assert!(DARK_ALERTNESS_MULT < mid && mid < LIT_ALERTNESS_MULT);
+    }
+
+    /// A campfire behind a wall: from the dark side the wall stays dark, and
+    /// out of view carries no light, however bright it is there. From the
+    /// campfire's side the wall is lit, by the lit ground in front of it,
+    /// whether or not the fire itself is in sight.
+    #[test]
+    fn a_wall_shows_only_the_light_on_the_side_you_can_see() {
+        // A wall across the middle (y = 3), a campfire above it at (4, 5).
+        let mut grid = Grid::filled(9, 7, TileType::Floor);
+        for x in 0..9 {
+            grid.get_mut(x, 3).unwrap().tile_type = TileType::Wall;
+        }
+        let mut world = World::new();
+        crate::spawning::spawn_campfire(&mut world, 4, 5);
+        let occlusion = LightOcclusion::build(&world, &grid);
+        let lights = light_emitters(&world);
+        let built = LightMap::build(&occlusion, &lights);
+        let at = |map: &LightMap, x: usize, y: usize| map.rgb[(y * map.width + x) * 3];
+        assert!(at(&built, 4, 3) > 0.1, "the light reaches the wall tile itself: the old glow");
+
+        // Standing below the wall: you see the wall and your side of it.
+        let below: Vec<bool> = (0..7).flat_map(|y| (0..9).map(move |_| y <= 3)).collect();
+        let mut seen = LightMap::build(&occlusion, &lights);
+        seen.as_seen(&occlusion, Some(&below));
+        assert_eq!(at(&seen, 4, 3), 0.0, "from the dark side, the wall is dark");
+        assert_eq!(at(&seen, 4, 5), 0.0, "and the campfire's ground, out of view, carries nothing");
+
+        // Above it, but with the campfire itself hidden (say behind a pillar):
+        // the lit ground in front of the wall is in view, so the wall glows.
+        let mut above: Vec<bool> = (0..7).flat_map(|y| (0..9).map(move |_| y >= 3)).collect();
+        above[5 * 9 + 4] = false;
+        let mut seen = LightMap::build(&occlusion, &lights);
+        seen.as_seen(&occlusion, Some(&above));
+        assert!(at(&seen, 4, 3) > 0.1, "from the lit side, the wall is lit");
+        assert_eq!(at(&seen, 4, 3), at(&built, 4, 4), "by the ground in front of it");
+
+        // No one to see from: every side counts.
+        let mut seen = LightMap::build(&occlusion, &lights);
+        seen.as_seen(&occlusion, None);
+        assert_eq!(at(&seen, 4, 3), at(&built, 4, 4));
     }
 }

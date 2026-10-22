@@ -19,6 +19,8 @@ pub struct UiIcons {
     pub items_texture_id: egui::TextureId,
     /// Texture ID for AnimatedTiles sheet (fire pits, torches, etc.)
     pub animated_tiles_texture_id: egui::TextureId,
+    /// Texture ID for the Outdoor sheet (grass and paths), if it's there.
+    pub outdoor_texture_id: Option<egui::TextureId>,
     // Items sheet UVs
     pub sword_uv: egui::Rect,
     pub bow_uv: egui::Rect,
@@ -105,6 +107,7 @@ impl UiIcons {
         monsters_egui_id: egui::TextureId,
         items_egui_id: egui::TextureId,
         animated_tiles_egui_id: egui::TextureId,
+        outdoor_egui_id: Option<egui::TextureId>,
     ) -> Self {
         Self {
             tiles_texture_id: tiles_egui_id,
@@ -112,6 +115,7 @@ impl UiIcons {
             monsters_texture_id: monsters_egui_id,
             items_texture_id: items_egui_id,
             animated_tiles_texture_id: animated_tiles_egui_id,
+            outdoor_texture_id: outdoor_egui_id,
             sword_uv: tileset.get_egui_uv(tile_ids::SWORD.0, tile_ids::SWORD.1),
             bow_uv: tileset.get_egui_uv(tile_ids::BOW.0, tile_ids::BOW.1),
             dagger_uv: tileset.get_egui_uv(tile_ids::DAGGER.0, tile_ids::DAGGER.1),
@@ -212,7 +216,8 @@ impl UiIcons {
         }
     }
 
-    /// Get the texture ID for a specific sprite sheet
+    /// Get the texture ID for a specific sprite sheet. An optional sheet
+    /// that isn't loaded gives the Tiles texture: check `has_sheet` first.
     pub fn texture_for_sheet(&self, sheet: SpriteSheet) -> egui::TextureId {
         match sheet {
             SpriteSheet::Tiles => self.tiles_texture_id,
@@ -220,6 +225,7 @@ impl UiIcons {
             SpriteSheet::Monsters => self.monsters_texture_id,
             SpriteSheet::Items => self.items_texture_id,
             SpriteSheet::AnimatedTiles => self.animated_tiles_texture_id,
+            SpriteSheet::Outdoor => self.outdoor_texture_id.unwrap_or(self.tiles_texture_id),
         }
     }
 

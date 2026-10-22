@@ -81,7 +81,7 @@ pub fn effective_stats(world: &World, entity: Entity) -> Stats {
         .unwrap_or(Stats::new(10, 10, 10));
 
     if let Ok(equipment) = world.get::<&Equipment>(entity) {
-        for inst in equipment.equipped_instances() {
+        for inst in equipment.equipped_items().filter_map(|e| crate::systems::held::item(world, e)) {
             stats.strength += inst.strength_bonus();
             stats.agility += inst.agility_bonus();
             stats.intelligence += inst.intelligence_bonus();
@@ -185,21 +185,21 @@ mod tests {
         let mut world = World::new();
 
         let mut equipment = Equipment::empty();
-        equipment.weapon_source = Some(instance(
+        equipment.weapon_source = Some(crate::systems::held::spawn_item(&mut world, instance(
             ItemType::Sword,
             Rarity::Rare,
             vec![Affix::Strength(2), Affix::Damage(1)],
-        ));
-        equipment.body = Some(instance(
+        )));
+        equipment.body = Some(crate::systems::held::spawn_item(&mut world, instance(
             ItemType::LeatherArmor,
             Rarity::Magic,
             vec![Affix::Agility(1)],
-        ));
-        equipment.head = Some(instance(
+        )));
+        equipment.head = Some(crate::systems::held::spawn_item(&mut world, instance(
             ItemType::Helmet,
             Rarity::Magic,
             vec![Affix::Intelligence(2)],
-        ));
+        )));
 
         let entity = world.spawn((Stats::new(16, 10, 12), equipment));
 
@@ -214,16 +214,16 @@ mod tests {
         let mut world = World::new();
 
         let mut equipment = Equipment::empty();
-        equipment.ring = Some(instance(
+        equipment.ring = Some(crate::systems::held::spawn_item(&mut world, instance(
             ItemType::Ring,
             Rarity::Magic,
             vec![Affix::Strength(2), Affix::Intelligence(1)],
-        ));
-        equipment.amulet = Some(instance(
+        )));
+        equipment.amulet = Some(crate::systems::held::spawn_item(&mut world, instance(
             ItemType::Amulet,
             Rarity::Rare,
             vec![Affix::Agility(2), Affix::Damage(2)],
-        ));
+        )));
 
         let entity = world.spawn((Stats::new(10, 10, 10), equipment));
 
@@ -234,7 +234,7 @@ mod tests {
 
         // Damage affixes on accessories feed the damage helper, not stats.
         let eq = world.get::<&Equipment>(entity).expect("equipment");
-        assert_eq!(eq.affix_damage_bonus(), 2);
+        assert_eq!(eq.affix_damage_bonus(&world), 2);
     }
 
     #[test]

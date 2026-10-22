@@ -16,7 +16,7 @@
 use hecs::Entity;
 use crate::world::World;
 
-use crate::components::{Equipment, Inventory, ItemInstance};
+use crate::components::ItemInstance;
 use crate::constants::*;
 use crate::events::{EventQueue, GameEvent};
 
@@ -55,14 +55,10 @@ pub fn tick_identification(
 
     let mut completed: Vec<(String, bool)> = Vec::new();
 
-    if let Ok(mut inventory) = world.get::<&mut Inventory>(player) {
-        for inst in inventory.items.iter_mut() {
-            progress_item(inst, step, required, &mut completed);
-        }
-    }
-    if let Ok(mut equipment) = world.get::<&mut Equipment>(player) {
-        for inst in equipment.equipped_instances_mut() {
-            progress_item(inst, step, required, &mut completed);
+    // Everything carried or worn (items are entities: `systems::held`).
+    for item in crate::systems::held::held_by(world, player) {
+        if let Ok(mut inst) = world.get::<&mut ItemInstance>(item) {
+            progress_item(&mut inst, step, required, &mut completed);
         }
     }
 
@@ -92,6 +88,7 @@ fn progress_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{Equipment, Inventory};
     use crate::components::{Affix, ItemType, Rarity, Stats};
 
     fn unidentified(kind: ItemType, affixes: Vec<Affix>) -> ItemInstance {
@@ -128,10 +125,10 @@ mod tests {
         let mut world = World::new();
 
         let mut inventory = Inventory::new();
-        inventory.items.push(unidentified(ItemType::Sword, vec![Affix::Damage(2)]));
+        inventory.items.push(crate::systems::held::spawn_item(&mut world, unidentified(ItemType::Sword, vec![Affix::Damage(2)])));
 
         let mut equipment = Equipment::empty();
-        equipment.ring = Some(unidentified(ItemType::Ring, vec![Affix::CursedLoud]));
+        equipment.ring = Some(crate::systems::held::spawn_item(&mut world, unidentified(ItemType::Ring, vec![Affix::CursedLoud])));
 
         let player = world.spawn((Stats::new(10, 10, 10), inventory, equipment));
         let mut events = EventQueue::new();
@@ -141,7 +138,7 @@ mod tests {
         tick_identification(&mut world, player, 1.0, &mut accumulator, &mut events);
         {
             let inv = world.get::<&Inventory>(player).expect("inventory");
-            assert!(!inv.items[0].identified);
+            assert!(!crate::systems::held::item(&world, inv.items[0]).unwrap().identified);
         }
 
         // Push past the requirement at INT 10.
@@ -153,10 +150,10 @@ mod tests {
             &mut events,
         );
         let inv = world.get::<&Inventory>(player).expect("inventory");
-        assert!(inv.items[0].identified, "inventory item should identify");
+        assert!(crate::systems::held::item(&world, inv.items[0]).unwrap().identified, "inventory item should identify");
         let eq = world.get::<&Equipment>(player).expect("equipment");
         assert!(
-            eq.ring.as_ref().map(|r| r.identified).unwrap_or(false),
+            eq.ring.and_then(|r| crate::systems::held::item(&world, r).map(|r| r.identified)).unwrap_or(false),
             "equipped ring should identify too"
         );
 

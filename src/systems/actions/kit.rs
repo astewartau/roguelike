@@ -661,6 +661,7 @@ mod tests {
 
     fn spawn_corpse(arena: &mut Arena, x: i32, y: i32, items: Vec<ItemInstance>, gold: u32) -> Entity {
         let pos = Position::new(x, y);
+        let items = crate::systems::held::spawn_items(&mut arena.world, items);
         let mut container = Container::corpse(items, gold);
         container.is_open = true;
         arena.world.spawn((
@@ -897,13 +898,15 @@ mod tests {
         assert_eq!(arena.hp(player), 30, "the caster (adjacent) is spared");
         assert!(!arena.world.contains(corpse), "the corpse is consumed");
 
-        let pile: Vec<(i32, i32, u32, usize)> = arena
+        assert_eq!(crate::systems::held::on_ground_at(&arena.world, (6, 5)).len(), 1, "the corpse's loot drops where it lay");
+        let coins: Vec<(i32, i32, u32)> = arena
             .world
-            .query::<(&Position, &Container, &crate::components::GroundItemPile)>()
+            .query::<(&Position, &Container)>()
             .iter()
-            .map(|(_, (p, c, _))| (p.x, p.y, c.gold, c.items.len()))
+            .filter(|(_, (p, _))| (p.x, p.y) == (6, 5))
+            .map(|(_, (p, c))| (p.x, p.y, c.gold))
             .collect();
-        assert_eq!(pile, vec![(6, 5, 9, 1)], "the corpse's loot drops where it lay");
+        assert_eq!(coins, vec![(6, 5, 9)], "and its gold");
 
         assert!(events.iter().any(|e| matches!(e, GameEvent::FireballExplosion { x: 6, y: 5, .. })));
         assert!(events.iter().any(|e| matches!(e, GameEvent::CorpseExploded { hits: 1, .. })));

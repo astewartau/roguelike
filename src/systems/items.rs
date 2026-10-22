@@ -1,6 +1,6 @@
 //! Item system functions.
 
-use crate::components::{Health, Inventory, ItemType};
+use crate::components::{Health, ItemType};
 use hecs::Entity;
 use crate::world::World;
 
@@ -60,14 +60,11 @@ pub fn item_is_throwable(item: ItemType) -> bool {
 /// Returns the result of the item use attempt
 pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUseResult {
     // Get the item type before removing it
-    let item_type = {
-        let Ok(inv) = world.get::<&Inventory>(entity) else {
-            return ItemUseResult::Failed;
-        };
-        if item_index >= inv.items.len() {
-            return ItemUseResult::Failed;
-        }
-        inv.items[item_index].kind
+    let Some(item) = super::inventory::inventory_item(world, entity, item_index) else {
+        return ItemUseResult::Failed;
+    };
+    let Some(item_type) = super::held::kind(world, item) else {
+        return ItemUseResult::Failed;
     };
 
     // Water flasks are stateful (empty <-> full) and are handled specially
@@ -86,10 +83,8 @@ pub fn use_item(world: &mut World, entity: Entity, item_index: usize) -> ItemUse
                 crate::components::EffectType::Wet,
                 crate::constants::WET_DURATION,
             );
-            if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
-                if let Some(item) = inv.items.get_mut(item_index) {
-                    item.kind = ItemType::WaterFlaskEmpty;
-                }
+            if let Ok(mut flask) = world.get::<&mut crate::components::ItemInstance>(item) {
+                flask.kind = ItemType::WaterFlaskEmpty;
             }
             return ItemUseResult::Used { item_type };
         }
@@ -183,12 +178,13 @@ pub fn fill_water_flask(
         return false;
     }
 
-    if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
-        if let Some(item) = inv.items.get_mut(item_index) {
-            if item.kind == ItemType::WaterFlaskEmpty {
-                item.kind = ItemType::WaterFlaskFull;
-                return true;
-            }
+    let Some(item) = super::inventory::inventory_item(world, entity, item_index) else {
+        return false;
+    };
+    if let Ok(mut flask) = world.get::<&mut crate::components::ItemInstance>(item) {
+        if flask.kind == ItemType::WaterFlaskEmpty {
+            flask.kind = ItemType::WaterFlaskFull;
+            return true;
         }
     }
     false
@@ -211,13 +207,13 @@ fn apply_status_effect(
     super::effects::add_effect_to_entity(world, entity, effect_type, duration);
 }
 
-/// Remove an item from an entity's inventory by index
+/// Use up the item at `item_index` in an entity's pack: it's gone, eaten,
+/// read, thrown, given away. (To move an item somewhere else instead, see
+/// `inventory::remove_from_inventory`.)
 pub fn remove_item_from_inventory(world: &mut World, entity: Entity, item_index: usize) {
-    if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
-        if item_index < inv.items.len() {
-            let item = inv.items.remove(item_index);
-            inv.current_weight_kg -= item_weight(item.kind);
-        }
+    if let Some(item) = super::inventory::inventory_item(world, entity, item_index) {
+        super::inventory::remove_from_inventory(world, entity, item);
+        let _ = world.despawn(item);
     }
 }
 
@@ -243,6 +239,7 @@ pub fn item_sprite(item: ItemType) -> (crate::tile::SpriteSheet, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Inventory;
     use crate::constants::{HEALTH_POTION_HEAL, HEALTH_POTION_WEIGHT, SCROLL_WEIGHT};
 
     #[test]
@@ -295,7 +292,7 @@ mod tests {
 
         let mut world = crate::world::World::new();
         let mut inv = Inventory::new();
-        inv.items.push(ItemInstance::plain(ItemType::WaterFlaskEmpty));
+        inv.items.push(crate::systems::held::spawn_item(&mut world, ItemInstance::plain(ItemType::WaterFlaskEmpty)));
         let entity = world.spawn((Position::new(2, 2), inv, StatusEffects::new()));
 
         let mut grid = Grid {
@@ -323,6 +320,7 @@ mod tests {
             stalagmite_positions: Vec::new(),
             mushroom_positions: Vec::new(),
             crystal_positions: Vec::new(),
+            outdoors: false,
         };
 
         // Using the empty flask defers to the fill flow.
@@ -335,7 +333,7 @@ mod tests {
         assert!(!super::fill_water_flask(&mut world, &grid, entity, 0));
         {
             let inv = world.get::<&Inventory>(entity).expect("inventory");
-            assert_eq!(inv.items[0].kind, ItemType::WaterFlaskEmpty);
+            assert_eq!(crate::systems::held::kind(&world, inv.items[0]).unwrap(), ItemType::WaterFlaskEmpty);
         }
 
         // Water adjacent: fill succeeds, flask becomes full.
@@ -343,7 +341,7 @@ mod tests {
         assert!(super::fill_water_flask(&mut world, &grid, entity, 0));
         {
             let inv = world.get::<&Inventory>(entity).expect("inventory");
-            assert_eq!(inv.items[0].kind, ItemType::WaterFlaskFull);
+            assert_eq!(crate::systems::held::kind(&world, inv.items[0]).unwrap(), ItemType::WaterFlaskFull);
         }
 
         // Drinking the full flask douses Burning on self and leaves the empty
@@ -360,7 +358,7 @@ mod tests {
         );
         let inv = world.get::<&Inventory>(entity).expect("inventory");
         assert_eq!(inv.items.len(), 1, "flask must not be consumed");
-        assert_eq!(inv.items[0].kind, ItemType::WaterFlaskEmpty);
+        assert_eq!(crate::systems::held::kind(&world, inv.items[0]).unwrap(), ItemType::WaterFlaskEmpty);
         drop(inv);
         let burning = crate::systems::effects::entity_has_effect(
             &world,

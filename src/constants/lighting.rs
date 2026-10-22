@@ -22,11 +22,18 @@ pub const LIGHT_PLAYER_FOCUSED: f32 = 0.2;
 /// the player's own light, with no pool of light anywhere. Higher shows the
 /// scene more plainly; lower lets the world's own lights stand out more.
 pub const LIGHT_EDITOR_AMBIENT: f32 = 0.6;
-/// Brightness of remembered tiles: explored but out of sight. Keep it below
-/// `LIGHT_PLAYER_AMBIENT`, or the remembered dungeon reads brighter than the
-/// dark at the edge of your view. It must also stay below 0.25, which is how
-/// the tile shader tells a remembered tile from a visible one.
-pub const LIGHT_FOG_BRIGHTNESS: f32 = 0.08;
+/// How remembered tiles (explored, out of sight) are lit: this share of the
+/// ambient light, the sky's and your own soft light everywhere in view, but
+/// never a lamp's or a fire's (you don't see those from behind a wall). So
+/// remembered ground is as dark as a moonless dungeon underground and nearly
+/// as bright as what you see at noon outdoors. Lower sets the edge of your
+/// sight off more; 1 makes remembered ground as bright as open ground.
+pub const LIGHT_FOG_SHARE: f32 = 0.8;
+/// The per-sprite fog value remembered things are drawn with. Informational
+/// only now: the tile shader decides what's seen from the map of how seen
+/// each tile is (`render::RevealFade::seen_map`) and lights remembered places
+/// by `LIGHT_FOG_SHARE`.
+pub const LIGHT_FOG_MARK: f32 = 0.1;
 
 /// Weight of a light's focused falloff (`t^2`, `t = 1 - d/r`): the bright pool
 /// close to the source.
@@ -263,3 +270,46 @@ pub const BURNING_LIGHT_INTENSITY: f32 = 0.85;
 /// within 2, ~75% at 3, ~40% at 4; one tile off glowing fungus ~75%. Lower
 /// makes lights count for more, further out.
 pub const LIGHT_LIT_LEVEL: f32 = 0.4;
+
+// =============================================================================
+// THE SKY (outdoor maps, see systems::sky)
+// =============================================================================
+
+/// Hours either side of sunrise and sunset over which light fades between
+/// night and day, and dawn and dusk glow warm. Longer makes softer, slower
+/// twilights.
+pub const SKY_TWILIGHT_HOURS: f32 = 1.0;
+/// Sky light at noon, added over the whole map like the player's ambient.
+/// The same scale as the light map: 0.8 sits at the bloom threshold, so a
+/// bright sprite glows only faintly at midday. Higher washes the art out.
+pub const SKY_NOON_LEVEL: f32 = 0.8;
+/// Sky light with the sun just up: the bottom of the daytime curve, which
+/// climbs to `SKY_NOON_LEVEL` at noon.
+pub const SKY_HORIZON_LEVEL: f32 = 0.4;
+/// Sky light on a moonless night: starlight, enough to make out shapes.
+pub const SKY_STARLIGHT_LEVEL: f32 = 0.05;
+/// What a full moon adds to the night (scaled by the moon's brightness, 0-1).
+/// Moonlight past about `LIGHT_LIT_LEVEL / 2` makes a lone figure in the
+/// open fairly easy to spot.
+pub const SKY_MOONLIGHT_LEVEL: f32 = 0.16;
+/// How bright the moon is in a new run, 0 (new moon) to 1 (full).
+pub const SKY_MOON_DEFAULT: f32 = 0.6;
+/// How strongly dawn and dusk tint the light toward `SKY_COLOR_TWILIGHT`,
+/// 0 (not at all) to 1 (fully, at the horizon).
+pub const SKY_TWILIGHT_STRENGTH: f32 = 0.8;
+/// Daylight: a warm white. One channel at 1.0, like every light colour.
+pub const SKY_COLOR_DAY: (f32, f32, f32) = (1.0, 0.97, 0.9);
+/// Sunrise and sunset: amber-rose.
+pub const SKY_COLOR_TWILIGHT: (f32, f32, f32) = (1.0, 0.62, 0.42);
+/// Moonlight and starlight: a cold blue.
+pub const SKY_COLOR_NIGHT: (f32, f32, f32) = (0.55, 0.68, 1.0);
+/// How much further than your own light (`FOV_RADIUS`) a full moon lets you
+/// see outdoors, in tiles. In full daylight you see as far as the land lets
+/// you.
+pub const SKY_MOON_SIGHT_BONUS: i32 = 4;
+/// How far the light of what you can see spills into remembered tiles right
+/// beside it, 0 to 1: the edge of your sight blends into the fog of war over
+/// a tile or two instead of stopping dead at a tile's edge. What you see
+/// keeps its full light; only the remembered side is lifted. 0 is a hard
+/// edge; much past 0.6 and remembered tiles by the edge look half seen.
+pub const LIGHT_FOG_EDGE_SPREAD: f32 = 0.5;

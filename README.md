@@ -178,6 +178,7 @@ cargo install puffin_viewer && puffin_viewer --url 127.0.0.1:8585
 | `]` | toggle grid lines |
 | `F11` | toggle fullscreen |
 | `` ` `` | toggle the dev menu |
+| `Alt` + `Z` | hide the whole interface (and show it again) |
 | `Esc` | cancel targeting → close dev menu → close open window → pause menu |
 
 ### Hotbars

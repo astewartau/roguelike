@@ -44,7 +44,9 @@ pub mod identify;
 pub mod inventory;
 pub mod item_defs;
 pub mod items;
+pub mod held;
 pub mod light;
+pub mod sky;
 pub mod noise;
 pub mod pack;
 pub mod player_input;
@@ -69,9 +71,8 @@ pub use animation::{
 pub use combat::{handle_container_opened, handle_door_closed, handle_door_opened, remove_dead_entities, weapon_damage};
 pub use experience::xp_progress;
 pub use inventory::{
-    cleanup_empty_ground_piles, find_container_at_player, loot_source_label, loot_sources,
-    stack_items, take_all_from_sources, take_gold_from_container, take_item_from_container,
-    unblock_emptied_containers,
+    find_container_at_player, loot_source_label, loot_sources, source_gold, source_items, stack_items,
+    take_all_from_sources, take_gold, take_item, unblock_emptied_containers, LootSource,
 };
 pub use items::{item_name, use_item, remove_item_from_inventory, item_targeting_params, ItemUseResult};
 pub use projectile::{cleanup_finished_projectiles, despawn_projectiles, lerp_projectiles_realtime, update_projectiles};

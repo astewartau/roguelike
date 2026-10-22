@@ -59,8 +59,8 @@ pub fn attacker_conditional_damage_mult(world: &World, attacker: Entity) -> f32 
         .map(|h| (h.current as f32) < (h.max as f32 * LOW_HEALTH_DAMAGE_THRESHOLD))
         .unwrap_or(false);
     if low_health {
-        if let Ok(equipment) = world.get::<&Equipment>(attacker) {
-            if let Some(source) = equipment.weapon_source.as_ref() {
+        if let Some(source) = world.get::<&Equipment>(attacker).ok().and_then(|e| e.weapon_source) {
+            if let Some(source) = crate::systems::held::item(world, source) {
                 for affix in &source.affixes {
                     if let Affix::LowHealthDamage(bonus) = affix {
                         mult += bonus;
@@ -78,7 +78,7 @@ pub fn attacker_conditional_damage_mult(world: &World, attacker: Entity) -> f32 
 pub fn attack_noise_radius(world: &World, attacker: Entity, base: i32) -> i32 {
     let loud = world
         .get::<&Equipment>(attacker)
-        .map(|e| e.has_cursed_loud())
+        .map(|e| e.has_cursed_loud(world))
         .unwrap_or(false);
     if loud {
         base * 2
@@ -108,12 +108,10 @@ pub fn resolve_weapon_on_hit(
         return;
     }
 
-    let affixes: Vec<Affix> = match world.get::<&Equipment>(attacker) {
-        Ok(e) => match e.weapon_source.as_ref() {
-            Some(source) => source.affixes.clone(),
-            None => return,
-        },
-        Err(_) => return,
+    let source = world.get::<&Equipment>(attacker).ok().and_then(|e| e.weapon_source);
+    let affixes: Vec<Affix> = match source.and_then(|s| crate::systems::held::item(world, s).map(|i| i.affixes.clone())) {
+        Some(affixes) => affixes,
+        None => return,
     };
     if affixes.is_empty() {
         return;
@@ -414,7 +412,7 @@ fn apply_damage_inner(
     if !dot {
         let defense = world
             .get::<&Equipment>(target)
-            .map(|e| e.total_defense())
+            .map(|e| e.total_defense(world))
             .unwrap_or(0);
         dmg -= defense;
     }
@@ -725,6 +723,7 @@ pub fn remove_dead_entities(ctx: &mut ActorCtx, floor: u32) -> u32 {
         // What's left keeps the creature's name ("Goblin's corpse"), and the
         // dead can be raised from it.
         let name = world.get::<&crate::components::Name>(id).map(|n| n.0.clone()).ok();
+        let loot_items = crate::systems::held::spawn_items(world, loot_items);
         let _ = world.insert(id, (Container::corpse(loot_items, gold), crate::components::Raisable));
         if let Some(name) = name {
             let _ = world.insert_one(id, crate::components::Name::new(format!("{name}'s corpse")));
@@ -820,8 +819,8 @@ mod tests {
         let mut events = crate::events::EventQueue::new();
         let mut world = World::new();
         let mut armor = crate::components::Equipment::with_weapon(Weapon::claws(1));
-        armor.body = Some(crate::components::ItemInstance::plain(crate::components::ItemType::ChainMail));
-        let defense = armor.total_defense();
+        armor.body = Some(crate::systems::held::spawn_item(&mut world, crate::components::ItemInstance::plain(crate::components::ItemType::ChainMail)));
+        let defense = armor.total_defense(&world);
         assert!(defense >= 1, "the test needs real armor");
         let e = world.spawn((Health::new(50), armor, StatusEffects::new()));
 

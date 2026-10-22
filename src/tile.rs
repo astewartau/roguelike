@@ -6,6 +6,7 @@ pub enum SpriteSheet {
     Monsters,      // monsters.png - enemies
     Items,         // items.png - weapons, armor, potions, etc.
     AnimatedTiles, // animated-tiles.png - fire pits, torches, etc.
+    Outdoor,       // custom/outdoor.png - grass and paths (tools/make_outdoor_tiles.py); optional
 }
 
 /// Helper to convert row.letter notation to tile ID
@@ -22,6 +23,7 @@ const fn rc(row: u32, col: u32, columns: u32) -> u32 {
 /// - Rogues: 7 columns (rogues.png 224x224)
 /// - Monsters: 12 columns (monsters.png 384x416)
 /// - Items: 11 columns (items.png 352x1280: stock is 26 rows, tools/make_tiles.py adds 27-40)
+/// - Outdoor: 16 columns (custom/outdoor.png 512x448, optional; addressed in `outdoor`)
 // A catalogue of what the sprite sheets contain, not a list of what the game
 // currently draws. Entries for art nothing spawns yet (and alternates like
 // SKELETON_ARCHER, superseded by SKELETON plus a BOW overlay) are kept so the
@@ -69,6 +71,13 @@ pub mod tile_ids {
     pub const GRASS_VARIANTS: [(SpriteSheet, u32); 3] = [GRASS, GRASS_2, GRASS_3];
     pub const TALL_GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(20, 7, TILES_COLS)); // 20.h wheat
     pub const STONE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(10, 1, TILES_COLS)); // 10.b stone floor
+    // Trees (row 26)
+    pub const TREE_SAPLING: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(26, 0, TILES_COLS)); // 26.a sapling
+    pub const TREE_SMALL: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(26, 1, TILES_COLS)); // 26.b small tree
+    pub const TREE: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(26, 2, TILES_COLS)); // 26.c tree
+    // Dirt on a green ground: what a path looks like without the outdoor sheet
+    pub const DIRT_ON_GRASS: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(14, 1, TILES_COLS)); // 14.b dirt 1 (green bg)
+    pub const DIRT_ON_GRASS_2: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(14, 2, TILES_COLS)); // 14.c dirt 2 (green bg)
 
     // Structures
     pub const STAIRS_DOWN: (SpriteSheet, u32) = (SpriteSheet::Tiles, rc(17, 7, TILES_COLS)); // 17.h staircase down
@@ -188,6 +197,7 @@ pub mod tile_ids {
     pub const BOW: (SpriteSheet, u32) = (SpriteSheet::Items, rc(10, 2, ITEMS_COLS)); // 10.c long bow
     pub const ARROW: (SpriteSheet, u32) = (SpriteSheet::Items, rc(24, 0, ITEMS_COLS)); // 24.a arrow
     pub const AXE: (SpriteSheet, u32) = (SpriteSheet::Items, rc(4, 1, ITEMS_COLS)); // 4.b battle axe
+    pub const HAMMER: (SpriteSheet, u32) = (SpriteSheet::Items, rc(5, 3, ITEMS_COLS)); // 5.d hammer
     pub const STAFF: (SpriteSheet, u32) = (SpriteSheet::Items, rc(11, 0, ITEMS_COLS)); // 11.a crystal staff
 
     // Armor (rows 13 & 16)
@@ -411,6 +421,9 @@ pub enum TileType {
     Stone,
     StairsDown,
     StairsUp,
+    /// A made path outdoors. Walks like floor; its picture joins up with the
+    /// paths beside it (`outdoor`).
+    Path(crate::outdoor::PathKind),
 }
 
 impl TileType {
@@ -426,6 +439,16 @@ impl TileType {
             TileType::Stone => tile_ids::STONE,
             TileType::StairsDown => tile_ids::STAIRS_DOWN,
             TileType::StairsUp => tile_ids::STAIRS_UP,
+            TileType::Path(kind) => kind.icon(),
+        }
+    }
+
+    /// The sprite to draw when the one a tile asks for isn't on the loaded
+    /// sheets (the outdoor sheet is optional): the stock look of its terrain.
+    pub fn fallback_sprite(&self) -> (SpriteSheet, u32) {
+        match self {
+            TileType::Path(kind) => kind.stock_sprite(),
+            other => other.sprite_ref(),
         }
     }
 
@@ -438,6 +461,7 @@ impl TileType {
                 | TileType::Water
                 | TileType::StairsDown
                 | TileType::StairsUp
+                | TileType::Path(_)
         )
     }
 
@@ -445,9 +469,34 @@ impl TileType {
         matches!(self, TileType::Wall | TileType::Empty | TileType::TallGrass)
     }
 
+    /// Whether it stands on the ground rather than being ground itself:
+    /// walls, tall grass and stairs. Ground laid under one leaves it
+    /// standing, and its ground shows again once it's gone (`Tile::under`).
+    pub fn stands_on_ground(&self) -> bool {
+        matches!(self, TileType::Wall | TileType::TallGrass | TileType::StairsDown | TileType::StairsUp)
+    }
+
     /// Whether this terrain can catch fire (and burn away).
     pub fn is_flammable(&self) -> bool {
         matches!(self, TileType::TallGrass)
+    }
+}
+
+/// A tile's ground: its terrain, and the picture it shows if not that
+/// terrain's own (a floor's variety, a grass look, a path's edge).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ground {
+    pub tile_type: TileType,
+    pub look: Option<(SpriteSheet, u32)>,
+}
+
+impl Ground {
+    /// Plain floor: what walls and tall grass the dungeon was generated
+    /// with stand on.
+    pub const FLOOR: Ground = Ground { tile_type: TileType::Floor, look: None };
+
+    pub fn sprite(&self) -> (SpriteSheet, u32) {
+        self.look.unwrap_or_else(|| self.tile_type.sprite_ref())
     }
 }
 
@@ -462,6 +511,11 @@ pub struct Tile {
     pub sprite_override: Option<(SpriteSheet, u32)>,
     /// What it's made of, if it's a wall (see `walls`).
     pub wall_style: crate::walls::WallStyle,
+    /// The ground under whatever stands here (`TileType::stands_on_ground`),
+    /// drawn beneath it and back in its place when it's gone. None for
+    /// ground itself, and for what the dungeon was generated with, which
+    /// stands on plain floor.
+    pub under: Option<Ground>,
 }
 
 impl Tile {
@@ -480,6 +534,50 @@ impl Tile {
             revealed_until: None,
             sprite_override: None,
             wall_style: crate::walls::WallStyle::Brick,
+            under: None,
+        }
+    }
+
+    /// What's underfoot here, beneath whatever stands on it.
+    pub fn ground(&self) -> Ground {
+        if self.tile_type.stands_on_ground() {
+            self.under.unwrap_or(Ground::FLOOR)
+        } else {
+            Ground { tile_type: self.tile_type, look: self.sprite_override }
+        }
+    }
+
+    /// Lay `ground` here, under whatever stands on it.
+    pub fn set_ground(&mut self, ground: Ground) {
+        if self.tile_type.stands_on_ground() {
+            self.under = Some(ground);
+        } else {
+            self.tile_type = ground.tile_type;
+            self.sprite_override = ground.look;
+            self.under = None;
+        }
+    }
+
+    /// Stand `top` (a wall, tall grass, stairs) on the ground here, in
+    /// place of whatever stood on it.
+    pub fn put_on_top(&mut self, top: TileType) {
+        debug_assert!(top.stands_on_ground(), "{top:?} is ground, not something on it");
+        if !self.tile_type.stands_on_ground() {
+            self.under = Some(self.ground());
+        }
+        if self.tile_type != top {
+            self.tile_type = top;
+            self.sprite_override = None;
+        }
+    }
+
+    /// Take away whatever stands here, leaving its ground.
+    pub fn clear_top(&mut self) {
+        if self.tile_type.stands_on_ground() {
+            let ground = self.ground();
+            self.under = None;
+            self.tile_type = ground.tile_type;
+            self.sprite_override = ground.look;
         }
     }
 

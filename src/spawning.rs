@@ -1248,6 +1248,28 @@ pub fn spawn_stalagmites(world: &mut World, x: i32, y: i32) -> hecs::Entity {
     ))
 }
 
+/// Spawn a tree. A grown one stands in the way and hides what's behind it
+/// (cover to slip through a wood by); a `young` one only stands in the way.
+/// Either burns (`Fuel::tree`), and a fire spreads from tree to tree.
+pub fn spawn_tree(world: &mut World, x: i32, y: i32, young: bool) -> hecs::Entity {
+    use crate::components::{BlocksMovement, BlocksVision, Fuel, Name};
+
+    let pos = Position::new(x, y);
+    let sprite = if young { tile_ids::TREE_SMALL } else { tile_ids::TREE };
+    let tree = world.spawn((
+        pos,
+        VisualPosition::from_position(&pos),
+        Sprite::from_ref(sprite),
+        Name::new(if young { "Young tree" } else { "Tree" }),
+        BlocksMovement,
+        Fuel::tree(),
+    ));
+    if !young {
+        let _ = world.insert_one(tree, BlocksVision);
+    }
+    tree
+}
+
 /// Spawn a patch of glowing cave fungus: walkable, sheds a small soft light,
 /// and catches fire (`Fuel::fungus`).
 pub fn spawn_glow_mushrooms(world: &mut World, x: i32, y: i32) -> hecs::Entity {
@@ -1338,26 +1360,13 @@ pub fn spawn_lantern(
     lantern
 }
 
-/// Spawn a torch lying burning on the floor, dropped by a dying torch-bearer:
-/// a ground item (a lit `Torch`, yours if you pick it up), a light, and a fire
-/// that can catch grass beside it until it gutters out (`Fuel::dropped_torch`).
+/// Spawn a torch lying burning on the floor, as a dying torch-bearer drops
+/// one: the lit `Torch` item itself, lying there, which burns as itself
+/// (`held::put_down`, `Fuel::dropped_torch`) until it's picked up or gutters
+/// out to an unlit torch.
 pub fn spawn_dropped_torch(world: &mut World, x: i32, y: i32) -> hecs::Entity {
-    use crate::components::{
-        Container, Fuel, GroundItemPile, ItemInstance, ItemType, OnFire,
-    };
-    use crate::constants::DROPPED_TORCH_BURN_DURATION;
-
-    let pos = Position::new(x, y);
-    let torch = world.spawn((
-        pos,
-        VisualPosition::from_position(&pos),
-        Fuel::dropped_torch(),
-        Container::ground_pile(vec![ItemInstance::plain(ItemType::Torch)]),
-        GroundItemPile,
-    ));
-    let remaining = crate::systems::fire::burn_time(DROPPED_TORCH_BURN_DURATION, torch, (x, y));
-    let _ = world.insert_one(torch, OnFire { remaining });
-    torch
+    use crate::components::{ItemInstance, ItemType};
+    crate::systems::held::drop_new(world, x, y, ItemInstance::plain(ItemType::Torch))
 }
 
 /// Spawn a hidden dungeon floor trap. No sprite: it is invisible until the

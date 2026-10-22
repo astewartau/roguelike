@@ -235,3 +235,16 @@ pub const HEARTH_RELIGHT_CHANCE: f64 = 0.3;
 /// Hit points of a standing lantern's glass: any real blow (or a blast)
 /// breaks it, spilling its oil burning.
 pub const LANTERN_HEALTH: i32 = 1;
+
+// =============================================================================
+// TREES (spawning::spawn_tree)
+// =============================================================================
+
+/// Per fire-step chance a tree catches when fire is on or beside it. Lower
+/// than grass: a wood smoulders before it goes up, so a grass fire licks at
+/// its edge rather than sweeping straight through. Higher makes forest
+/// fires race.
+pub const TREE_IGNITE_CHANCE: f64 = 0.12;
+/// Game seconds a tree burns before it's gone. Long, so a burning wood
+/// lights the night and spreads to its neighbours a while.
+pub const TREE_BURN_DURATION: f32 = 30.0;

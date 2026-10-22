@@ -109,10 +109,19 @@ impl FireFades {
 
     /// After the frame's flames are drawn: those not drawn this frame have
     /// gone out and start fading. Returns what's fading, to draw on top.
-    pub fn finish(&mut self, real_time: f32) -> Vec<RenderEntity> {
+    ///
+    /// A burning item picked up (`world` says it's held now) didn't go out:
+    /// its fire went with it, so nothing is left fading on the floor.
+    pub fn finish(&mut self, world: &hecs::World, real_time: f32) -> Vec<RenderEntity> {
         let seen = std::mem::take(&mut self.seen);
         let gone: Vec<(Entity, FlameKind)> = self.lit.keys().filter(|k| !seen.contains(k)).copied().collect();
         for key in gone {
+            let carried_off = world.get::<&crate::components::ItemInstance>(key.0).is_ok()
+                && world.get::<&crate::components::Position>(key.0).is_err();
+            if carried_off {
+                self.lit.remove(&key);
+                continue;
+            }
             if let Some(mut flame) = self.lit.remove(&key) {
                 // It fades out from about as far as it had faded in (one
                 // caught and gone at once barely shows at all).
@@ -178,6 +187,27 @@ mod tests {
         }
     }
 
+    /// A burning torch picked up off the floor took its fire with it: no
+    /// flame is left fading where it lay. One that burns out there does fade.
+    #[test]
+    fn a_torch_picked_up_leaves_no_fading_flame() {
+        use crate::components::{ItemInstance, ItemType};
+        let mut world = crate::world::World::new();
+        let frames = FlameFrames::Flames { phase: 0.0 };
+        let torch = crate::systems::held::drop_new(&mut world, 1, 1, ItemInstance::plain(ItemType::Torch));
+        let mut fades = FireFades::default();
+        fades.shown((torch, FlameKind::Fuel), 10.0, &flame(), frames, None);
+        assert!(fades.finish(&world, 10.0).is_empty());
+        crate::systems::held::lift(&mut world, torch);
+        assert!(fades.finish(&world, 11.0).is_empty(), "carried off, not gone out");
+
+        let burnt = crate::systems::held::drop_new(&mut world, 2, 2, ItemInstance::plain(ItemType::Torch));
+        fades.shown((burnt, FlameKind::Fuel), 12.0, &flame(), frames, None);
+        fades.finish(&world, 12.0);
+        crate::systems::torches::item_goes_out(&mut world, burnt, ItemType::UnlitTorch);
+        assert_eq!(fades.finish(&world, 13.0).len(), 1, "burnt out where it lay: it fades");
+    }
+
     /// A flame fades in from nothing over the fade-in time, and when it
     /// goes out it's drawn on where it was, fading to nothing.
     #[test]
@@ -187,19 +217,19 @@ mod tests {
         let key = (e, FlameKind::Fuel);
         let frames = FlameFrames::Flames { phase: 0.0 };
         assert_eq!(fades.shown(key, 10.0, &flame(), frames, None), 0.0, "caught this frame: unseen");
-        assert!(fades.finish(10.0).is_empty());
+        assert!(fades.finish(&hecs::World::new(), 10.0).is_empty());
         let half = fades.shown(key, 10.0 + FIRE_FADE_IN_SECONDS / 2.0, &flame(), frames, None);
         assert!(half > 0.3 && half < 1.0, "on its way in: {half}");
-        fades.finish(11.0);
+        fades.finish(&hecs::World::new(), 11.0);
         assert_eq!(fades.shown(key, 11.0, &flame(), frames, None), 1.0, "fully in");
-        assert!(fades.finish(11.0).is_empty(), "drawn this frame, so not going out");
+        assert!(fades.finish(&hecs::World::new(), 11.0).is_empty(), "drawn this frame, so not going out");
 
         // Not drawn this frame: it's gone out, and fades from where it was.
-        let fading = fades.finish(12.0);
+        let fading = fades.finish(&hecs::World::new(), 12.0);
         assert_eq!(fading.len(), 1);
         assert!(fading[0].alpha > 0.99 && fading[0].x == 1.0, "fades from full, in its place");
-        let later = fades.finish(12.0 + FIRE_FADE_OUT_SECONDS / 2.0);
+        let later = fades.finish(&hecs::World::new(), 12.0 + FIRE_FADE_OUT_SECONDS / 2.0);
         assert!(later[0].alpha > 0.0 && later[0].alpha < 1.0);
-        assert!(fades.finish(12.01 + FIRE_FADE_OUT_SECONDS).is_empty(), "and then it's gone");
+        assert!(fades.finish(&hecs::World::new(), 12.01 + FIRE_FADE_OUT_SECONDS).is_empty(), "and then it's gone");
     }
 }

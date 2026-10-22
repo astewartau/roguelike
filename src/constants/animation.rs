@@ -279,3 +279,11 @@ pub const EXPLOSION_SHOCKWAVE_DURATION: f32 = 0.3;
 pub const EXPLOSION_FLASH_DURATION: f32 = 0.1;
 /// Seconds per frame of falling rain (`tile_ids::RAIN`). Lower falls faster.
 pub const RAIN_FRAME_DURATION: f32 = 0.08;
+/// Real seconds a tile takes to fade in as it comes into view (a door
+/// opened, a corner turned), from dark to fully lit. Lower is snappier; 0
+/// shows it at once. Only the drawing fades: what you can see, for play,
+/// changes at once.
+pub const REVEAL_FADE_IN_SECONDS: f32 = 0.1;
+/// Real seconds a tile takes to fade back to the fog of war as it leaves
+/// view. Longer lets the last look linger.
+pub const REVEAL_FADE_OUT_SECONDS: f32 = 0.1;

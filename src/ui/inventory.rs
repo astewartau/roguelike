@@ -198,7 +198,11 @@ fn draw_stats_column(
         ui.add_space(10.0);
 
         if let Ok(equipment) = world.get::<&Equipment>(player_entity) {
-            let weapon_source = equipment.weapon_source.as_ref();
+            let slot_item = |slot: Option<hecs::Entity>| {
+                slot.and_then(|e| systems::held::item(world, e).map(|i| crate::components::ItemInstance::clone(&i)))
+            };
+            let weapon_source_item = slot_item(equipment.weapon_source);
+            let weapon_source = weapon_source_item.as_ref();
 
             // Single weapon slot
             ui.horizontal(|ui| {
@@ -298,15 +302,15 @@ fn draw_stats_column(
             // Armor + accessory slots (body / head / ring / amulet)
             use crate::systems::item_defs::{armor_base_defense, is_accessory_kind, ArmorSlot};
             for (label, slot, piece) in [
-                ("Body:", ArmorSlot::Body, &equipment.body),
-                ("Head:", ArmorSlot::Head, &equipment.head),
-                ("Ring:", ArmorSlot::Ring, &equipment.ring),
-                ("Amulet:", ArmorSlot::Amulet, &equipment.amulet),
-                ("Off-hand:", ArmorSlot::OffHand, &equipment.off_hand),
+                ("Body:", ArmorSlot::Body, slot_item(equipment.body)),
+                ("Head:", ArmorSlot::Head, slot_item(equipment.head)),
+                ("Ring:", ArmorSlot::Ring, slot_item(equipment.ring)),
+                ("Amulet:", ArmorSlot::Amulet, slot_item(equipment.amulet)),
+                ("Off-hand:", ArmorSlot::OffHand, slot_item(equipment.off_hand)),
             ] {
                 ui.horizontal(|ui| {
                     ui.label(label);
-                    match piece {
+                    match &piece {
                         Some(instance) => {
                             let size = egui::vec2(48.0, 48.0);
                             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -356,7 +360,7 @@ fn draw_stats_column(
 
             // Total defense readout
             ui.add_space(4.0);
-            ui.label(format!("Defense: {}", equipment.total_defense()));
+            ui.label(format!("Defense: {}", equipment.total_defense(world)));
         }
     });
 }
@@ -387,7 +391,8 @@ fn draw_inventory_column(
             .unwrap_or(crate::components::ItemType::Arrow);
 
         if let Ok(inventory) = world.get::<&Inventory>(player_entity) {
-            if inventory.items.is_empty() {
+            let items = systems::held::instances(world, &inventory.items);
+            if items.is_empty() {
                 ui.label(
                     egui::RichText::new("(empty)")
                         .italics()
@@ -395,7 +400,7 @@ fn draw_inventory_column(
                 );
             } else {
                 // Build display slots: group stackable items, keep others separate
-                let slots = build_inventory_slots(&inventory.items);
+                let slots = build_inventory_slots(&items);
 
                 ui.horizontal_wrapped(|ui| {
                     for slot in &slots {
@@ -445,7 +450,7 @@ fn draw_inventory_column(
                         // Rarity + affix block for gear (looked up from the backing
                         // instance); identified Legendary items show their name,
                         // unidentified gear hides affixes behind "???".
-                        let backing = inventory.items.get(slot.first_index);
+                        let backing = items.get(slot.first_index);
                         let item_display_name = backing
                             .map(|inst| inst.display_name())
                             .unwrap_or_else(|| systems::item_name(slot.item_type).to_string());
@@ -645,10 +650,9 @@ fn draw_item_context_menu(
             .get::<&Inventory>(player_entity)
             .ok()
             .map(|inv| {
-                if let Some(instance) = inv.items.get(item_idx) {
-                    let item = instance.kind;
+                if let Some(item) = inv.items.get(item_idx).and_then(|&e| systems::held::kind(world, e)) {
                     let count = if item.is_stackable() {
-                        inv.items.iter().filter(|i| i.kind == item).count() as u32
+                        inv.items.iter().filter(|&&e| systems::held::kind(world, e) == Some(item)).count() as u32
                     } else {
                         1
                     };

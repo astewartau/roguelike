@@ -12,6 +12,36 @@ pub const DUNGEON_DEFAULT_WIDTH: usize = 40;
 pub const DUNGEON_DEFAULT_HEIGHT: usize = 40;
 
 // =============================================================================
+// OUTDOOR GROUND (see outdoor.rs)
+// =============================================================================
+
+/// Share of open path tiles (path on all eight sides) that show the sheet's
+/// spare middle, the one with a little more going on (a rut, a missing
+/// cobble, moss on a slab, a weed). Higher breaks up long stretches of road
+/// more but makes the extras feel common; 0 shows the plain middle only.
+pub const PATH_SPARE_MIDDLE_CHANCE: f32 = 0.15;
+
+/// Wild grass (the Paint tab's mixed brush) grows in drifts of lush and of
+/// dry grass about this many tiles across. Smaller makes a busier,
+/// patchier field; larger, broad sweeps.
+pub const WILD_GRASS_PATCH_SIZE: i32 = 6;
+/// Where the drift (0 to 1) is above this, wild grass is lush: 0.74 is
+/// about one tile in seven. Raising it toward 1 makes lush patches rarer
+/// and smaller.
+pub const WILD_GRASS_LUSH_ABOVE: f32 = 0.74;
+/// Where the drift is below this, wild grass is dry: 0.21 is about one
+/// tile in ten. Lowering it toward 0 makes dry patches rarer and smaller.
+pub const WILD_GRASS_DRY_BELOW: f32 = 0.21;
+/// Of the wild grass outside the drifts, the share dotted with flowers,
+/// clover, pebbles, moss and worn patches. What's left is short grass, so
+/// raising these makes a busier field.
+pub const WILD_GRASS_MEADOW_SHARE: f32 = 0.12;
+pub const WILD_GRASS_CLOVER_SHARE: f32 = 0.05;
+pub const WILD_GRASS_PEBBLES_SHARE: f32 = 0.03;
+pub const WILD_GRASS_MOSS_SHARE: f32 = 0.02;
+pub const WILD_GRASS_WORN_SHARE: f32 = 0.01;
+
+// =============================================================================
 // FLOOR TRAPS (hidden, placed by generation — see systems::discovery)
 // =============================================================================
 
@@ -163,3 +193,6 @@ pub const OIL_SPILL_ROOM_MAX: usize = 4;
 /// more per step.
 pub const SANDBOX_WIDTH: usize = 40;
 pub const SANDBOX_HEIGHT: usize = 30;
+/// The seed the sandbox's starting map is laid out from (where its trees
+/// stand), so it's the same countryside every time.
+pub const SANDBOX_LAYOUT_SEED: u64 = 7;

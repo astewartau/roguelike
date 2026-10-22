@@ -24,10 +24,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::component_registry as registry;
-use crate::components::{AbilityType, EffectType, Inventory, ItemInstance, ItemType, Stats};
+use crate::components::{AbilityType, EffectType, ItemInstance, ItemType, Stats};
 use crate::engine::GameState;
 use crate::events::EventQueue;
-use crate::tile::TileType;
 use crate::ui::RainStyle;
 use crate::vfx::VfxManager;
 
@@ -98,7 +97,7 @@ pub enum CursorTool {
     /// Place something on the clicked tile.
     Place(Spawnable),
     /// Paint terrain under the cursor (click or drag).
-    Paint(TileType),
+    Paint(paint::Paint),
     /// A looping particle fire on the tile: purely visual, nothing burns.
     ParticleFire,
     /// Move the player there.
@@ -197,7 +196,7 @@ impl CursorTool {
     pub fn describe(&self) -> String {
         match self {
             CursorTool::Place(what) => format!("Place {}", what.name()),
-            CursorTool::Paint(tile) => format!("Paint {tile:?}"),
+            CursorTool::Paint(what) => format!("Paint {}", what.name()),
             CursorTool::ParticleFire => "Particle fire (visual only)".into(),
             CursorTool::Teleport => "Teleport".into(),
             CursorTool::Ignite => "Ignite".into(),
@@ -267,6 +266,10 @@ pub enum DevCommand {
     RerollFloor,
     /// Let `n` game seconds pass (the player waits).
     AdvanceTime(f32),
+    /// Put this floor under the open sky, or not (`Grid::outdoors`).
+    SetOutdoors(bool),
+    /// Set the time of day and how the sky behaves.
+    SetSky(crate::systems::sky::Sky),
     /// Replace one of an entity's components with this JSON.
     SetComponent { entity: Entity, name: &'static str, value: serde_json::Value },
     /// Give an entity a component, at its default.
@@ -334,6 +337,10 @@ pub struct DevTools {
     /// Multiplies how fast animations and effects play (1 is normal), for
     /// watching them slowly. Game time is unaffected.
     pub anim_speed: f32,
+    /// Light the editor evenly, to work in the dark, rather than exactly as
+    /// play lights it (the player's own light, the sky, every lamp): what
+    /// you see while tuning is otherwise what you'll play.
+    pub even_light: bool,
     /// Creatures are held still (`DevFrozen`).
     pub ai_frozen: bool,
     /// The world clock: while running, game time passes on its own at
@@ -426,6 +433,7 @@ impl Default for DevTools {
             keep_fed: false,
             no_fog: false,
             anim_speed: 1.0,
+            even_light: false,
             ai_frozen: false,
             clock_running: false,
             clock_speed: 1.0,
@@ -624,9 +632,17 @@ impl DevTools {
         let Some(tool) = self.tool else {
             return;
         };
-        if self.held_at.is_some() && self.held_at != Some(at) && tool.drags() {
+        let Some(from) = self.held_at else {
+            return;
+        };
+        if from != at && tool.drags() {
+            // The cursor can cross several tiles in a frame: fill in the
+            // ones between, stepping only straight so that a painted path
+            // or wall never joins at just a corner.
+            for step in straight_steps(from, at) {
+                self.use_tool(state, events, vfx, step);
+            }
             self.held_at = Some(at);
-            self.use_tool(state, events, vfx, at);
         }
     }
 
@@ -687,8 +703,8 @@ impl DevTools {
                 });
                 state.fov_dirty = true;
             }
-            CursorTool::Paint(tile) => {
-                if paint::paint(&mut state.world, &mut state.grid, at, self.brush, tile) {
+            CursorTool::Paint(what) => {
+                if paint::paint(&mut state.world, &mut state.grid, at, self.brush, what) {
                     state.fov_dirty = true;
                 }
             }
@@ -877,6 +893,14 @@ impl DevTools {
                 DevCommand::ClearEffects => cheats::clear_effects(&mut state.world, player),
                 DevCommand::RevealMap => {
                     crate::systems::rendering::reveal_entire_map(&mut state.grid);
+                    state.fov_dirty = true;
+                }
+                DevCommand::SetOutdoors(outdoors) => {
+                    state.grid.outdoors = outdoors;
+                    state.fov_dirty = true; // daylight changes how far you see
+                }
+                DevCommand::SetSky(sky) => {
+                    state.sky = sky;
                     state.fov_dirty = true;
                 }
                 DevCommand::KillHostiles { visible_only } => {
@@ -1133,6 +1157,31 @@ fn resync(state: &mut GameState, e: Entity) {
     state.fov_dirty = true;
 }
 
+/// The tiles from `from` (not included) to `to` (included), each a single
+/// step up, down, left or right from the one before, keeping as close to
+/// the straight line between them as that allows.
+fn straight_steps(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let (sx, sy) = (dx.signum(), dy.signum());
+    let (nx, ny) = (dx.abs(), dy.abs());
+    let mut at = from;
+    let mut steps = Vec::with_capacity((nx + ny) as usize);
+    let (mut ix, mut iy) = (0, 0);
+    while ix < nx || iy < ny {
+        // Step along whichever axis is further behind its share of the
+        // line: compare (ix + 0.5) / nx with (iy + 0.5) / ny, cross-multiplied.
+        if iy >= ny || (ix < nx && (2 * ix + 1) * ny < (2 * iy + 1) * nx) {
+            at.0 += sx;
+            ix += 1;
+        } else {
+            at.1 += sy;
+            iy += 1;
+        }
+        steps.push(at);
+    }
+    steps
+}
+
 /// What a click on `at` picks: a creature first, the player last.
 fn thing_at(state: &GameState, at: (i32, i32)) -> Option<Entity> {
     let player = state.player_entity;
@@ -1200,16 +1249,15 @@ fn give_item(world: &mut World, player: Entity, kind: ItemType, options: &SpawnO
     use crate::systems::item_defs::{get_def, roll_gear_with_rarity, ItemCategory};
     let gear = matches!(get_def(kind).category, ItemCategory::Weapon | ItemCategory::Armor | ItemCategory::Accessory);
     let item = if gear { roll_gear_with_rarity(kind, options.rarity, rng) } else { ItemInstance::plain(kind) };
-    if let Ok(mut inventory) = world.get::<&mut Inventory>(player) {
-        inventory.current_weight_kg += crate::systems::items::item_weight(kind);
-        inventory.items.push(item);
-    }
+    crate::systems::inventory::add_item_to_inventory(world, player, item);
 }
 
 #[cfg(test)]
 mod tests {
     use super::spawn::{DoorKind, BOSSES, ENEMIES};
     use super::*;
+    use crate::components::Inventory;
+    use crate::tile::TileType;
     use crate::components::{
         Actor, FurnitureKind, TrapEffect, LanternStyle, PlayerClass, Position,
     };
@@ -1279,10 +1327,30 @@ mod tests {
 
         // Painting stairs moves the marker and asks for a fresh field of view.
         state.fov_dirty = false;
-        dev.tool = Some(CursorTool::Paint(TileType::StairsDown));
+        dev.tool = Some(CursorTool::Paint(TileType::StairsDown.into()));
         dev.use_tool(state, &mut events, &mut vfx, (near.0 + 1, near.1));
         assert_eq!(state.grid.stairs_down_pos, Some((near.0 + 1, near.1)));
         assert!(state.fov_dirty);
+    }
+
+    /// A drag across several tiles in one frame paints every tile between,
+    /// in straight steps, so a painted path has no gaps and never joins at
+    /// just a corner.
+    #[test]
+    fn a_fast_drag_fills_in_straight_steps() {
+        for (from, to) in [((0, 0), (5, 2)), ((3, 3), (-2, 7)), ((1, 1), (1, -3)), ((0, 0), (4, 4))] {
+            let steps = straight_steps(from, to);
+            assert_eq!(steps.last(), Some(&to));
+            assert_eq!(steps.len() as i32, (to.0 - from.0).abs() + (to.1 - from.1).abs());
+            let mut at = from;
+            for &next in &steps {
+                assert_eq!((next.0 - at.0).abs() + (next.1 - at.1).abs(), 1, "{from:?} to {to:?}");
+                at = next;
+            }
+        }
+        assert!(straight_steps((2, 2), (2, 2)).is_empty());
+        // It stays near the line: a shallow drag doesn't go up first.
+        assert_eq!(straight_steps((0, 0), (4, 1))[0], (1, 0));
     }
 
     #[test]
@@ -1299,7 +1367,7 @@ mod tests {
             .unwrap()
             .items
             .iter()
-            .filter(|i| i.kind == ItemType::ScrollOfFireball)
+            .filter(|&&i| crate::systems::held::kind(&state.world, i) == Some(ItemType::ScrollOfFireball))
             .count();
         assert!(carried >= 3);
     }
@@ -1317,7 +1385,7 @@ mod tests {
     fn the_inspector_picks_and_carries() {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
-        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.start_blank_sandbox(PlayerClass::Fighter, &mut camera);
         let mut events = EventQueue::new();
         let mut vfx = VfxManager::new();
         let state = engine.state.as_mut().unwrap();
@@ -1383,7 +1451,7 @@ mod tests {
         use crate::components::{Name, Player};
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
-        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.start_blank_sandbox(PlayerClass::Fighter, &mut camera);
         let mut events = EventQueue::new();
         let mut vfx = VfxManager::new();
         let state = engine.state.as_mut().unwrap();

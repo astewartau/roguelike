@@ -195,7 +195,7 @@ pub fn start_action_with_events(
     // Applies whether or not the curse has been identified.
     let cursed_heavy = world
         .get::<&crate::components::Equipment>(entity)
-        .map(|e| e.cursed_heavy_total())
+        .map(|e| e.cursed_heavy_total(world))
         .unwrap_or(0.0);
     // Exhausted (fatigue meter maxed, player-only): every action is slower.
     let exhausted = world

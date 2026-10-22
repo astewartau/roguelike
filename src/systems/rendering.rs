@@ -1,6 +1,6 @@
 //! Rendering-related systems and data structures.
 
-use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Container, Door, EffectType, GroundItemPile, OverlaySprite, FlameOverlay, Position, Projectile, ProjectileKind, Sprite, SpriteTint, StatusEffects, VisualPosition};
+use crate::components::{Actor, AnimatedSprite, BlocksVision, CarriedTorch, Door, EffectType, ItemInstance, OverlaySprite, FlameOverlay, Position, Projectile, ProjectileKind, Sprite, SpriteTint, StatusEffects, VisualPosition};
 use crate::constants::{FIRE_FRAME_DURATION, HELD_TORCH_FRAME_DURATION, INVISIBLE_PLAYER_ALPHA, PROJECTILE_TRAIL};
 use crate::tile::{SpriteSheet, tile_ids};
 use crate::constants::{OILED_SPRITE_TINT, WET_SPRITE_TINT};
@@ -14,7 +14,9 @@ use std::collections::HashSet;
 const AMBIENT_BRIGHTNESS: f32 = 0.3;
 /// Brightness for explored but not visible tiles (fog of war); see the
 /// constant's own docs for the limits on it.
-const FOG_BRIGHTNESS: f32 = crate::constants::LIGHT_FOG_BRIGHTNESS;
+/// What a remembered tile, and what's remembered on it, is drawn with: the
+/// shader's mark for out of sight (it lights them from the ambient light).
+const FOG_MARK: f32 = crate::constants::LIGHT_FOG_MARK;
 
 /// Visual effect flags (bitfield)
 pub mod effects {
@@ -293,14 +295,19 @@ fn has_line_of_sight(
 /// `player_light` is whose light the scene is seen by: None for the
 /// editor's even lighting (no pool around anyone), as with no player.
 /// Light sources contribute what reaches the tile through walls, doors and
-/// objects (`systems::light::light_reaching`).
+/// objects (`systems::light::light_reaching`), and the sky over an outdoor
+/// map (`sky`, None underground) lights every tile in view. Remembered
+/// tiles are drawn at `fog` (`Sky::fog_brightness`).
 /// Must be called after update_fov (requires visible flags to be set).
 pub fn calculate_illumination(
     world: &World,
     grid: &mut Grid,
     player_light: Option<Entity>,
     fov_radius: i32,
+    sky: Option<crate::systems::sky::SkyLight>,
+    fog: f32,
 ) {
+    let sky_level = sky.map_or(0.0, |s| s.level);
     let width = grid.width;
     let height = grid.height;
 
@@ -332,7 +339,7 @@ pub fn calculate_illumination(
 
             if !tile.visible {
                 // Explored but not visible - fog of war brightness
-                grid.illumination[idx] = FOG_BRIGHTNESS;
+                grid.illumination[idx] = fog;
                 continue;
             }
 
@@ -349,7 +356,7 @@ pub fn calculate_illumination(
                 }
                 None => AMBIENT_BRIGHTNESS,
             };
-            let mut total_illumination = player_contrib;
+            let mut total_illumination = player_contrib + sky_level;
 
             // Add what each light source gets through to this tile
             for (src, light) in &light_sources {
@@ -362,6 +369,7 @@ pub fn calculate_illumination(
         }
     }
 }
+
 
 /// Multiply a Wet (bluish) or Oiled (greasy) look into an entity's tint, so
 /// the surface status reads on the sprite as well as in the HUD.
@@ -415,24 +423,15 @@ pub fn collect_renderables(
         // Check if this is an open door (render darker)
         let is_open_door = world.get::<&Door>(id).map(|door| door.is_open).unwrap_or(false);
 
-        // A pile of items shows whatever is on top of it, badge and all, so
-        // taking that item uncovers the next rather than leaving its picture
-        // behind. (A pile of nothing but gold keeps its coins.)
-        let pile_top = if world.get::<&GroundItemPile>(id).is_ok() {
-            world.get::<&Container>(id).ok().and_then(|c| c.items.first().map(|i| i.kind))
-        } else {
-            None
-        };
-        let sprite = &pile_top
-            .map(|kind| Sprite::from_ref(crate::systems::item_defs::get_def(kind).sprite))
-            .unwrap_or(*sprite);
+        // An item lying loose wears its badge (what a potion or scroll does).
+        let item_kind = world.get::<&ItemInstance>(id).ok().map(|i| i.kind);
 
         // Overlays: a bow on an archer, a ground item's badge, a carried torch.
         let mut overlays: Vec<Overlay> = Vec::new();
         if let Ok(o) = world.get::<&OverlaySprite>(id) {
             overlays.push(Overlay::in_place(Sprite::new(o.sheet, o.tile_id)));
         }
-        if let Some(badge) = pile_top.and_then(crate::systems::item_defs::badge) {
+        if let Some(badge) = item_kind.and_then(crate::systems::item_defs::badge) {
             overlays.push(Overlay::in_place(Sprite::from_ref(badge)));
         }
         if let Ok(torch) = world.get::<&CarriedTorch>(id) {
@@ -519,7 +518,7 @@ pub fn collect_renderables(
                 x: vis_pos.x,
                 y: vis_pos.y,
                 sprite: *sprite,
-                brightness: FOG_BRIGHTNESS,
+                brightness: FOG_MARK,
                 alpha: 1.0,
                 effects: effects::NONE,
                 // Only non-actors are remembered in fog: a ground item keeps
@@ -596,7 +595,7 @@ pub fn collect_renderables(
                 x: vis_x,
                 y: vis_y,
                 sprite,
-                brightness: FOG_BRIGHTNESS,
+                brightness: FOG_MARK,
                 alpha: 1.0,
                 effects: effects::NONE,
                 overlays: Vec::new(),
@@ -706,7 +705,7 @@ pub fn collect_renderables(
     entities_to_render.append(&mut fire_overlays);
     // And fires that have gone out, fading where they were.
     if let Some(fades) = fades {
-        entities_to_render.extend(fades.finish(real_time));
+        entities_to_render.extend(fades.finish(world, real_time));
     }
 
     entities_to_render
@@ -831,13 +830,13 @@ mod tests {
     }
 
     #[test]
-    fn a_pile_shows_its_top_item_and_that_items_badge() {
-        use crate::components::{Container, ItemInstance, ItemType};
+    fn a_loose_item_is_drawn_with_its_badge_and_picking_it_up_uncovers_the_next() {
+        use crate::components::{ItemInstance, ItemType};
         let mut world = World::new();
         let grid = lit_grid();
         let at = Position::new(0, 0);
         let player = world.spawn((at, VisualPosition::from_position(&at), Sprite::from_ref(tile_ids::FIGHTER)));
-        let pile = crate::systems::inventory::spawn_ground_item(
+        let scroll = crate::systems::inventory::spawn_ground_item(
             &mut world,
             3,
             3,
@@ -845,15 +844,22 @@ mod tests {
         );
         crate::systems::inventory::spawn_ground_item(&mut world, 3, 3, ItemInstance::plain(ItemType::Sword));
         let drawn = |world: &World| {
-            let all = collect_renderables(world, &grid, player, 0.0, None);
-            let e = all.iter().find(|e| (e.x, e.y) == (3.0, 3.0)).expect("the pile is drawn");
-            let badges: Vec<_> = e.overlays.iter().map(|o| (o.sprite.sheet, o.sprite.tile_id)).collect();
-            ((e.sprite.sheet, e.sprite.tile_id), badges)
+            collect_renderables(world, &grid, player, 0.0, None)
+                .iter()
+                .filter(|e| (e.x, e.y) == (3.0, 3.0))
+                .map(|e| {
+                    let badges: Vec<_> = e.overlays.iter().map(|o| (o.sprite.sheet, o.sprite.tile_id)).collect();
+                    ((e.sprite.sheet, e.sprite.tile_id), badges)
+                })
+                .collect::<Vec<_>>()
         };
 
-        assert_eq!(drawn(&world), (tile_ids::SCROLL, vec![tile_ids::BADGE_FIREBALL]));
-        world.get::<&mut Container>(pile).unwrap().items.remove(0);
-        assert_eq!(drawn(&world), (tile_ids::SWORD, vec![]), "taking the scroll uncovers the sword");
+        assert_eq!(
+            drawn(&world),
+            vec![(tile_ids::SCROLL, vec![tile_ids::BADGE_FIREBALL]), (tile_ids::SWORD, vec![])]
+        );
+        crate::systems::held::lift(&mut world, scroll);
+        assert_eq!(drawn(&world), vec![(tile_ids::SWORD, vec![])], "taking the scroll leaves the sword");
     }
 
     #[test]

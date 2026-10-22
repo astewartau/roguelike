@@ -117,10 +117,18 @@ impl World {
         Ok(removed)
     }
 
-    /// Delete `entity` and everything on it.
+    /// Delete `entity` and everything on it, and every item it holds
+    /// (`systems::held`): a held item has no existence apart from its
+    /// holder. Move items out first to keep them.
     pub fn despawn(&mut self, entity: Entity) -> Result<(), NoSuchEntity> {
+        let held = crate::systems::held::held_by_all(&self.inner, entity);
         self.inner.despawn(entity)?;
         self.changes.push(WorldChange::Despawned(entity));
+        for item in held {
+            if self.inner.despawn(item).is_ok() {
+                self.changes.push(WorldChange::Despawned(item));
+            }
+        }
         Ok(())
     }
 

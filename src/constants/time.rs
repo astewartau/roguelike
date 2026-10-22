@@ -20,3 +20,19 @@ pub const ACTION_RECOVER_DURATION: f32 = 0.25;
 /// little quicker than a step, slower than opening a door. Up makes shoving
 /// barrels into a fight a bigger commitment.
 pub const ACTION_PUSH_DURATION: f32 = 0.8;
+
+// =============================================================================
+// TIME OF DAY (see systems::sky)
+// =============================================================================
+
+/// Game seconds in one day and night. At 1440 a game second is a minute of
+/// the day: a step takes a minute, a full day about 1400 steps (or a minute
+/// of sleeping, at the fast-forward speed). Lower makes days pass quicker.
+pub const DAY_LENGTH: f32 = 1440.0;
+/// The hour (0-24) a new run or sandbox starts at.
+pub const DAY_START_HOUR: f32 = 8.0;
+/// When the sun is half risen and half set, in hours (0-24), unless the
+/// developer tools change them. Dawn and dusk spread `SKY_TWILIGHT_HOURS`
+/// either side.
+pub const SUNRISE_HOUR: f32 = 6.0;
+pub const SUNSET_HOUR: f32 = 19.0;

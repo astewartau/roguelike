@@ -1228,10 +1228,14 @@ impl StatusEffects {
 }
 
 
-/// Inventory component - pure data
+/// What an entity carries. Each item is an entity of its own (with an
+/// `ItemInstance`), held here; see `systems::held`. The tools save it with
+/// its items written out in full (`component_registry`), so the serde form
+/// skips them.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Inventory {
-    pub items: Vec<ItemInstance>,
+    #[serde(skip)]
+    pub items: Vec<Entity>,
     pub current_weight_kg: f32,
     pub gold: u32,
 }
@@ -1251,11 +1255,12 @@ impl Inventory {
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Raisable;
 
-/// Container component (for chests, coffins, barrels)
+/// Container component (for chests, coffins, barrels, remains)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Container {
-    /// What's inside.
-    pub items: Vec<ItemInstance>,
+    /// What's inside: item entities, as `Inventory::items`.
+    #[serde(skip)]
+    pub items: Vec<Entity>,
     pub gold: u32,
     /// Whether it has been opened.
     pub is_open: bool,
@@ -1792,7 +1797,7 @@ impl VisualPosition {
 
 impl Container {
     /// Create a chest container
-    pub fn chest(items: Vec<ItemInstance>, gold: u32) -> Self {
+    pub fn chest(items: Vec<Entity>, gold: u32) -> Self {
         Self {
             items,
             gold,
@@ -1803,7 +1808,7 @@ impl Container {
     }
 
     /// Create a coffin (may spawn enemy when opened)
-    pub fn coffin(items: Vec<ItemInstance>, gold: u32, spawn_chance: f32) -> Self {
+    pub fn coffin(items: Vec<Entity>, gold: u32, spawn_chance: f32) -> Self {
         Self {
             items,
             gold,
@@ -1814,7 +1819,7 @@ impl Container {
     }
 
     /// Create a barrel (contains food)
-    pub fn barrel(items: Vec<ItemInstance>) -> Self {
+    pub fn barrel(items: Vec<Entity>) -> Self {
         Self {
             items,
             gold: 0,
@@ -1825,7 +1830,7 @@ impl Container {
     }
 
     /// Create a corpse/bones container (from dead enemies)
-    pub fn corpse(items: Vec<ItemInstance>, gold: u32) -> Self {
+    pub fn corpse(items: Vec<Entity>, gold: u32) -> Self {
         Self {
             items,
             gold,
@@ -1835,16 +1840,6 @@ impl Container {
         }
     }
 
-    /// Create a ground item pile
-    pub fn ground_pile(items: Vec<ItemInstance>) -> Self {
-        Self {
-            items,
-            gold: 0,
-            is_open: false,
-            spawn_chance: 0.0,
-            open_sprite: None,
-        }
-    }
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.gold == 0
@@ -1939,10 +1934,6 @@ pub struct BlocksVision;
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BlocksMovement;
 
-/// Marker component for ground item piles dropped by entities
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct GroundItemPile;
-
 /// Weapon data - pure data, damage calculation in systems
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Weapon {
@@ -2012,18 +2003,24 @@ pub struct Equipment {
     /// The inventory instance backing the player's equipped weapon. Carries
     /// rarity/affixes so they survive equip→unequip and feed the damage formula.
     /// `None` for enemies (their claws/bows are not item instances).
-    pub weapon_source: Option<ItemInstance>,
+    #[serde(skip)]
+    pub weapon_source: Option<Entity>,
     /// Body armor slot (generic - any entity with Equipment can wear armor)
-    pub body: Option<ItemInstance>,
+    #[serde(skip)]
+    pub body: Option<Entity>,
     /// Head armor slot
-    pub head: Option<ItemInstance>,
+    #[serde(skip)]
+    pub head: Option<Entity>,
     /// Ring accessory slot (pure affix carrier)
-    pub ring: Option<ItemInstance>,
+    #[serde(skip)]
+    pub ring: Option<Entity>,
     /// Amulet accessory slot (pure affix carrier)
-    pub amulet: Option<ItemInstance>,
+    #[serde(skip)]
+    pub amulet: Option<Entity>,
     /// Off-hand slot (a torch). Shares hands with the weapon: a two-handed
     /// weapon and an off-hand item can't both be held.
-    pub off_hand: Option<ItemInstance>,
+    #[serde(skip)]
+    pub off_hand: Option<Entity>,
 }
 
 impl Equipment {
@@ -2060,44 +2057,22 @@ impl Equipment {
         }
     }
 
-    /// Iterate over every equipped item instance (weapon source, armor,
-    /// accessories). The single place that defines "what counts as worn gear"
-    /// for affix aggregation.
-    pub fn equipped_instances(&self) -> impl Iterator<Item = &ItemInstance> {
-        [
-            self.weapon_source.as_ref(),
-            self.body.as_ref(),
-            self.head.as_ref(),
-            self.ring.as_ref(),
-            self.amulet.as_ref(),
-            self.off_hand.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-    }
-
-    /// Mutable variant of [`equipped_instances`] (used by identification).
-    pub fn equipped_instances_mut(&mut self) -> impl Iterator<Item = &mut ItemInstance> {
-        [
-            self.weapon_source.as_mut(),
-            self.body.as_mut(),
-            self.head.as_mut(),
-            self.ring.as_mut(),
-            self.amulet.as_mut(),
-            self.off_hand.as_mut(),
-        ]
-        .into_iter()
-        .flatten()
+    /// Every equipped item (weapon source, armor, accessories, off hand):
+    /// the single place that defines "what counts as worn gear" for affix
+    /// aggregation. Item entities; read them with `systems::held::item`.
+    pub fn equipped_items(&self) -> impl Iterator<Item = Entity> {
+        [self.weapon_source, self.body, self.head, self.ring, self.amulet, self.off_hand].into_iter().flatten()
     }
 
     /// Total flat defense from all armor + accessory slots (base by kind +
     /// Defense affixes, minus CursedFragile). Works for any entity with an
     /// Equipment component, so granting an enemy armor later is just a matter
     /// of filling a slot.
-    pub fn total_defense(&self) -> i32 {
-        [&self.body, &self.head, &self.ring, &self.amulet]
-            .iter()
-            .filter_map(|s| s.as_ref())
+    pub fn total_defense(&self, world: &hecs::World) -> i32 {
+        [self.body, self.head, self.ring, self.amulet]
+            .into_iter()
+            .flatten()
+            .filter_map(|e| world.get::<&ItemInstance>(e).ok())
             .map(|inst| crate::systems::item_defs::armor_base_defense(inst.kind) + inst.defense_bonus())
             .sum()
     }
@@ -2105,28 +2080,37 @@ impl Equipment {
     /// Total `Affix::Damage` bonus from the weapon's backing instance plus
     /// accessories. Rings/amulets are pure affix carriers, so their damage
     /// affixes apply to every weapon (and unarmed) attack.
-    pub fn affix_damage_bonus(&self) -> i32 {
-        self.weapon_source.as_ref().map_or(0, |w| w.damage_bonus())
-            + self.ring.as_ref().map_or(0, |r| r.damage_bonus())
-            + self.amulet.as_ref().map_or(0, |a| a.damage_bonus())
+    pub fn affix_damage_bonus(&self, world: &hecs::World) -> i32 {
+        [self.weapon_source, self.ring, self.amulet]
+            .into_iter()
+            .flatten()
+            .filter_map(|e| world.get::<&ItemInstance>(e).ok())
+            .map(|inst| inst.damage_bonus())
+            .sum()
     }
 
     /// Sum of all `CursedHeavy` fractions across worn gear. Applied as an
     /// action-speed penalty in the time system (curses bite whether or not
     /// the item has been identified).
-    pub fn cursed_heavy_total(&self) -> f32 {
-        self.equipped_instances()
-            .flat_map(|inst| inst.affixes.iter())
-            .map(|a| match a {
-                Affix::CursedHeavy(f) => *f,
-                _ => 0.0,
+    pub fn cursed_heavy_total(&self, world: &hecs::World) -> f32 {
+        self.equipped_items()
+            .filter_map(|e| world.get::<&ItemInstance>(e).ok())
+            .map(|inst| {
+                inst.affixes
+                    .iter()
+                    .map(|a| match a {
+                        Affix::CursedHeavy(f) => *f,
+                        _ => 0.0,
+                    })
+                    .sum::<f32>()
             })
             .sum()
     }
 
     /// Whether any worn gear carries `CursedLoud` (attacks make double noise).
-    pub fn has_cursed_loud(&self) -> bool {
-        self.equipped_instances()
+    pub fn has_cursed_loud(&self, world: &hecs::World) -> bool {
+        self.equipped_items()
+            .filter_map(|e| world.get::<&ItemInstance>(e).ok())
             .any(|inst| inst.affixes.iter().any(|a| matches!(a, Affix::CursedLoud)))
     }
 
@@ -2606,8 +2590,8 @@ pub enum Doused {
     /// The entity is only the fire, so dousing removes it (grass fires: the
     /// grass itself is terrain and survives).
     Despawn,
-    /// The fire is gone and this item is left lying on its tile (a dropped
-    /// torch leaves an unlit torch).
+    /// The fire is gone and the burning item is this one now, where it lies
+    /// (a dropped torch becomes an unlit torch).
     LeavesItem(ItemType),
     /// Water can't reach it (a flame behind glass). Only putting it out by
     /// hand does.
@@ -2621,7 +2605,7 @@ pub enum Burnout {
     Despawn,
     /// The entity is gone and the tall grass under it is burnt to floor.
     ScorchGrass,
-    /// The entity is gone and this item is left lying on its tile.
+    /// The burning item is this one now, where it lies.
     LeavesItem(ItemType),
 }
 
@@ -2662,6 +2646,24 @@ impl Fuel {
             spreads: true,
             lit_look: AnimatedSprite::flames(),
             lit_light: LightSource::brazier(),
+            tended: false,
+        }
+    }
+
+    /// A tree: slow to catch (damp wood when wet), burns long and bright,
+    /// spreads to what's around it, and is gone when it's spent.
+    pub fn tree() -> Self {
+        Self {
+            catch_chance: crate::constants::TREE_IGNITE_CHANCE,
+            burn_time: crate::constants::TREE_BURN_DURATION,
+            dampable: true,
+            stand_ignite_chance: 0.0,
+            ignition: Ignition::InPlace,
+            doused: Doused::Extinguish,
+            burnout: Burnout::Despawn,
+            spreads: true,
+            lit_look: AnimatedSprite::flames(),
+            lit_light: LightSource::campfire(),
             tended: false,
         }
     }
@@ -3371,38 +3373,45 @@ mod tests {
         }
     }
 
+    fn worn(world: &mut crate::world::World, kind: ItemType, affixes: Vec<Affix>) -> Option<Entity> {
+        Some(crate::systems::held::spawn_item(world, instance(kind, affixes)))
+    }
+
     #[test]
     fn test_total_defense_includes_accessories_and_cursed_fragile() {
+        let mut world = crate::world::World::new();
         let mut eq = Equipment::empty();
-        eq.body = Some(instance(ItemType::LeatherArmor, vec![Affix::Defense(2)]));
-        eq.ring = Some(instance(ItemType::Ring, vec![Affix::Defense(1)]));
-        eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::CursedFragile(2)]));
+        eq.body = worn(&mut world, ItemType::LeatherArmor, vec![Affix::Defense(2)]);
+        eq.ring = worn(&mut world, ItemType::Ring, vec![Affix::Defense(1)]);
+        eq.amulet = worn(&mut world, ItemType::Amulet, vec![Affix::CursedFragile(2)]);
 
         // Leather base 2 + 2 affix + 1 ring - 2 cursed amulet = 3
-        assert_eq!(eq.total_defense(), crate::constants::LEATHER_ARMOR_DEFENSE + 2 + 1 - 2);
+        assert_eq!(eq.total_defense(&world), crate::constants::LEATHER_ARMOR_DEFENSE + 2 + 1 - 2);
     }
 
     #[test]
     fn test_cursed_heavy_and_loud_aggregate_across_worn_gear() {
+        let mut world = crate::world::World::new();
         let mut eq = Equipment::empty();
-        assert_eq!(eq.cursed_heavy_total(), 0.0);
-        assert!(!eq.has_cursed_loud());
+        assert_eq!(eq.cursed_heavy_total(&world), 0.0);
+        assert!(!eq.has_cursed_loud(&world));
 
-        eq.weapon_source = Some(instance(ItemType::Sword, vec![Affix::CursedHeavy(0.2)]));
-        eq.ring = Some(instance(ItemType::Ring, vec![Affix::CursedHeavy(0.1)]));
-        eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::CursedLoud]));
+        eq.weapon_source = worn(&mut world, ItemType::Sword, vec![Affix::CursedHeavy(0.2)]);
+        eq.ring = worn(&mut world, ItemType::Ring, vec![Affix::CursedHeavy(0.1)]);
+        eq.amulet = worn(&mut world, ItemType::Amulet, vec![Affix::CursedLoud]);
 
-        assert!((eq.cursed_heavy_total() - 0.3).abs() < 0.0001);
-        assert!(eq.has_cursed_loud());
+        assert!((eq.cursed_heavy_total(&world) - 0.3).abs() < 0.0001);
+        assert!(eq.has_cursed_loud(&world));
     }
 
     #[test]
     fn test_affix_damage_bonus_includes_accessories() {
+        let mut world = crate::world::World::new();
         let mut eq = Equipment::empty();
-        eq.weapon_source = Some(instance(ItemType::Sword, vec![Affix::Damage(2)]));
-        eq.ring = Some(instance(ItemType::Ring, vec![Affix::Damage(1)]));
-        eq.amulet = Some(instance(ItemType::Amulet, vec![Affix::Damage(3)]));
-        assert_eq!(eq.affix_damage_bonus(), 6);
+        eq.weapon_source = worn(&mut world, ItemType::Sword, vec![Affix::Damage(2)]);
+        eq.ring = worn(&mut world, ItemType::Ring, vec![Affix::Damage(1)]);
+        eq.amulet = worn(&mut world, ItemType::Amulet, vec![Affix::Damage(3)]);
+        assert_eq!(eq.affix_damage_bonus(&world), 6);
     }
 }
 

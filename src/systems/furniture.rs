@@ -17,7 +17,7 @@ use crate::world::World;
 use rand::Rng;
 
 use crate::components::{
-    EffectType, Equipment, Furniture, FurnitureKind, Health, Hunger, Inventory, ItemInstance,
+    EffectType, Furniture, FurnitureKind, Health, Hunger, ItemInstance,
     Rarity, SpriteTint, Stats,
 };
 use crate::constants::*;
@@ -140,14 +140,9 @@ pub fn identify_all_carried(world: &mut World, entity: Entity) -> usize {
             count += 1;
         }
     };
-    if let Ok(mut inv) = world.get::<&mut Inventory>(entity) {
-        for inst in inv.items.iter_mut() {
-            identify(inst);
-        }
-    }
-    if let Ok(mut eq) = world.get::<&mut Equipment>(entity) {
-        for inst in eq.equipped_instances_mut() {
-            identify(inst);
+    for item in crate::systems::held::held_by(world, entity) {
+        if let Ok(mut inst) = world.get::<&mut ItemInstance>(item) {
+            identify(&mut inst);
         }
     }
     count
@@ -183,14 +178,8 @@ pub fn perform_altar_sacrifice(
     rng: &mut impl Rng,
 ) {
     // Look up (and price) the offering.
-    let offering: Option<(String, u32)> = world
-        .get::<&Inventory>(player)
-        .ok()
-        .and_then(|inv| {
-            inv.items
-                .get(item_index)
-                .map(|inst| (inst.display_name(), altar_item_value(inst)))
-        });
+    let offering: Option<(String, u32)> = crate::systems::inventory::inventory_item(world, player, item_index)
+        .and_then(|e| crate::systems::held::item(world, e).map(|inst| (inst.display_name(), altar_item_value(&inst))));
     let Some((item_name, value)) = offering else {
         return;
     };
@@ -246,6 +235,7 @@ pub fn perform_altar_sacrifice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{Equipment, Inventory};
     use crate::components::{Affix, ItemType};
 
     /// Build a player with an inventory of sacrificeable items plus one
@@ -259,7 +249,7 @@ mod tests {
         let mut world = World::new();
         let mut inv = Inventory::new();
         for _ in 0..6 {
-            inv.items.push(ItemInstance::plain(ItemType::Sword));
+            inv.items.push(crate::systems::held::spawn_item(&mut world, ItemInstance::plain(ItemType::Sword)));
         }
         let player = world.spawn((
             Position::new(1, 1),
@@ -375,23 +365,23 @@ mod tests {
     fn test_identify_all_carried_covers_inventory_and_equipment() {
         let mut world = World::new();
         let mut inv = Inventory::new();
-        inv.items.push(ItemInstance {
+        inv.items.push(crate::systems::held::spawn_item(&mut world, ItemInstance {
             kind: ItemType::Sword,
             rarity: Rarity::Magic,
             affixes: vec![Affix::Damage(2)],
             name: None,
             identified: false,
             identify_progress: 0.0,
-        });
+        }));
         let mut eq = Equipment::empty();
-        eq.ring = Some(ItemInstance {
+        eq.ring = Some(crate::systems::held::spawn_item(&mut world, ItemInstance {
             kind: ItemType::Ring,
             rarity: Rarity::Magic,
             affixes: vec![Affix::Agility(1)],
             name: None,
             identified: false,
             identify_progress: 0.0,
-        });
+        }));
         let player = world.spawn((inv, eq));
 
         assert_eq!(identify_all_carried(&mut world, player), 2);

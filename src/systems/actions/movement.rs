@@ -204,7 +204,7 @@ pub fn doorway_obstructed(world: &World, door: Entity) -> bool {
             || e.has::<crate::components::Health>()
             || e.has::<crate::components::Health>()
             || e.has::<Container>()
-            || e.has::<crate::components::GroundItemPile>())
+            || e.has::<crate::components::ItemInstance>())
     })
 }
 

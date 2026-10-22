@@ -7,7 +7,7 @@ use rand::Rng;
 
 use crate::components::{
     AbilityType, BlocksMovement, Channel, ChannelEffect, ChaseAI, ClassAbility, Container,
-    EffectType, Equipment, EquippedWeapon, Health, Inventory, ItemType, LearnedAbilities,
+    EffectType, Equipment, EquippedWeapon, Health, ItemType, LearnedAbilities,
     Player, Position, Projectile, ProjectileMarker,
     SecondaryAbility, Sprite, Follower, VisualPosition,
 };
@@ -521,35 +521,24 @@ fn complete_raise_dead(
 }
 
 /// Consume a corpse (bones container) at `pos`: despawn it, and drop anything
-/// it held to a ground pile on the same tile so no loot is destroyed. Shared
-/// by Raise Dead and Corpse Explosion. Corpses never block movement, so there
-/// is nothing to release in the spatial cache.
+/// it held onto the same tile so no loot is destroyed. Shared by Raise Dead
+/// and Corpse Explosion. Corpses never block movement, so there is nothing to
+/// release in the spatial cache.
 pub(crate) fn consume_corpse(world: &mut World, corpse: Entity, pos: (i32, i32)) {
     let (x, y) = pos;
-    // Take the loot out of the bones, then consume them.
+    // Take the loot out of the bones (so it isn't despawned with them), then
+    // consume them.
     let (items, gold) = world
-        .get::<&Container>(corpse)
-        .map(|c| (c.items.clone(), c.gold))
+        .get::<&mut Container>(corpse)
+        .map(|mut c| (std::mem::take(&mut c.items), std::mem::take(&mut c.gold)))
         .unwrap_or((Vec::new(), 0));
     let _ = world.despawn(corpse);
 
-    // Anything the corpse held drops to a ground pile on the same tile.
-    if !items.is_empty() || gold > 0 {
-        let sprite_ref = items
-            .first()
-            .map(|i| crate::systems::item_defs::get_def(i.kind).sprite)
-            .unwrap_or(tile_ids::COINS);
-        let mut pile = Container::ground_pile(items);
-        pile.gold = gold;
-        let pos = Position::new(x, y);
-        world.spawn((
-            pos,
-            VisualPosition::from_position(&pos),
-            Sprite::from_ref(sprite_ref),
-            pile,
-            crate::components::GroundItemPile,
-        ));
+    // Anything the corpse held drops onto the same tile.
+    for item in items {
+        crate::systems::held::put_down(world, item, x, y);
     }
+    crate::systems::inventory::drop_gold(world, x, y, gold);
 }
 
 /// One pulse of Life Drain: damage the target and heal by part of it.
@@ -1002,14 +991,8 @@ pub fn apply_shoot_crippling_shot(
     };
 
     // Check for and consume arrow from inventory
-    if let Ok(mut inventory) = world.get::<&mut Inventory>(shooter) {
-        if let Some(idx) = inventory.items.iter().position(|i| i.kind == ItemType::Arrow) {
-            inventory.items.remove(idx);
-        } else {
-            // No arrows! Can't shoot
-            return ActionResult::Blocked;
-        }
-    } else {
+    if crate::systems::inventory::use_up_first_of(world, shooter, &[ItemType::Arrow]).is_none() {
+        // No arrows! Can't shoot
         return ActionResult::Blocked;
     }
 
@@ -1111,6 +1094,7 @@ mod tests {
 
     fn spawn_bones(world: &mut World, x: i32, y: i32, items: Vec<crate::components::ItemInstance>, gold: u32) -> Entity {
         let pos = Position::new(x, y);
+        let items = crate::systems::held::spawn_items(world, items);
         let mut container = Container::corpse(items, gold);
         container.is_open = true;
         world.spawn((
@@ -1194,13 +1178,15 @@ mod tests {
         assert!(!world.contains(bones), "bones are consumed by the raise");
         assert!(world.get::<&Channel>(caster).is_err());
 
-        // The corpse's loot survives as a ground pile on the same tile.
-        let pile: Vec<(i32, i32, u32, usize)> = world
-            .query::<(&Position, &Container, &crate::components::GroundItemPile)>()
+        // The corpse's loot survives on the same tile: its item lying
+        // there, its gold as coins.
+        assert_eq!(crate::systems::held::on_ground_at(&world, (6, 5)).len(), 1, "loot drops where the bones were");
+        let coins: Vec<(i32, i32, u32)> = world
+            .query::<(&Position, &Container)>()
             .iter()
-            .map(|(_, (p, c, _))| (p.x, p.y, c.gold, c.items.len()))
+            .map(|(_, (p, c))| (p.x, p.y, c.gold))
             .collect();
-        assert_eq!(pile, vec![(6, 5, 13, 1)], "loot drops where the bones were");
+        assert_eq!(coins, vec![(6, 5, 13)], "and its gold");
 
         // The engine is told to spawn the companion at the bones' tile.
         let raised = events.drain().any(|e| {

@@ -93,7 +93,7 @@ pub const INFO: &[Info] = &[
     info("RainCloud", "Fire & light", "rains", "Rain over its area, soaking it again and again.", &[]),
     // Things
     info("Container", "Things", "holds loot", "Holds items and gold.", &[]),
-    info("GroundItemPile", "Things", "", "Loose items lying on the floor: picked up, not opened.", &[]),
+    info("ItemInstance", "Things", "an item", "An item: picked up when it lies loose, carried, worn, or kept in a container.", &[]),
     info("Raisable", "Things", "raisable", "The dead can be raised from it, or it detonated.", &[]),
     info("Door", "Things", "", "Opens and closes.", &["BlocksMovement"]),
     info("SecretDoor", "Things", "", "Looks like wall until found; then it's a door.", &["BlocksMovement"]),

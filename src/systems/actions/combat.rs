@@ -119,7 +119,7 @@ pub fn apply_melee_blow(
             .map(|e| {
                 (
                     e.get_melee().map(|w| w.base_damage + w.damage_bonus).unwrap_or(UNARMED_DAMAGE),
-                    e.affix_damage_bonus(),
+                    e.affix_damage_bonus(world),
                 )
             })
             .unwrap_or((UNARMED_DAMAGE, 0));
@@ -340,7 +340,7 @@ pub fn apply_cleave(ctx: &mut EffectCtx, attacker: Entity) -> ActionResult {
         .map(|e| {
             (
                 e.get_melee().map(|w| w.base_damage + w.damage_bonus).unwrap_or(UNARMED_DAMAGE),
-                e.affix_damage_bonus(),
+                e.affix_damage_bonus(world),
             )
         })
         .unwrap_or((UNARMED_DAMAGE, 0));
@@ -577,6 +577,7 @@ pub(super) mod tests {
             stalagmite_positions: Vec::new(),
             mushroom_positions: Vec::new(),
             crystal_positions: Vec::new(),
+            outdoors: false,
         }
     }
 
@@ -954,24 +955,26 @@ pub(super) mod tests {
     /// corpse, loot and all.
     #[test]
     fn a_boss_raising_the_dead_leaves_the_loot() {
-        use crate::components::{Container, GroundItemPile, ItemInstance, ItemType, Position, Raisable};
+        use crate::components::{Container, ItemInstance, ItemType, Position, Raisable};
         let mut arena = Arena::new((5, 5));
         let boss = crate::spawning::spawn_boss(&mut arena.world, 9, 8, 5, &mut arena.rng).expect("floor 9 has a boss");
         arena.world.get::<&mut Boss>(boss).unwrap().cooldown = 0.0;
         arena.hunt(boss, 1.0);
-        let mut corpse = Container::corpse(vec![ItemInstance::plain(ItemType::HealthPotion)], 7);
+        let potion = crate::systems::held::spawn_items(&mut arena.world, [ItemInstance::plain(ItemType::HealthPotion)]);
+        let mut corpse = Container::corpse(potion, 7);
         corpse.is_open = true;
         let bones = arena.world.spawn((Position::new(9, 6), corpse, Raisable));
 
         crate::systems::ai::decide_action(&mut arena.ctx(), boss);
         assert!(!arena.world.contains(bones), "the bones are used up");
-        let pile: Vec<(i32, i32, u32, usize)> = arena
+        assert_eq!(crate::systems::held::on_ground_at(&arena.world, (9, 6)).len(), 1, "their loot drops where they lay");
+        let coins: Vec<(i32, i32, u32)> = arena
             .world
-            .query::<(&Position, &Container, &GroundItemPile)>()
+            .query::<(&Position, &Container)>()
             .iter()
-            .map(|(_, (p, c, _))| (p.x, p.y, c.gold, c.items.len()))
+            .map(|(_, (p, c))| (p.x, p.y, c.gold))
             .collect();
-        assert_eq!(pile, vec![(9, 6, 7, 1)], "their loot drops where they lay");
+        assert_eq!(coins, vec![(9, 6, 7)], "and their gold");
     }
 
     /// The slam winds up first and lands at completion on whoever is still

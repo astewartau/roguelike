@@ -1,6 +1,9 @@
 //! Rendering context - owns rendering resources separate from game state.
 
 mod post;
+mod reveal;
+
+pub use reveal::RevealFade;
 
 use crate::camera::Camera;
 use crate::grid::Grid;
@@ -20,10 +23,11 @@ use std::sync::Arc;
 /// Shared by `RenderContext::render_frame` and `Renderer::render`, which both
 /// need the whole set.
 pub struct SceneLighting<'a> {
-    /// Where the player's light is centred; None in the editor (the
-    /// developer tools shown) or with no player, when the world is lit
-    /// evenly instead.
+    /// Where the player's light is centred; None with no player, or when
+    /// lit evenly.
     pub player_pos: Option<(f32, f32)>,
+    /// Lit evenly (the editor's Light evenly toggle) rather than as play.
+    pub even: bool,
     /// The player's light reach, with its own flicker already applied.
     pub player_light_radius: f32,
     /// Tint of the player's own light. Multiplies the ambient floor as well as
@@ -34,6 +38,11 @@ pub struct SceneLighting<'a> {
     /// Tile to lighten slightly (the one under the mouse cursor), if any.
     /// See `HOVER_TILE_BRIGHTEN`.
     pub highlight_tile: Option<(i32, i32)>,
+    /// The sky's light, if the map is outdoors (`GameState::sky_light`).
+    pub sky: Option<crate::systems::sky::SkyLight>,
+    /// The share of the ambient light remembered tiles are lit by
+    /// (`SkyLook::fog`); a tile fading in or out of view blends from that.
+    pub fog: f32,
 }
 
 /// The flicker signal for one light at one instant, in `[-scale, scale]`.
@@ -68,6 +77,8 @@ pub struct SceneContents<'a> {
     pub entities: &'a [RenderEntity],
     pub vfx_effects: &'a [VisualEffect],
     pub fires: &'a [FireEffect],
+    /// How far each tile has faded into view.
+    pub reveal: &'a RevealFade,
 }
 
 /// Rendering resources - lives in the application shell (main.rs).
@@ -114,7 +125,19 @@ impl RenderContext {
             .painter
             .register_native_texture(tileset.get_native_texture(SpriteSheet::AnimatedTiles));
 
-        let ui_icons = UiIcons::new(&tileset, tiles_egui_id, rogues_egui_id, monsters_egui_id, items_egui_id, animated_tiles_egui_id);
+        let outdoor_egui_id = tileset
+            .has_sheet(SpriteSheet::Outdoor)
+            .then(|| egui_glow.painter.register_native_texture(tileset.get_native_texture(SpriteSheet::Outdoor)));
+
+        let ui_icons = UiIcons::new(
+            &tileset,
+            tiles_egui_id,
+            rogues_egui_id,
+            monsters_egui_id,
+            items_egui_id,
+            animated_tiles_egui_id,
+            outdoor_egui_id,
+        );
 
         // Post-processing is a visual nicety, not a requirement: if the driver
         // refuses a half-float framebuffer or one of the passes will not
@@ -164,7 +187,7 @@ impl RenderContext {
     ) {
         profile_function!();
 
-        let SceneContents { grid, entities, vfx_effects, fires } = scene;
+        let SceneContents { grid, entities, vfx_effects, fires, reveal } = scene;
 
         // Draw the scene into the offscreen target when the post-process pass
         // is available, so bloom and vignette can be applied to the game world
@@ -195,7 +218,7 @@ impl RenderContext {
         {
             profile_scope!("render_tiles");
             self.renderer
-                .render(&self.camera, grid, &self.tileset, lighting, show_grid_lines)
+                .render(&self.camera, grid, &self.tileset, lighting, reveal, show_grid_lines)
                 .unwrap();
         }
         {
@@ -311,6 +334,9 @@ mod tests {
             ("fungus", LIGHT_COLOR_FUNGUS),
             ("crystal", LIGHT_COLOR_CRYSTAL),
             ("default", LIGHT_COLOR_DEFAULT),
+            ("sky by day", SKY_COLOR_DAY),
+            ("sky at dawn and dusk", SKY_COLOR_TWILIGHT),
+            ("sky by night", SKY_COLOR_NIGHT),
         ] {
             let max = r.max(g).max(b);
             assert!(

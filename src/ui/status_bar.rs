@@ -79,7 +79,7 @@ pub fn get_status_bar_data(world: &World, player_entity: hecs::Entity, grid: &Gr
 
     let defense = world
         .get::<&crate::components::Equipment>(player_entity)
-        .map(|e| e.total_defense())
+        .map(|e| e.total_defense(world))
         .unwrap_or(0);
 
     // Concealed is a derived/positional state: true while standing in tall grass.
@@ -544,7 +544,8 @@ pub fn draw_status_bar(
     data: &StatusBarData,
     anim: &mut StatusBarAnim,
     icons: &UiIcons,
-    game_time: f32,
+    // The time of day, as `Sky::clock_text` gives it.
+    clock: &str,
     // Points to keep below the top of the screen (clear of the developer
     // tools' toolbar).
     top: f32,
@@ -721,7 +722,7 @@ pub fn draw_status_bar(
                 FatigueState::Rested => {}
             }
 
-            // Elapsed game time (HH:MM:SS)
+            // The time of day (`systems::sky`)
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("Time")
@@ -729,7 +730,7 @@ pub fn draw_status_bar(
                         .small(),
                 );
                 ui.label(
-                    egui::RichText::new(format_game_clock(game_time))
+                    egui::RichText::new(clock)
                         .monospace()
                         .color(colors::TEXT_PRIMARY),
                 );

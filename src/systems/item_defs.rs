@@ -79,6 +79,16 @@ pub fn get_def(item: ItemType) -> &'static ItemDef {
         .expect("All ItemType variants must have a definition")
 }
 
+/// What an item of this kind burns as while it lies on the ground, if it
+/// does: a lit torch keeps burning where it's dropped (`held::put_down`),
+/// until it's picked up or burns down to an unlit torch.
+pub fn burns_lying_down(item: ItemType) -> Option<crate::components::Fuel> {
+    match item {
+        ItemType::Torch => Some(crate::components::Fuel::dropped_torch()),
+        _ => None,
+    }
+}
+
 /// Get the base price for an item type
 pub fn get_price(item: ItemType) -> u32 {
     get_def(item).base_price

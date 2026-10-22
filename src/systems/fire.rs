@@ -15,7 +15,8 @@
 //!
 //! Tall grass is terrain rather than an entity: when it catches, a grass-fire
 //! patch (`Fuel::grass_fire`) is spawned on the tile, and that patch's
-//! `Burnout::ScorchGrass` burns the tile down to floor when it is spent.
+//! `Burnout::ScorchGrass` burns the tile down to the ground it grew on (plain
+//! floor for the dungeon's own grass) when it is spent.
 //!
 //! This system also ticks oil-barrel fuses (and detonates them) and dries
 //! soaked tiles. Spread happens in discrete game-time steps.
@@ -88,23 +89,21 @@ pub fn tick_fire(
     }
     for (id, (x, y), burnout) in spent {
         if let Burnout::LeavesItem(kind) = burnout {
-            crate::systems::torches::put_out_dropped_torch(world, id, Some(kind));
+            crate::systems::torches::item_goes_out(world, id, kind);
             continue;
         }
         crate::systems::used_up::use_up(world, id, crate::systems::used_up::BURNT_AWAY);
         if burnout == Burnout::ScorchGrass {
             if let Some(tile) = grid.get_mut(x, y) {
                 if tile.tile_type == TileType::TallGrass {
-                    tile.tile_type = TileType::Floor;
-                    tile.sprite_override = None;
-                    *fov_dirty = true; // grass blocked vision; floor doesn't
+                    // Back to the ground it grew on: a lawn, a path, or
+                    // plain floor for the dungeon's own grass.
+                    tile.clear_top();
+                    *fov_dirty = true; // grass blocked vision; the ground doesn't
                 }
             }
         }
     }
-
-    // 1b. A floor torch whose torch was picked up stops burning.
-    crate::systems::torches::tick_dropped_torches(world);
 
     // 2. Soaked tiles dry out.
     let mut dried: Vec<Entity> = Vec::new();
@@ -357,7 +356,12 @@ fn spread_step(world: &mut World, grid: &mut Grid, events: &mut EventQueue, rng:
         }
     }
 
-    // Apply (after queries are dropped).
+    // Apply (after queries are dropped). Tiles in a fixed order, not the
+    // set's: each new fire's burn time comes from its entity id
+    // (`burn_time`), so lighting them in a different order each run made a
+    // seeded game play out differently.
+    let mut grass_to_ignite: Vec<(i32, i32)> = grass_to_ignite.into_iter().collect();
+    grass_to_ignite.sort_unstable();
     for (x, y) in grass_to_ignite {
         crate::spawning::spawn_fire_patch(world, x, y);
     }
@@ -435,7 +439,7 @@ pub fn douse_fuel(world: &mut World, id: Entity) {
             crate::systems::used_up::use_up(world, id, crate::systems::used_up::BURNT_AWAY);
         }
         Doused::LeavesItem(kind) => {
-            crate::systems::torches::put_out_dropped_torch(world, id, Some(kind));
+            crate::systems::torches::item_goes_out(world, id, kind);
         }
     }
 }
@@ -1023,6 +1027,7 @@ mod tests {
             stalagmite_positions: Vec::new(),
             mushroom_positions: Vec::new(),
             crystal_positions: Vec::new(),
+            outdoors: false,
         }
     }
 
@@ -1538,6 +1543,27 @@ mod tests {
         assert!(!crate::systems::effects::entity_has_effect(&world, victim, EffectType::Oiled));
     }
 
+    /// Tall grass burns down to whatever it grew on: a lawn painted under
+    /// it is still there afterwards, not dungeon floor.
+    #[test]
+    fn burnt_tall_grass_leaves_the_ground_it_grew_on() {
+        let mut world = World::new();
+        let mut grid = make_grid(5, 5, TileType::Floor);
+        let lawn = crate::tile::Ground {
+            tile_type: TileType::Grass,
+            look: Some(crate::outdoor::GrassKind::Meadow.sprite_at(2, 2)),
+        };
+        if let Some(t) = grid.get_mut(2, 2) {
+            t.set_ground(lawn);
+            t.put_on_top(TileType::TallGrass);
+        }
+        crate::spawning::spawn_fire_patch(&mut world, 2, 2);
+        run_fire(&mut world, &mut grid, GRASS_BURN_DURATION * 3.0);
+        let tile = grid.get(2, 2).unwrap();
+        assert_eq!(tile.tile_type, TileType::Grass, "burnt down to the lawn");
+        assert_eq!(tile.ground(), lawn);
+    }
+
     #[test]
     fn test_wet_grass_blocks_ignition() {
         let mut world = World::new();
@@ -1854,8 +1880,8 @@ mod tests {
             crate::components::Equipment::empty(),
             crate::components::StatusEffects::new(),
         ));
-        world.get::<&mut crate::components::Equipment>(holder).unwrap().off_hand =
-            Some(crate::components::ItemInstance::plain(crate::components::ItemType::Torch));
+        let torch = crate::systems::held::spawn_item(&mut world, crate::components::ItemInstance::plain(crate::components::ItemType::Torch));
+        world.get::<&mut crate::components::Equipment>(holder).unwrap().off_hand = Some(torch);
         crate::systems::torches::sync_held_torch(&mut world, holder);
         assert!(crate::systems::torches::use_held_torch_on(&mut world, &grid, holder, 2, 2, &mut events));
         assert!(burning(&world, campfire), "relit");

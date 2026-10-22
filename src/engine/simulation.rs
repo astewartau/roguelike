@@ -1,7 +1,7 @@
 //! Game simulation - turn execution, time advancement, and event processing.
 
 use crate::components::{
-    ActionType, Actor, AIState, ChaseAI, EffectType, Health, Inventory, ItemType, Follower,
+    ActionType, Actor, AIState, ChaseAI, EffectType, Health, ItemType, Follower,
 };
 use crate::constants;
 use crate::events::{EventQueue, GameEvent, StairDirection};
@@ -520,9 +520,9 @@ pub fn process_ui_actions(
 
     let mut result = UiActionResult::default();
 
-    // Chest interactions (also works for ground item piles)
-    // The window covers every container on the tile (see `loot_sources`), so
-    // each take names the container it came from.
+    // Chest interactions (also works for items lying loose)
+    // The window covers every container on the tile and the floor (see
+    // `loot_sources`), so each take names the source it came from.
     if ui_state.open_chest.is_some() {
         let sources = systems::loot_sources(world, ui_state.open_chest, ui_state.loot_tile);
         let mut took_something = false;
@@ -532,22 +532,20 @@ pub fn process_ui_actions(
             took_something = true;
         } else if actions.close_chest {
             result.close_chest = true;
-        } else if let Some(container) = actions.chest_take_gold {
-            systems::take_gold_from_container(world, player_entity, container, Some(events));
+        } else if let Some(source) = actions.chest_take_gold {
+            systems::take_gold(world, player_entity, source, Some(events));
             took_something = true;
-        } else if let Some((container, item_index)) = actions.chest_item_to_take {
-            systems::take_item_from_container(world, player_entity, container, item_index, Some(events));
+        } else if let Some((source, item)) = actions.chest_item_to_take {
+            systems::take_item(world, player_entity, source, item, Some(events));
             took_something = true;
         }
         if took_something {
-            // Clean up empty ground item piles, and stop a container that was
-            // just emptied blocking its tile.
-            systems::cleanup_empty_ground_piles(world);
+            // Stop a container that was just emptied blocking its tile.
             systems::unblock_emptied_containers(world, spatial_cache);
             // Nothing left anywhere on the tile: the window has done its job.
             let all_empty = systems::loot_sources(world, ui_state.open_chest, ui_state.loot_tile)
                 .into_iter()
-                .all(|id| world.get::<&crate::components::Container>(id).map(|c| c.is_empty()).unwrap_or(true));
+                .all(|source| systems::source_items(world, source).is_empty() && systems::source_gold(world, source) == 0);
             if all_empty {
                 result.close_chest = true;
             }
@@ -713,9 +711,8 @@ pub fn process_ui_actions(
 
     // Throw item
     if let Some(item_index) = actions.item_to_throw {
-        if let Ok(inv) = world.get::<&Inventory>(player_entity) {
-            if let Some(item) = inv.items.get(item_index) {
-                let item_type = item.kind;
+        {
+            if let Some(item_type) = systems::inventory::inventory_kind(world, player_entity, item_index) {
                 if systems::items::item_is_throwable(item_type) {
                     let params = systems::item_targeting_params(item_type);
                     result.enter_targeting = Some(TargetingMode {
@@ -779,10 +776,7 @@ fn study_scroll(
     use crate::components::LearnedAbilities;
     use crate::systems::item_defs::{min_learn_int, scroll_learned_ability};
 
-    let item_type = {
-        let inv = world.get::<&Inventory>(player_entity).ok()?;
-        inv.items.get(item_index)?.kind
-    };
+    let item_type = systems::inventory::inventory_kind(world, player_entity, item_index)?;
 
     let required_int = min_learn_int(item_type)?;
     let ability = scroll_learned_ability(item_type)?;
@@ -855,7 +849,6 @@ fn buy_item_from_vendor(
     use crate::components::{Inventory, ItemInstance, Vendor};
     use crate::events::GameEvent;
     use crate::systems::item_defs::get_price;
-    use crate::systems::items::item_weight;
 
     // Get item info from vendor
     let (item_type, price) = {
@@ -889,9 +882,8 @@ fn buy_item_from_vendor(
     // Transfer gold from player to vendor
     if let Ok(mut player_inv) = world.get::<&mut Inventory>(player_entity) {
         player_inv.gold -= price;
-        player_inv.items.push(instance);
-        player_inv.current_weight_kg += item_weight(item_type);
     }
+    systems::inventory::add_item_to_inventory(world, player_entity, instance);
 
     if let Ok(mut vendor) = world.get::<&mut Vendor>(vendor_id) {
         vendor.gold += price;
@@ -919,14 +911,11 @@ fn sell_item_to_vendor(
     use crate::components::{Inventory, Vendor};
     use crate::events::GameEvent;
     use crate::systems::item_defs::get_sell_price;
-    use crate::systems::items::item_weight;
 
     // Get item info from player
-    let (item_type, sell_price) = {
-        let Ok(player_inv) = world.get::<&Inventory>(player_entity) else { return };
-        let Some(item) = player_inv.items.get(item_idx) else { return };
-        (item.kind, get_sell_price(item.kind))
-    };
+    let Some(item) = crate::systems::inventory::inventory_item(world, player_entity, item_idx) else { return };
+    let Some(item_type) = crate::systems::held::kind(world, item) else { return };
+    let sell_price = get_sell_price(item_type);
 
     // Check vendor can afford it
     {
@@ -934,10 +923,11 @@ fn sell_item_to_vendor(
         if vendor.gold < sell_price { return; }
     }
 
-    // Remove item from player, add gold
+    // Remove item from player (it's the vendor's now: gone from the
+    // world, back into their stock list), add gold
+    crate::systems::inventory::remove_from_inventory(world, player_entity, item);
+    let _ = world.despawn(item);
     if let Ok(mut player_inv) = world.get::<&mut Inventory>(player_entity) {
-        player_inv.items.remove(item_idx);
-        player_inv.current_weight_kg -= item_weight(item_type);
         player_inv.gold += sell_price;
     }
 
@@ -956,6 +946,7 @@ fn sell_item_to_vendor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Inventory;
     use crate::components::{
         AbilityType, Affix, Equipment, ItemInstance, LearnedAbilities, Rarity, Stats,
     };
@@ -1007,7 +998,7 @@ mod tests {
     /// Spawn a bare player with one Scroll of Blink and the given base INT.
     fn player_with_blink_scroll(world: &mut World, int: i32) -> Entity {
         let mut inv = Inventory::new();
-        inv.items.push(ItemInstance::plain(ItemType::ScrollOfBlink));
+        inv.items.push(crate::systems::held::spawn_item(world, ItemInstance::plain(ItemType::ScrollOfBlink)));
         world.spawn((inv, Stats::new(10, int, 10), LearnedAbilities::default()))
     }
 
@@ -1058,14 +1049,14 @@ mod tests {
         // Base INT 12, +2 from an identified helmet affix = 14 (meets Blink).
         let player = player_with_blink_scroll(&mut world, 12);
         let mut equipment = Equipment::empty();
-        equipment.head = Some(ItemInstance {
+        equipment.head = Some(crate::systems::held::spawn_item(&mut world, ItemInstance {
             kind: ItemType::Helmet,
             rarity: Rarity::Magic,
             affixes: vec![Affix::Intelligence(2)],
             name: None,
             identified: true,
             identify_progress: 0.0,
-        });
+        }));
         world.insert_one(player, equipment).expect("insert equipment");
 
         let mut events = EventQueue::new();

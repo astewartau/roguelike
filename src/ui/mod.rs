@@ -84,12 +84,12 @@ pub struct UiActions {
     /// Unequip an armor slot (put the piece back in inventory)
     pub unequip_armor: Option<crate::systems::item_defs::ArmorSlot>,
     /// Take an item (the whole stack, for stackables) from one of the
-    /// containers in the loot window: (container, index in its items)
-    pub chest_item_to_take: Option<(Entity, usize)>,
-    /// Take everything from every container in the loot window
+    /// sources in the loot window: (where it is, the item)
+    pub chest_item_to_take: Option<(crate::systems::LootSource, Entity)>,
+    /// Take everything from every source in the loot window
     pub chest_take_all: bool,
-    /// Take the gold from one of the containers in the loot window
-    pub chest_take_gold: Option<Entity>,
+    /// Take the gold from one of the sources in the loot window
+    pub chest_take_gold: Option<crate::systems::LootSource>,
     pub close_chest: bool,
     /// Index of dialogue option selected by player
     pub dialogue_option_selected: Option<usize>,
@@ -141,6 +141,9 @@ pub enum CharacterTab {
 /// This centralizes UI state management and decouples it from game logic.
 /// The UI reacts to game events rather than being set imperatively.
 pub struct GameUiState {
+    /// The interface is hidden (Alt+Z): only the world and its effects are
+    /// drawn, for a clear view or a screenshot.
+    pub interface_hidden: bool,
     /// Currently open chest/container (for loot window)
     pub open_chest: Option<Entity>,
     /// Tile the open loot window is looting. Every walkable container on it
@@ -191,6 +194,7 @@ pub struct GameUiState {
 impl GameUiState {
     pub fn new(player_entity: Entity) -> Self {
         Self {
+            interface_hidden: false,
             open_chest: None,
             loot_tile: (0, 0),
             talking_to: None,
@@ -380,6 +384,8 @@ pub struct UiFrame<'a> {
     pub overlays: UiOverlays<'a>,
     pub mouse_pos: (f32, f32),
     pub game_time: f32,
+    /// The time of day and the sky (`GameState::sky`).
+    pub sky: crate::systems::sky::Sky,
 }
 
 pub fn run_ui(
@@ -389,7 +395,7 @@ pub fn run_ui(
     dev: &mut crate::devtools::DevTools,
     frame: UiFrame<'_>,
 ) -> UiActions {
-    let UiFrame { game, resources, overlays, mouse_pos, game_time } = frame;
+    let UiFrame { game, resources, overlays, mouse_pos, game_time, sky } = frame;
     let UiWorld { world, player_entity, grid } = game;
     let UiResources { camera, tileset, icons } = resources;
     let UiOverlays {
@@ -485,16 +491,22 @@ pub fn run_ui(
         .map(|a| a.can_act())
         .unwrap_or(false);
 
+    // Alt+Z hides the whole interface, leaving the world and its effects
+    // (explosions, rain, beams, auras) on screen.
+    let ui = !ui_state.interface_hidden;
+
     egui_glow.run(window, |ctx| {
-        // Enemy health bars (draw early so they're behind other indicators)
-        draw_enemy_health_bars(ctx, camera, &enemy_health_data);
+        if ui {
+            // Enemy health bars (draw early so they're behind other indicators)
+            draw_enemy_health_bars(ctx, camera, &enemy_health_data);
 
-        // Markers over corpses and item piles with something left in them
-        draw_loot_indicators(ctx, camera, &loot_indicator_data);
+            // Markers over corpses and loose items with something left in them
+            draw_loot_indicators(ctx, camera, &loot_indicator_data);
 
-        // Red markers on tiles hostiles are about to hit (the developer
-        // tools' Warnings overlay; none unless it's switched on)
-        draw_attack_telegraphs(ctx, camera, &attack_telegraph_data, player_idle);
+            // Red markers on tiles hostiles are about to hit (the developer
+            // tools' Warnings overlay; none unless it's switched on)
+            draw_attack_telegraphs(ctx, camera, &attack_telegraph_data, player_idle);
+        }
 
         // Player buff auras (draw first so they're behind everything)
         if !editing {
@@ -502,7 +514,7 @@ pub fn run_ui(
         }
 
         // Targeting overlay (draw first so it's behind other UI)
-        if let Some(ref data) = targeting_data.as_ref().filter(|_| !editing) {
+        if let Some(ref data) = targeting_data.as_ref().filter(|_| !editing && ui) {
             draw_targeting_overlay(ctx, camera, data);
         }
 
@@ -510,7 +522,8 @@ pub fn run_ui(
         // marking it) and the info panel. Hidden while the pointer is over a
         // panel or outside the window.
         let pointer_on_map = ctx.input(|i| i.pointer.hover_pos().is_some())
-            && !ctx.is_pointer_over_area();
+            && !ctx.is_pointer_over_area()
+            && ui;
         // While the tile menu is open, its tile keeps the highlight.
         ui_state.hover_highlight = if let Some(menu) = ui_state.tile_menu.as_ref() {
             Some(menu.tile)
@@ -529,41 +542,43 @@ pub fn run_ui(
         }
 
         // Status bar (whenever playing)
-        let status_rect = if editing {
+        let status_rect = if editing || !ui {
             None
         } else {
-            draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, game_time, hud_top)
+            draw_status_bar(ctx, &status_data, &mut ui_state.status_anim, icons, &sky.clock_text(game_time), hud_top)
         };
 
-        // Scrolling combat/message log (bottom-left)
-        draw_message_log(ctx, &ui_state.message_log);
+        if ui {
+            // Scrolling combat/message log (bottom-left)
+            draw_message_log(ctx, &ui_state.message_log);
 
-        // Quick-use hotbars (items + abilities, bottom-center)
-        if !editing {
-            draw_hotbars(
-                ctx,
-                world,
-                player_entity,
-                icons,
-                &mut ui_state.hotbar_main,
-                &mut ui_state.hotbar_shift,
-                &mut ui_state.hotbar_qer,
-                &mut ui_state.hotbar_anim,
-                &mut actions,
-            );
+            // Quick-use hotbars (items + abilities, bottom-center)
+            if !editing {
+                draw_hotbars(
+                    ctx,
+                    world,
+                    player_entity,
+                    icons,
+                    &mut ui_state.hotbar_main,
+                    &mut ui_state.hotbar_shift,
+                    &mut ui_state.hotbar_qer,
+                    &mut ui_state.hotbar_anim,
+                    &mut actions,
+                );
+            }
+
+            // Floating damage numbers
+            draw_damage_numbers(ctx, vfx_effects, camera);
+
+            // Alert indicators (enemy spotted player)
+            draw_alert_indicators(ctx, vfx_effects, camera);
+
+            // Resting indicator ("Zzz" bubble)
+            draw_resting_indicators(ctx, resting_bubble, camera);
+
+            // Enemy status effect indicators (fear, slow, confusion)
+            draw_enemy_status_indicators(ctx, camera, &enemy_status_data);
         }
-
-        // Floating damage numbers
-        draw_damage_numbers(ctx, vfx_effects, camera);
-
-        // Alert indicators (enemy spotted player)
-        draw_alert_indicators(ctx, vfx_effects, camera);
-
-        // Resting indicator ("Zzz" bubble)
-        draw_resting_indicators(ctx, resting_bubble, camera);
-
-        // Enemy status effect indicators (fear, slow, confusion)
-        draw_enemy_status_indicators(ctx, camera, &enemy_status_data);
 
         // Explosions (fireballs, barrels, corpse explosions, ground slams)
         draw_explosions(ctx, vfx_effects, camera, icons);
@@ -572,7 +587,9 @@ pub fn run_ui(
         draw_rain(ctx, camera, icons, rain, real_time, dev.rain_style);
 
         // The developer tools' debug overlays
-        draw_dev_overlays(ctx, dev, camera, world, grid, player_entity, hover_tile);
+        if ui {
+            draw_dev_overlays(ctx, dev, camera, world, grid, player_entity, hover_tile);
+        }
 
         // The developer tools' preview of what a click would do
         if pointer_on_map {
@@ -590,6 +607,11 @@ pub fn run_ui(
 
         // Raise Dead channels, and how far along every channel is
         draw_raise_dead_channels(ctx, camera, channels, real_time);
+
+        // Everything from here on is interface.
+        if !ui {
+            return;
+        }
         draw_channel_progress(ctx, camera, channels);
 
         // Developer menu
@@ -597,7 +619,7 @@ pub fn run_ui(
             ctx,
             dev,
             &DevArt { icons, tileset },
-            &DevView { world, grid, player: player_entity, game_time, hud_left: status_rect.map_or(0.0, |r| r.max.x) },
+            &DevView { world, grid, player: player_entity, game_time, sky, hud_left: status_rect.map_or(0.0, |r| r.max.x) },
         );
 
         // Loot window (if chest is open)

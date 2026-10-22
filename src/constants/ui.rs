@@ -288,8 +288,10 @@ pub const DEVTOOLS_GHOST_ALPHA: u8 = 150;
 pub const DEV_MAX_SHOT_WAITS: usize = 16;
 
 /// The speeds the developer tools' world clock offers, in game seconds per
-/// real second.
-pub const DEV_CLOCK_SPEEDS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+/// real second. The fastest is for watching the sky turn: a day
+/// (`DAY_LENGTH`) in a minute and a half. `DEV_CLOCK_MAX_STEP` caps what a
+/// frame can catch up, so a speed past about 30 runs no faster.
+pub const DEV_CLOCK_SPEEDS: [f32; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 16.0];
 /// Most game time the world clock catches up in one frame. A long frame (a
 /// hitch, the window dragged) would otherwise be simulated all at once;
 /// lower keeps the world from lurching, higher keeps high speeds honest on

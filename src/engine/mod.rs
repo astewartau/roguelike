@@ -15,6 +15,7 @@ mod context;
 pub mod floor_transition;
 mod game_state;
 pub mod initialization;
+mod sandbox_map;
 mod simulation;
 
 pub use context::{ActorCtx, EffectCtx, SimCtx};
@@ -126,6 +127,8 @@ pub struct GameEngine {
     /// animation, so it rides real time like the fire sprite it sits under,
     /// the camera shake and the hit flashes.
     light_flicker_time: f32,
+    /// How far each tile has faded into view, for drawing (`RevealFade`).
+    reveal_fade: crate::render::RevealFade,
 
     /// Highlighted option index in the pause menu (keyboard navigation)
     pause_selected: usize,
@@ -189,6 +192,7 @@ impl GameEngine {
             dev: crate::devtools::DevTools::new(),
             real_time: 0.0,
             light_flicker_time: 0.0,
+            reveal_fade: Default::default(),
             pause_selected: 0,
             audio,
             resting: false,
@@ -257,13 +261,23 @@ impl GameEngine {
         self.begin(state, ui_state);
     }
 
-    /// Start a sandbox: an empty walled arena, nobody in it, the developer
+    /// Start a sandbox: a stretch of countryside, nobody in it, the developer
     /// tools shown (no panel open, the editor seeing everything) and the world clock
     /// on Hold (Run sets it going). Placing a player there makes them
     /// `class`.
     pub fn start_sandbox(&mut self, class: PlayerClass, camera: &mut Camera) {
+        self.start_sandbox_from(GameState::new_sandbox(class), camera);
+    }
+
+    /// The sandbox as an empty walled arena, for tests that want a blank
+    /// slate rather than the countryside.
+    #[cfg(test)]
+    pub fn start_blank_sandbox(&mut self, class: PlayerClass, camera: &mut Camera) {
+        self.start_sandbox_from(GameState::new_blank_sandbox(class), camera);
+    }
+
+    fn start_sandbox_from(&mut self, state: GameState, camera: &mut Camera) {
         self.finalize_run_record();
-        let state = GameState::new_sandbox(class);
         camera.set_tracking_target(glam::Vec2::new(
             state.grid.width as f32 / 2.0,
             state.grid.height as f32 / 2.0,
@@ -438,6 +452,15 @@ impl GameEngine {
                             }
                             if key == KeyCode::Backquote {
                                 self.dev.toggle();
+                            }
+                            // Alt+Z hides the whole interface, and shows it
+                            // again. The Z goes no further.
+                            let alt = [KeyCode::AltLeft, KeyCode::AltRight]
+                                .iter()
+                                .any(|k| self.input.keys_pressed.contains(k));
+                            if key == KeyCode::KeyZ && alt && !key_event.repeat {
+                                self.toggle_interface();
+                                return None;
                             }
                             self.input.keys_pressed.insert(key);
                         }
@@ -811,7 +834,8 @@ impl GameEngine {
 
             // How lit the player is, for the AI's noticing and the HUD. After
             // the fire tick, so flames that just caught or burnt out count.
-            systems::light::update_light_exposure(&mut state.world, &state.grid, state.player_entity);
+            let sky = state.sky_light();
+            systems::light::update_light_exposure(&mut state.world, &state.grid, state.player_entity, sky);
 
             // Passive identification of carried/equipped items, paced by the
             // same game-time delta (frozen while paused/idle).
@@ -874,13 +898,10 @@ impl GameEngine {
         if state.fov_dirty || editing || see_all {
             {
                 profile_scope!("fov_update");
-                systems::update_fov(
-                    &state.world,
-                    &mut state.grid,
-                    state.player_entity,
-                    crate::constants::FOV_RADIUS,
-                    state.game_clock.time,
-                );
+                // Outdoors, daylight lets you see further than your own light.
+                let extent = state.grid.width.max(state.grid.height) as i32;
+                let radius = systems::sky::sight_radius(state.sky_light(), extent);
+                systems::update_fov(&state.world, &mut state.grid, state.player_entity, radius, state.game_clock.time);
             }
 
             if editing || see_all {
@@ -893,16 +914,27 @@ impl GameEngine {
             // Calculate per-tile illumination (must be after FOV update)
             {
                 profile_scope!("illumination");
-                // The editor (dev tools shown) is lit evenly, player or not.
+                // Lit as in play, editor or not, unless the editor is asked
+                // to light evenly.
+                let sky = state.sky_light();
+                let even = self.dev.visible && self.dev.even_light;
                 systems::calculate_illumination(
                     &state.world,
                     &mut state.grid,
-                    (!self.dev.visible).then_some(state.player_entity),
+                    (!even).then_some(state.player_entity),
                     crate::constants::FOV_RADIUS,
+                    sky,
+                    state.sky.fog_brightness(sky),
                 );
             }
 
             state.fov_dirty = false;
+        }
+
+        // Ease what's drawn toward what's now in view, in real time, frozen
+        // behind menus like the light flicker.
+        if self.game_mode == GameMode::Playing {
+            self.reveal_fade.update(&state.grid, dt);
         }
 
         // The spatial cache is now the single source of truth for "is this tile
@@ -1132,16 +1164,48 @@ impl GameEngine {
         self.ui_state.as_ref().and_then(|u| u.hover_highlight)
     }
 
+    /// How far each tile has faded into view, for the renderer.
+    pub fn reveal_fade(&self) -> &crate::render::RevealFade {
+        &self.reveal_fade
+    }
+
+    /// Hide the whole interface, or show it again (Alt+Z). A tile menu that
+    /// was open closes rather than lingering unseen.
+    pub fn toggle_interface(&mut self) {
+        if let Some(ui) = self.ui_state.as_mut() {
+            ui.interface_hidden = !ui.interface_hidden;
+            ui.tile_menu = None;
+            ui.hover_highlight = None;
+        }
+    }
+
+    /// The share of the ambient light remembered tiles are lit by, for the
+    /// renderer.
+    pub fn fog_level(&self) -> f32 {
+        self.state.as_ref().map_or(crate::constants::LIGHT_FOG_SHARE, |s| s.sky.look.fog)
+    }
+
+    /// The sky's light for the renderer, if this floor is outdoors.
+    pub fn sky_light(&self) -> Option<crate::systems::sky::SkyLight> {
+        self.state.as_ref().and_then(|s| s.sky_light())
+    }
+
     /// Should show grid lines?
     pub fn show_grid_lines(&self) -> bool {
         self.ui_state.as_ref().map(|u| u.show_grid_lines).unwrap_or(false)
     }
 
+    /// Whether the scene is lit evenly rather than as play lights it: the
+    /// editor, when its Light evenly toggle is on.
+    pub fn even_light(&self) -> bool {
+        self.dev.visible && self.dev.even_light
+    }
+
     /// Where the player's light is centred (their visual position, for smooth
-    /// lighting). None in the editor (the dev tools shown), which is lit
-    /// evenly whether or not there's a player, and with no player.
+    /// lighting). None with no player, or when lit evenly (`even_light`).
+    /// The editor otherwise lights the scene just as play does.
     pub fn player_light_pos(&self) -> Option<(f32, f32)> {
-        if self.dev.visible {
+        if self.even_light() {
             return None;
         }
         self.state.as_ref().and_then(|s| {
@@ -1208,7 +1272,40 @@ impl GameEngine {
                 (pos, light)
             })
             .collect();
-        LightMap::build(&LightOcclusion::build(&state.world, &state.grid), &lights)
+        let occlusion = LightOcclusion::build(&state.world, &state.grid);
+        let mut map = LightMap::build(&occlusion, &lights);
+        // Drawn as seen from where the player stands: a wall shows only the
+        // light on its sides in view, and what's out of view carries none.
+        let in_view = self.player_view(state);
+        map.as_seen(&occlusion, in_view.as_deref());
+        map
+    }
+
+    /// Which tiles the player sees, for drawing light as they'd see it
+    /// (`LightMap::as_seen`). In play, the tiles in view. The editor shows
+    /// every tile, so there it's what the player has a line of sight to from
+    /// where they stand, as far as the map goes; with no player, None (no one
+    /// to see from, so every side counts).
+    fn player_view(&self, state: &GameState) -> Option<Vec<bool>> {
+        if !self.dev.visible {
+            return Some(state.grid.tiles.iter().map(|t| t.visible).collect());
+        }
+        let at = state.world.get::<&crate::components::Position>(state.player_entity).ok().map(|p| (p.x, p.y))?;
+        let blockers: std::collections::HashSet<(i32, i32)> = state
+            .world
+            .query::<(&crate::components::Position, &crate::components::BlocksVision)>()
+            .iter()
+            .map(|(_, (p, _))| (p.x, p.y))
+            .collect();
+        let (w, h) = (state.grid.width, state.grid.height);
+        let mut view = vec![false; w * h];
+        let reach = w.max(h) as i32;
+        for (x, y) in crate::fov::Fov::calculate(&state.grid, at.0, at.1, reach, Some(|x: i32, y: i32| blockers.contains(&(x, y)))) {
+            if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+                view[y as usize * w + x as usize] = true;
+            }
+        }
+        Some(view)
     }
 
     /// Run the UI and return actions. This handles the borrowing internally.
@@ -1352,6 +1449,7 @@ impl GameEngine {
                         },
                         mouse_pos: self.input.mouse_pos,
                         game_time: state.game_clock.time,
+                        sky: state.sky,
                     },
                 )
             }
@@ -1521,9 +1619,8 @@ impl GameEngine {
             match container_action {
                 crate::game::ContainerAction::TookAll(_) => {
                     ui_state.close_chest();
-                    // Clean up empty ground item piles, and stop the container
-                    // that was just emptied blocking its tile.
-                    systems::cleanup_empty_ground_piles(&mut state.world);
+                    // Stop the container that was just emptied blocking its
+                    // tile.
                     systems::unblock_emptied_containers(
                         &mut state.world,
                         &mut state.spatial_cache,
@@ -2900,14 +2997,14 @@ mod tests {
                 crate::systems::update_fov(&state.world, &mut state.grid, player, crate::constants::FOV_RADIUS, state.game_clock.time)
             });
             time("calculate_illumination", 60, || {
-                crate::systems::calculate_illumination(&state.world, &mut state.grid, Some(player), crate::constants::FOV_RADIUS)
+                crate::systems::calculate_illumination(&state.world, &mut state.grid, Some(player), crate::constants::FOV_RADIUS, None, crate::constants::LIGHT_FOG_SHARE * crate::constants::LIGHT_PLAYER_AMBIENT)
             });
             // Per frame.
             time("LightOcclusion::build", 60, || {
                 crate::systems::light::LightOcclusion::build(&state.world, &state.grid).between((0, 0), (1, 1))
             });
             time("update_light_exposure", 60, || {
-                crate::systems::light::update_light_exposure(&mut state.world, &state.grid, player)
+                crate::systems::light::update_light_exposure(&mut state.world, &state.grid, player, None)
             });
             time("collect_renderables", 60, || {
                 crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0, None).len()
@@ -3109,7 +3206,7 @@ mod tests {
         use crate::devtools::{CursorTool, Spawnable};
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
-        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.start_blank_sandbox(PlayerClass::Fighter, &mut camera);
         engine.dev.clock_running = true;
         let goblin = crate::devtools::spawn::ENEMIES.iter().position(|d| d.name == "Goblin").expect("goblins exist");
         for &(at, faction) in goblins {
@@ -3161,7 +3258,7 @@ mod tests {
         use crate::devtools::{CursorTool, DevTab, Spawnable};
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
-        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.start_blank_sandbox(PlayerClass::Fighter, &mut camera);
         engine.dev.open_panel(DevTab::Spawn);
         engine.dev.tool = Some(CursorTool::Place(Spawnable::FirePatch));
         {
@@ -3214,7 +3311,7 @@ mod tests {
     fn the_editor_camera_stays_put() {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
-        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.start_blank_sandbox(PlayerClass::Fighter, &mut camera);
         let fighter = engine.dev.prefabs.iter().position(|p| p.name == "Fighter (Player)").unwrap();
         engine.dev.open_panel(crate::devtools::DevTab::Spawn);
         engine.dev.tool = Some(crate::devtools::CursorTool::PlacePrefab(fighter));
@@ -3240,11 +3337,12 @@ mod tests {
         assert!(!engine.input.mouse_down, "the press was the UI's, not a pan");
     }
 
-    /// The editor is lit evenly, player or no player: showing the tools
-    /// drops the pool of light at the player's feet, and hiding them brings
-    /// it back.
+    /// The editor is lit exactly as play is, so what you tune there is
+    /// what you'll play: the player's light and its pool, the same light at
+    /// their feet. Its Light evenly toggle lights everything flat instead,
+    /// to work in the dark.
     #[test]
-    fn the_editor_has_its_own_lighting() {
+    fn the_editor_is_lit_as_play_is_unless_asked_to_light_evenly() {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
         engine.start_game(PlayerClass::Fighter, 77, &mut camera);
@@ -3254,19 +3352,24 @@ mod tests {
             state.grid.illumination[p.1 as usize * state.grid.width + p.0 as usize]
         };
         run_frames(&mut engine, &mut camera, 0.2);
-        let playing = at_feet(&engine);
-        assert!(engine.player_light_pos().is_some());
+        let playing = (at_feet(&engine), engine.player_light_pos(), engine.even_light());
+        assert!(playing.1.is_some());
 
         engine.dev.visible = true;
         run_frames(&mut engine, &mut camera, 0.2);
-        assert_eq!(engine.player_light_pos(), None, "no pool of light in the editor");
-        let editing = at_feet(&engine);
-        assert!(editing < playing, "relit evenly: {playing} -> {editing}");
+        assert_eq!((at_feet(&engine), engine.player_light_pos(), engine.even_light()), playing, "the editor matches play");
 
+        engine.dev.even_light = true;
+        run_frames(&mut engine, &mut camera, 0.2);
+        assert!(engine.even_light());
+        assert_eq!(engine.player_light_pos(), None, "no pool of light, lit evenly");
+        assert!(at_feet(&engine) < playing.0, "relit evenly");
+
+        // Hidden, play is play, whatever the editor was set to.
         engine.dev.visible = false;
         run_frames(&mut engine, &mut camera, 0.2);
-        assert!(engine.player_light_pos().is_some());
-        assert_eq!(at_feet(&engine), playing, "the player's light again");
+        assert!(!engine.even_light());
+        assert_eq!(at_feet(&engine), playing.0, "the player's light again");
     }
 
     /// With the developer tools shown, WASD pans the view and never moves
@@ -3316,11 +3419,81 @@ mod tests {
         }
     }
 
+    /// A sandbox put outdoors from the dev tools is lit by the time of day:
+    /// at noon the player stands in plain view and sees across the field;
+    /// at midnight under a new moon they're in the dark and see only as far
+    /// as their own light. Indoors, noon makes no difference.
+    #[test]
+    fn outdoors_the_time_of_day_lights_you_and_lets_you_see() {
+        use crate::devtools::{CursorTool, DevCommand};
+        use crate::systems::sky::Sky;
+        let (mut engine, mut camera) = sandbox_with(&[]);
+        let ranger = engine.dev.prefabs.iter().position(|p| p.name == "Ranger (Player)").expect("the built-in Ranger");
+        engine.dev.open_panel(crate::devtools::DevTab::Spawn);
+        engine.dev.tool = Some(CursorTool::PlacePrefab(ranger));
+        {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (20, 15));
+        }
+        for request in engine.dev.take_requests() {
+            engine.handle_dev_request(request);
+        }
+        engine.dev.toggle(); // into play: the player's own sight and light
+        assert!(!engine.dev.visible);
+
+        let mut set = |engine: &mut GameEngine, outdoors: bool, hour: f32, moon: f32| {
+            let clock = engine.game_time();
+            let mut sky = Sky { moon, ..engine.state.as_ref().unwrap().sky };
+            sky.set_hour(clock, hour);
+            engine.dev.commands.push(DevCommand::SetOutdoors(outdoors));
+            engine.dev.commands.push(DevCommand::SetSky(sky));
+            engine.process_ui_actions(&UiActions::default());
+            run_frames(engine, &mut camera, 0.1);
+            let state = engine.state.as_ref().unwrap();
+            let exposure = state.world.get::<&crate::components::LightExposure>(state.player_entity).unwrap().0;
+            let far_off_seen = state.grid.get(2, 15).unwrap().visible; // 18 tiles west, in the open
+            (exposure, far_off_seen)
+        };
+
+        let (noon, seen_at_noon) = set(&mut engine, true, 12.5, 0.0);
+        assert!(noon >= crate::constants::LIGHT_LIT_LEVEL, "plain view at noon: {noon}");
+        assert!(seen_at_noon, "daylight shows the far side of the field");
+        {
+            // The sky is a light like any other: the far tile's light level
+            // (what the light overlay shows) is the sky's, not darkness.
+            let state = engine.state.as_ref().unwrap();
+            let far = state.grid.illumination[15 * state.grid.width + 2];
+            assert!(far >= crate::constants::SKY_NOON_LEVEL, "the far tile is lit by day: {far}");
+        }
+
+        let (midnight, seen_at_midnight) = set(&mut engine, true, 0.0, 0.0);
+        assert!(midnight < crate::constants::LIGHT_LIT_LEVEL / 2.0, "dark at midnight: {midnight}");
+        assert!(!seen_at_midnight, "only your own light's reach at night");
+
+        let (indoors, seen_indoors) = set(&mut engine, false, 12.5, 0.0);
+        assert!(indoors < 0.01, "no sky indoors: {indoors}");
+        assert!(!seen_indoors);
+    }
+
+    /// Alt+Z hides the interface and brings it back; a tile menu that was
+    /// open doesn't linger unseen.
+    #[test]
+    fn the_interface_can_be_hidden_and_shown_again() {
+        let mut engine = engine_with_run();
+        assert!(!engine.ui_state.as_ref().unwrap().interface_hidden);
+        engine.toggle_interface();
+        let ui = engine.ui_state.as_ref().unwrap();
+        assert!(ui.interface_hidden && ui.tile_menu.is_none() && ui.hover_highlight.is_none());
+        assert_eq!(engine.hover_highlight_tile(), None, "no tile is lightened under the cursor");
+        engine.toggle_interface();
+        assert!(!engine.ui_state.as_ref().unwrap().interface_hidden);
+    }
+
     #[test]
     fn a_sandbox_starts_empty_on_hold_and_runs_when_asked() {
         let mut camera = crate::camera::Camera::new(800.0, 600.0);
         let mut engine = GameEngine::new();
-        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.start_blank_sandbox(PlayerClass::Fighter, &mut camera);
         let state = engine.state.as_ref().unwrap();
         assert!(state.sandbox && !state.has_player());
         assert!(engine.dev.visible && !engine.dev.clock_running, "starts on Hold");
@@ -3882,7 +4055,13 @@ mod tests {
         // leaves kills=24) or torches. Two separate runs agreed.
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=334.4440 floor=0 kills=23 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=129 roster=eff941fa";
+        // Re-recorded when items became entities: every item in a chest takes
+        // an entity id now, so everything spawned after shifts, and this script
+        // rings the hostiles round the player in id order and fire burn times
+        // hash the id. Time and position are unchanged. That same change showed
+        // fire spread lighting a step's new fires in a `HashSet`'s order, so a
+        // seeded run could play out two ways; it lights them in tile order now.
+        const EXPECTED: &str = "t=334.4440 floor=0 kills=18 hp=0/50 pos=11,8 hunger=83.3344 fatigue=35.8435 n=135 roster=ef0188bb";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 400,
@@ -3956,7 +4135,8 @@ mod tests {
         // being scheduled on arrival (they used to never act).
         // Roster re-recorded when lanterns got their (1 HP) glass: every
         // scalar above it was unchanged.
-        const EXPECTED: &str = "t=265.6621 floor=1 kills=24 hp=99956/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=f251b362";
+        // Re-recorded when items became entities (see the scenario above).
+        const EXPECTED: &str = "t=265.6621 floor=1 kills=19 hp=99947/100000 pos=10,13 hunger=87.5008 fatigue=28.5528 n=105 roster=04855b9a";
         assert_eq!(
             run_fixed_script(&Scenario {
                 turns: 300,
@@ -4092,32 +4272,66 @@ mod tests {
     /// came back full of chests that could never release their skeletons, a
     /// storage room came back with chest-sprited barrels, and a pile of dropped
     /// loot came back as a blocking chest.
+    /// What you carry and wear comes with you down the stairs and back,
+    /// every item the same entity it was; and a floor saved and reloaded
+    /// brings back each container's items once, with no stray copies.
+    #[test]
+    fn your_pack_and_gear_go_with_you_between_floors() {
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_game(PlayerClass::Ranger, 7, &mut camera);
+        let carried = |engine: &GameEngine| {
+            let state = engine.state.as_ref().unwrap();
+            let mut held = crate::systems::held::held_by(&state.world, state.player_entity);
+            held.sort();
+            let kinds: Vec<_> = held.iter().map(|&e| crate::systems::held::kind(&state.world, e)).collect();
+            (held, kinds)
+        };
+        let item_count = |engine: &GameEngine| {
+            let state = engine.state.as_ref().unwrap();
+            state.world.query::<&crate::components::ItemInstance>().iter().count()
+        };
+        let before = carried(&engine);
+        assert!(!before.0.is_empty(), "a Ranger starts with things");
+        let items_on_floor_0 = item_count(&engine);
+
+        engine.handle_floor_transition(crate::events::StairDirection::Down, &mut camera);
+        assert_eq!(carried(&engine), before, "the same items, down a floor");
+        engine.handle_floor_transition(crate::events::StairDirection::Up, &mut camera);
+        assert_eq!(carried(&engine), before, "and back up");
+        assert_eq!(item_count(&engine), items_on_floor_0, "floor 0's items came back once each");
+    }
+
     #[test]
     fn container_kinds_survive_a_floor_round_trip() {
-        use crate::components::{Container, GroundItemPile, ItemInstance, ItemType, Name, Position, Raisable};
+        use crate::components::{Container, ItemInstance, ItemType, Name, Position, Raisable};
 
         /// What each container is, as the player would tell them apart: its
-        /// name, whether something may climb out, whether it's remains or a
-        /// loose pile, and whether it stands in the way. Sorted, so two
-        /// censuses compare directly.
-        const KINDS: [&str; 5] = ["Chest", "Coffin", "Barrel", "corpse", "pile"];
+        /// name, whether something may climb out, whether it's remains, and
+        /// whether it stands in the way, and what it holds (items are
+        /// entities: these are its items' kinds, read back through them).
+        /// Sorted, so two censuses compare directly.
+        const KINDS: [&str; 4] = ["Chest", "Coffin", "Barrel", "corpse"];
         fn kind(world: &crate::world::World, id: hecs::Entity) -> &'static str {
-            if world.get::<&GroundItemPile>(id).is_ok() {
-                return "pile";
-            }
             if world.get::<&Raisable>(id).is_ok() {
                 return "corpse";
             }
             let name = world.get::<&Name>(id).map(|n| n.0.clone()).unwrap_or_default();
             KINDS.iter().copied().find(|k| *k == name).unwrap_or("other")
         }
-        fn census(world: &crate::world::World) -> Vec<(&'static str, bool, bool)> {
+        type Row = (&'static str, bool, bool, Vec<String>);
+        fn census(world: &crate::world::World) -> Vec<Row> {
             let mut rows: Vec<_> = world
                 .query::<&Container>()
                 .iter()
                 .map(|(id, c)| {
                     let blocks = world.get::<&crate::components::BlocksMovement>(id).is_ok();
-                    (kind(world, id), c.spawn_chance > 0.0, blocks)
+                    let mut held: Vec<String> = crate::systems::held::instances(world, &c.items)
+                        .iter()
+                        .map(|i| format!("{:?}", i.kind))
+                        .collect();
+                    held.sort();
+                    (kind(world, id), c.spawn_chance > 0.0, blocks, held)
                 })
                 .collect();
             rows.sort();
@@ -4125,31 +4339,25 @@ mod tests {
         }
 
         let mut checked_coffins = 0;
-        let mut checked_piles = 0;
+        let mut checked_contents = 0;
 
         for seed in 0..25u64 {
             let mut camera = crate::camera::Camera::new(800.0, 600.0);
             let mut engine = GameEngine::new();
             engine.start_game(PlayerClass::Fighter, seed, &mut camera);
 
-            // Drop a pile of loot on the player's tile, so the walkable
-            // container kind is covered too.
-            {
+            // Drop an apple on the player's tile, so loose items are covered
+            // too.
+            let at = {
                 let state = engine.state.as_mut().expect("run started");
                 let at = state
                     .world
                     .get::<&Position>(state.player_entity)
                     .map(|p| (p.x, p.y))
                     .expect("player has a position");
-                let pos = Position::new(at.0, at.1);
-                state.world.spawn((
-                    pos,
-                    crate::components::VisualPosition::from_position(&pos),
-                    crate::components::Sprite::from_ref(crate::tile::tile_ids::COINS),
-                    Container::ground_pile(vec![ItemInstance::plain(ItemType::Apple)]),
-                    GroundItemPile,
-                ));
-            }
+                crate::systems::inventory::spawn_ground_item(&mut state.world, at.0, at.1, ItemInstance::plain(ItemType::Apple));
+                at
+            };
 
             let before = census(&engine.state.as_ref().expect("run").world);
 
@@ -4164,33 +4372,23 @@ mod tests {
 
             assert_eq!(
                 before, after,
-                "seed {seed}: container kinds changed across a floor round trip"
+                "seed {seed}: containers changed across a floor round trip"
             );
 
             checked_coffins += before.iter().filter(|r| r.0 == "Coffin" && r.1).count();
-            checked_piles += before.iter().filter(|r| r.0 == "pile").count();
+            checked_contents += before.iter().filter(|r| !r.3.is_empty()).count();
 
-            // The restored pile must still be walkable and still be findable as
-            // a pile, not a blocking chest.
-            let piles = state
-                .world
-                .query::<(&Container, &GroundItemPile)>()
-                .iter()
-                .count();
-            assert!(piles > 0, "seed {seed}: the dropped pile came back as something else");
-            for (id, _) in state.world.query::<(&Container, &GroundItemPile)>().iter() {
-                assert!(
-                    state.world.get::<&crate::components::BlocksMovement>(id).is_err(),
-                    "seed {seed}: a dropped pile must not block movement"
-                );
-            }
+            // The apple is still lying where it was dropped, as itself.
+            let loose = crate::systems::held::on_ground_at(&state.world, at);
+            let kinds: Vec<_> = loose.iter().filter_map(|&e| crate::systems::held::kind(&state.world, e)).collect();
+            assert!(kinds.contains(&ItemType::Apple), "seed {seed}: the dropped apple came back as something else: {kinds:?}");
         }
 
         assert!(
             checked_coffins > 0,
             "no coffins were round-tripped — the coffin half of this is untested"
         );
-        assert!(checked_piles > 0, "no ground piles were round-tripped");
+        assert!(checked_contents > 0, "no container held anything — the contents half of this is untested");
     }
 
 

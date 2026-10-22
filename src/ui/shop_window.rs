@@ -51,10 +51,10 @@ pub fn get_shop_window_data(
 
     // Build player sellable items with sell prices
     let player_items: Vec<(usize, ItemType, u32, u32)> =
-        crate::systems::stack_items(&player_inv.items)
+        crate::systems::stack_items(&crate::systems::held::instances(world, &player_inv.items))
             .into_iter()
             .map(|s| {
-                let kind = player_inv.items[s.first_index].kind;
+                let kind = crate::systems::held::kind(world, player_inv.items[s.first_index]).unwrap_or(ItemType::Apple);
                 (s.first_index, kind, get_sell_price(kind), s.count)
             })
             .collect();

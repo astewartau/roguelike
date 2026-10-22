@@ -50,6 +50,9 @@ pub struct Grid {
     pub mushroom_positions: Vec<(i32, i32)>,
     /// Crystal clusters in Cavern rooms (light sources)
     pub crystal_positions: Vec<(i32, i32)>,
+    /// Under the open sky: lit by the time of day (`systems::sky`) rather
+    /// than only by its lights, as the dungeon is.
+    pub outdoors: bool,
 }
 
 impl Grid {
@@ -89,6 +92,7 @@ impl Grid {
             stalagmite_positions: result.stalagmite_positions,
             mushroom_positions: result.mushroom_positions,
             crystal_positions: result.crystal_positions,
+            outdoors: false,
         }
     }
 
@@ -135,6 +139,7 @@ impl Grid {
             stalagmite_positions: vec![],
             mushroom_positions: vec![],
             crystal_positions: vec![],
+            outdoors: false,
         }
     }
 
