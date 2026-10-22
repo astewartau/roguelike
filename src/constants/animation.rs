@@ -241,6 +241,11 @@ pub const FIRE_FADE_IN_SECONDS: f32 = 0.35;
 /// Real seconds a fire takes to fade out once it's gone out, drawn on where
 /// it was. Longer lingers like embers.
 pub const FIRE_FADE_OUT_SECONDS: f32 = 0.7;
+/// Real seconds Call Rain takes to fade in as it starts. Lower is snappier.
+pub const RAIN_FADE_IN_SECONDS: f32 = 0.6;
+/// Real seconds Call Rain takes to fade out once it's stopped, drawn on
+/// where it was falling. Longer is a gentler stop.
+pub const RAIN_FADE_OUT_SECONDS: f32 = 1.0;
 /// Seconds each frame of a held torch's flame is shown, the same pace as a
 /// torch lying burning on the floor (`AnimatedSprite::torch`). Lower flickers
 /// faster.

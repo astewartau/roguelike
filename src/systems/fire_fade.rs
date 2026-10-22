@@ -76,7 +76,8 @@ pub struct FireFades {
 }
 
 /// 0 to 1 over `seconds`, easing out (quick to show, settling gently).
-fn ease(t: f32, seconds: f32) -> f32 {
+/// Shared with rain's fade (`ui::RainFades`).
+pub(crate) fn ease(t: f32, seconds: f32) -> f32 {
     let x = (t / seconds).clamp(0.0, 1.0);
     1.0 - (1.0 - x) * (1.0 - x)
 }

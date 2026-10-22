@@ -51,7 +51,7 @@ pub use vfx::{RainStyle,
     draw_enemy_status_indicators, draw_explosions, draw_life_drain_beams, draw_player_buff_auras, draw_rain,
     draw_resting_indicators,
     draw_channel_progress, draw_potion_splashes, draw_raise_dead_channels, draw_taming_beams,
-    get_buff_aura_data, get_channel_data, get_enemy_health_data, get_rain_data, ChannelData, RainPatch,
+    get_buff_aura_data, get_channel_data, get_enemy_health_data, get_rain_data, ChannelData, RainFades, RainPatch,
     get_attack_telegraph_data, get_enemy_status_data, get_life_drain_beam_data, get_loot_indicator_data, get_taming_beam_data, LifeDrainBeamData,
     TamingBeamData,
 };

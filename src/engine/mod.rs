@@ -1322,7 +1322,10 @@ impl GameEngine {
                     &self.vfx.taming_beams,
                 );
                 let channels = crate::ui::get_channel_data(&state.world);
-                let rain = crate::ui::get_rain_data(&state.world, &state.grid);
+                let rain = self
+                    .vfx
+                    .rain_fades
+                    .apply(crate::ui::get_rain_data(&state.world, &state.grid), self.real_time);
 
                 crate::ui::run_ui(
                     egui_glow,
@@ -2071,8 +2074,9 @@ impl GameEngine {
         if !can_transition_floor(state.current_floor, direction) {
             return;
         }
-        // Nothing burning here is burning there.
+        // Nothing burning (or raining) here is burning there.
         self.vfx.fire_fades.clear();
+        self.vfx.rain_fades.clear();
 
         // `handle_floor_transition` swaps the new grid into `state.grid` itself.
         let (current_floor, seed) = (state.current_floor, state.seed);

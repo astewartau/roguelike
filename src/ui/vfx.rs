@@ -883,11 +883,62 @@ fn ring_tiles(ring: i32) -> impl Iterator<Item = (i32, i32)> {
         .filter(move |(dx, dy)| dx.abs().max(dy.abs()) == ring)
 }
 
-/// Call Rain still falling: its tiles you can see, and how strongly it's
-/// raining (it eases off over the last moments).
+/// Call Rain falling: its tiles you can see, and how strongly it's raining
+/// (it fades in as it starts and out once it's stopped: `RainFades`).
+#[derive(Debug, Clone)]
 pub struct RainPatch {
+    /// The rain cloud it falls from.
+    pub cloud: Entity,
     pub tiles: Vec<(i32, i32)>,
     pub opacity: f32,
+}
+
+/// Rain fading in as it starts and out once it's stopped, in real time (the
+/// game clock stands still while it waits for you, and a fade would freeze
+/// halfway). Kept by the vfx manager between frames.
+#[derive(Default)]
+pub struct RainFades {
+    /// When each cloud's rain was first drawn.
+    started: std::collections::HashMap<Entity, (f32, RainPatch)>,
+    /// Rain whose cloud is gone, with when it stopped.
+    stopping: Vec<(f32, RainPatch)>,
+}
+
+impl RainFades {
+    /// This frame's rain, faded in by how long each has been falling, plus
+    /// the rain of clouds that have gone, fading out where it fell.
+    pub fn apply(&mut self, patches: Vec<RainPatch>, real_time: f32) -> Vec<RainPatch> {
+        use crate::constants::{RAIN_FADE_IN_SECONDS, RAIN_FADE_OUT_SECONDS};
+        use crate::systems::fire_fade::ease;
+        let mut out = Vec::new();
+        let mut here = Vec::new();
+        for mut patch in patches {
+            here.push(patch.cloud);
+            let since = self.started.entry(patch.cloud).or_insert((real_time, patch.clone())).0;
+            patch.opacity *= ease(real_time - since, RAIN_FADE_IN_SECONDS);
+            self.started.insert(patch.cloud, (since, patch.clone()));
+            out.push(patch);
+        }
+        let gone: Vec<Entity> = self.started.keys().filter(|c| !here.contains(c)).copied().collect();
+        for cloud in gone {
+            if let Some((_, patch)) = self.started.remove(&cloud) {
+                // From about as strong as it had got (it was drawn at that).
+                let shown = patch.opacity;
+                self.stopping.push((real_time - (1.0 - shown) * RAIN_FADE_OUT_SECONDS, RainPatch { opacity: 1.0, ..patch }));
+            }
+        }
+        self.stopping.retain(|(since, _)| real_time - since < RAIN_FADE_OUT_SECONDS);
+        out.extend(self.stopping.iter().map(|(since, patch)| RainPatch {
+            opacity: 1.0 - ease(real_time - since, RAIN_FADE_OUT_SECONDS),
+            ..patch.clone()
+        }));
+        out
+    }
+
+    /// Forget all rain (a new floor).
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// Every rain cloud in the world, as the visible tiles it falls on.
@@ -896,12 +947,13 @@ pub fn get_rain_data(world: &World, grid: &Grid) -> Vec<RainPatch> {
     world
         .query::<(&Position, &RainCloud)>()
         .iter()
-        .map(|(_, (p, cloud))| RainPatch {
+        .map(|(id, (p, cloud))| RainPatch {
+            cloud: id,
             tiles: (-cloud.radius..=cloud.radius)
                 .flat_map(|dy| (-cloud.radius..=cloud.radius).map(move |dx| (p.x + dx, p.y + dy)))
                 .filter(|&(x, y)| grid.get(x, y).is_some_and(|t| t.visible && t.tile_type.is_walkable()))
                 .collect(),
-            opacity: (cloud.remaining / 0.6).clamp(0.0, 1.0),
+            opacity: 1.0,
         })
         .collect()
 }
@@ -1661,5 +1713,31 @@ mod channel_tests {
             (ChannelKind::Tame, (4.5, 5.5), 0.25),
             (ChannelKind::RaiseDead, (2.5, 1.5), 0.75),
         ]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rain fades in as a cloud starts and, once the cloud's gone, goes on
+    /// falling where it was, fading out, then stops.
+    #[test]
+    fn rain_fades_in_and_out() {
+        use crate::constants::{RAIN_FADE_IN_SECONDS, RAIN_FADE_OUT_SECONDS};
+        let cloud = hecs::World::new().spawn(());
+        let patch = || vec![RainPatch { cloud, tiles: vec![(3, 3)], opacity: 1.0 }];
+        let mut fades = RainFades::default();
+        assert_eq!(fades.apply(patch(), 5.0)[0].opacity, 0.0, "it starts unseen");
+        let rising = fades.apply(patch(), 5.0 + RAIN_FADE_IN_SECONDS / 2.0)[0].opacity;
+        assert!(rising > 0.3 && rising < 1.0, "fading in: {rising}");
+        assert_eq!(fades.apply(patch(), 7.0)[0].opacity, 1.0);
+
+        let stopping = fades.apply(Vec::new(), 7.0);
+        assert_eq!(stopping.len(), 1, "the cloud is gone, its rain fades where it fell");
+        assert_eq!(stopping[0].tiles, vec![(3, 3)]);
+        let later = fades.apply(Vec::new(), 7.0 + RAIN_FADE_OUT_SECONDS / 2.0)[0].opacity;
+        assert!(later > 0.0 && later < 1.0, "fading out: {later}");
+        assert!(fades.apply(Vec::new(), 7.01 + RAIN_FADE_OUT_SECONDS).is_empty(), "and it's stopped");
     }
 }

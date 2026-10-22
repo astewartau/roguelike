@@ -219,6 +219,8 @@ pub struct VfxManager {
     pub hitstop: crate::systems::hitstop::HitStop,
     /// Fire fading in as it catches and out as it goes out.
     pub fire_fades: crate::systems::fire_fade::FireFades,
+    /// Rain fading in as it starts and out once it's stopped.
+    pub rain_fades: crate::ui::RainFades,
 }
 
 impl VfxManager {
@@ -234,6 +236,7 @@ impl VfxManager {
             shake_requests: Vec::new(),
             hitstop: crate::systems::hitstop::HitStop::new(),
             fire_fades: Default::default(),
+            rain_fades: Default::default(),
         }
     }
 
