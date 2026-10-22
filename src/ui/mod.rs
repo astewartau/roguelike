@@ -466,7 +466,10 @@ pub fn run_ui(
     let enemy_status_data = get_enemy_status_data(world, grid);
     let enemy_health_data = get_enemy_health_data(world, grid, player_entity);
     let loot_indicator_data = get_loot_indicator_data(world, grid);
-    let attack_telegraph_data = get_attack_telegraph_data(world, grid, game_time);
+    // Warnings of attacks in progress and fusing barrels: a developer
+    // overlay, off unless switched on (and then in play too).
+    let attack_telegraph_data =
+        if dev.overlays.warnings { get_attack_telegraph_data(world, grid, game_time) } else { Vec::new() };
     // The hovered tile, and the tile the right-click menu is open on: the
     // info panel describes the menu's tile while it is open.
     let hover_tile = crate::input::cursor_tile(camera, mouse_pos);
@@ -489,7 +492,8 @@ pub fn run_ui(
         // Markers over corpses and item piles with something left in them
         draw_loot_indicators(ctx, camera, &loot_indicator_data);
 
-        // Red markers on tiles hostiles are about to hit
+        // Red markers on tiles hostiles are about to hit (the developer
+        // tools' Warnings overlay; none unless it's switched on)
         draw_attack_telegraphs(ctx, camera, &attack_telegraph_data, player_idle);
 
         // Player buff auras (draw first so they're behind everything)

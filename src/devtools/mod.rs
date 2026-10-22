@@ -171,6 +171,10 @@ pub struct Overlays {
     pub fire_and_water: bool,
     /// Tile coordinates.
     pub coords: bool,
+    /// Warnings of what's about to happen: the tiles an attack in progress
+    /// will hit, and a fusing barrel's blast, filling as they near. Unlike
+    /// the others it shows in play too while on, so it can be played with.
+    pub warnings: bool,
 }
 
 impl Default for Overlays {
@@ -184,6 +188,7 @@ impl Default for Overlays {
             blockers: false,
             fire_and_water: false,
             coords: false,
+            warnings: false,
         }
     }
 }
@@ -1602,6 +1607,13 @@ mod tests {
 
         dev.toggle();
         assert_eq!(dev.tool, None, "hidden, nothing is armed");
+    }
+
+    /// The warnings of attacks in progress and fusing barrels are a
+    /// developer overlay, off until switched on.
+    #[test]
+    fn warnings_are_off_by_default() {
+        assert!(!DevTools::new().overlays.warnings);
     }
 
     /// Going back to play holds the world clock.

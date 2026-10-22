@@ -1116,6 +1116,8 @@ fn overlays_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
     muted(ui, "Label, sight ring (halved for idle ones while you sneak), and a red line from any that can see you.");
     look::toggle(ui, &mut o.path, "Path to the player");
     muted(ui, "From the creature selected on the Inspect tab.");
+    look::toggle(ui, &mut o.warnings, "Warnings");
+    muted(ui, "Red squares on the tiles an attack in progress or a fusing barrel will hit, filling as it nears, with a countdown while you choose. Shows in play too while on.");
 }
 
 fn effects_tab(ui: &mut egui::Ui, dev: &mut DevTools) {
