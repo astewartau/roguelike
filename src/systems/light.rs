@@ -42,20 +42,30 @@ use crate::tile::TileType;
 /// anything Burning that has no light of its own. The light map and the AI
 /// both read lights through this, so they always agree on what is lit.
 pub fn light_emitters(world: &World) -> Vec<((i32, i32), LightSource)> {
-    let mut lights: Vec<((i32, i32), LightSource)> = world
+    light_emitters_by_fire(world).into_iter().map(|(_, at, light)| (at, light)).collect()
+}
+
+/// `light_emitters`, each saying which fire it's the glow of, if it is one
+/// (for the light map to fade it in and out with its flames: `fire_fade`).
+pub fn light_emitters_by_fire(
+    world: &World,
+) -> Vec<(Option<(Entity, crate::systems::fire_fade::FlameKind)>, (i32, i32), LightSource)> {
+    use crate::systems::fire_fade::FlameKind;
+    let mut lights: Vec<_> = world
         .query::<(&Position, &LightSource)>()
         .iter()
-        .map(|(_, (pos, light))| ((pos.x, pos.y), *light))
+        .map(|(_, (pos, light))| (None, (pos.x, pos.y), *light))
         .collect();
     // A fire lights with its fuel's light, alongside any light the thing has
     // of its own.
     for (id, (pos, fuel, _)) in world.query::<(&Position, &Fuel, &OnFire)>().iter() {
-        lights.push(((pos.x, pos.y), LightSource { phase: stable_phase(id), ..fuel.lit_light }));
+        let light = LightSource { phase: stable_phase(id), ..fuel.lit_light };
+        lights.push((Some((id, FlameKind::Fuel)), (pos.x, pos.y), light));
     }
     // So does a lit torch, in whoever's hand.
     for (id, (pos, torch)) in world.query::<(&Position, &CarriedTorch)>().iter() {
         if torch.lit {
-            lights.push(((pos.x, pos.y), LightSource { phase: stable_phase(id), ..LightSource::torch() }));
+            lights.push((None, (pos.x, pos.y), LightSource { phase: stable_phase(id), ..LightSource::torch() }));
         }
     }
     for (id, (pos, status)) in world
@@ -64,7 +74,7 @@ pub fn light_emitters(world: &World) -> Vec<((i32, i32), LightSource)> {
         .iter()
     {
         if status.effects.iter().any(|e| e.effect_type == EffectType::Burning) {
-            lights.push(((pos.x, pos.y), LightSource::burning(stable_phase(id))));
+            lights.push((Some((id, FlameKind::Burning)), (pos.x, pos.y), LightSource::burning(stable_phase(id))));
         }
     }
     lights

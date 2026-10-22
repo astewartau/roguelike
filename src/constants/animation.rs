@@ -235,6 +235,12 @@ pub const HITSTOP_TIME_SCALE: f32 = 0.0;
 /// shown: fuel burning on the floor and the fire on a burning creature.
 /// Lower flickers faster; much above 0.15 it stops reading as fire.
 pub const FIRE_FRAME_DURATION: f32 = 0.1;
+/// Real seconds a fire takes to fade in as it catches (flames and glow).
+/// Lower is snappier; 0 pops it on in a frame.
+pub const FIRE_FADE_IN_SECONDS: f32 = 0.35;
+/// Real seconds a fire takes to fade out once it's gone out, drawn on where
+/// it was. Longer lingers like embers.
+pub const FIRE_FADE_OUT_SECONDS: f32 = 0.7;
 /// Seconds each frame of a held torch's flame is shown, the same pace as a
 /// torch lying burning on the floor (`AnimatedSprite::torch`). Lower flickers
 /// faster.

@@ -26,6 +26,7 @@
 pub mod action_dispatch;
 pub mod actions;
 pub mod ai;
+pub mod fire_fade;
 pub mod animation;
 pub mod camera_shake;
 pub mod coatings;

@@ -30,6 +30,7 @@ pub mod effects {
 const NO_TINT: (f32, f32, f32) = (1.0, 1.0, 1.0);
 
 /// Entity ready for rendering with all visual state
+#[derive(Clone)]
 pub struct RenderEntity {
     pub x: f32,
     pub y: f32,
@@ -377,7 +378,16 @@ fn surface_status_tint(world: &World, id: Entity, (r, g, b): (f32, f32, f32)) ->
 
 /// Collect entities that should be rendered, with fog of war applied.
 /// Entities are sorted by layer: ground items first, then actors, then player on top.
-pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, real_time: f32) -> Vec<RenderEntity> {
+/// With `fades`, fire fades in as it catches and out as it goes out
+/// (`fire_fade`); without, it's drawn as it is.
+pub fn collect_renderables(
+    world: &World,
+    grid: &Grid,
+    player_entity: Entity,
+    real_time: f32,
+    mut fades: Option<&mut super::fire_fade::FireFades>,
+) -> Vec<RenderEntity> {
+    use super::fire_fade::{FlameFrames, FlameKind};
     // Separate entities by render layer
     let mut ground_layer: Vec<RenderEntity> = Vec::new();  // Bones, items on ground, campfires
     let mut actor_layer: Vec<RenderEntity> = Vec::new();   // Enemies and NPCs
@@ -522,10 +532,12 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
 
     // Process entities with AnimatedSprite component (e.g., campfires, water)
     // Collect and sort by z_order so water renders below braziers/fire
+    // (The last is the fire, for a burning fuel's flames: which thing, and
+    // the glow it gives.)
     let mut animated_entities: Vec<_> = world
         .query::<(&Position, &VisualPosition, &AnimatedSprite)>()
         .iter()
-        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, *anim))
+        .map(|(_, (pos, vis_pos, anim))| (pos.x, pos.y, vis_pos.x, vis_pos.y, *anim, None))
         .collect();
     // A burning fuel's flames, drawn over whatever it is.
     animated_entities.extend(
@@ -533,11 +545,24 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
             .query::<(&Position, &VisualPosition, &crate::components::Fuel)>()
             .with::<&crate::components::OnFire>()
             .iter()
-            .map(|(_, (pos, vis_pos, fuel))| (pos.x, pos.y, vis_pos.x, vis_pos.y, fuel.lit_look)),
+            .map(|(id, (pos, vis_pos, fuel))| {
+                (pos.x, pos.y, vis_pos.x, vis_pos.y, fuel.lit_look, Some((id, fuel.lit_light)))
+            }),
     );
-    animated_entities.sort_by_key(|(_, _, _, _, anim)| anim.z_order);
+    animated_entities.sort_by_key(|(_, _, _, _, anim, _)| anim.z_order);
 
-    for (pos_x, pos_y, vis_x, vis_y, anim) in animated_entities {
+    for (pos_x, pos_y, vis_x, vis_y, anim, fire) in animated_entities {
+        // A fire fades in as it catches.
+        let mut fade = |drawn: &RenderEntity| match (fire, fades.as_deref_mut()) {
+            (Some((id, light)), Some(fades)) => fades.shown(
+                (id, FlameKind::Fuel),
+                real_time,
+                drawn,
+                FlameFrames::Animated(anim),
+                Some(((pos_x, pos_y), light)),
+            ),
+            _ => 1.0,
+        };
         let (is_explored, is_visible) = grid
             .get(pos_x, pos_y)
             .map(|tile| (tile.known(), tile.visible))
@@ -553,7 +578,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 .copied()
                 .unwrap_or(0.5);
             // Animated sprites (like fire) render at full tile brightness
-            ground_layer.push(RenderEntity {
+            let mut drawn = RenderEntity {
                 x: vis_x,
                 y: vis_y,
                 sprite,
@@ -562,10 +587,12 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 effects: effects::NONE,
                 overlays: Vec::new(),
                 tint: NO_TINT,
-            });
+            };
+            drawn.alpha *= fade(&drawn);
+            ground_layer.push(drawn);
         } else if is_explored {
             // Show in fog at same brightness as other fog tiles
-            ground_layer.push(RenderEntity {
+            let mut drawn = RenderEntity {
                 x: vis_x,
                 y: vis_y,
                 sprite,
@@ -574,7 +601,9 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 effects: effects::NONE,
                 overlays: Vec::new(),
                 tint: NO_TINT,
-            });
+            };
+            drawn.alpha *= fade(&drawn);
+            ground_layer.push(drawn);
         }
     }
 
@@ -591,7 +620,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
     let mut fire_overlays: Vec<RenderEntity> = Vec::new();
     // Deliberately includes invisible enemies: their flames still show, which
     // is the one way to spot them.
-    for (_, (pos, vis_pos, status)) in
+    for (id, (pos, vis_pos, status)) in
         world.query::<(&Position, &VisualPosition, &StatusEffects)>().iter()
     {
         // Check if entity is burning
@@ -614,7 +643,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                     .copied()
                     .unwrap_or(0.5);
 
-                fire_overlays.push(RenderEntity {
+                let mut drawn = RenderEntity {
                     x: vis_pos.x,
                     y: vis_pos.y,
                     sprite: Sprite::new(SpriteSheet::AnimatedTiles, fire_tile_id),
@@ -623,13 +652,19 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                     effects: effects::BURNING, // Mark for third-pass rendering
                     overlays: Vec::new(),
                     tint: NO_TINT,
-                });
+                };
+                if let Some(fades) = fades.as_deref_mut() {
+                    let frames = FlameFrames::Flames { phase: pos.x as f32 * 0.1 + pos.y as f32 * 0.07 };
+                    let glow = ((pos.x, pos.y), crate::components::LightSource::burning(0.0));
+                    drawn.alpha *= fades.shown((id, FlameKind::Burning), real_time, &drawn, frames, Some(glow));
+                }
+                fire_overlays.push(drawn);
             }
         }
     }
 
     // Flames drawn over anything that asks for them (an armed fire trap)
-    for (_, (pos, vis_pos, _)) in
+    for (id, (pos, vis_pos, _)) in
         world.query::<(&Position, &VisualPosition, &FlameOverlay)>().iter()
     {
         let is_visible = grid
@@ -650,7 +685,7 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 .copied()
                 .unwrap_or(0.5);
 
-            fire_overlays.push(RenderEntity {
+            let mut drawn = RenderEntity {
                 x: vis_pos.x,
                 y: vis_pos.y,
                 sprite: Sprite::new(SpriteSheet::AnimatedTiles, fire_tile_id),
@@ -659,11 +694,20 @@ pub fn collect_renderables(world: &World, grid: &Grid, player_entity: Entity, re
                 effects: effects::BURNING,
                 overlays: Vec::new(),
                 tint: NO_TINT,
-            });
+            };
+            if let Some(fades) = fades.as_deref_mut() {
+                let frames = FlameFrames::Flames { phase: pos.x as f32 * 0.1 + pos.y as f32 * 0.07 };
+                drawn.alpha *= fades.shown((id, FlameKind::Overlay), real_time, &drawn, frames, None);
+            }
+            fire_overlays.push(drawn);
         }
     }
 
     entities_to_render.append(&mut fire_overlays);
+    // And fires that have gone out, fading where they were.
+    if let Some(fades) = fades {
+        entities_to_render.extend(fades.finish(real_time));
+    }
 
     entities_to_render
 }
@@ -711,7 +755,7 @@ mod tests {
 
     /// The held torch drawn on whichever entity wears `sprite`, at `real_time`.
     fn torch_on(world: &World, grid: &Grid, player: Entity, sprite: (SpriteSheet, u32), real_time: f32) -> Overlay {
-        let drawn = collect_renderables(world, grid, player, real_time);
+        let drawn = collect_renderables(world, grid, player, real_time, None);
         let carrier = drawn
             .iter()
             .find(|e| (e.sprite.sheet, e.sprite.tile_id) == sprite)
@@ -764,7 +808,7 @@ mod tests {
         ));
         let north = tile_ids::ARROW_FLIGHT.1 + tile_ids::FLIGHT_DIRECTIONS / 4;
         let arrows = |world: &World| -> Vec<(usize, f32)> {
-            collect_renderables(world, &grid, player, 0.0)
+            collect_renderables(world, &grid, player, 0.0, None)
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| e.sprite.tile_id == north && e.sprite.sheet == tile_ids::ARROW_FLIGHT.0)
@@ -775,7 +819,7 @@ mod tests {
         let drawn = arrows(&world);
         assert_eq!(drawn.len(), 1 + PROJECTILE_TRAIL.len(), "the arrow and its blur, all facing up");
         assert_eq!(drawn.last().map(|d| d.1), Some(1.0), "the arrow itself is drawn last, solid");
-        let rat_at = collect_renderables(&world, &grid, player, 0.0)
+        let rat_at = collect_renderables(&world, &grid, player, 0.0, None)
             .iter()
             .position(|e| (e.sprite.sheet, e.sprite.tile_id) == tile_ids::RAT)
             .unwrap();
@@ -801,7 +845,7 @@ mod tests {
         );
         crate::systems::inventory::spawn_ground_item(&mut world, 3, 3, ItemInstance::plain(ItemType::Sword));
         let drawn = |world: &World| {
-            let all = collect_renderables(world, &grid, player, 0.0);
+            let all = collect_renderables(world, &grid, player, 0.0, None);
             let e = all.iter().find(|e| (e.x, e.y) == (3.0, 3.0)).expect("the pile is drawn");
             let badges: Vec<_> = e.overlays.iter().map(|o| (o.sprite.sheet, o.sprite.tile_id)).collect();
             ((e.sprite.sheet, e.sprite.tile_id), badges)

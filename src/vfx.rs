@@ -217,6 +217,8 @@ pub struct VfxManager {
     /// Hit-stop timer, fed by events alongside the rest of the vfx and read
     /// by the engine tick to slow the animation clock (`systems::hitstop`).
     pub hitstop: crate::systems::hitstop::HitStop,
+    /// Fire fading in as it catches and out as it goes out.
+    pub fire_fades: crate::systems::fire_fade::FireFades,
 }
 
 impl VfxManager {
@@ -231,6 +233,7 @@ impl VfxManager {
             resting_bubble: None,
             shake_requests: Vec::new(),
             hitstop: crate::systems::hitstop::HitStop::new(),
+            fire_fades: Default::default(),
         }
     }
 

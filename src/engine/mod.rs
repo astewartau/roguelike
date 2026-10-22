@@ -937,6 +937,7 @@ impl GameEngine {
                 &state.grid,
                 state.player_entity,
                 self.real_time,
+                Some(&mut self.vfx.fire_fades),
             )
         };
 
@@ -1177,14 +1178,24 @@ impl GameEngine {
     /// frame, rather than per fragment in the shader.
     pub fn render_light_map(&self) -> crate::systems::light::LightMap {
         use crate::constants::*;
-        use crate::systems::light::{light_emitters, LightMap, LightOcclusion};
+        use crate::systems::light::{light_emitters_by_fire, LightMap, LightOcclusion};
 
         let Some(ref state) = self.state else {
             return LightMap { width: 0, height: 0, rgb: Vec::new() };
         };
         let time = self.light_flicker_time;
-        let lights: Vec<_> = light_emitters(&state.world)
+        // A fire's glow fades in and out with its flames (the light the
+        // game itself reckons with, for sneaking, doesn't).
+        let fades = &self.vfx.fire_fades;
+        let lights: Vec<_> = light_emitters_by_fire(&state.world)
             .into_iter()
+            .map(|(fire, pos, mut light)| {
+                if let Some((id, kind)) = fire {
+                    light.intensity *= fades.light_fade(id, kind, self.real_time);
+                }
+                (pos, light)
+            })
+            .chain(fades.dying_lights(self.real_time))
             .map(|(pos, mut light)| {
                 let flicker = crate::render::flicker_offset(time, light.phase, light.flicker);
                 // Clamped at zero so a hand-authored amplitude over 1.0
@@ -2060,6 +2071,8 @@ impl GameEngine {
         if !can_transition_floor(state.current_floor, direction) {
             return;
         }
+        // Nothing burning here is burning there.
+        self.vfx.fire_fades.clear();
 
         // `handle_floor_transition` swaps the new grid into `state.grid` itself.
         let (current_floor, seed) = (state.current_floor, state.seed);
@@ -2893,12 +2906,12 @@ mod tests {
                 crate::systems::light::update_light_exposure(&mut state.world, &state.grid, player)
             });
             time("collect_renderables", 60, || {
-                crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0).len()
+                crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0, None).len()
             });
             {
                 // How many GPU batches render_entities issues for this frame:
                 // a new one at every sprite-sheet change, in draw order.
-                let ents = crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0);
+                let ents = crate::systems::collect_renderables(&state.world, &state.grid, player, 0.0, None);
                 let mut batches = 0;
                 let mut last = None;
                 for e in &ents {
@@ -3134,6 +3147,59 @@ mod tests {
         engine.dev.no_fog = true;
         run_frames(&mut engine, &mut camera, 0.2);
         assert_eq!(count(&engine), (all, all, all), "See everything, while playing");
+    }
+
+    /// Fire fades in as it catches and out once it's gone, in real time:
+    /// a fire patch's flames start faint and come up to full; despawned,
+    /// they go on being drawn where it was, fading, and then they're gone.
+    #[test]
+    fn fire_fades_in_and_out() {
+        use crate::devtools::{CursorTool, DevTab, Spawnable};
+        let mut camera = crate::camera::Camera::new(800.0, 600.0);
+        let mut engine = GameEngine::new();
+        engine.start_sandbox(PlayerClass::Fighter, &mut camera);
+        engine.dev.open_panel(DevTab::Spawn);
+        engine.dev.tool = Some(CursorTool::Place(Spawnable::FirePatch));
+        {
+            let state = engine.state.as_mut().unwrap();
+            engine.dev.use_tool(state, &mut engine.events, &mut engine.vfx, (10, 10));
+        }
+        let flame_at = |engine: &mut GameEngine, camera: &mut crate::camera::Camera| {
+            let drawn = engine.tick(1.0 / 60.0, camera).entities;
+            drawn
+                .iter()
+                .filter(|r| (r.x - 10.0).abs() < 0.01 && (r.y - 10.0).abs() < 0.01)
+                .map(|r| r.alpha)
+                .fold(None, |best: Option<f32>, a| Some(best.map_or(a, |b| b.max(a))))
+        };
+        let first = flame_at(&mut engine, &mut camera).expect("the fire is drawn");
+        assert!(first < 0.3, "it catches faintly: {first}");
+        run_frames(&mut engine, &mut camera, 1.0);
+        let lit = flame_at(&mut engine, &mut camera).unwrap();
+        assert!(lit > 0.99, "and comes up to full: {lit}");
+
+        {
+            let state = engine.state.as_mut().unwrap();
+            let fires: Vec<Entity> = state
+                .world
+                .query::<(&crate::components::Position, &crate::components::OnFire)>()
+                .iter()
+                .filter(|(_, (p, _))| (p.x, p.y) == (10, 10))
+                .map(|(e, _)| e)
+                .collect();
+            assert!(!fires.is_empty());
+            for e in fires {
+                let _ = state.world.despawn(e);
+            }
+            state.sync_world_changes();
+        }
+        let going = flame_at(&mut engine, &mut camera).expect("still drawn as it goes out");
+        assert!(going > 0.0 && going <= 1.0);
+        run_frames(&mut engine, &mut camera, 0.3);
+        let fainter = flame_at(&mut engine, &mut camera).expect("still fading");
+        assert!(fainter < going, "fading: {going} -> {fainter}");
+        run_frames(&mut engine, &mut camera, 1.0);
+        assert_eq!(flame_at(&mut engine, &mut camera), None, "and gone");
     }
 
     /// In the editor the view stays where you put it: carrying the player
